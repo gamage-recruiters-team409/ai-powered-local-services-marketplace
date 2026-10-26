@@ -1,0 +1,99 @@
+﻿# =========================
+# Environment / Secrets
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Frontend - React / Node
+# =========================
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =========================
+# Backend - Java / Maven
+# =========================
+backend/target/
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Maven Wrapper Cache
+.mvn/timing.properties
+
+# =========================
+# IDE / Editor
+# =========================
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+.factorypath
+
+# =========================
+# Operating System
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+log/
+
+# =========================
+# Coverage / Reports
+# =========================
+coverage/
+*.exec
+test-results/
+
+# =========================
+# Temporary Files
+# =========================
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# =========================
+# Uploads / Local Storage
+# =========================
+uploads/
+storage/
+tmp/
+
+# =========================
+# Docker Local Overrides
+# =========================
+docker-compose.override.yml
+
+# =========================
+# Private Data
+# =========================
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# Never commit private local data
+private/
+secrets/
+
