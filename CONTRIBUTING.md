@@ -116,3 +116,5 @@ Developers must not merge their own pull requests.
 
 Corrections requested during review must be completed on the same branch unless otherwise instructed.
 
+
+Normal development pull requests must target the develop branch.
