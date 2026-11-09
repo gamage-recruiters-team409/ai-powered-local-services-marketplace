@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.auth.service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -90,14 +91,13 @@ public class AuthServiceImpl implements AuthService {
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setRole(request.role());
 
-        // Email verification flag handling
-        // TODO: Switch default app.auth.require-email-verification to true once email verification module is implemented
+        // Issue 4: emailVerified is ALWAYS false until real email verification happens.
+        // The dev bypass only controls status (ACTIVE vs PENDING_VERIFICATION).
+        user.setEmailVerified(false);
         if (requireEmailVerification) {
             user.setStatus(UserStatus.PENDING_VERIFICATION);
-            user.setEmailVerified(false);
         } else {
             user.setStatus(UserStatus.ACTIVE);
-            user.setEmailVerified(true);
         }
 
         user.setConsentStatus(request.acceptedTerms());
@@ -124,7 +124,7 @@ public class AuthServiceImpl implements AuthService {
         User user = userRepository.findByEmail(normalizedEmail)
                 .orElseThrow(() -> new BadCredentialsException(GENERIC_BAD_CREDENTIALS_MSG));
 
-        // Handle auto-unlock if the lock duration has expired
+        // Issue 1: Auto-unlock ONLY applies if status is LOCKED from failed attempts
         if (user.getStatus() == UserStatus.LOCKED) {
             if (user.getLockStartedAt() != null) {
                 long minutesLocked = Duration.between(user.getLockStartedAt(), Instant.now()).toMinutes();
@@ -147,7 +147,35 @@ public class AuthServiceImpl implements AuthService {
             }
         }
 
-        // Verify password
+        // Issue 1: Handle non-ACTIVE accounts (SUSPENDED, DEACTIVATED, PENDING_VERIFICATION)
+        // If wrong password: do NOT change status or counter, and return the same generic 401.
+        // If correct password: throw corresponding 403.
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            boolean passwordMatch = passwordEncoder.matches(request.password(), user.getPasswordHash());
+            if (!passwordMatch) {
+                // Do not increment counter, do not change status, do not leak account state
+                throw new BadCredentialsException(GENERIC_BAD_CREDENTIALS_MSG);
+            }
+
+            // Correct password, reveal appropriate account status error
+            switch (user.getStatus()) {
+                case PENDING_VERIFICATION -> throw new AccountStatusException(
+                        "EMAIL_NOT_VERIFIED",
+                        "Email verification is required before logging in."
+                );
+                case SUSPENDED -> throw new AccountStatusException(
+                        "ACCOUNT_SUSPENDED",
+                        "Your account has been suspended. Please contact support."
+                );
+                case DEACTIVATED -> throw new AccountStatusException(
+                        "ACCOUNT_DEACTIVATED",
+                        "Your account has been deactivated."
+                );
+                default -> throw new BadCredentialsException(GENERIC_BAD_CREDENTIALS_MSG);
+            }
+        }
+
+        // User is ACTIVE: verify password and apply lockout counting strictly here
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             int failedAttempts = user.getFailedLoginCount() + 1;
             user.setFailedLoginCount(failedAttempts);
@@ -161,32 +189,11 @@ public class AuthServiceImpl implements AuthService {
             throw new BadCredentialsException(GENERIC_BAD_CREDENTIALS_MSG);
         }
 
-        // Verify user account status
-        switch (user.getStatus()) {
-            case PENDING_VERIFICATION -> throw new AccountStatusException(
-                    "EMAIL_NOT_VERIFIED",
-                    "Email verification is required before logging in."
-            );
-            case SUSPENDED -> throw new AccountStatusException(
-                    "ACCOUNT_SUSPENDED",
-                    "Your account has been suspended. Please contact support."
-            );
-            case DEACTIVATED -> throw new AccountStatusException(
-                    "ACCOUNT_DEACTIVATED",
-                    "Your account has been deactivated."
-            );
-            case LOCKED -> throw new AccountStatusException(
-                    "ACCOUNT_LOCKED",
-                    "Your account is temporarily locked. Please try again later."
-            );
-            case ACTIVE -> {
-                // Success: reset failed login tracking if necessary
-                if (user.getFailedLoginCount() > 0 || user.getLockStartedAt() != null) {
-                    user.setFailedLoginCount(0);
-                    user.setLockStartedAt(null);
-                    userRepository.save(user);
-                }
-            }
+        // Successful login for ACTIVE user: reset failed login tracking
+        if (user.getFailedLoginCount() > 0 || user.getLockStartedAt() != null) {
+            user.setFailedLoginCount(0);
+            user.setLockStartedAt(null);
+            userRepository.save(user);
         }
 
         return issueTokens(user);
@@ -195,32 +202,45 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public AuthResponse refresh(RefreshTokenRequest request) {
         String tokenHash = tokenService.hashToken(request.refreshToken());
+        Instant now = Instant.now();
 
-        AuthToken authToken = authTokenRepository.findByTokenHash(tokenHash)
-                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "Invalid refresh token"));
+        // Issue 3: Atomically claim and mark the token as used in a single conditional MongoDB update
+        Optional<AuthToken> claimedTokenOpt = authTokenRepository.findAndConsumeValidToken(tokenHash, now);
 
-        if (authToken.isUsed()) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, "TOKEN_REUSED", "Refresh token has already been used");
+        if (claimedTokenOpt.isEmpty()) {
+            // Failed to claim: inspect existing token record to determine exact rejection reason
+            Optional<AuthToken> existingOpt = authTokenRepository.findByTokenHash(tokenHash);
+
+            if (existingOpt.isEmpty()) {
+                throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "Invalid refresh token");
+            }
+
+            AuthToken existing = existingOpt.get();
+            if (existing.isUsed()) {
+                // Token reuse detected! Revoke all active refresh tokens for this user as a security measure
+                authTokenRepository.revokeAllActiveTokensByUserId(existing.getUserId());
+                throw new ApiException(HttpStatus.UNAUTHORIZED, "TOKEN_REUSED", "Refresh token has already been used");
+            }
+
+            if (existing.isRevoked()) {
+                throw new ApiException(HttpStatus.UNAUTHORIZED, "TOKEN_REVOKED", "Refresh token has been revoked");
+            }
+
+            if (existing.isExpired()) {
+                throw new ApiException(HttpStatus.UNAUTHORIZED, "TOKEN_EXPIRED", "Refresh token has expired");
+            }
+
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "Invalid refresh token");
         }
 
-        if (authToken.isRevoked()) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, "TOKEN_REVOKED", "Refresh token has been revoked");
-        }
+        AuthToken consumedToken = claimedTokenOpt.get();
 
-        if (authToken.isExpired()) {
-            throw new ApiException(HttpStatus.UNAUTHORIZED, "TOKEN_EXPIRED", "Refresh token has expired");
-        }
-
-        User user = userRepository.findById(authToken.getUserId())
+        User user = userRepository.findById(consumedToken.getUserId())
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "User not found"));
 
         if (user.getStatus() != UserStatus.ACTIVE) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "ACCOUNT_NOT_ACTIVE", "User account is not active");
         }
-
-        // Mark the old token as used (token rotation)
-        authToken.setUsedAt(Instant.now());
-        authTokenRepository.save(authToken);
 
         // Issue new token pair
         return issueTokens(user);
@@ -234,9 +254,13 @@ public class AuthServiceImpl implements AuthService {
 
         String tokenHash = tokenService.hashToken(request.refreshToken());
         authTokenRepository.findByTokenHash(tokenHash).ifPresent(token -> {
-            if (token.getRevokedAt() == null) {
-                token.setRevokedAt(Instant.now());
-                authTokenRepository.save(token);
+            // Issue 5: Revoke only if the token belongs to the authenticated current user.
+            // On mismatch, do not revoke and return neutrally to prevent token enumeration.
+            if (currentUserId != null && currentUserId.equals(token.getUserId())) {
+                if (token.getRevokedAt() == null) {
+                    token.setRevokedAt(Instant.now());
+                    authTokenRepository.save(token);
+                }
             }
         });
     }

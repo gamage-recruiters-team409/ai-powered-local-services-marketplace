@@ -9,7 +9,7 @@ import org.springframework.stereotype.Repository;
 import com.gamagerecruiters.marketplace.modules.auth.domain.AuthToken;
 
 @Repository
-public interface AuthTokenRepository extends MongoRepository<AuthToken, String> {
+public interface AuthTokenRepository extends MongoRepository<AuthToken, String>, AuthTokenRepositoryCustom {
 
     Optional<AuthToken> findByTokenHash(String tokenHash);
 
