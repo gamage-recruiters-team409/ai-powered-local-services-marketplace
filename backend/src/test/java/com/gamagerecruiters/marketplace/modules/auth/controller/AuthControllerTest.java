@@ -55,7 +55,6 @@ class AuthControllerTest {
     @Test
     @DisplayName("Should return 400 VALIDATION_FAILED when registration payload has validation errors")
     void shouldReturnValidationErrorsOnInvalidRegistration() throws Exception {
-        // Missing name, invalid email, weak password, acceptedTerms=false
         RegisterRequest request = new RegisterRequest(
                 "",
                 "invalid-email",
@@ -66,7 +65,7 @@ class AuthControllerTest {
                 ""
         );
 
-        mockMvc.perform(post("/api/auth/register")
+        mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
@@ -80,7 +79,7 @@ class AuthControllerTest {
     void shouldReturnBadRequestWhenLoginEmpty() throws Exception {
         LoginRequest request = new LoginRequest("", "");
 
-        mockMvc.perform(post("/api/auth/login")
+        mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest())
@@ -96,7 +95,7 @@ class AuthControllerTest {
         when(authService.login(any(LoginRequest.class)))
                 .thenThrow(new BadCredentialsException("Invalid email or password"));
 
-        mockMvc.perform(post("/api/auth/login")
+        mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isUnauthorized())

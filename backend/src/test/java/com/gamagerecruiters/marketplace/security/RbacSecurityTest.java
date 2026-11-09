@@ -1,6 +1,5 @@
 package com.gamagerecruiters.marketplace.security;
 
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -43,7 +42,7 @@ class RbacSecurityTest {
     @Test
     @DisplayName("Unauthenticated request to protected endpoint should return 401 UNAUTHORIZED")
     void shouldReturn401WhenUnauthenticated() throws Exception {
-        mockMvc.perform(get("/api/test/customer-only"))
+        mockMvc.perform(get("/api/v1/test/customer-only"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.status").value(401))
                 .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
@@ -57,7 +56,7 @@ class RbacSecurityTest {
         when(tokenService.getEmailFromToken("valid-customer-token")).thenReturn("cust@test.local");
         when(tokenService.getRoleFromToken("valid-customer-token")).thenReturn(Role.CUSTOMER);
 
-        mockMvc.perform(get("/api/test/customer-only")
+        mockMvc.perform(get("/api/v1/test/customer-only")
                         .header("Authorization", "Bearer valid-customer-token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Hello Customer"));
@@ -71,7 +70,7 @@ class RbacSecurityTest {
         when(tokenService.getEmailFromToken("valid-customer-token")).thenReturn("cust@test.local");
         when(tokenService.getRoleFromToken("valid-customer-token")).thenReturn(Role.CUSTOMER);
 
-        mockMvc.perform(get("/api/test/admin-only")
+        mockMvc.perform(get("/api/v1/test/admin-only")
                         .header("Authorization", "Bearer valid-customer-token"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))
@@ -86,7 +85,7 @@ class RbacSecurityTest {
         when(tokenService.getEmailFromToken("valid-admin-token")).thenReturn("admin@test.local");
         when(tokenService.getRoleFromToken("valid-admin-token")).thenReturn(Role.ADMIN);
 
-        mockMvc.perform(get("/api/test/admin-only")
+        mockMvc.perform(get("/api/v1/test/admin-only")
                         .header("Authorization", "Bearer valid-admin-token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Hello Admin"));
@@ -100,7 +99,7 @@ class RbacSecurityTest {
         when(tokenService.getEmailFromToken("valid-super-token")).thenReturn("super@test.local");
         when(tokenService.getRoleFromToken("valid-super-token")).thenReturn(Role.SUPER_ADMIN);
 
-        mockMvc.perform(get("/api/test/any-admin")
+        mockMvc.perform(get("/api/v1/test/any-admin")
                         .header("Authorization", "Bearer valid-super-token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Hello Admin/SuperAdmin"));
@@ -114,7 +113,7 @@ class RbacSecurityTest {
         when(tokenService.getEmailFromToken("valid-cust-token")).thenReturn("owner@test.local");
         when(tokenService.getRoleFromToken("valid-cust-token")).thenReturn(Role.CUSTOMER);
 
-        mockMvc.perform(get("/api/test/ownership/owner-123")
+        mockMvc.perform(get("/api/v1/test/ownership/owner-123")
                         .header("Authorization", "Bearer valid-cust-token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Ownership verified"));
@@ -128,7 +127,7 @@ class RbacSecurityTest {
         when(tokenService.getEmailFromToken("valid-cust-token")).thenReturn("user999@test.local");
         when(tokenService.getRoleFromToken("valid-cust-token")).thenReturn(Role.CUSTOMER);
 
-        mockMvc.perform(get("/api/test/ownership/owner-123")
+        mockMvc.perform(get("/api/v1/test/ownership/owner-123")
                         .header("Authorization", "Bearer valid-cust-token"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))

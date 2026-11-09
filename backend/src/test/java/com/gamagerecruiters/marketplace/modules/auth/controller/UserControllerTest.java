@@ -48,16 +48,16 @@ class UserControllerTest {
     private TokenService tokenService;
 
     @Test
-    @DisplayName("GET /api/users/me should return 401 when token is missing")
+    @DisplayName("GET /api/v1/users/me should return 401 when token is missing")
     void shouldReturn401WhenNotAuthenticated() throws Exception {
-        mockMvc.perform(get("/api/users/me"))
+        mockMvc.perform(get("/api/v1/users/me"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.status").value(401))
                 .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
     }
 
     @Test
-    @DisplayName("GET /api/users/me should return current user profile when authenticated")
+    @DisplayName("GET /api/v1/users/me should return current user profile when authenticated")
     void shouldReturnProfileWhenAuthenticated() throws Exception {
         when(tokenService.validateToken("valid-token")).thenReturn(true);
         when(tokenService.getUserIdFromToken("valid-token")).thenReturn("u-123");
@@ -77,7 +77,7 @@ class UserControllerTest {
 
         when(authService.getCurrentUser("u-123")).thenReturn(profile);
 
-        mockMvc.perform(get("/api/users/me")
+        mockMvc.perform(get("/api/v1/users/me")
                         .header("Authorization", "Bearer valid-token"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("u-123"))

@@ -7,12 +7,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
+import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.dto.CurrentUserResponse;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.auth.service.AuthService;
 
 @RestController
-@RequestMapping("/api/users")
+@RequestMapping(ApiPaths.API_V1 + "/users")
 public class UserController {
 
     private final AuthService authService;

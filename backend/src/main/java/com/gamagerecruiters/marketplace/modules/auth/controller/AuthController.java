@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.dto.AuthResponse;
 import com.gamagerecruiters.marketplace.modules.auth.dto.LoginRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.LogoutRequest;
@@ -19,7 +20,7 @@ import com.gamagerecruiters.marketplace.modules.auth.service.AuthService;
 import jakarta.validation.Valid;
 
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping(ApiPaths.API_V1 + "/auth")
 public class AuthController {
 
     private final AuthService authService;

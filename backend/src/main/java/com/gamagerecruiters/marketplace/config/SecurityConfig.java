@@ -19,6 +19,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CustomAccessDeniedHandler;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationEntryPoint;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
@@ -34,9 +35,9 @@ public class SecurityConfig {
      */
     public static final String[] PUBLIC_ENDPOINTS = {
             "/api/health",
-            "/api/auth/register",
-            "/api/auth/login",
-            "/api/auth/refresh"
+            ApiPaths.API_V1 + "/auth/register",
+            ApiPaths.API_V1 + "/auth/login",
+            ApiPaths.API_V1 + "/auth/refresh"
     };
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;

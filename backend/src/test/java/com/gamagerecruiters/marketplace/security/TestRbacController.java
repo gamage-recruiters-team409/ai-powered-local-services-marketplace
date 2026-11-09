@@ -9,11 +9,12 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.auth.security.OwnershipChecker;
 
 @RestController
-@RequestMapping("/api/test")
+@RequestMapping(ApiPaths.API_V1 + "/test")
 public class TestRbacController {
 
     @GetMapping("/customer-only")
