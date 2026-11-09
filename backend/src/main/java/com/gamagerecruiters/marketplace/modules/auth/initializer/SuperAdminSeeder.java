@@ -60,7 +60,8 @@ public class SuperAdminSeeder implements CommandLineRunner {
         User superAdmin = new User();
         superAdmin.setName("Super Admin");
         superAdmin.setEmail(normalizedEmail);
-        superAdmin.setPhone("+10000000000");
+        // Phone is left absent (null) for admin accounts
+        superAdmin.setPhone(null);
         superAdmin.setPasswordHash(passwordEncoder.encode(superAdminPassword));
         superAdmin.setRole(Role.SUPER_ADMIN);
         superAdmin.setStatus(UserStatus.ACTIVE);
