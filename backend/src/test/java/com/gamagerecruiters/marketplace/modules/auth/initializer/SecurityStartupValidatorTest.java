@@ -142,6 +142,17 @@ class SecurityStartupValidatorTest {
     }
 
     @Test
+    @DisplayName("Finding 2: Startup succeeds if bypass=false in integration-test profile")
+    void shouldSucceedWhenBypassOnInIntegrationTest() {
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{"integration-test"});
+
+        SecurityStartupValidator validator = new SecurityStartupValidator(false, env);
+
+        assertDoesNotThrow(validator::validateSecurityConfiguration);
+    }
+
+    @Test
     @DisplayName("Issue B: Startup succeeds when verification=true regardless of profile (prod)")
     void shouldSucceedWhenVerificationTrueInProd() {
         Environment env = mock(Environment.class);

@@ -17,7 +17,7 @@ public class SecurityStartupValidator {
 
     private static final Logger log = LoggerFactory.getLogger(SecurityStartupValidator.class);
 
-    private static final Set<String> ALLOWED_BYPASS_PROFILES = Set.of("local", "dev", "test");
+    private static final Set<String> ALLOWED_BYPASS_PROFILES = Set.of("local", "dev", "test", "integration-test");
     private static final Set<String> PROTECTED_PROFILES = Set.of("prod", "production", "staging", "stage", "uat");
 
     private final boolean requireEmailVerification;

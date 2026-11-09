@@ -16,7 +16,7 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 
 @Component
-@Profile("!test")
+@Profile("!test & !integration-test")
 public class SuperAdminSeeder implements CommandLineRunner {
 
     private static final Logger log = LoggerFactory.getLogger(SuperAdminSeeder.class);
