@@ -13,8 +13,34 @@ import org.springframework.core.env.Environment;
 class SecurityStartupValidatorTest {
 
     @Test
-    @DisplayName("Issue 4: Startup fails if REQUIRE_EMAIL_VERIFICATION is false in prod profile")
-    void shouldFailStartupWhenBypassOnInProd() {
+    @DisplayName("Issue B: Startup fails if bypass=false with no active profile (empty)")
+    void shouldFailWhenBypassOnAndNoProfile() {
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{});
+
+        SecurityStartupValidator validator = new SecurityStartupValidator(false, env);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, validator::validateSecurityConfiguration);
+        assertTrue(ex.getMessage().contains("Security violation"));
+        assertTrue(ex.getMessage().contains("without an explicitly configured active profile"));
+    }
+
+    @Test
+    @DisplayName("Issue B: Startup fails if bypass=false with unknown profile")
+    void shouldFailWhenBypassOnAndUnknownProfile() {
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{"sandbox"});
+
+        SecurityStartupValidator validator = new SecurityStartupValidator(false, env);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, validator::validateSecurityConfiguration);
+        assertTrue(ex.getMessage().contains("Security violation"));
+        assertTrue(ex.getMessage().contains("unknown/unauthorized"));
+    }
+
+    @Test
+    @DisplayName("Issue B: Startup fails if bypass=false in prod profile")
+    void shouldFailWhenBypassOnInProd() {
         Environment env = mock(Environment.class);
         when(env.getActiveProfiles()).thenReturn(new String[]{"prod"});
 
@@ -22,23 +48,80 @@ class SecurityStartupValidatorTest {
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, validator::validateSecurityConfiguration);
         assertTrue(ex.getMessage().contains("Security violation"));
+        assertTrue(ex.getMessage().contains("protected profile"));
     }
 
     @Test
-    @DisplayName("Issue 4: Startup fails if REQUIRE_EMAIL_VERIFICATION is false in staging profile")
-    void shouldFailStartupWhenBypassOnInStaging() {
+    @DisplayName("Issue B: Startup fails if bypass=false in production profile")
+    void shouldFailWhenBypassOnInProduction() {
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{"production"});
+
+        SecurityStartupValidator validator = new SecurityStartupValidator(false, env);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, validator::validateSecurityConfiguration);
+        assertTrue(ex.getMessage().contains("protected profile"));
+    }
+
+    @Test
+    @DisplayName("Issue B: Startup fails if bypass=false in staging profile")
+    void shouldFailWhenBypassOnInStaging() {
         Environment env = mock(Environment.class);
         when(env.getActiveProfiles()).thenReturn(new String[]{"staging"});
 
         SecurityStartupValidator validator = new SecurityStartupValidator(false, env);
 
-        IllegalStateException ex = assertThrows(IllegalStateException.class, validator::validateSecurityConfiguration);
-        assertTrue(ex.getMessage().contains("Security violation"));
+        assertThrows(IllegalStateException.class, validator::validateSecurityConfiguration);
     }
 
     @Test
-    @DisplayName("Issue 4: Startup succeeds when REQUIRE_EMAIL_VERIFICATION is false in local/dev profile")
-    void shouldSucceedStartupWhenBypassOnInDev() {
+    @DisplayName("Issue B: Startup fails if bypass=false in stage profile")
+    void shouldFailWhenBypassOnInStage() {
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{"stage"});
+
+        SecurityStartupValidator validator = new SecurityStartupValidator(false, env);
+
+        assertThrows(IllegalStateException.class, validator::validateSecurityConfiguration);
+    }
+
+    @Test
+    @DisplayName("Issue B: Startup fails if bypass=false in uat profile")
+    void shouldFailWhenBypassOnInUat() {
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{"uat"});
+
+        SecurityStartupValidator validator = new SecurityStartupValidator(false, env);
+
+        assertThrows(IllegalStateException.class, validator::validateSecurityConfiguration);
+    }
+
+    @Test
+    @DisplayName("Issue B: Startup fails if bypass=false with mixed local+prod profiles (protected profile wins)")
+    void shouldFailWhenBypassOnWithMixedLocalAndProd() {
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{"local", "prod"});
+
+        SecurityStartupValidator validator = new SecurityStartupValidator(false, env);
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, validator::validateSecurityConfiguration);
+        assertTrue(ex.getMessage().contains("protected profile"));
+    }
+
+    @Test
+    @DisplayName("Issue B: Startup succeeds if bypass=false in local profile")
+    void shouldSucceedWhenBypassOnInLocal() {
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{"local"});
+
+        SecurityStartupValidator validator = new SecurityStartupValidator(false, env);
+
+        assertDoesNotThrow(validator::validateSecurityConfiguration);
+    }
+
+    @Test
+    @DisplayName("Issue B: Startup succeeds if bypass=false in dev profile")
+    void shouldSucceedWhenBypassOnInDev() {
         Environment env = mock(Environment.class);
         when(env.getActiveProfiles()).thenReturn(new String[]{"dev"});
 
@@ -48,10 +131,32 @@ class SecurityStartupValidatorTest {
     }
 
     @Test
-    @DisplayName("Issue 4: Startup succeeds when REQUIRE_EMAIL_VERIFICATION is true in prod profile")
-    void shouldSucceedStartupWhenVerificationTrueInProd() {
+    @DisplayName("Issue B: Startup succeeds if bypass=false in test profile")
+    void shouldSucceedWhenBypassOnInTest() {
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{"test"});
+
+        SecurityStartupValidator validator = new SecurityStartupValidator(false, env);
+
+        assertDoesNotThrow(validator::validateSecurityConfiguration);
+    }
+
+    @Test
+    @DisplayName("Issue B: Startup succeeds when verification=true regardless of profile (prod)")
+    void shouldSucceedWhenVerificationTrueInProd() {
         Environment env = mock(Environment.class);
         when(env.getActiveProfiles()).thenReturn(new String[]{"prod"});
+
+        SecurityStartupValidator validator = new SecurityStartupValidator(true, env);
+
+        assertDoesNotThrow(validator::validateSecurityConfiguration);
+    }
+
+    @Test
+    @DisplayName("Issue B: Startup succeeds when verification=true with no profile")
+    void shouldSucceedWhenVerificationTrueWithNoProfile() {
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{});
 
         SecurityStartupValidator validator = new SecurityStartupValidator(true, env);
 
