@@ -7,6 +7,7 @@ import org.springframework.stereotype.Repository;
 
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
+import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 
 @Repository
 public interface UserRepository extends MongoRepository<User, String> {
@@ -20,4 +21,6 @@ public interface UserRepository extends MongoRepository<User, String> {
     boolean existsByPhone(String phone);
 
     boolean existsByRole(Role role);
+
+    long countByRoleAndStatus(Role role, UserStatus status);
 }

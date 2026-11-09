@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.auth.service;
 import java.time.Instant;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -14,6 +15,8 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
+import com.gamagerecruiters.marketplace.modules.auth.security.AdminRolePolicy;
+import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.auth.security.Roles;
 
 @Service
@@ -36,20 +39,48 @@ public class UserInternalServiceImpl implements UserInternalService {
     @Override
     @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     public User changeStatus(String userId, UserStatus status) {
-        User user = getById(userId);
-        user.setStatus(status);
-        if (status == UserStatus.ACTIVE) {
-            user.setFailedLoginCount(0);
-            user.setLockStartedAt(null);
+        String currentUserId = CurrentUser.getUserId();
+        if (currentUserId == null) {
+            throw new AccessDeniedException("Authentication required: actor could not be resolved from security context");
         }
-        return userRepository.save(user);
+
+        User actor = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new AccessDeniedException("Actor user not found in database"));
+
+        User target = getById(userId);
+
+        AdminRolePolicy.validateStatusChange(actor, target, status, userRepository);
+
+        target.setStatus(status);
+        if (status == UserStatus.ACTIVE) {
+            target.setFailedLoginCount(0);
+            target.setLockStartedAt(null);
+        }
+        return userRepository.save(target);
     }
 
     @Override
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     public User createAdminAccount(String name, String email, String password, Role role) {
+        if (role == Role.SUPER_ADMIN) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "INVALID_ROLE",
+                    "SUPER_ADMIN accounts cannot be created via API. They are initialized via startup seed only."
+            );
+        }
+
         if (!Roles.ADMIN_ROLES.contains(role)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_ROLE", "Assigned role must be an administrative role");
+        }
+
+        String currentUserId = CurrentUser.getUserId();
+        if (currentUserId != null) {
+            User actor = userRepository.findById(currentUserId)
+                    .orElseThrow(() -> new AccessDeniedException("Actor user not found in database"));
+            if (actor.getRole() != Role.SUPER_ADMIN || actor.getStatus() != UserStatus.ACTIVE) {
+                throw new AccessDeniedException("Only an active SUPER_ADMIN may create administrative accounts");
+            }
         }
 
         String normalizedEmail = email.toLowerCase().trim();
