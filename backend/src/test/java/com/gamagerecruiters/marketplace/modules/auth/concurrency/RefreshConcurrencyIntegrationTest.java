@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.fail;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -16,21 +15,22 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.MongoDBContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.AuthToken;
@@ -45,31 +45,39 @@ import com.gamagerecruiters.marketplace.modules.auth.service.AuthService;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 
 @SpringBootTest
-@Testcontainers(disabledWithoutDocker = true)
 @ActiveProfiles("integration-test")
 @Tag("integration")
+@ExtendWith(DockerRequiredCondition.class)
 class RefreshConcurrencyIntegrationTest {
 
-    @Container
+    private static final Logger log = LoggerFactory.getLogger(RefreshConcurrencyIntegrationTest.class);
+
     static MongoDBContainer mongoDBContainer = new MongoDBContainer("mongo:7.0");
 
     @DynamicPropertySource
     static void configureMongoUri(DynamicPropertyRegistry registry) {
-        registry.add("spring.data.mongodb.uri", mongoDBContainer::getReplicaSetUrl);
+        registry.add("spring.data.mongodb.uri", () -> {
+            // Container may not be started yet when Spring resolves properties lazily;
+            // start it here as a safety net (idempotent if already running).
+            if (!mongoDBContainer.isRunning()) {
+                mongoDBContainer.start();
+            }
+            return mongoDBContainer.getReplicaSetUrl();
+        });
     }
 
     @BeforeAll
-    static void verifyDockerWhenRequired() {
-        boolean requireDocker = Boolean.parseBoolean(System.getenv("REQUIRE_DOCKER_TESTS")) ||
-                               Boolean.parseBoolean(System.getProperty("require.docker.tests", "false"));
-        if (requireDocker) {
-            try {
-                if (!DockerClientFactory.instance().isDockerAvailable()) {
-                    fail("REQUIRE_DOCKER_TESTS is true but Docker daemon is not available/running!");
-                }
-            } catch (Exception e) {
-                fail("REQUIRE_DOCKER_TESTS is true but Docker check failed: " + e.getMessage());
-            }
+    static void startContainer() {
+        // DockerRequiredCondition guarantees Docker is available and skip is not requested.
+        if (!mongoDBContainer.isRunning()) {
+            mongoDBContainer.start();
+        }
+    }
+
+    @AfterAll
+    static void stopContainer() {
+        if (mongoDBContainer != null && mongoDBContainer.isRunning()) {
+            mongoDBContainer.stop();
         }
     }
 
