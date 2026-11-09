@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.gamagerecruiters.marketplace.common.exception.GlobalExceptionHandler;
 import com.gamagerecruiters.marketplace.config.SecurityConfig;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.dto.CurrentUserResponse;
 import com.gamagerecruiters.marketplace.modules.auth.security.CustomAccessDeniedHandler;
@@ -26,6 +27,7 @@ import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationE
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
 import com.gamagerecruiters.marketplace.modules.auth.service.AuthService;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
+import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 
 @WebMvcTest(UserController.class)
 @Import({
@@ -47,6 +49,9 @@ class UserControllerTest {
     @MockitoBean
     private TokenService tokenService;
 
+    @MockitoBean
+    private UserInternalService userInternalService;
+
     @Test
     @DisplayName("GET /api/v1/users/me should return 401 when token is missing")
     void shouldReturn401WhenNotAuthenticated() throws Exception {
@@ -63,6 +68,13 @@ class UserControllerTest {
         when(tokenService.getUserIdFromToken("valid-token")).thenReturn("u-123");
         when(tokenService.getEmailFromToken("valid-token")).thenReturn("jane@marketplace.local");
         when(tokenService.getRoleFromToken("valid-token")).thenReturn(Role.CUSTOMER);
+
+        User activeUser = new User();
+        activeUser.setId("u-123");
+        activeUser.setEmail("jane@marketplace.local");
+        activeUser.setRole(Role.CUSTOMER);
+        activeUser.setStatus(UserStatus.ACTIVE);
+        when(userInternalService.getById("u-123")).thenReturn(activeUser);
 
         CurrentUserResponse profile = new CurrentUserResponse(
                 "u-123",

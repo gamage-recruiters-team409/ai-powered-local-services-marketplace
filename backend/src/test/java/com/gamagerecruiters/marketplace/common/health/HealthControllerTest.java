@@ -18,6 +18,7 @@ import com.gamagerecruiters.marketplace.modules.auth.security.CustomAccessDenied
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationEntryPoint;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
+import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 
 @WebMvcTest(HealthController.class)
 @Import({SecurityConfig.class, JwtAuthenticationFilter.class, JwtAuthenticationEntryPoint.class, CustomAccessDeniedHandler.class})
@@ -29,6 +30,9 @@ class HealthControllerTest {
 
     @MockitoBean
     private TokenService tokenService;
+
+    @MockitoBean
+    private UserInternalService userInternalService;
 
     @Test
     @DisplayName("Health endpoint /api/health should be public and return UP")
