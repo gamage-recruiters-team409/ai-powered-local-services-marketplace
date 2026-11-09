@@ -60,35 +60,34 @@ public class MongoIndexInitializer {
     private void initUsersPhonePartialIndex() {
         try {
             MongoCollection<Document> usersCollection = mongoTemplate.getCollection("users");
+            Document expectedPhoneFilter = new Document("phone", new Document("$type", "string"));
 
             // Inspect existing indexes — never drop, only validate
             for (Document indexDoc : usersCollection.listIndexes()) {
                 String indexName = indexDoc.getString("name");
                 Document key = indexDoc.get("key", Document.class);
 
-                if (key != null && key.containsKey("phone") && key.size() == 1) {
+                if (key != null && key.containsKey("phone")) {
+                    boolean validKey = key.size() == 1 && isDirectionAscending(key.get("phone"));
+                    boolean validUnique = isUniqueTrue(indexDoc);
                     Document partialFilter = indexDoc.get("partialFilterExpression", Document.class);
+                    boolean validFilter = expectedPhoneFilter.equals(partialFilter);
 
-                    if (partialFilter == null) {
-                        // Legacy non-partial index detected — refuse to start, require manual migration
-                        throw new IllegalStateException(
-                                "Legacy non-partial index '" + indexName + "' detected on users.phone. " +
-                                "Automatic drop is disabled for safety. Manual migration required: " +
-                                "see docs/db-migrations/2026-11-users-phone-partial-index.md " +
-                                "and run docs/db-migrations/users-phone-partial-index.js via mongosh."
-                        );
-                    }
-
-                    // Validate partial filter has the expected shape: {phone: {$type: "string"}}
-                    Document expectedPhoneFilter = new Document("phone", new Document("$type", "string"));
-                    if (partialFilter.equals(expectedPhoneFilter)) {
+                    if (validKey && validUnique && validFilter) {
                         log.info("Index verified: users.phone (partial unique, string type) -> existing '{}' matches expected specification.", indexName);
                         return;
                     }
 
-                    // Partial filter exists but doesn't match expected shape
-                    log.warn("Index '{}' on users.phone has unexpected partialFilterExpression: {}. Expected: {}. " +
-                             "Creating expected index if possible.", indexName, partialFilter, expectedPhoneFilter);
+                    // Index on phone exists but does not strictly match required specification
+                    throw new IllegalStateException(
+                            "Incompatible index '" + indexName + "' detected on users.phone. " +
+                            "Expected key {phone: 1}, unique: true, and partialFilterExpression: {phone: {$type: 'string'}}, " +
+                            "but found [key=" + key.toJson() + ", unique=" + indexDoc.get("unique") +
+                            ", partialFilterExpression=" + (partialFilter != null ? partialFilter.toJson() : "null") + "]. " +
+                            "Automatic drop is disabled for safety. Manual migration required: " +
+                            "see docs/db-migrations/2026-11-users-phone-partial-index.md " +
+                            "and run docs/db-migrations/users-phone-partial-index.js via mongosh."
+                    );
                 }
             }
 
@@ -111,6 +110,24 @@ public class MongoIndexInitializer {
                     "Ensure no duplicate phone numbers exist among string-typed phone records.", e
             );
         }
+    }
+
+    private boolean isDirectionAscending(Object dir) {
+        if (dir instanceof Number n) {
+            return n.intValue() == 1;
+        }
+        return false;
+    }
+
+    private boolean isUniqueTrue(Document indexDoc) {
+        Object val = indexDoc.get("unique");
+        if (val instanceof Boolean b) {
+            return b;
+        }
+        if (val instanceof Number n) {
+            return n.intValue() == 1;
+        }
+        return false;
     }
 
     private void initAuthTokensTokenHashIndex() {

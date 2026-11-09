@@ -27,12 +27,12 @@ application now **refuses to start** if it detects this legacy index, directing 
    db.users.getIndexes();
    ```
 
-4. Look for an index with key `{ phone: 1 }`.
-   - If it has **no** `partialFilterExpression` → legacy index, proceed with migration.
-   - If it already has `partialFilterExpression: { phone: { $type: "string" } }` →
-     migration already applied, no action needed.
-   - If no phone index exists at all → the application will create it automatically on
-     next startup.
+4. Look for an index covering `phone`. The application accepts an existing index ONLY if ALL 3 criteria match:
+   - Key pattern is exactly `{ phone: 1 }` (ascending, single field).
+   - `unique` is strictly `true` (absent or false is rejected).
+   - `partialFilterExpression` is exactly `{ phone: { $type: "string" } }`.
+   - If an index on `phone` exists but lacks `unique: true` or has an incorrect filter or key, the application **fails to start** and refuses to alter the database automatically.
+   - If no phone index exists at all → the application creates it automatically on next startup.
 
 ## Migration Steps
 
