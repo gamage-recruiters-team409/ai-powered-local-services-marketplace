@@ -28,6 +28,7 @@ import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationE
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
 import com.gamagerecruiters.marketplace.modules.auth.service.AuthService;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
+import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 
 @WebMvcTest(AuthController.class)
 @Import({
@@ -51,6 +52,9 @@ class AuthControllerTest {
 
     @MockitoBean
     private TokenService tokenService;
+
+    @MockitoBean
+    private UserInternalService userInternalService;
 
     @Test
     @DisplayName("Should return 400 VALIDATION_FAILED when registration payload has validation errors")
@@ -102,5 +106,53 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.status").value(401))
                 .andExpect(jsonPath("$.error").value("INVALID_CREDENTIALS"))
                 .andExpect(jsonPath("$.message").value("Invalid email or password"));
+    }
+
+    @Test
+    @DisplayName("Issue 8: Malformed JSON body on /api/v1/auth/login should return 400 MALFORMED_REQUEST")
+    void shouldReturn400OnMalformedJsonLogin() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\": \"test@test.com\", invalidJson"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("MALFORMED_REQUEST"))
+                .andExpect(jsonPath("$.message").value("Malformed or unreadable request body"));
+    }
+
+    @Test
+    @DisplayName("Issue 8: Malformed JSON body on /api/v1/auth/register should return 400 MALFORMED_REQUEST")
+    void shouldReturn400OnMalformedJsonRegister() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{invalid-json"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("MALFORMED_REQUEST"))
+                .andExpect(jsonPath("$.message").value("Malformed or unreadable request body"));
+    }
+
+    @Test
+    @DisplayName("Issue 8: Invalid enum value for role in register payload should return 400 instead of 500")
+    void shouldReturn400OnInvalidRoleEnum() throws Exception {
+        String invalidPayload = """
+                {
+                    "name": "Jane Doe",
+                    "email": "jane@example.com",
+                    "phone": "+1234567890",
+                    "password": "Password123",
+                    "role": "NOT_A_VALID_ROLE",
+                    "acceptedTerms": true,
+                    "policyVersion": "v1.0"
+                }
+                """;
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(invalidPayload))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("MALFORMED_REQUEST"))
+                .andExpect(jsonPath("$.message").value("Malformed or unreadable request body"));
     }
 }
