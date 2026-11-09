@@ -77,7 +77,8 @@ class AuthServiceTest {
                 tokenService,
                 false, // requireEmailVerification = false for dev
                 5,     // maxFailedLogins = 5
-                15     // lockDurationMinutes = 15
+                15,    // lockDurationMinutes = 15
+                10     // refreshReuseGraceSeconds = 10
         );
     }
 
@@ -125,7 +126,8 @@ class AuthServiceTest {
                 tokenService,
                 true, // requireEmailVerification = true
                 5,
-                15
+                15,
+                10
         );
 
         RegisterRequest request = new RegisterRequest(
@@ -483,12 +485,34 @@ class AuthServiceTest {
     }
 
     @Test
-    @DisplayName("Issue 3: Reused refresh token is rejected and revokes all active refresh tokens for the user")
+    @DisplayName("Issue D: Reused refresh token within grace period returns 409 Conflict without revoking user tokens")
+    void shouldReturnConflictWithoutRevokingWhenRefreshReusedWithinGracePeriod() {
+        RefreshTokenRequest request = new RefreshTokenRequest("recently-used-token");
+
+        AuthToken token = new AuthToken("u-1", TokenType.REFRESH, "hash-recent", Instant.now().plusSeconds(3600), Instant.now());
+        // Used 2 seconds ago (within 10s grace period)
+        token.setUsedAt(Instant.now().minusSeconds(2));
+
+        when(tokenService.hashToken("recently-used-token")).thenReturn("hash-recent");
+        when(authTokenRepository.findAndConsumeValidToken(eq("hash-recent"), any(Instant.class))).thenReturn(Optional.empty());
+        when(authTokenRepository.findByTokenHash("hash-recent")).thenReturn(Optional.of(token));
+
+        ApiException ex = assertThrows(ApiException.class, () -> authService.refresh(request));
+        assertEquals("REFRESH_IN_PROGRESS", ex.getErrorCode());
+        assertEquals(org.springframework.http.HttpStatus.CONFLICT, ex.getStatus());
+
+        // Verify tokens are NOT revoked
+        verify(authTokenRepository, never()).revokeAllActiveTokensByUserId(anyString());
+    }
+
+    @Test
+    @DisplayName("Issue D: Reused refresh token after grace period is rejected and revokes all active refresh tokens for the user")
     void shouldRejectReusedRefreshTokenAndRevokeUserTokens() {
         RefreshTokenRequest request = new RefreshTokenRequest("already-used-token");
 
         AuthToken token = new AuthToken("u-1", TokenType.REFRESH, "hash-used", Instant.now().plusSeconds(3600), Instant.now());
-        token.setUsedAt(Instant.now());
+        // Used 30 seconds ago (outside 10s grace period)
+        token.setUsedAt(Instant.now().minusSeconds(30));
 
         when(tokenService.hashToken("already-used-token")).thenReturn("hash-used");
         when(authTokenRepository.findAndConsumeValidToken(eq("hash-used"), any(Instant.class))).thenReturn(Optional.empty());
@@ -496,6 +520,7 @@ class AuthServiceTest {
 
         ApiException ex = assertThrows(ApiException.class, () -> authService.refresh(request));
         assertEquals("TOKEN_REUSED", ex.getErrorCode());
+        assertEquals(org.springframework.http.HttpStatus.UNAUTHORIZED, ex.getStatus());
 
         // Verify security measure: all active tokens for this user are revoked
         verify(authTokenRepository).revokeAllActiveTokensByUserId("u-1");

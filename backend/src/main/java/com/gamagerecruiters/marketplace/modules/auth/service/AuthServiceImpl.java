@@ -43,15 +43,17 @@ public class AuthServiceImpl implements AuthService {
     private final boolean requireEmailVerification;
     private final int maxFailedLogins;
     private final int lockDurationMinutes;
+    private final int refreshReuseGraceSeconds;
 
     public AuthServiceImpl(
             UserRepository userRepository,
             AuthTokenRepository authTokenRepository,
             PasswordEncoder passwordEncoder,
             TokenService tokenService,
-            @Value("${app.auth.require-email-verification:false}") boolean requireEmailVerification,
+            @Value("${app.auth.require-email-verification:true}") boolean requireEmailVerification,
             @Value("${app.auth.max-failed-logins:5}") int maxFailedLogins,
-            @Value("${app.auth.lock-duration-minutes:15}") int lockDurationMinutes
+            @Value("${app.auth.lock-duration-minutes:15}") int lockDurationMinutes,
+            @Value("${app.auth.refresh-reuse-grace-seconds:10}") int refreshReuseGraceSeconds
     ) {
         this.userRepository = userRepository;
         this.authTokenRepository = authTokenRepository;
@@ -60,6 +62,7 @@ public class AuthServiceImpl implements AuthService {
         this.requireEmailVerification = requireEmailVerification;
         this.maxFailedLogins = maxFailedLogins;
         this.lockDurationMinutes = lockDurationMinutes;
+        this.refreshReuseGraceSeconds = refreshReuseGraceSeconds;
     }
 
     @Override
@@ -217,7 +220,16 @@ public class AuthServiceImpl implements AuthService {
 
             AuthToken existing = existingOpt.get();
             if (existing.isUsed()) {
-                // Token reuse detected! Revoke all active refresh tokens for this user as a security measure
+                // Token reuse detected — check grace window for concurrent refresh tolerance
+                long elapsedSeconds = Duration.between(existing.getUsedAt(), now).getSeconds();
+                if (elapsedSeconds <= refreshReuseGraceSeconds) {
+                    // Within grace window: likely a concurrent request, not an attack.
+                    // Return 409 Conflict without revoking user sessions.
+                    throw new ApiException(HttpStatus.CONFLICT, "REFRESH_IN_PROGRESS",
+                            "Refresh already in progress, retry with the latest token");
+                }
+                // Outside grace window: genuine token reuse attack.
+                // Revoke all active refresh tokens for this user as a security measure.
                 authTokenRepository.revokeAllActiveTokensByUserId(existing.getUserId());
                 throw new ApiException(HttpStatus.UNAUTHORIZED, "TOKEN_REUSED", "Refresh token has already been used");
             }
