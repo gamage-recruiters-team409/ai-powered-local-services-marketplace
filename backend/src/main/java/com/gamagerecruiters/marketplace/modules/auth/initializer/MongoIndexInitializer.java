@@ -31,7 +31,6 @@ public class MongoIndexInitializer {
     }
 
     @EventListener(ApplicationReadyEvent.class)
-    @SuppressWarnings("removal")
     public void initializeIndexes() {
         log.info("Initializing and validating MongoDB indexes for auth collections...");
 
@@ -43,13 +42,13 @@ public class MongoIndexInitializer {
         log.info("All required MongoDB indexes for auth module verified successfully.");
     }
 
-    @SuppressWarnings("removal")
     private void initUsersEmailIndex() {
         try {
-            mongoTemplate.indexOps(User.class).ensureIndex(
+            @SuppressWarnings("removal")
+            String result = mongoTemplate.indexOps(User.class).ensureIndex(
                     new Index().on("email", Sort.Direction.ASC).unique().named("email_1")
             );
-            log.info("Index verified: users.email (unique)");
+            log.info("Index verified: users.email (unique) -> {}", result);
         } catch (Exception e) {
             throw new IllegalStateException(
                     "Startup failed: Unable to create required unique index 'email_1' on users collection. " +
@@ -58,33 +57,54 @@ public class MongoIndexInitializer {
         }
     }
 
-    @SuppressWarnings("removal")
     private void initUsersPhonePartialIndex() {
         try {
             MongoCollection<Document> usersCollection = mongoTemplate.getCollection("users");
-            // Check for legacy non-partial index on phone
+
+            // Inspect existing indexes — never drop, only validate
             for (Document indexDoc : usersCollection.listIndexes()) {
                 String indexName = indexDoc.getString("name");
                 Document key = indexDoc.get("key", Document.class);
-                if ("phone_1".equals(indexName) || (key != null && key.containsKey("phone") && key.size() == 1)) {
+
+                if (key != null && key.containsKey("phone") && key.size() == 1) {
                     Document partialFilter = indexDoc.get("partialFilterExpression", Document.class);
+
                     if (partialFilter == null) {
-                        log.info("Found legacy non-partial index '{}' on users.phone. Dropping to apply partial unique filter...", indexName);
-                        usersCollection.dropIndex(indexName);
+                        // Legacy non-partial index detected — refuse to start, require manual migration
+                        throw new IllegalStateException(
+                                "Legacy non-partial index '" + indexName + "' detected on users.phone. " +
+                                "Automatic drop is disabled for safety. Manual migration required: " +
+                                "see docs/db-migrations/2026-11-users-phone-partial-index.md " +
+                                "and run docs/db-migrations/users-phone-partial-index.js via mongosh."
+                        );
                     }
+
+                    // Validate partial filter has the expected shape: {phone: {$type: "string"}}
+                    Document expectedPhoneFilter = new Document("phone", new Document("$type", "string"));
+                    if (partialFilter.equals(expectedPhoneFilter)) {
+                        log.info("Index verified: users.phone (partial unique, string type) -> existing '{}' matches expected specification.", indexName);
+                        return;
+                    }
+
+                    // Partial filter exists but doesn't match expected shape
+                    log.warn("Index '{}' on users.phone has unexpected partialFilterExpression: {}. Expected: {}. " +
+                             "Creating expected index if possible.", indexName, partialFilter, expectedPhoneFilter);
                 }
             }
 
-            // Create partial unique index: unique only when phone is a string (leaves absent/null phones unindexed)
+            // No phone index found — create the partial unique index
             Document filterDoc = new Document("phone", new Document("$type", "string"));
-            mongoTemplate.indexOps(User.class).ensureIndex(
+            @SuppressWarnings("removal")
+            String result = mongoTemplate.indexOps(User.class).ensureIndex(
                     new Index()
                             .on("phone", Sort.Direction.ASC)
                             .unique()
                             .partial(PartialIndexFilter.of(filterDoc))
                             .named("phone_1")
             );
-            log.info("Index verified: users.phone (partial unique, string type)");
+            log.info("Index created: users.phone (partial unique, string type) -> {}", result);
+        } catch (IllegalStateException e) {
+            throw e; // Re-throw our own validation errors
         } catch (Exception e) {
             throw new IllegalStateException(
                     "Startup failed: Unable to create required partial unique index 'phone_1' on users collection. " +
@@ -93,13 +113,13 @@ public class MongoIndexInitializer {
         }
     }
 
-    @SuppressWarnings("removal")
     private void initAuthTokensTokenHashIndex() {
         try {
-            mongoTemplate.indexOps(AuthToken.class).ensureIndex(
+            @SuppressWarnings("removal")
+            String result = mongoTemplate.indexOps(AuthToken.class).ensureIndex(
                     new Index().on("tokenHash", Sort.Direction.ASC).unique().named("tokenHash_1")
             );
-            log.info("Index verified: auth_tokens.tokenHash (unique)");
+            log.info("Index verified: auth_tokens.tokenHash (unique) -> {}", result);
         } catch (Exception e) {
             throw new IllegalStateException(
                     "Startup failed: Unable to create required unique index 'tokenHash_1' on auth_tokens collection.", e
@@ -107,13 +127,13 @@ public class MongoIndexInitializer {
         }
     }
 
-    @SuppressWarnings("removal")
     private void initAuthTokensTtlIndex() {
         try {
-            mongoTemplate.indexOps(AuthToken.class).ensureIndex(
+            @SuppressWarnings("removal")
+            String result = mongoTemplate.indexOps(AuthToken.class).ensureIndex(
                     new Index().on("expiresAt", Sort.Direction.ASC).expire(0, TimeUnit.SECONDS).named("expiresAt_1")
             );
-            log.info("Index verified: auth_tokens.expiresAt (TTL)");
+            log.info("Index verified: auth_tokens.expiresAt (TTL) -> {}", result);
         } catch (Exception e) {
             throw new IllegalStateException(
                     "Startup failed: Unable to create required TTL index 'expiresAt_1' on auth_tokens collection.", e
