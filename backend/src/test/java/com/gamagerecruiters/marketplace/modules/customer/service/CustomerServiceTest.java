@@ -48,6 +48,9 @@ class CustomerServiceTest {
     @Mock
     private DistrictCatalog districtCatalog;
 
+    @Mock
+    private OpenBookingsChecker openBookingsChecker;
+
     private CustomerServiceImpl customerService;
 
     @BeforeEach
@@ -56,6 +59,7 @@ class CustomerServiceTest {
                 userInternalService,
                 customerAddressRepository,
                 districtCatalog,
+                openBookingsChecker,
                 10
         );
     }
@@ -287,5 +291,32 @@ class CustomerServiceTest {
         assertFalse(currentDefault.isDefault());
         verify(customerAddressRepository).save(currentDefault);
         verify(customerAddressRepository).save(target);
+    }
+
+    @Test
+    @DisplayName("deactivateAccount: Success when password matches and no open bookings")
+    void shouldDeactivateAccountWhenNoOpenBookings() {
+        when(openBookingsChecker.hasOpenBookings("c-1")).thenReturn(false);
+
+        customerService.deactivateAccount("c-1", new com.gamagerecruiters.marketplace.modules.customer.dto.DeactivateAccountRequest("ValidPass123!"));
+
+        verify(userInternalService).verifyPassword("c-1", "ValidPass123!");
+        verify(openBookingsChecker).hasOpenBookings("c-1");
+        verify(userInternalService).deactivateOwnAccount("c-1");
+    }
+
+    @Test
+    @DisplayName("deactivateAccount: Throws 409 when open bookings exist and never deactivates")
+    void shouldRejectDeactivationWhenOpenBookingsExist() {
+        when(openBookingsChecker.hasOpenBookings("c-1")).thenReturn(true);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> customerService.deactivateAccount("c-1", new com.gamagerecruiters.marketplace.modules.customer.dto.DeactivateAccountRequest("ValidPass123!"))
+        );
+        assertEquals("OPEN_BOOKINGS_EXIST", ex.getErrorCode());
+        assertEquals("You cannot deactivate your account while you have active bookings", ex.getMessage());
+        verify(userInternalService).verifyPassword("c-1", "ValidPass123!");
+        verify(userInternalService, never()).deactivateOwnAccount(any());
     }
 }

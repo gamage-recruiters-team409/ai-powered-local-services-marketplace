@@ -41,6 +41,7 @@ import com.gamagerecruiters.marketplace.modules.customer.dto.ChangePasswordReque
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressResponse;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerProfileResponse;
+import com.gamagerecruiters.marketplace.modules.customer.dto.DeactivateAccountRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.UpdateCustomerProfileRequest;
 import com.gamagerecruiters.marketplace.modules.customer.service.CustomerService;
 
@@ -271,5 +272,95 @@ class CustomerControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("addr-2"))
                 .andExpect(jsonPath("$.isDefault").value(true));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/customers/me/deactivate returns 204 on success")
+    void shouldDeactivateAccountSuccessfully() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        DeactivateAccountRequest req = new DeactivateAccountRequest("ValidPass123!");
+
+        mockMvc.perform(post("/api/v1/customers/me/deactivate")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isNoContent());
+
+        verify(customerService).deactivateAccount(eq("cust-1"), any(DeactivateAccountRequest.class));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/customers/me/deactivate returns 403 for PROVIDER role")
+    void shouldReturn403WhenProviderDeactivates() throws Exception {
+        mockAuth("prov-token", "prov-1", Role.PROVIDER);
+
+        DeactivateAccountRequest req = new DeactivateAccountRequest("ValidPass123!");
+
+        mockMvc.perform(post("/api/v1/customers/me/deactivate")
+                        .header("Authorization", "Bearer prov-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/customers/me/deactivate returns 400 on blank password")
+    void shouldReturn400OnBlankPasswordDeactivate() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        DeactivateAccountRequest req = new DeactivateAccountRequest("");
+
+        mockMvc.perform(post("/api/v1/customers/me/deactivate")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/customers/me/deactivate returns 409 when open bookings exist")
+    void shouldReturn409WhenOpenBookingsExist() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        DeactivateAccountRequest req = new DeactivateAccountRequest("ValidPass123!");
+
+        doThrow(new com.gamagerecruiters.marketplace.common.exception.ApiException(
+                org.springframework.http.HttpStatus.CONFLICT,
+                "OPEN_BOOKINGS_EXIST",
+                "You cannot deactivate your account while you have active bookings"
+        )).when(customerService).deactivateAccount(eq("cust-1"), any());
+
+        mockMvc.perform(post("/api/v1/customers/me/deactivate")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("OPEN_BOOKINGS_EXIST"))
+                .andExpect(jsonPath("$.message").value("You cannot deactivate your account while you have active bookings"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/customers/me/deactivate returns 503 when deactivation check is unavailable (fail-closed)")
+    void shouldReturn503WhenDeactivationUnavailable() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        DeactivateAccountRequest req = new DeactivateAccountRequest("ValidPass123!");
+
+        doThrow(new com.gamagerecruiters.marketplace.common.exception.ApiException(
+                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                "DEACTIVATION_UNAVAILABLE",
+                "Account deactivation is temporarily unavailable"
+        )).when(customerService).deactivateAccount(eq("cust-1"), any());
+
+        mockMvc.perform(post("/api/v1/customers/me/deactivate")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("DEACTIVATION_UNAVAILABLE"))
+                .andExpect(jsonPath("$.message").value("Account deactivation is temporarily unavailable"));
     }
 }

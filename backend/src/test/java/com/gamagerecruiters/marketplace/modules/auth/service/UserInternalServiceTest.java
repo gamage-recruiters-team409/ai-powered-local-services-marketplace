@@ -408,4 +408,95 @@ class UserInternalServiceTest {
         );
         assertEquals("WEAK_PASSWORD", ex.getErrorCode());
     }
+
+    @Test
+    @DisplayName("verifyPassword: Valid password passes without exception")
+    void shouldVerifyPasswordSuccessfully() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPasswordHash("hashed-pass");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("Pass123!", "hashed-pass")).thenReturn(true);
+
+        assertDoesNotThrow(() -> userInternalService.verifyPassword("u-1", "Pass123!"));
+    }
+
+    @Test
+    @DisplayName("verifyPassword: Wrong password throws 400 Bad Request")
+    void shouldRejectInvalidPasswordOnVerification() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPasswordHash("hashed-pass");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("WrongPass", "hashed-pass")).thenReturn(false);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> userInternalService.verifyPassword("u-1", "WrongPass")
+        );
+        assertEquals("INVALID_PASSWORD", ex.getErrorCode());
+        assertEquals("Password confirmation is incorrect", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("deactivateOwnAccount: Active user transitions to DEACTIVATED and revokes all tokens")
+    void shouldDeactivateActiveAccountAndRevokeTokens() {
+        User user = new User();
+        user.setId("u-1");
+        user.setStatus(UserStatus.ACTIVE);
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+
+        userInternalService.deactivateOwnAccount("u-1");
+
+        assertEquals(UserStatus.DEACTIVATED, user.getStatus());
+        verify(userRepository).save(user);
+        verify(authTokenRepository).revokeAllActiveTokensByUserId("u-1");
+    }
+
+    @Test
+    @DisplayName("deactivateOwnAccount: Non-active user throws 400 Bad Request")
+    void shouldRejectDeactivatingNonActiveAccount() {
+        User user = new User();
+        user.setId("u-1");
+        user.setStatus(UserStatus.SUSPENDED);
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> userInternalService.deactivateOwnAccount("u-1")
+        );
+        assertEquals("ACCOUNT_NOT_ACTIVE", ex.getErrorCode());
+        verify(userRepository, never()).save(any());
+        verify(authTokenRepository, never()).revokeAllActiveTokensByUserId(any());
+    }
+
+    @Test
+    @DisplayName("changeStatus: Admin cannot modify status of a DEACTIVATED account")
+    void shouldRejectAdminModifyingDeactivatedAccount() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+
+        User actor = new User();
+        actor.setId("admin-1");
+        actor.setRole(Role.ADMIN);
+        actor.setStatus(UserStatus.ACTIVE);
+
+        User target = new User();
+        target.setId("cust-1");
+        target.setRole(Role.CUSTOMER);
+        target.setStatus(UserStatus.DEACTIVATED);
+
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("cust-1")).thenReturn(Optional.of(target));
+
+        AccessDeniedException ex = assertThrows(
+                AccessDeniedException.class,
+                () -> userInternalService.changeStatus("cust-1", UserStatus.ACTIVE)
+        );
+        assertTrue(ex.getMessage().contains("Cannot modify status of a DEACTIVATED account"));
+        verify(userRepository, never()).save(target);
+    }
 }
