@@ -362,7 +362,8 @@ class CustomerServiceTest {
         );
         assertEquals(HttpStatus.CONFLICT, ex.getStatus());
         assertEquals("CONCURRENT_MODIFICATION", ex.getErrorCode());
-        verify(customerAddressRepository, times(3)).save(any(CustomerAddress.class));
+        // Exactly 4 save attempts: 3 retries to set target as default + 1 post-exhaustion self-heal attempt
+        verify(customerAddressRepository, times(4)).save(any(CustomerAddress.class));
     }
 
     @Test
