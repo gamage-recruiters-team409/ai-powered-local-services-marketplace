@@ -1296,11 +1296,11 @@
   background-color: #115e59;
 }
 
-/* Horizontal overflow guard for mobile */
+/* Horizontal overflow guard for mobile scoped strictly to search page wrapper */
 @media (max-width: 640px) {
-  html, body, #root, .localserve-page-wrapper {
-    overflow-x: hidden !important;
-    max-width: 100vw !important;
+  .localserve-page-wrapper {
+    overflow-x: hidden;
+    max-width: 100%;
   }
 
   .localserve-content-container,
@@ -1308,7 +1308,7 @@
   .search-results-column,
   .provider-result-card,
   .comparison-banner-card {
-    max-width: 100% !important;
-    box-sizing: border-box !important;
+    max-width: 100%;
+    box-sizing: border-box;
   }
 }

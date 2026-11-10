@@ -40,3 +40,4 @@ export function FeaturePendingModal({ isOpen, title, message, badgeText, onClose
 }
 
 export default FeaturePendingModal;
+
