@@ -14,8 +14,8 @@
 const DB_NAME = "marketplace";
 db = db.getSiblingDB(DB_NAME);
 
-const MAX_ADDRESSES = 10;
-const collection = db.getCollection("customer_addresses");
+const maxAddressesEnv = typeof process !== "undefined" && process.env ? process.env.MAX_ADDRESSES : null;
+const MAX_ADDRESSES = maxAddressesEnv ? parseInt(maxAddressesEnv, 10) : 10;
 
 print("=== STARTING READ-ONLY PRE-CHECK FOR customer_addresses ===");
 print("Target Collection: " + collection.getName());
