@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.completion.initializer;
 
+import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -11,10 +12,24 @@ import org.springframework.data.mongodb.core.index.Index;
 import org.springframework.stereotype.Component;
 
 import com.gamagerecruiters.marketplace.modules.completion.domain.ServiceCompletion;
+import com.mongodb.client.MongoCollection;
 
+/**
+ * Creates and verifies the MongoDB indexes required by the completion module.
+ *
+ * <p>The one-completion-per-booking rule depends on a unique index on
+ * {@code service_completions.bookingId}. The stored index definition is read back
+ * from MongoDB and checked (key, direction, unique, not partial/sparse) before it is
+ * reported as valid. An incompatible existing index stops startup; it is never
+ * dropped or replaced automatically.
+ */
 @Component
 @Profile("!test")
 public class CompletionIndexInitializer {
+
+    static final String COLLECTION = "service_completions";
+    static final String BOOKING_ID_FIELD = "bookingId";
+    static final String BOOKING_ID_INDEX = "bookingId_1";
 
     private static final Logger log = LoggerFactory.getLogger(CompletionIndexInitializer.class);
 
@@ -26,17 +41,98 @@ public class CompletionIndexInitializer {
 
     @EventListener(ApplicationReadyEvent.class)
     public void initializeIndexes() {
+        log.info("Initializing and validating MongoDB indexes for {}...", COLLECTION);
         try {
-            @SuppressWarnings("removal")
-            String result = mongoTemplate.indexOps(ServiceCompletion.class).ensureIndex(
-                    new Index().on("bookingId", Sort.Direction.ASC).unique().named("bookingId_1")
-            );
-            log.info("Index verified: service_completions.bookingId (unique) -> {}", result);
+            MongoCollection<Document> collection = mongoTemplate.getCollection(COLLECTION);
+
+            // Inspect existing indexes first — never drop, only validate
+            Document bookingIndex = findBookingIdIndex(collection);
+
+            if (bookingIndex == null) {
+                createBookingIdIndex();
+                // Read the stored definition back instead of trusting the create call
+                bookingIndex = findBookingIdIndex(collection);
+                if (bookingIndex == null) {
+                    throw new IllegalStateException(
+                            "Startup failed: required unique index '" + BOOKING_ID_INDEX + "' was requested on "
+                                    + COLLECTION + " but was not found when the stored indexes were read back.");
+                }
+            }
+
+            assertUniqueBookingIdIndex(bookingIndex);
+            log.info("Index verified: {}.bookingId (unique) -> stored definition {}", COLLECTION, describe(bookingIndex));
+        } catch (IllegalStateException e) {
+            throw e; // Re-throw our own validation errors
         } catch (Exception e) {
             throw new IllegalStateException(
-                    "Startup failed: Unable to create required unique index 'bookingId_1' on service_completions. " +
-                    "Ensure no booking has more than one completion record.", e
-            );
+                    "Startup failed: Unable to create or verify required unique index '" + BOOKING_ID_INDEX + "' on "
+                            + COLLECTION + ". Ensure no booking has more than one completion record.", e);
         }
+    }
+
+    @SuppressWarnings("removal")
+    private void createBookingIdIndex() {
+        String name = mongoTemplate.indexOps(ServiceCompletion.class).ensureIndex(
+                new Index().on(BOOKING_ID_FIELD, Sort.Direction.ASC).unique().named(BOOKING_ID_INDEX)
+        );
+        log.info("Index created: {}.bookingId (unique) -> {}", COLLECTION, name);
+    }
+
+    /** Returns the index that is on bookingId alone, or that uses the bookingId_1 name; null if none. */
+    private Document findBookingIdIndex(MongoCollection<Document> collection) {
+        for (Document indexDoc : collection.listIndexes()) {
+            Document key = indexDoc.get("key", Document.class);
+            boolean onBookingIdOnly = key != null && key.size() == 1 && key.containsKey(BOOKING_ID_FIELD);
+            boolean usesExpectedName = BOOKING_ID_INDEX.equals(indexDoc.getString("name"));
+            if (onBookingIdOnly || usesExpectedName) {
+                return indexDoc;
+            }
+        }
+        return null;
+    }
+
+    private void assertUniqueBookingIdIndex(Document indexDoc) {
+        Document key = indexDoc.get("key", Document.class);
+        boolean validKey = key != null && key.size() == 1 && isAscending(key.get(BOOKING_ID_FIELD));
+        boolean validUnique = isTrue(indexDoc.get("unique"));
+        boolean coversAllDocuments = !indexDoc.containsKey("partialFilterExpression") && !isTrue(indexDoc.get("sparse"));
+
+        if (validKey && validUnique && coversAllDocuments) {
+            return;
+        }
+
+        throw new IllegalStateException(
+                "Incompatible index '" + indexDoc.getString("name") + "' detected on " + COLLECTION + ".bookingId. "
+                        + "Expected key {bookingId: 1} with unique: true (not partial, not sparse), but found "
+                        + describe(indexDoc) + ". Automatic drop is disabled for safety. Manual migration required: "
+                        + "inspect with db." + COLLECTION + ".getIndexes(), resolve any duplicate bookingId values, "
+                        + "then replace the index manually before restarting the application.");
+    }
+
+    private static boolean isAscending(Object direction) {
+        return direction instanceof Number n && n.doubleValue() == 1.0;
+    }
+
+    private static boolean isTrue(Object value) {
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof Number n) {
+            return n.intValue() == 1;
+        }
+        return false;
+    }
+
+    private static String describe(Document indexDoc) {
+        Document summary = new Document("name", indexDoc.getString("name"))
+                .append("key", indexDoc.get("key"))
+                .append("unique", indexDoc.containsKey("unique") ? indexDoc.get("unique") : "absent");
+        if (indexDoc.containsKey("partialFilterExpression")) {
+            summary.append("partialFilterExpression", indexDoc.get("partialFilterExpression"));
+        }
+        if (indexDoc.containsKey("sparse")) {
+            summary.append("sparse", indexDoc.get("sparse"));
+        }
+        return summary.toJson();
     }
 }
