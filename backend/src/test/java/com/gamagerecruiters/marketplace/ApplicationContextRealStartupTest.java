@@ -16,12 +16,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
-<<<<<<< HEAD
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
-=======
 import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
->>>>>>> develop
 
 @SpringBootTest
 @ActiveProfiles("test")
