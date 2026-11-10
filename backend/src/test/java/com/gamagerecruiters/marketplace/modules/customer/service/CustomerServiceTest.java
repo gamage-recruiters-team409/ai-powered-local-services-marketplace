@@ -335,14 +335,21 @@ class CustomerServiceTest {
     @Test
     @DisplayName("setDefaultAddress: Retries up to 3 times on default index race and returns 409 if exhausted")
     void shouldReturn409WhenDefaultAddressRaceExhaustsRetries() {
-        CustomerAddress target = new CustomerAddress();
-        target.setId("addr-2");
-        target.setCustomerId("c-1");
-        target.setDefault(false);
-
-        when(customerAddressRepository.findByIdAndCustomerId("addr-2", "c-1")).thenReturn(Optional.of(target));
+        when(customerAddressRepository.findByIdAndCustomerId("addr-2", "c-1")).thenAnswer(inv -> {
+            CustomerAddress a = new CustomerAddress();
+            a.setId("addr-2");
+            a.setCustomerId("c-1");
+            a.setDefault(false);
+            return Optional.of(a);
+        });
         when(customerAddressRepository.findByCustomerIdAndIsDefaultTrue("c-1")).thenReturn(List.of());
-        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1")).thenReturn(List.of(target));
+        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1")).thenAnswer(inv -> {
+            CustomerAddress a = new CustomerAddress();
+            a.setId("addr-2");
+            a.setCustomerId("c-1");
+            a.setDefault(false);
+            return List.of(a);
+        });
 
         // Stub with doThrow on any(CustomerAddress.class) matching default index name
         org.mockito.Mockito.doThrow(new DuplicateKeyException("E11000 duplicate key error collection: marketplace.customer_addresses index: " +

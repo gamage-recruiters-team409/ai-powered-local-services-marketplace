@@ -254,6 +254,7 @@ public class CustomerServiceImpl implements CustomerService {
                 CustomerAddress saved = customerAddressRepository.save(target);
                 return CustomerAddressResponse.fromEntity(saved);
             } catch (DuplicateKeyException ex) {
+                target.setDefault(false);
                 if (previousDefault != null) {
                     try {
                         previousDefault.setDefault(true);
