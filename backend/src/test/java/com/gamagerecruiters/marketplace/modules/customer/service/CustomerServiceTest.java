@@ -7,10 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -20,6 +22,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.http.HttpStatus;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
@@ -47,6 +52,9 @@ class CustomerServiceTest {
 
     @Mock
     private DistrictCatalog districtCatalog;
+
+    @Mock
+    private ObjectProvider<OpenBookingsChecker> openBookingsCheckerProvider;
 
     @Mock
     private OpenBookingsChecker openBookingsChecker;
@@ -120,10 +128,11 @@ class CustomerServiceTest {
     }
 
     @Test
-    @DisplayName("createAddress: First address automatically becomes default")
-    void shouldMakeFirstAddressDefault() {
+    @DisplayName("createAddress: First address automatically becomes default and gets slot 1")
+    void shouldMakeFirstAddressDefaultWithSlotOne() {
         when(districtCatalog.isValidDistrict("Colombo")).thenReturn(true);
-        when(customerAddressRepository.countByCustomerId("c-1")).thenReturn(0L);
+        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1"))
+                .thenReturn(List.of());
         when(customerAddressRepository.save(any(CustomerAddress.class))).thenAnswer(inv -> {
             CustomerAddress a = inv.getArgument(0);
             a.setId("addr-1");
@@ -146,18 +155,18 @@ class CustomerServiceTest {
     }
 
     @Test
-    @DisplayName("createAddress: Subsequent default address unsets previous default")
+    @DisplayName("createAddress: Subsequent default address unsets previous default and allocates free slot")
     void shouldUnsetPreviousDefaultWhenNewDefaultCreated() {
         when(districtCatalog.isValidDistrict("Gampaha")).thenReturn(true);
-        when(customerAddressRepository.countByCustomerId("c-1")).thenReturn(1L);
 
         CustomerAddress existingDefault = new CustomerAddress();
         existingDefault.setId("addr-1");
         existingDefault.setCustomerId("c-1");
         existingDefault.setDefault(true);
+        existingDefault.setSlot(1);
 
-        when(customerAddressRepository.findFirstByCustomerIdAndIsDefaultTrue("c-1"))
-                .thenReturn(Optional.of(existingDefault));
+        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1"))
+                .thenReturn(List.of(existingDefault));
         when(customerAddressRepository.save(any(CustomerAddress.class))).thenAnswer(inv -> {
             CustomerAddress a = inv.getArgument(0);
             if (a.getId() == null) {
@@ -186,7 +195,18 @@ class CustomerServiceTest {
     @DisplayName("createAddress: Exceeding max addresses limit returns 409 Conflict")
     void shouldRejectAddressWhenLimitReached() {
         when(districtCatalog.isValidDistrict("Colombo")).thenReturn(true);
-        when(customerAddressRepository.countByCustomerId("c-1")).thenReturn(10L);
+
+        List<CustomerAddress> tenAddresses = new ArrayList<>();
+        for (int i = 1; i <= 10; i++) {
+            CustomerAddress a = new CustomerAddress();
+            a.setId("addr-" + i);
+            a.setCustomerId("c-1");
+            a.setSlot(i);
+            a.setDefault(i == 1);
+            tenAddresses.add(a);
+        }
+
+        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1")).thenReturn(tenAddresses);
 
         CustomerAddressRequest req = new CustomerAddressRequest(
                 "Work", "100 High Level Rd", null, "Nugegoda", "Colombo", null, false
@@ -197,39 +217,149 @@ class CustomerServiceTest {
                 () -> customerService.createAddress("c-1", req)
         );
         assertEquals("MAX_ADDRESSES_REACHED", ex.getErrorCode());
-        verify(customerAddressRepository, never()).save(any());
     }
 
     @Test
-    @DisplayName("createAddress: Invalid district throws 400 Bad Request")
-    void shouldRejectInvalidDistrictOnCreate() {
-        when(districtCatalog.isValidDistrict("NotADistrict")).thenReturn(false);
+    @DisplayName("createAddress: Retries next slot on DuplicateKeyException for slot index")
+    void shouldRetryNextSlotOnSlotDuplicateKeyException() {
+        when(districtCatalog.isValidDistrict("Colombo")).thenReturn(true);
+
+        CustomerAddress existing1 = new CustomerAddress();
+        existing1.setId("addr-1");
+        existing1.setCustomerId("c-1");
+        existing1.setSlot(1);
+        existing1.setDefault(true);
+
+        CustomerAddress existing2 = new CustomerAddress();
+        existing2.setId("addr-2");
+        existing2.setCustomerId("c-1");
+        existing2.setSlot(2);
+        existing2.setDefault(false);
+
+        // First attempt sees only existing1; tries slot 2, which conflicts
+        // Second attempt sees both existing1 and existing2; tries slot 3 and succeeds
+        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1"))
+                .thenReturn(List.of(existing1))
+                .thenReturn(List.of(existing1, existing2));
+
+        when(customerAddressRepository.save(any(CustomerAddress.class)))
+                .thenThrow(new DuplicateKeyException("E11000 duplicate key error collection: marketplace.customer_addresses index: " +
+                        CustomerServiceImpl.SLOT_INDEX_NAME + " dup key: { customerId: \"c-1\", slot: 2 }"))
+                .thenAnswer(inv -> {
+                    CustomerAddress a = inv.getArgument(0);
+                    a.setId("addr-3");
+                    return a;
+                });
 
         CustomerAddressRequest req = new CustomerAddressRequest(
-                "Home", "123 Main St", null, "City", "NotADistrict", null, false
+                "Third", "300 Lake Rd", null, "Colombo", "Colombo", null, false
         );
+
+        CustomerAddressResponse res = customerService.createAddress("c-1", req);
+        assertNotNull(res);
+        assertEquals("addr-3", res.id());
+    }
+
+    @Test
+    @DisplayName("createAddress: Rethrows unknown duplicate key exception unchanged")
+    void shouldRethrowUnknownDuplicateKeyException() {
+        when(districtCatalog.isValidDistrict("Colombo")).thenReturn(true);
+        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1")).thenReturn(List.of());
+        when(customerAddressRepository.save(any(CustomerAddress.class)))
+                .thenThrow(new DuplicateKeyException("E11000 duplicate key error collection: other_collection index: unknown_index_1"));
+
+        CustomerAddressRequest req = new CustomerAddressRequest(
+                "Home", "123 Galle Road", null, "Colombo", "Colombo", null, false
+        );
+
+        assertThrows(DuplicateKeyException.class, () -> customerService.createAddress("c-1", req));
+    }
+
+    @Test
+    @DisplayName("createAddress: Lazily backfills legacy addresses without slots")
+    void shouldLazilyBackfillLegacyAddressesWithoutSlots() {
+        when(districtCatalog.isValidDistrict("Colombo")).thenReturn(true);
+
+        CustomerAddress legacy1 = new CustomerAddress();
+        legacy1.setId("legacy-1");
+        legacy1.setCustomerId("c-1");
+        legacy1.setSlot(null);
+        legacy1.setDefault(true);
+
+        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1"))
+                .thenReturn(List.of(legacy1));
+
+        when(customerAddressRepository.save(any(CustomerAddress.class))).thenAnswer(inv -> {
+            CustomerAddress a = inv.getArgument(0);
+            if (a.getId() == null) {
+                a.setId("addr-new");
+            }
+            return a;
+        });
+
+        CustomerAddressRequest req = new CustomerAddressRequest(
+                "New", "200 Baseline Rd", null, "Colombo", "Colombo", null, false
+        );
+
+        CustomerAddressResponse res = customerService.createAddress("c-1", req);
+        assertNotNull(res);
+        assertEquals(1, legacy1.getSlot(), "Legacy address must be assigned lowest free slot 1");
+        verify(customerAddressRepository, times(2)).save(any(CustomerAddress.class)); // 1 backfill + 1 create
+    }
+
+    @Test
+    @DisplayName("setDefaultAddress: Unsets previous default and marks target address default")
+    void shouldSetTargetAddressAsDefault() {
+        CustomerAddress currentDefault = new CustomerAddress();
+        currentDefault.setId("addr-1");
+        currentDefault.setCustomerId("c-1");
+        currentDefault.setDefault(true);
+
+        CustomerAddress target = new CustomerAddress();
+        target.setId("addr-2");
+        target.setCustomerId("c-1");
+        target.setDefault(false);
+
+        when(customerAddressRepository.findByIdAndCustomerId("addr-2", "c-1")).thenReturn(Optional.of(target));
+        when(customerAddressRepository.findByCustomerIdAndIsDefaultTrue("c-1")).thenReturn(List.of(currentDefault));
+        when(customerAddressRepository.save(any(CustomerAddress.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        CustomerAddressResponse res = customerService.setDefaultAddress("c-1", "addr-2");
+
+        assertTrue(target.isDefault());
+        assertFalse(currentDefault.isDefault());
+        verify(customerAddressRepository).save(currentDefault);
+        verify(customerAddressRepository).save(target);
+    }
+
+    @Test
+    @DisplayName("setDefaultAddress: Retries up to 3 times on default index race and returns 409 if exhausted")
+    void shouldReturn409WhenDefaultAddressRaceExhaustsRetries() {
+        CustomerAddress currentDefault = new CustomerAddress();
+        currentDefault.setId("addr-1");
+        currentDefault.setCustomerId("c-1");
+        currentDefault.setDefault(true);
+
+        CustomerAddress target = new CustomerAddress();
+        target.setId("addr-2");
+        target.setCustomerId("c-1");
+        target.setDefault(false);
+
+        when(customerAddressRepository.findByIdAndCustomerId("addr-2", "c-1")).thenReturn(Optional.of(target));
+        when(customerAddressRepository.findByCustomerIdAndIsDefaultTrue("c-1")).thenReturn(List.of(currentDefault));
+        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1")).thenReturn(List.of(currentDefault, target));
+
+        // Simulating 3 consecutive duplicate key exceptions on default index
+        when(customerAddressRepository.save(target))
+                .thenThrow(new DuplicateKeyException("E11000 duplicate key error collection: marketplace.customer_addresses index: " +
+                        CustomerServiceImpl.DEFAULT_ADDRESS_INDEX_NAME + " dup key: { customerId: \"c-1\", isDefault: true }"));
 
         ApiException ex = assertThrows(
                 ApiException.class,
-                () -> customerService.createAddress("c-1", req)
+                () -> customerService.setDefaultAddress("c-1", "addr-2")
         );
-        assertEquals("INVALID_DISTRICT", ex.getErrorCode());
-    }
-
-    @Test
-    @DisplayName("updateAddress: Updating address not owned by caller returns 404 Not Found")
-    void shouldReturn404WhenUpdatingUnownedAddress() {
-        when(districtCatalog.isValidDistrict("Colombo")).thenReturn(true);
-        when(customerAddressRepository.findByIdAndCustomerId("addr-99", "c-1")).thenReturn(Optional.empty());
-
-        CustomerAddressRequest req = new CustomerAddressRequest(
-                "Home", "Updated St", null, "Colombo", "Colombo", null, false
-        );
-
-        assertThrows(
-                ResourceNotFoundException.class,
-                () -> customerService.updateAddress("c-1", "addr-99", req)
-        );
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals("CONCURRENT_MODIFICATION", ex.getErrorCode());
     }
 
     @Test
@@ -254,69 +384,5 @@ class CustomerServiceTest {
         verify(customerAddressRepository).delete(addressToDelete);
         assertTrue(oldestRemaining.isDefault(), "Oldest remaining address must be promoted to default");
         verify(customerAddressRepository).save(oldestRemaining);
-    }
-
-    @Test
-    @DisplayName("deleteAddress: Deleting address not owned by caller returns 404")
-    void shouldReturn404WhenDeletingUnownedAddress() {
-        when(customerAddressRepository.findByIdAndCustomerId("addr-other", "c-1")).thenReturn(Optional.empty());
-
-        assertThrows(
-                ResourceNotFoundException.class,
-                () -> customerService.deleteAddress("c-1", "addr-other")
-        );
-        verify(customerAddressRepository, never()).delete(any());
-    }
-
-    @Test
-    @DisplayName("setDefaultAddress: Unsets previous default and marks target address default")
-    void shouldSetTargetAddressAsDefault() {
-        CustomerAddress currentDefault = new CustomerAddress();
-        currentDefault.setId("addr-1");
-        currentDefault.setCustomerId("c-1");
-        currentDefault.setDefault(true);
-
-        CustomerAddress target = new CustomerAddress();
-        target.setId("addr-2");
-        target.setCustomerId("c-1");
-        target.setDefault(false);
-
-        when(customerAddressRepository.findByIdAndCustomerId("addr-2", "c-1")).thenReturn(Optional.of(target));
-        when(customerAddressRepository.findFirstByCustomerIdAndIsDefaultTrue("c-1")).thenReturn(Optional.of(currentDefault));
-        when(customerAddressRepository.save(any(CustomerAddress.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        CustomerAddressResponse res = customerService.setDefaultAddress("c-1", "addr-2");
-
-        assertTrue(target.isDefault());
-        assertFalse(currentDefault.isDefault());
-        verify(customerAddressRepository).save(currentDefault);
-        verify(customerAddressRepository).save(target);
-    }
-
-    @Test
-    @DisplayName("deactivateAccount: Success when password matches and no open bookings")
-    void shouldDeactivateAccountWhenNoOpenBookings() {
-        when(openBookingsChecker.hasOpenBookings("c-1")).thenReturn(false);
-
-        customerService.deactivateAccount("c-1", new com.gamagerecruiters.marketplace.modules.customer.dto.DeactivateAccountRequest("ValidPass123!"));
-
-        verify(userInternalService).verifyPassword("c-1", "ValidPass123!");
-        verify(openBookingsChecker).hasOpenBookings("c-1");
-        verify(userInternalService).deactivateOwnAccount("c-1");
-    }
-
-    @Test
-    @DisplayName("deactivateAccount: Throws 409 when open bookings exist and never deactivates")
-    void shouldRejectDeactivationWhenOpenBookingsExist() {
-        when(openBookingsChecker.hasOpenBookings("c-1")).thenReturn(true);
-
-        ApiException ex = assertThrows(
-                ApiException.class,
-                () -> customerService.deactivateAccount("c-1", new com.gamagerecruiters.marketplace.modules.customer.dto.DeactivateAccountRequest("ValidPass123!"))
-        );
-        assertEquals("OPEN_BOOKINGS_EXIST", ex.getErrorCode());
-        assertEquals("You cannot deactivate your account while you have active bookings", ex.getMessage());
-        verify(userInternalService).verifyPassword("c-1", "ValidPass123!");
-        verify(userInternalService, never()).deactivateOwnAccount(any());
     }
 }

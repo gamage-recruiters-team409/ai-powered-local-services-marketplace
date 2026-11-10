@@ -18,6 +18,7 @@ public class CustomerAddress {
     private String district;
     private String postalCode;
     private boolean isDefault;
+    private Integer slot;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -118,6 +119,14 @@ public class CustomerAddress {
 
     public void setDefault(boolean isDefault) {
         this.isDefault = isDefault;
+    }
+
+    public Integer getSlot() {
+        return slot;
+    }
+
+    public void setSlot(Integer slot) {
+        this.slot = slot;
     }
 
     public Instant getCreatedAt() {
