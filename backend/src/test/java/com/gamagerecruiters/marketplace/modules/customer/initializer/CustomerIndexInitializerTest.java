@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -22,9 +23,9 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.IndexOperations;
 
 import com.gamagerecruiters.marketplace.modules.customer.domain.CustomerAddress;
+import com.mongodb.client.AggregateIterable;
 import com.mongodb.client.ListIndexesIterable;
 import com.mongodb.client.MongoCollection;
-import com.mongodb.client.MongoCursor;
 
 @ExtendWith(MockitoExtension.class)
 class CustomerIndexInitializerTest {
@@ -39,6 +40,10 @@ class CustomerIndexInitializerTest {
     @SuppressWarnings("rawtypes")
     private MongoCollection addressCollection;
 
+    @Mock
+    @SuppressWarnings("rawtypes")
+    private AggregateIterable aggregateIterable;
+
     private CustomerIndexInitializer initializer;
 
     @BeforeEach
@@ -47,83 +52,155 @@ class CustomerIndexInitializerTest {
     }
 
     @Test
-    @DisplayName("Creates customerId_1 index when missing and never calls dropIndex")
+    @DisplayName("Fresh collection: Creates all 3 required indexes and never calls dropIndex")
     @SuppressWarnings("unchecked")
-    void shouldCreateCustomerIdIndexWhenMissing() {
-        ListIndexesIterable<Document> iterable = mockListIndexesIterable(List.of());
+    void shouldCreateAllThreeIndexesOnFreshCollection() {
         when(mongoTemplate.getCollection("customer_addresses")).thenReturn(addressCollection);
+        when(addressCollection.aggregate(any())).thenReturn(aggregateIterable);
+        when(aggregateIterable.first()).thenReturn(null);
+
+        ListIndexesIterable<Document> iterable = mockListIndexesIterable(List.of());
         when(addressCollection.listIndexes()).thenReturn(iterable);
         when(mongoTemplate.indexOps(CustomerAddress.class)).thenReturn(addressIndexOps);
-        when(addressIndexOps.ensureIndex(any())).thenReturn("customerId_1");
 
-        assertDoesNotThrow(() -> initializer.initCustomerAddressesIndex());
+        assertDoesNotThrow(() -> initializer.initializeIndexes());
 
-        verify(addressIndexOps).ensureIndex(any());
+        verify(addressIndexOps, times(3)).ensureIndex(any());
         verify(addressCollection, never()).dropIndex(any(String.class));
     }
 
     @Test
-    @DisplayName("Validates existing customerId_1 index when compatible")
+    @DisplayName("Extra compound index present: Startup succeeds and unrelated compound index is ignored")
     @SuppressWarnings("unchecked")
-    void shouldAcceptCompatibleExistingIndex() {
-        Document existingIndex = new Document("name", "customerId_1")
+    void shouldIgnoreUnrelatedCompoundIndex() {
+        when(mongoTemplate.getCollection("customer_addresses")).thenReturn(addressCollection);
+        when(addressCollection.aggregate(any())).thenReturn(aggregateIterable);
+        when(aggregateIterable.first()).thenReturn(null);
+
+        Document extraCompound = new Document("name", "customerId_1_createdAt_1")
+                .append("key", new Document("customerId", 1).append("createdAt", 1))
+                .append("unique", false);
+
+        ListIndexesIterable<Document> iterable = mockListIndexesIterable(List.of(extraCompound));
+        when(addressCollection.listIndexes()).thenReturn(iterable);
+        when(mongoTemplate.indexOps(CustomerAddress.class)).thenReturn(addressIndexOps);
+
+        assertDoesNotThrow(() -> initializer.initializeIndexes());
+
+        verify(addressIndexOps, times(3)).ensureIndex(any());
+        verify(addressCollection, never()).dropIndex(any(String.class));
+    }
+
+    @Test
+    @DisplayName("All required indexes already present and compatible: Verifies without recreating or dropping")
+    @SuppressWarnings("unchecked")
+    void shouldAcceptAllCompatibleExistingIndexes() {
+        when(mongoTemplate.getCollection("customer_addresses")).thenReturn(addressCollection);
+        when(addressCollection.aggregate(any())).thenReturn(aggregateIterable);
+        when(aggregateIterable.first()).thenReturn(null);
+
+        Document plainIndex = new Document("name", "customerId_1")
                 .append("key", new Document("customerId", 1))
                 .append("unique", false);
 
-        ListIndexesIterable<Document> iterable = mockListIndexesIterable(List.of(existingIndex));
-        when(mongoTemplate.getCollection("customer_addresses")).thenReturn(addressCollection);
+        Document defaultIndex = new Document("name", "customerId_1_isDefault_1_unique_default")
+                .append("key", new Document("customerId", 1).append("isDefault", 1))
+                .append("unique", true)
+                .append("partialFilterExpression", new Document("isDefault", true));
+
+        Document slotIndex = new Document("name", "customerId_1_slot_1_unique")
+                .append("key", new Document("customerId", 1).append("slot", 1))
+                .append("unique", true)
+                .append("partialFilterExpression", new Document("slot", new Document("$gt", 0)));
+
+        ListIndexesIterable<Document> iterable = mockListIndexesIterable(List.of(plainIndex, defaultIndex, slotIndex));
         when(addressCollection.listIndexes()).thenReturn(iterable);
 
-        assertDoesNotThrow(() -> initializer.initCustomerAddressesIndex());
+        assertDoesNotThrow(() -> initializer.initializeIndexes());
 
         verify(mongoTemplate, never()).indexOps(CustomerAddress.class);
         verify(addressCollection, never()).dropIndex(any(String.class));
     }
 
     @Test
-    @DisplayName("Fails startup when incompatible unique index exists on customerId")
+    @DisplayName("Incompatible unique index on customerId: Fails startup and never drops index")
     @SuppressWarnings("unchecked")
-    void shouldFailStartupWhenIncompatibleUniqueIndexExists() {
+    void shouldFailStartupWhenIncompatibleUniquePlainIndexExists() {
+        when(mongoTemplate.getCollection("customer_addresses")).thenReturn(addressCollection);
+        when(addressCollection.aggregate(any())).thenReturn(aggregateIterable);
+        when(aggregateIterable.first()).thenReturn(null);
+
         Document badIndex = new Document("name", "customerId_unique")
                 .append("key", new Document("customerId", 1))
                 .append("unique", true);
 
         ListIndexesIterable<Document> iterable = mockListIndexesIterable(List.of(badIndex));
-        when(mongoTemplate.getCollection("customer_addresses")).thenReturn(addressCollection);
         when(addressCollection.listIndexes()).thenReturn(iterable);
 
         IllegalStateException ex = assertThrows(
                 IllegalStateException.class,
-                () -> initializer.initCustomerAddressesIndex()
+                () -> initializer.initializeIndexes()
         );
         assertTrue(ex.getMessage().contains("Incompatible index 'customerId_unique' detected"));
+        verify(addressCollection, never()).dropIndex(any(String.class));
+    }
+
+    @Test
+    @DisplayName("Incompatible default address index (missing partialFilter): Fails startup and never drops")
+    @SuppressWarnings("unchecked")
+    void shouldFailStartupWhenIncompatibleDefaultAddressIndexExists() {
+        when(mongoTemplate.getCollection("customer_addresses")).thenReturn(addressCollection);
+        when(addressCollection.aggregate(any())).thenReturn(aggregateIterable);
+        when(aggregateIterable.first()).thenReturn(null);
+
+        Document plainIndex = new Document("name", "customerId_1")
+                .append("key", new Document("customerId", 1))
+                .append("unique", false);
+
+        Document badDefaultIndex = new Document("name", "customerId_1_isDefault_1_unique_default")
+                .append("key", new Document("customerId", 1).append("isDefault", 1))
+                .append("unique", true); // Missing partialFilterExpression!
+
+        ListIndexesIterable<Document> iterable = mockListIndexesIterable(List.of(plainIndex, badDefaultIndex));
+        when(addressCollection.listIndexes()).thenReturn(iterable);
+
+        IllegalStateException ex = assertThrows(
+                IllegalStateException.class,
+                () -> initializer.initializeIndexes()
+        );
+        assertTrue(ex.getMessage().contains("Incompatible index 'customerId_1_isDefault_1_unique_default' detected"));
+        verify(addressCollection, never()).dropIndex(any(String.class));
+    }
+
+    @Test
+    @DisplayName("Pre-check finds duplicate default addresses: Fails startup with migration guide hint")
+    @SuppressWarnings("unchecked")
+    void shouldFailStartupWhenDuplicateDefaultsExistInPreCheck() {
+        when(mongoTemplate.getCollection("customer_addresses")).thenReturn(addressCollection);
+        when(addressCollection.aggregate(any())).thenReturn(aggregateIterable);
+        when(aggregateIterable.first()).thenReturn(new Document("_id", "cust-123").append("count", 2));
+
+        IllegalStateException ex = assertThrows(
+                IllegalStateException.class,
+                () -> initializer.initializeIndexes()
+        );
+        assertTrue(ex.getMessage().contains("Customer 'cust-123' has 2 default addresses"));
+        assertTrue(ex.getMessage().contains("2026-11-customer-default-address-cleanup.md"));
         verify(addressCollection, never()).dropIndex(any(String.class));
     }
 
     @SuppressWarnings("unchecked")
     private ListIndexesIterable<Document> mockListIndexesIterable(List<Document> indexes) {
         ListIndexesIterable<Document> iterable = mock(ListIndexesIterable.class);
-        MongoCursor<Document> cursor = mock(MongoCursor.class);
-
-        when(iterable.iterator()).thenReturn(cursor);
-
-        if (indexes.isEmpty()) {
-            when(cursor.hasNext()).thenReturn(false);
-        } else if (indexes.size() == 1) {
-            when(cursor.hasNext()).thenReturn(true, false);
-            when(cursor.next()).thenReturn(indexes.get(0));
-        } else {
-            Boolean[] hasNextResults = new Boolean[indexes.size() + 1];
-            for (int i = 0; i < indexes.size(); i++) {
-                hasNextResults[i] = true;
+        when(iterable.iterator()).thenAnswer(inv -> {
+            com.mongodb.client.MongoCursor<Document> cursor = mock(com.mongodb.client.MongoCursor.class);
+            java.util.Iterator<Document> it = indexes.iterator();
+            when(cursor.hasNext()).thenAnswer(i -> it.hasNext());
+            if (!indexes.isEmpty()) {
+                when(cursor.next()).thenAnswer(i -> it.next());
             }
-            hasNextResults[indexes.size()] = false;
-            when(cursor.hasNext()).thenReturn(hasNextResults[0],
-                    java.util.Arrays.copyOfRange(hasNextResults, 1, hasNextResults.length));
-            when(cursor.next()).thenReturn(indexes.get(0),
-                    indexes.subList(1, indexes.size()).toArray(new Document[0]));
-        }
-
+            return cursor;
+        });
         return iterable;
     }
 }

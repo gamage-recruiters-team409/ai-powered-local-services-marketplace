@@ -44,4 +44,6 @@ printCollectionIndexes("users");
 print("");
 printCollectionIndexes("auth_tokens");
 print("");
+printCollectionIndexes("customer_addresses");
+print("");
 print("[OK] Index inspection complete.");
