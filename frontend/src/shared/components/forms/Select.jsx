@@ -19,7 +19,7 @@
  * Shared Form & Basic UI Components - Figma.
  */
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import "./forms.css";
 
 /**
@@ -83,6 +83,30 @@ function Select({
     rest.defaultValue ?? (placeholder ? "" : undefined),
   );
 
+  // Keep uncontrolled selection styling synchronized with native form resets.
+  const selectRef = useRef(null);
+
+  useEffect(() => {
+    const select = selectRef.current;
+    const form = select?.form;
+
+    if (!form || rest.value !== undefined) {
+      return;
+    }
+
+    const handleReset = () => {
+      setTimeout(() => {
+        setInternalValue(select.value);
+      }, 0);
+    };
+
+    form.addEventListener("reset", handleReset);
+
+    return () => {
+      form.removeEventListener("reset", handleReset);
+    };
+  }, [rest.value]);
+
   // Prefer the parent's value for controlled dropdowns.
   const selectedValue = rest.value !== undefined ? rest.value : internalValue;
 
@@ -126,6 +150,7 @@ function Select({
       <div className="shared-select-wrapper">
         <select
           {...rest}
+          ref={selectRef}
           value={rest.value !== undefined ? rest.value : undefined}
           defaultValue={
             rest.value === undefined

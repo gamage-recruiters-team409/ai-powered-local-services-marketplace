@@ -78,6 +78,15 @@ function DataTable({
   const hasError = Boolean(error);
   const isEmpty = data.length === 0;
 
+  // Normalize errors into renderable text to prevent React from
+  // attempting to render JavaScript Error objects directly.
+  const errorMessage =
+    error instanceof Error
+      ? error.message || "Unable to load records."
+      : typeof error === "string"
+        ? error
+        : "Unable to load records.";
+
   /**
    * Returns the content for a table cell.
    *
@@ -184,7 +193,7 @@ function DataTable({
                   colSpan={columnCount}
                   className="shared-table__state shared-table__state--error"
                 >
-                  {errorContent || error}
+                  {errorContent ?? errorMessage}
                 </td>
               </tr>
             ) : isEmpty ? (
