@@ -12,6 +12,8 @@ During application startup, `CustomerIndexInitializer` validates this index. If 
 ---
 
 ## Read-Only Pre-Check Query
+> **IMPORTANT:** Run `mongosh "$MONGODB_URI" docs/db-migrations/precheck-customer-addresses.js` against Atlas before the first startup of this branch; if it reports any rows, do not auto-fix data, and contact the Team Lead immediately.
+
 To check whether any customer currently has more than 1 default address, run the following read-only aggregation in `mongosh`:
 
 ```javascript

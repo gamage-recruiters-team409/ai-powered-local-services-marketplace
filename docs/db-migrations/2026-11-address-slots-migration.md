@@ -9,6 +9,8 @@ This migration runbook explains how to backfill existing unslotted addresses and
 
 ## Pre-requisites & Pre-Checks
 
+> **IMPORTANT:** Run `mongosh "$MONGODB_URI" docs/db-migrations/precheck-customer-addresses.js` against Atlas before the first startup of this branch; if it reports any rows, do not auto-fix data, and contact the Team Lead immediately.
+
 1. **Verify Existing Indexes:**
    Run the read-only index inspection script:
    ```bash
