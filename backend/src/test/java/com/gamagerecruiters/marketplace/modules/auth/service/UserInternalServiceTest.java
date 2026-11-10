@@ -33,6 +33,7 @@ import com.gamagerecruiters.marketplace.common.exception.ResourceConflictExcepti
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
+import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 
@@ -43,13 +44,16 @@ class UserInternalServiceTest {
     private UserRepository userRepository;
 
     @Mock
+    private AuthTokenRepository authTokenRepository;
+
+    @Mock
     private PasswordEncoder passwordEncoder;
 
     private UserInternalServiceImpl userInternalService;
 
     @BeforeEach
     void setUp() {
-        userInternalService = new UserInternalServiceImpl(userRepository, passwordEncoder);
+        userInternalService = new UserInternalServiceImpl(userRepository, authTokenRepository, passwordEncoder);
     }
 
     @AfterEach
@@ -257,5 +261,151 @@ class UserInternalServiceTest {
                 () -> userInternalService.createAdminAccount("Fake Admin", "fake@marketplace.local", "Pass123", Role.CUSTOMER)
         );
         assertEquals("INVALID_ROLE", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("updateContactDetails: Should update name and normalize Sri Lankan phone successfully")
+    void shouldUpdateContactDetailsWithNormalizedPhone() {
+        User user = new User();
+        user.setId("u-1");
+        user.setName("Old Name");
+        user.setPhone("+94711111111");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(userRepository.findByPhone("+94771234567")).thenReturn(Optional.empty());
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User updated = userInternalService.updateContactDetails("u-1", "New Name", "0771234567");
+
+        assertEquals("New Name", updated.getName());
+        assertEquals("+94771234567", updated.getPhone());
+        verify(userRepository).save(user);
+    }
+
+    @Test
+    @DisplayName("updateContactDetails: Should reject phone already used by another user")
+    void shouldRejectDuplicatePhoneOnContactUpdate() {
+        User user = new User();
+        user.setId("u-1");
+
+        User other = new User();
+        other.setId("u-2");
+        other.setPhone("+94771234567");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(userRepository.findByPhone("+94771234567")).thenReturn(Optional.of(other));
+
+        ResourceConflictException ex = assertThrows(
+                ResourceConflictException.class,
+                () -> userInternalService.updateContactDetails("u-1", "New Name", "0771234567")
+        );
+        assertEquals("PHONE_ALREADY_EXISTS", ex.getErrorCode());
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("updateContactDetails: Should allow keeping own phone number")
+    void shouldAllowKeepingOwnPhoneOnContactUpdate() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPhone("+94771234567");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(userRepository.findByPhone("+94771234567")).thenReturn(Optional.of(user));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User updated = userInternalService.updateContactDetails("u-1", "Updated Name", "+94771234567");
+        assertEquals("Updated Name", updated.getName());
+        assertEquals("+94771234567", updated.getPhone());
+    }
+
+    @Test
+    @DisplayName("updateContactDetails: Should reject invalid Sri Lankan phone format")
+    void shouldRejectInvalidPhoneOnContactUpdate() {
+        User user = new User();
+        user.setId("u-1");
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> userInternalService.updateContactDetails("u-1", "Name", "12345")
+        );
+        assertEquals("INVALID_PHONE_FORMAT", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("changePassword: Valid current and new password should update hash and revoke tokens")
+    void shouldChangePasswordAndRevokeTokens() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPasswordHash("hashed-old-pass");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("OldPass123!", "hashed-old-pass")).thenReturn(true);
+        when(passwordEncoder.matches("NewPass123!", "hashed-old-pass")).thenReturn(false);
+        when(passwordEncoder.encode("NewPass123!")).thenReturn("hashed-new-pass");
+
+        userInternalService.changePassword("u-1", "OldPass123!", "NewPass123!");
+
+        assertEquals("hashed-new-pass", user.getPasswordHash());
+        verify(userRepository).save(user);
+        verify(authTokenRepository).revokeAllActiveTokensByUserId("u-1");
+    }
+
+    @Test
+    @DisplayName("changePassword: Wrong current password should be rejected with 400")
+    void shouldRejectWrongCurrentPassword() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPasswordHash("hashed-old-pass");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("WrongPass123!", "hashed-old-pass")).thenReturn(false);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> userInternalService.changePassword("u-1", "WrongPass123!", "NewPass123!")
+        );
+        assertEquals("INVALID_CURRENT_PASSWORD", ex.getErrorCode());
+        assertEquals("Current password is incorrect", ex.getMessage());
+        verify(userRepository, never()).save(any());
+        verify(authTokenRepository, never()).revokeAllActiveTokensByUserId(any());
+    }
+
+    @Test
+    @DisplayName("changePassword: Same new password as current should be rejected with 400")
+    void shouldRejectSamePassword() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPasswordHash("hashed-old-pass");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("OldPass123!", "hashed-old-pass")).thenReturn(true);
+        when(passwordEncoder.matches("OldPass123!", "hashed-old-pass")).thenReturn(true);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> userInternalService.changePassword("u-1", "OldPass123!", "OldPass123!")
+        );
+        assertEquals("SAME_PASSWORD", ex.getErrorCode());
+        assertEquals("New password cannot be the same as the current password", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("changePassword: Weak new password should be rejected with 400")
+    void shouldRejectWeakNewPassword() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPasswordHash("hashed-old-pass");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("OldPass123!", "hashed-old-pass")).thenReturn(true);
+        when(passwordEncoder.matches("weak", "hashed-old-pass")).thenReturn(false);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> userInternalService.changePassword("u-1", "OldPass123!", "weak")
+        );
+        assertEquals("WEAK_PASSWORD", ex.getErrorCode());
     }
 }
