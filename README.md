@@ -1,4 +1,4 @@
-﻿# AI-Powered Local Services Marketplace
+# AI-Powered Local Services Marketplace
 
 Development repository for the Gamage Recruiters AI-Powered Local Services Marketplace.
 
@@ -60,6 +60,24 @@ Main architectural areas include:
 - Integration
 - Persistence
 - Data
+
+## Testing
+
+### Running Tests
+- **Full Test Suite**:
+  ```bash
+  mvn clean test
+  ```
+- **Concurrency Integration Test (Mandatory by default)**:
+  `RefreshConcurrencyIntegrationTest` requires a running Docker daemon (e.g. Docker Desktop) to spin up an ephemeral MongoDB 7.0 container via Testcontainers. If Docker is missing, the test fails by default.
+  ```bash
+  mvn test -Dtest=RefreshConcurrencyIntegrationTest
+  ```
+- **Explicit Skip Opt-Out**:
+  To explicitly skip Docker-backed integration tests when running in environments without Docker, pass `-Dskip.docker.tests=true` or `-DSKIP_DOCKER_TESTS=true` (or set the `SKIP_DOCKER_TESTS=true` environment variable):
+  ```bash
+  mvn test -Dskip.docker.tests=true
+  ```
 
 ## Main Branches
 
