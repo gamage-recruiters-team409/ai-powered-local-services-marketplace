@@ -42,7 +42,6 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MongoDBContainer;
 
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
-import com.gamagerecruiters.marketplace.modules.auth.concurrency.DockerRequiredCondition;
 import com.gamagerecruiters.marketplace.modules.customer.domain.CustomerAddress;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressResponse;
@@ -196,6 +195,74 @@ public class CustomerAddressMongoIntegrationTest {
         collection.listIndexes().into(indexNames);
 
         assertThat(indexNames).anySatisfy(idx -> assertThat(idx.getString("name")).isEqualTo("customerId_1_createdAt_1"));
+    }
+
+    @Test
+    @DisplayName("Partial unique index: A second default address inserted directly is rejected by the index")
+    void secondDefaultInsertedDirectlyIsRejectedByUniqueIndex() {
+        MongoCollection<Document> collection = mongoTemplate.getCollection("customer_addresses");
+        String customerId = "cust-direct-insert-test";
+
+        Document doc1 = new Document("customerId", customerId)
+                .append("label", "Home")
+                .append("addressLine1", "123 Main St")
+                .append("city", "Colombo")
+                .append("district", "Colombo")
+                .append("isDefault", true)
+                .append("slot", 1)
+                .append("createdAt", Instant.now())
+                .append("updatedAt", Instant.now());
+        collection.insertOne(doc1);
+
+        Document doc2 = new Document("customerId", customerId)
+                .append("label", "Office")
+                .append("addressLine1", "456 Office St")
+                .append("city", "Colombo")
+                .append("district", "Colombo")
+                .append("isDefault", true)
+                .append("slot", 2)
+                .append("createdAt", Instant.now())
+                .append("updatedAt", Instant.now());
+
+        com.mongodb.MongoWriteException ex = assertThrows(
+                com.mongodb.MongoWriteException.class,
+                () -> collection.insertOne(doc2)
+        );
+        assertEquals(11000, ex.getError().getCode(), "Direct insert of second default address must be rejected by unique index (E11000)");
+        assertTrue(ex.getMessage().contains("customerId_1_isDefault_1_unique_default"));
+    }
+
+    @Test
+    @DisplayName("Failure injection: Interruption between unset and set never leaves two defaults, self-heals to exactly one")
+    void failureInjectionBetweenUnsetAndSetNeverLeavesTwoDefaults() {
+        String customerId = "cust-failure-injection";
+
+        // Create 2 addresses: addr1 is default, addr2 is not
+        CustomerAddressResponse addr1 = customerService.createAddress(
+                customerId, new CustomerAddressRequest("Addr 1", "Street 1", null, "City", "Colombo", null, true)
+        );
+        CustomerAddressResponse addr2 = customerService.createAddress(
+                customerId, new CustomerAddressRequest("Addr 2", "Street 2", null, "City", "Colombo", null, false)
+        );
+
+        assertEquals(1, countDefaultsInDb(customerId));
+
+        // Inject simulated mid-switch failure: unsetting addr1 in the DB directly (as if interrupted before setting addr2)
+        MongoCollection<Document> collection = mongoTemplate.getCollection("customer_addresses");
+        collection.updateOne(
+                new Document("_id", new org.bson.types.ObjectId(addr1.id())),
+                new Document("$set", new Document("isDefault", false))
+        );
+
+        // At worst 0 defaults for a moment, NEVER 2
+        int countBeforeHeal = countDefaultsInDb(customerId);
+        assertTrue(countBeforeHeal <= 1, "Interrupted state must never have more than 1 default");
+
+        // The self-healing read/write path automatically heals this on the next call:
+        List<CustomerAddressResponse> addresses = customerService.getAddresses(customerId);
+        int countAfterHeal = countDefaultsInDb(customerId);
+        assertEquals(1, countAfterHeal, "Self-healing must restore/promote exactly one default address");
+        assertTrue(addresses.stream().anyMatch(CustomerAddressResponse::isDefault));
     }
 
     @Test
