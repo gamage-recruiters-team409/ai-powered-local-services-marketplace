@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -73,8 +76,10 @@ class AvailabilityIndexInitializerTest {
     }
 
     @Test
-    @DisplayName("Creates both unique indexes when missing and verifies them after creation")
-    void createsAndVerifiesMissingIndexes() {
+    @DisplayName("Fresh database: creates missing collections first, then creates and verifies both unique indexes")
+    void freshDatabaseCreatesCollectionsThenIndexes() {
+        when(mongoTemplate.collectionExists("availability_rules")).thenReturn(false);
+        when(mongoTemplate.collectionExists("blocked_dates")).thenReturn(false);
         when(mongoTemplate.getCollection("availability_rules")).thenReturn(rulesCollection);
         when(mongoTemplate.getCollection("blocked_dates")).thenReturn(blockedDatesCollection);
 
@@ -87,6 +92,10 @@ class AvailabilityIndexInitializerTest {
 
         assertThatCode(initializer::initializeIndexes).doesNotThrowAnyException();
 
+        InOrder order = inOrder(mongoTemplate, rulesCollection);
+        order.verify(mongoTemplate).createCollection("availability_rules");
+        order.verify(rulesCollection, atLeastOnce()).listIndexes();
+        verify(mongoTemplate).createCollection("blocked_dates");
         verify(rulesCollection).createIndex(any(Bson.class), any(IndexOptions.class));
         verify(blockedDatesCollection).createIndex(any(Bson.class), any(IndexOptions.class));
     }
@@ -94,6 +103,7 @@ class AvailabilityIndexInitializerTest {
     @Test
     @DisplayName("Accepts an existing compatible unique index without creating a new one")
     void acceptsExistingCompatibleIndex() {
+        when(mongoTemplate.collectionExists("blocked_dates")).thenReturn(true);
         when(mongoTemplate.getCollection("blocked_dates")).thenReturn(blockedDatesCollection);
         ListIndexesIterable<Document> existing = indexes(ID_INDEX, PROVIDER_DATE_UNIQUE);
         when(blockedDatesCollection.listIndexes()).thenReturn(existing);
@@ -102,6 +112,34 @@ class AvailabilityIndexInitializerTest {
                 "providerId_1_date_1")).doesNotThrowAnyException();
 
         verify(blockedDatesCollection, never()).createIndex(any(Bson.class), any(IndexOptions.class));
+        verify(mongoTemplate, never()).createCollection(anyString());
+    }
+
+    @Test
+    @DisplayName("Accepts a collection created at the same moment by another instance")
+    void acceptsCollectionCreatedConcurrently() {
+        when(mongoTemplate.collectionExists("availability_rules")).thenReturn(false, true);
+        when(mongoTemplate.createCollection("availability_rules"))
+                .thenThrow(new RuntimeException("NamespaceExists: collection already exists"));
+        when(mongoTemplate.getCollection("availability_rules")).thenReturn(rulesCollection);
+        ListIndexesIterable<Document> existing = indexes(ID_INDEX, PROVIDER_UNIQUE);
+        when(rulesCollection.listIndexes()).thenReturn(existing);
+
+        assertThatCode(() -> initializer.ensureUniqueIndex("availability_rules", List.of("providerId"),
+                "providerId_1")).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("Fails safely when the collection cannot be created")
+    void failsWhenCollectionCannotBeCreated() {
+        when(mongoTemplate.collectionExists("availability_rules")).thenReturn(false, false);
+        when(mongoTemplate.createCollection("availability_rules"))
+                .thenThrow(new RuntimeException("not authorized"));
+
+        assertThatThrownBy(() -> initializer.ensureUniqueIndex("availability_rules", List.of("providerId"),
+                "providerId_1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Startup failed");
     }
 
     @Test

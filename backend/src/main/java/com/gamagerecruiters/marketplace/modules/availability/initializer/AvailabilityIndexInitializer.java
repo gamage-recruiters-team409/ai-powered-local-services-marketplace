@@ -19,7 +19,8 @@ import com.mongodb.client.model.Indexes;
 /**
  * Creates and verifies the unique indexes the availability module depends on.
  *
- * <p>For each index it reads the real definition from MongoDB and checks the key fields,
+ * <p>On a fresh database the collections may not exist yet, so each collection is created
+ * first when missing. For each index it then reads the real definition from MongoDB and checks the key fields,
  * their order, ascending direction and {@code unique: true}. Startup fails when an
  * incompatible index exists. Existing indexes are never dropped automatically.
  */
@@ -52,6 +53,8 @@ public class AvailabilityIndexInitializer {
 
     void ensureUniqueIndex(String collectionName, List<String> fields, String indexName) {
         try {
+            ensureCollectionExists(collectionName);
+
             MongoCollection<Document> collection = mongoTemplate.getCollection(collectionName);
             List<Document> indexes = collection.listIndexes().into(new ArrayList<>());
 
@@ -83,6 +86,26 @@ public class AvailabilityIndexInitializer {
             throw new IllegalStateException("Startup failed: Unable to create or verify required unique index '"
                     + indexName + "' on " + collectionName + " collection. "
                     + "Ensure no duplicate values exist for " + fields + ".", e);
+        }
+    }
+
+    /**
+     * Creates the collection when it does not exist yet (fresh database), so listIndexes()
+     * never runs against a missing namespace. If another instance creates it at the same
+     * moment, the existing collection is accepted.
+     */
+    private void ensureCollectionExists(String collectionName) {
+        if (mongoTemplate.collectionExists(collectionName)) {
+            return;
+        }
+        try {
+            mongoTemplate.createCollection(collectionName);
+            log.info("Collection created: {}", collectionName);
+        } catch (RuntimeException e) {
+            if (!mongoTemplate.collectionExists(collectionName)) {
+                throw e;
+            }
+            log.info("Collection {} was created concurrently by another instance", collectionName);
         }
     }
 

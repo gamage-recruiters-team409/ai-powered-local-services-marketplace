@@ -43,7 +43,8 @@ import com.gamagerecruiters.marketplace.modules.availability.service.Availabilit
 
 /**
  * Runs the availability module against a real MongoDB (Testcontainers) to verify:
- * the real unique index definitions, and simultaneous first-time schedule updates.
+ * index creation on a completely fresh database, the real unique index definitions,
+ * and simultaneous first-time schedule updates.
  * Requires Docker. Skip explicitly with -DSKIP_DOCKER_TESTS=true.
  */
 @SpringBootTest
@@ -114,6 +115,32 @@ class AvailabilityMongoIntegrationTest {
         assertThat(new ArrayList<>(rulesIndex.get("key", Document.class).keySet())).containsExactly("providerId");
         assertThat(rulesIndex.getBoolean("unique")).isTrue();
 
+        assertThat(new ArrayList<>(blockedIndex.get("key", Document.class).keySet()))
+                .containsExactly("providerId", "date");
+        assertThat(blockedIndex.getBoolean("unique")).isTrue();
+    }
+
+    @Test
+    @DisplayName("Real MongoDB, fresh database: collections and unique indexes are created from nothing")
+    void freshDatabaseCreatesCollectionsAndIndexes() {
+        // Make this test container database completely fresh for the availability module.
+        mongoTemplate.dropCollection(AvailabilityRule.class);
+        mongoTemplate.dropCollection(BlockedDate.class);
+        assertThat(mongoTemplate.collectionExists("availability_rules")).isFalse();
+        assertThat(mongoTemplate.collectionExists("blocked_dates")).isFalse();
+
+        indexInitializer.initializeIndexes();
+
+        assertThat(mongoTemplate.collectionExists("availability_rules")).isTrue();
+        assertThat(mongoTemplate.collectionExists("blocked_dates")).isTrue();
+
+        Document rulesIndex = findIndex("availability_rules", "providerId_1");
+        Document blockedIndex = findIndex("blocked_dates", "providerId_1_date_1");
+        log.info("Fresh database - availability_rules index created: {}", rulesIndex.toJson());
+        log.info("Fresh database - blocked_dates index created: {}", blockedIndex.toJson());
+
+        assertThat(new ArrayList<>(rulesIndex.get("key", Document.class).keySet())).containsExactly("providerId");
+        assertThat(rulesIndex.getBoolean("unique")).isTrue();
         assertThat(new ArrayList<>(blockedIndex.get("key", Document.class).keySet()))
                 .containsExactly("providerId", "date");
         assertThat(blockedIndex.getBoolean("unique")).isTrue();
