@@ -9,7 +9,7 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
  *
  * @param role                the caller's role, taken from the authenticated principal
  * @param canEdit             admin areas the caller may edit (always only their own area)
- * @param canView             admin areas the caller may view read-only (never overlaps canEdit)
+ * @param canView             admin areas the caller may view read-only; only SUPER_ADMIN has any (never overlaps canEdit)
  * @param canAccessSuperAdmin whether the caller may open the Super Admin area
  */
 public record AdminAccessResponse(

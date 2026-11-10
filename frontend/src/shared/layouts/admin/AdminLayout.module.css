@@ -397,6 +397,11 @@
   border-left: 1px solid var(--adm-color-border);
 }
 
+/* display: flex above would otherwise override the hidden attribute on a collapsed group */
+.subList[hidden] {
+  display: none;
+}
+
 .subLink {
   display: block;
   padding: 7px 12px;

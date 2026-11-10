@@ -92,7 +92,7 @@ class AdminAccessControllerTest {
 
     @ParameterizedTest
     @EnumSource(value = Role.class, names = {"ADMIN", "SUPPORT_ADMIN", "MODERATOR", "FINANCE_ADMIN"})
-    @DisplayName("GET /admin/access as a non-super admin returns own area editable, three others read-only")
+    @DisplayName("GET /admin/access as a non-super admin returns only its own area, no view access")
     void returnsStaffAdminAccess(Role role) throws Exception {
         String token = authenticateAs(role);
 
@@ -101,7 +101,8 @@ class AdminAccessControllerTest {
                 .andExpect(jsonPath("$.role").value(role.name()))
                 .andExpect(jsonPath("$.canEdit.length()").value(1))
                 .andExpect(jsonPath("$.canEdit[0]").value(role.name()))
-                .andExpect(jsonPath("$.canView.length()").value(3))
+                .andExpect(jsonPath("$.canView").isArray())
+                .andExpect(jsonPath("$.canView").isEmpty())
                 .andExpect(jsonPath("$.canAccessSuperAdmin").value(false));
     }
 
@@ -113,7 +114,9 @@ class AdminAccessControllerTest {
         mockMvc.perform(get(ACCESS_URL).param("role", "SUPER_ADMIN").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.role").value("MODERATOR"))
+                .andExpect(jsonPath("$.canEdit.length()").value(1))
                 .andExpect(jsonPath("$.canEdit[0]").value("MODERATOR"))
+                .andExpect(jsonPath("$.canView").isEmpty())
                 .andExpect(jsonPath("$.canAccessSuperAdmin").value(false));
     }
 

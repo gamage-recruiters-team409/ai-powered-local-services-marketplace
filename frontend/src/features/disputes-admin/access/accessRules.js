@@ -10,6 +10,9 @@ export const AREA_MODE = Object.freeze({ EDIT: 'edit', VIEW: 'view', NONE: 'none
 /** Role card for the Super Admin area when the user must sign in as a Super Admin. */
 export const CARD_SIGN_IN = 'sign-in'
 
+/** Role card for an area the user's role cannot open (shown, but disabled). */
+export const CARD_LOCKED = 'locked'
+
 export const ACCESS_ERROR = Object.freeze({
   UNAUTHORIZED: 'unauthorized',
   FORBIDDEN: 'forbidden',
@@ -57,21 +60,21 @@ export function getAdminHomePath(access) {
 }
 
 /**
- * Cards for role selection and the switch-role modal.
- * Areas in neither list are hidden, except the Super Admin card, which is shown
- * to other admins as "sign in as Super Admin".
+ * Cards for role selection and the switch-role modal, one per admin area.
+ * Areas the user can open get their mode (edit / view). Areas they cannot open are shown
+ * as locked, except the Super Admin card, which other admins can use to sign in as a Super Admin.
  */
 export function getRoleCards(access) {
+  if (!access) {
+    return []
+  }
   return AREA_ORDER.map((area) => {
     const mode = getAreaMode(access, area)
     if (mode !== AREA_MODE.NONE) {
       return { area, mode }
     }
-    if (area === ADMIN_ROLES.SUPER_ADMIN && access) {
-      return { area, mode: CARD_SIGN_IN }
-    }
-    return null
-  }).filter(Boolean)
+    return { area, mode: area === ADMIN_ROLES.SUPER_ADMIN ? CARD_SIGN_IN : CARD_LOCKED }
+  })
 }
 
 /** Area whose links the sidebar shows: the area in the URL if allowed, else the user's own area. */

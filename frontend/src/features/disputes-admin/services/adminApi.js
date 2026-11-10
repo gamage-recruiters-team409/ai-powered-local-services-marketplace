@@ -1,22 +1,27 @@
 import axios from 'axios'
 
+import { shouldAttachToken } from './apiTokenGuard'
 import { getAccessToken } from './authBridge'
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
 /**
  * Admin feature HTTP client. Base URL comes from VITE_API_BASE_URL (e.g. http://localhost:8080/api/v1).
  * TEMPORARY: swap for the shared Axios instance (with token refresh) once WP01 provides it.
  */
 const adminHttp = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
+  baseURL: API_BASE_URL,
   timeout: 15000,
 })
 
-const ABSOLUTE_URL = /^[a-z][a-z\d+\-.]*:\/\//i
-
 adminHttp.interceptors.request.use((config) => {
+  // Without a base URL, requests would silently go to the frontend server; fail with a clear error instead.
+  if (!API_BASE_URL) {
+    throw new Error('VITE_API_BASE_URL is not configured')
+  }
   const token = getAccessToken()
-  // Attach the token only to relative API paths, so it can never be sent to another host.
-  if (token && !ABSOLUTE_URL.test(config.url ?? '')) {
+  // Attach the token only when the request resolves to the API origin, so it can never reach another host.
+  if (token && shouldAttachToken(config.url, config.baseURL, API_BASE_URL)) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config

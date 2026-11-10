@@ -192,6 +192,20 @@
   background: var(--adm-color-primary-soft);
 }
 
+/* Area the role cannot open: visible for orientation, not clickable. */
+.cardLocked,
+.cardLocked:hover {
+  border-color: var(--adm-color-border);
+  background: var(--adm-color-bg);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.cardLocked .cardTitle,
+.cardLocked .cardAction {
+  color: var(--adm-color-text-muted);
+}
+
 .cardTop {
   display: flex;
   align-items: center;
