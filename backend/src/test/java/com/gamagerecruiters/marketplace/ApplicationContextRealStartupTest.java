@@ -16,6 +16,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
+import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
+import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -26,6 +28,12 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private AuthTokenRepository authTokenRepository;
+    
+    @MockitoBean
+    private ServiceCompletionRepository serviceCompletionRepository;
+
+    @MockitoBean
+    private ReviewRepository reviewRepository;
 
     @MockitoBean
     private MongoTemplate mongoTemplate;
