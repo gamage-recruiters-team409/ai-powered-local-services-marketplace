@@ -5,7 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
@@ -15,14 +17,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 
@@ -32,6 +40,7 @@ import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundExcepti
 import com.gamagerecruiters.marketplace.modules.availability.domain.AvailabilityRule;
 import com.gamagerecruiters.marketplace.modules.availability.domain.BlockReason;
 import com.gamagerecruiters.marketplace.modules.availability.domain.BlockedDate;
+import com.gamagerecruiters.marketplace.modules.availability.domain.WeeklyHours;
 import com.gamagerecruiters.marketplace.modules.availability.dto.AvailabilityResponse;
 import com.gamagerecruiters.marketplace.modules.availability.dto.BlockedDateResponse;
 import com.gamagerecruiters.marketplace.modules.availability.dto.CreateBlockedDateRequest;
@@ -55,11 +64,14 @@ class AvailabilityServiceImplTest {
     @Mock
     private BlockedDateRepository blockedDateRepository;
 
+    @Mock
+    private MongoTemplate mongoTemplate;
+
     private AvailabilityServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new AvailabilityServiceImpl(availabilityRuleRepository, blockedDateRepository, FIXED_CLOCK);
+        service = new AvailabilityServiceImpl(availabilityRuleRepository, blockedDateRepository, mongoTemplate, FIXED_CLOCK);
     }
 
     private static List<WeeklyHoursRequest> fullWeek() {
@@ -86,11 +98,25 @@ class AvailabilityServiceImplTest {
         verify(availabilityRuleRepository, never()).save(any());
     }
 
+    private static AvailabilityRule storedRule(int bufferMinutes) {
+        AvailabilityRule rule = new AvailabilityRule();
+        rule.setId("rule-1");
+        rule.setProviderId(PROVIDER_ID);
+        List<WeeklyHours> days = new ArrayList<>();
+        for (DayOfWeek day : DayOfWeek.values()) {
+            days.add(new WeeklyHours(day, true, "09:00", "17:00"));
+        }
+        rule.setWeeklyHours(days);
+        rule.setBufferMinutes(bufferMinutes);
+        rule.setUpdatedAt(Instant.now(FIXED_CLOCK));
+        return rule;
+    }
+
     @Test
-    @DisplayName("Saves a valid weekly schedule for the provider")
-    void updateAvailabilitySavesValidSchedule() {
-        when(availabilityRuleRepository.findByProviderId(PROVIDER_ID)).thenReturn(Optional.empty());
-        when(availabilityRuleRepository.save(any(AvailabilityRule.class))).thenAnswer(inv -> inv.getArgument(0));
+    @DisplayName("Saves a valid weekly schedule with one atomic upsert")
+    void updateAvailabilityUsesAtomicUpsert() {
+        when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class),
+                eq(AvailabilityRule.class))).thenReturn(storedRule(45));
 
         AvailabilityResponse response =
                 service.updateAvailability(PROVIDER_ID, new UpdateAvailabilityRequest(fullWeek(), 45));
@@ -98,8 +124,57 @@ class AvailabilityServiceImplTest {
         assertThat(response.providerId()).isEqualTo(PROVIDER_ID);
         assertThat(response.bufferMinutes()).isEqualTo(45);
         assertThat(response.weeklyHours()).hasSize(7);
-        assertThat(response.weeklyHours().get(0).dayOfWeek()).isEqualTo(DayOfWeek.MONDAY);
-        assertThat(response.updatedAt()).isEqualTo(Instant.now(FIXED_CLOCK));
+
+        ArgumentCaptor<Query> query = ArgumentCaptor.forClass(Query.class);
+        ArgumentCaptor<Update> update = ArgumentCaptor.forClass(Update.class);
+        ArgumentCaptor<FindAndModifyOptions> options = ArgumentCaptor.forClass(FindAndModifyOptions.class);
+        verify(mongoTemplate).findAndModify(query.capture(), update.capture(), options.capture(),
+                eq(AvailabilityRule.class));
+
+        assertThat(query.getValue().getQueryObject().getString("providerId")).isEqualTo(PROVIDER_ID);
+        assertThat(options.getValue().isUpsert()).isTrue();
+        assertThat(options.getValue().isReturnNew()).isTrue();
+
+        Document set = update.getValue().getUpdateObject().get("$set", Document.class);
+        Document setOnInsert = update.getValue().getUpdateObject().get("$setOnInsert", Document.class);
+        assertThat(set.get("bufferMinutes")).isEqualTo(45);
+        assertThat(set.get("updatedAt")).isEqualTo(Instant.now(FIXED_CLOCK));
+        assertThat(setOnInsert.get("createdAt")).isEqualTo(Instant.now(FIXED_CLOCK));
+
+        @SuppressWarnings("unchecked")
+        List<WeeklyHours> savedDays = (List<WeeklyHours>) set.get("weeklyHours");
+        assertThat(savedDays.get(0).getDayOfWeek()).isEqualTo(DayOfWeek.MONDAY);
+        verify(availabilityRuleRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Concurrent first-time update: retries once after a duplicate key and returns the saved schedule")
+    void updateAvailabilityRetriesAfterDuplicateKey() {
+        when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class),
+                eq(AvailabilityRule.class)))
+                .thenThrow(new DuplicateKeyException("E11000 duplicate key error"))
+                .thenReturn(storedRule(30));
+
+        AvailabilityResponse response =
+                service.updateAvailability(PROVIDER_ID, new UpdateAvailabilityRequest(fullWeek(), 30));
+
+        assertThat(response.providerId()).isEqualTo(PROVIDER_ID);
+        verify(mongoTemplate, times(2)).findAndModify(any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(AvailabilityRule.class));
+    }
+
+    @Test
+    @DisplayName("Concurrent update: returns 409 (not 500) when the conflict continues after retry")
+    void updateAvailabilityReturnsConflictWhenRetryFails() {
+        when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class),
+                eq(AvailabilityRule.class)))
+                .thenThrow(new DuplicateKeyException("E11000 duplicate key error"));
+
+        assertThatThrownBy(() -> service.updateAvailability(PROVIDER_ID, new UpdateAvailabilityRequest(fullWeek(), 30)))
+                .isInstanceOf(ResourceConflictException.class)
+                .satisfies(e -> assertThat(((ApiException) e).getErrorCode()).isEqualTo("AVAILABILITY_UPDATE_CONFLICT"));
+        verify(mongoTemplate, times(AvailabilityServiceImpl.MAX_UPSERT_ATTEMPTS)).findAndModify(any(Query.class),
+                any(Update.class), any(FindAndModifyOptions.class), eq(AvailabilityRule.class));
     }
 
     @Test
@@ -111,7 +186,7 @@ class AvailabilityServiceImplTest {
         assertThatThrownBy(() -> service.updateAvailability(PROVIDER_ID, new UpdateAvailabilityRequest(days, 30)))
                 .isInstanceOf(ApiException.class)
                 .satisfies(e -> assertThat(((ApiException) e).getErrorCode()).isEqualTo("INVALID_WEEKLY_HOURS"));
-        verify(availabilityRuleRepository, never()).save(any());
+        verifyNoInteractions(mongoTemplate);
     }
 
     @Test

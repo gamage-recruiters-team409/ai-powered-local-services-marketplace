@@ -9,6 +9,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
@@ -16,6 +17,11 @@ import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -47,21 +53,28 @@ public class AvailabilityServiceImpl implements AvailabilityService {
     /** Business timezone used to decide what "today" is. */
     public static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Colombo");
 
+    /** Upsert attempts before a concurrent duplicate-key result is reported as a conflict. */
+    static final int MAX_UPSERT_ATTEMPTS = 2;
+
     private final AvailabilityRuleRepository availabilityRuleRepository;
     private final BlockedDateRepository blockedDateRepository;
+    private final MongoTemplate mongoTemplate;
     private final Clock clock;
 
     @Autowired
     public AvailabilityServiceImpl(AvailabilityRuleRepository availabilityRuleRepository,
-                                   BlockedDateRepository blockedDateRepository) {
-        this(availabilityRuleRepository, blockedDateRepository, Clock.system(BUSINESS_ZONE));
+                                   BlockedDateRepository blockedDateRepository,
+                                   MongoTemplate mongoTemplate) {
+        this(availabilityRuleRepository, blockedDateRepository, mongoTemplate, Clock.system(BUSINESS_ZONE));
     }
 
     AvailabilityServiceImpl(AvailabilityRuleRepository availabilityRuleRepository,
                             BlockedDateRepository blockedDateRepository,
+                            MongoTemplate mongoTemplate,
                             Clock clock) {
         this.availabilityRuleRepository = availabilityRuleRepository;
         this.blockedDateRepository = blockedDateRepository;
+        this.mongoTemplate = mongoTemplate;
         this.clock = clock;
     }
 
@@ -72,29 +85,49 @@ public class AvailabilityServiceImpl implements AvailabilityService {
         return AvailabilityMapper.toResponse(rule);
     }
 
+    /**
+     * Creates or replaces the provider's schedule in one atomic upsert, so two first-time
+     * requests at the same moment cannot both insert a document. The unique providerId index
+     * keeps one schedule per provider.
+     */
     @Override
     public AvailabilityResponse updateAvailability(String providerId, UpdateAvailabilityRequest request) {
         validateWeeklyHours(request.weeklyHours());
 
-        Instant now = Instant.now(clock);
-        AvailabilityRule rule = availabilityRuleRepository.findByProviderId(providerId)
-                .orElseGet(() -> {
-                    AvailabilityRule created = new AvailabilityRule();
-                    created.setProviderId(providerId);
-                    created.setCreatedAt(now);
-                    return created;
-                });
-
         List<WeeklyHours> days = request.weeklyHours().stream()
-                .sorted((a, b) -> a.dayOfWeek().compareTo(b.dayOfWeek()))
+                .sorted(Comparator.comparing(WeeklyHoursRequest::dayOfWeek))
                 .map(AvailabilityMapper::toDomain)
                 .toList();
+        Instant now = Instant.now(clock);
 
-        rule.setWeeklyHours(new ArrayList<>(days));
-        rule.setBufferMinutes(request.bufferMinutes());
-        rule.setUpdatedAt(now);
+        Query query = Query.query(Criteria.where("providerId").is(providerId));
+        Update update = new Update()
+                .set("weeklyHours", new ArrayList<>(days))
+                .set("bufferMinutes", request.bufferMinutes())
+                .set("updatedAt", now)
+                .setOnInsert("createdAt", now);
+        FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
 
-        return AvailabilityMapper.toResponse(availabilityRuleRepository.save(rule));
+        return AvailabilityMapper.toResponse(upsertWithRetry(query, update, options));
+    }
+
+    private AvailabilityRule upsertWithRetry(Query query, Update update, FindAndModifyOptions options) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                AvailabilityRule saved = mongoTemplate.findAndModify(query, update, options, AvailabilityRule.class);
+                if (saved == null) {
+                    throw new IllegalStateException("Availability upsert returned no document");
+                }
+                return saved;
+            } catch (DuplicateKeyException e) {
+                // Another request inserted this provider's schedule at the same time.
+                // Retrying turns the insert into a normal update of that document.
+                if (attempt >= MAX_UPSERT_ATTEMPTS) {
+                    throw new ResourceConflictException("AVAILABILITY_UPDATE_CONFLICT",
+                            "Availability was updated at the same time. Please try again.");
+                }
+            }
+        }
     }
 
     @Override
