@@ -18,6 +18,7 @@ import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
 import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
+import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -34,6 +35,9 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private BlockedDateRepository blockedDateRepository;
+
+    @MockitoBean
+    private BookingRepository bookingRepository;
 
     @MockitoBean
     private MongoTemplate mongoTemplate;
