@@ -1,3 +1,4 @@
+
 package com.gamagerecruiters.marketplace;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -16,6 +17,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
+import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
+import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 
@@ -28,7 +31,13 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private AuthTokenRepository authTokenRepository;
-    
+
+    @MockitoBean
+    private AvailabilityRuleRepository availabilityRuleRepository;
+
+    @MockitoBean
+    private BlockedDateRepository blockedDateRepository;
+
     @MockitoBean
     private ServiceCompletionRepository serviceCompletionRepository;
 
