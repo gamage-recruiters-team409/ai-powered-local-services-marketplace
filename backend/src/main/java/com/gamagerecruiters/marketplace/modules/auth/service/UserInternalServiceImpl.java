@@ -1,6 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.auth.service;
 
 import java.time.Instant;
+import java.util.regex.Pattern;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
@@ -14,19 +15,29 @@ import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundExcepti
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
+import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.AdminRolePolicy;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.auth.security.Roles;
+import com.gamagerecruiters.marketplace.modules.customer.util.SriLankanPhoneUtil;
 
 @Service
 public class UserInternalServiceImpl implements UserInternalService {
 
+    private static final Pattern PASSWORD_POLICY = Pattern.compile("^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}$");
+
     private final UserRepository userRepository;
+    private final AuthTokenRepository authTokenRepository;
     private final PasswordEncoder passwordEncoder;
 
-    public UserInternalServiceImpl(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+    public UserInternalServiceImpl(
+            UserRepository userRepository,
+            AuthTokenRepository authTokenRepository,
+            PasswordEncoder passwordEncoder
+    ) {
         this.userRepository = userRepository;
+        this.authTokenRepository = authTokenRepository;
         this.passwordEncoder = passwordEncoder;
     }
 
@@ -99,5 +110,47 @@ public class UserInternalServiceImpl implements UserInternalService {
         admin.setCreatedAt(Instant.now());
 
         return userRepository.save(admin);
+    }
+
+    @Override
+    public User updateContactDetails(String userId, String fullName, String phone) {
+        User user = getById(userId);
+
+        String normalizedPhone = SriLankanPhoneUtil.normalize(phone);
+
+        userRepository.findByPhone(normalizedPhone).ifPresent(existing -> {
+            if (!existing.getId().equals(userId)) {
+                throw new ResourceConflictException("PHONE_ALREADY_EXISTS", "Phone number is already in use");
+            }
+        });
+
+        user.setName(fullName.trim());
+        user.setPhone(normalizedPhone);
+        return userRepository.save(user);
+    }
+
+    @Override
+    public void changePassword(String userId, String currentPassword, String newPassword) {
+        User user = getById(userId);
+
+        if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_CURRENT_PASSWORD", "Current password is incorrect");
+        }
+
+        if (passwordEncoder.matches(newPassword, user.getPasswordHash())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "SAME_PASSWORD", "New password cannot be the same as the current password");
+        }
+
+        if (newPassword == null || !PASSWORD_POLICY.matcher(newPassword).matches()) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "WEAK_PASSWORD",
+                    "Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one digit"
+            );
+        }
+
+        user.setPasswordHash(passwordEncoder.encode(newPassword));
+        userRepository.save(user);
+        authTokenRepository.revokeAllActiveTokensByUserId(userId);
     }
 }
