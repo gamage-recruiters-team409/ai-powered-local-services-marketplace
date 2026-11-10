@@ -335,24 +335,19 @@ class CustomerServiceTest {
     @Test
     @DisplayName("setDefaultAddress: Retries up to 3 times on default index race and returns 409 if exhausted")
     void shouldReturn409WhenDefaultAddressRaceExhaustsRetries() {
-        CustomerAddress currentDefault = new CustomerAddress();
-        currentDefault.setId("addr-1");
-        currentDefault.setCustomerId("c-1");
-        currentDefault.setDefault(true);
-
         CustomerAddress target = new CustomerAddress();
         target.setId("addr-2");
         target.setCustomerId("c-1");
         target.setDefault(false);
 
         when(customerAddressRepository.findByIdAndCustomerId("addr-2", "c-1")).thenReturn(Optional.of(target));
-        when(customerAddressRepository.findByCustomerIdAndIsDefaultTrue("c-1")).thenReturn(List.of(currentDefault));
-        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1")).thenReturn(List.of(currentDefault, target));
+        when(customerAddressRepository.findByCustomerIdAndIsDefaultTrue("c-1")).thenReturn(List.of());
+        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1")).thenReturn(List.of(target));
 
-        // Simulating 3 consecutive duplicate key exceptions on default index
-        when(customerAddressRepository.save(target))
-                .thenThrow(new DuplicateKeyException("E11000 duplicate key error collection: marketplace.customer_addresses index: " +
-                        CustomerServiceImpl.DEFAULT_ADDRESS_INDEX_NAME + " dup key: { customerId: \"c-1\", isDefault: true }"));
+        // Stub with doThrow on any(CustomerAddress.class) matching default index name
+        org.mockito.Mockito.doThrow(new DuplicateKeyException("E11000 duplicate key error collection: marketplace.customer_addresses index: " +
+                CustomerServiceImpl.DEFAULT_ADDRESS_INDEX_NAME + " dup key: { customerId: \"c-1\", isDefault: true }"))
+                .when(customerAddressRepository).save(any(CustomerAddress.class));
 
         ApiException ex = assertThrows(
                 ApiException.class,
@@ -360,6 +355,47 @@ class CustomerServiceTest {
         );
         assertEquals(HttpStatus.CONFLICT, ex.getStatus());
         assertEquals("CONCURRENT_MODIFICATION", ex.getErrorCode());
+        verify(customerAddressRepository, times(3)).save(any(CustomerAddress.class));
+    }
+
+    @Test
+    @DisplayName("loweringLimit: Lowering limit hides or deletes nothing; existing addresses remain and new creates rejected")
+    void shouldKeepAndReturnAllAddressesWhenLimitLowered() {
+        // Customer already has 8 addresses, but service instance is configured with lower limit of 5
+        CustomerServiceImpl restrictedService = new CustomerServiceImpl(
+                userInternalService,
+                customerAddressRepository,
+                districtCatalog,
+                openBookingsCheckerProvider,
+                5 // Lower limit
+        );
+
+        List<CustomerAddress> eightAddresses = new ArrayList<>();
+        for (int i = 1; i <= 8; i++) {
+            CustomerAddress a = new CustomerAddress();
+            a.setId("addr-" + i);
+            a.setCustomerId("c-1");
+            a.setSlot(i);
+            a.setDefault(i == 1);
+            eightAddresses.add(a);
+        }
+
+        when(customerAddressRepository.findByCustomerIdOrderByCreatedAtAsc("c-1")).thenReturn(eightAddresses);
+
+        // All 8 addresses are still returned, none hidden or deleted
+        List<CustomerAddressResponse> returned = restrictedService.getAddresses("c-1");
+        assertEquals(8, returned.size(), "Lowering the limit must never hide existing addresses");
+
+        // Attempting to create an address is rejected because count >= lower limit
+        when(districtCatalog.isValidDistrict("Colombo")).thenReturn(true);
+        ResourceConflictException ex = assertThrows(
+                ResourceConflictException.class,
+                () -> restrictedService.createAddress("c-1", new CustomerAddressRequest(
+                        "New", "Street", null, "City", "Colombo", null, false
+                ))
+        );
+        assertEquals("MAX_ADDRESSES_REACHED", ex.getErrorCode());
+        verify(customerAddressRepository, never()).delete(any());
     }
 
     @Test
