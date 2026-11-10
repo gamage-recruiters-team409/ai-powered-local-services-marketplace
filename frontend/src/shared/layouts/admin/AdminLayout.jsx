@@ -10,6 +10,8 @@ import { ADMIN_BRAND } from './adminBrand'
 const SIDEBAR_ID = 'admin-sidebar'
 const MAIN_ID = 'admin-main'
 const FALLBACK_USER = { name: 'Admin', roleLabel: 'Admin' }
+// Must match the drawer breakpoint in AdminLayout.module.css (max-width: 1023px).
+const DESKTOP_QUERY = '(min-width: 1024px)'
 
 /**
  * Shared Admin Common Layout: header, sidebar navigation, main content and footer.
@@ -58,6 +60,18 @@ export function AdminLayout({
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [drawerOpen, closeDrawer])
 
+  // The drawer only exists on small screens: close it if the window grows to desktop width.
+  useEffect(() => {
+    const desktop = window.matchMedia(DESKTOP_QUERY)
+    const handleChange = (event) => {
+      if (event.matches) {
+        setDrawerOpen(false)
+      }
+    }
+    desktop.addEventListener('change', handleChange)
+    return () => desktop.removeEventListener('change', handleChange)
+  }, [])
+
   const handleSwitchRole = onSwitchRole
     ? () => {
         setDrawerOpen(false)
@@ -100,12 +114,13 @@ export function AdminLayout({
           onSwitchRole={handleSwitchRole}
         />
 
-        <main id={MAIN_ID} className={styles.main} tabIndex={-1}>
+        {/* inert while the mobile drawer is open: keyboard focus stays inside the drawer */}
+        <main id={MAIN_ID} className={styles.main} tabIndex={-1} inert={drawerOpen}>
           {children ?? <Outlet />}
         </main>
       </div>
 
-      <footer className={styles.footer}>
+      <footer className={styles.footer} inert={drawerOpen}>
         <p>{brand.footerText}</p>
         {brand.footerLinks?.length > 0 && (
           <nav aria-label="Footer">

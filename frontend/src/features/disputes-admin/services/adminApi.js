@@ -11,9 +11,12 @@ const adminHttp = axios.create({
   timeout: 15000,
 })
 
+const ABSOLUTE_URL = /^[a-z][a-z\d+\-.]*:\/\//i
+
 adminHttp.interceptors.request.use((config) => {
   const token = getAccessToken()
-  if (token) {
+  // Attach the token only to relative API paths, so it can never be sent to another host.
+  if (token && !ABSOLUTE_URL.test(config.url ?? '')) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config
