@@ -21,6 +21,7 @@ import com.gamagerecruiters.marketplace.modules.customer.dto.ChangePasswordReque
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressResponse;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerProfileResponse;
+import com.gamagerecruiters.marketplace.modules.customer.dto.DeactivateAccountRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.UpdateCustomerProfileRequest;
 import com.gamagerecruiters.marketplace.modules.customer.service.CustomerService;
 
@@ -95,5 +96,13 @@ public class CustomerController {
         String currentUserId = CurrentUser.getUserId();
         CustomerAddressResponse updated = customerService.setDefaultAddress(currentUserId, addressId);
         return ResponseEntity.ok(updated);
+    }
+
+    @PostMapping("/deactivate")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public ResponseEntity<Void> deactivateAccount(@Valid @RequestBody DeactivateAccountRequest request) {
+        String currentUserId = CurrentUser.getUserId();
+        customerService.deactivateAccount(currentUserId, request);
+        return ResponseEntity.noContent().build();
     }
 }

@@ -6,6 +6,7 @@ import com.gamagerecruiters.marketplace.modules.customer.dto.ChangePasswordReque
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressResponse;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerProfileResponse;
+import com.gamagerecruiters.marketplace.modules.customer.dto.DeactivateAccountRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.UpdateCustomerProfileRequest;
 
 public interface CustomerService {
@@ -25,4 +26,6 @@ public interface CustomerService {
     void deleteAddress(String customerId, String addressId);
 
     CustomerAddressResponse setDefaultAddress(String customerId, String addressId);
+
+    void deactivateAccount(String customerId, DeactivateAccountRequest request);
 }

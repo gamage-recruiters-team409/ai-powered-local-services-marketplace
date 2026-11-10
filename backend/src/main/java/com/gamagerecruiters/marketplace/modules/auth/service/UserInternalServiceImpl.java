@@ -153,4 +153,23 @@ public class UserInternalServiceImpl implements UserInternalService {
         userRepository.save(user);
         authTokenRepository.revokeAllActiveTokensByUserId(userId);
     }
+
+    @Override
+    public void verifyPassword(String userId, String rawPassword) {
+        User user = getById(userId);
+        if (rawPassword == null || !passwordEncoder.matches(rawPassword, user.getPasswordHash())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PASSWORD", "Password confirmation is incorrect");
+        }
+    }
+
+    @Override
+    public void deactivateOwnAccount(String userId) {
+        User user = getById(userId);
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ACCOUNT_NOT_ACTIVE", "Only active accounts can be deactivated");
+        }
+        user.setStatus(UserStatus.DEACTIVATED);
+        userRepository.save(user);
+        authTokenRepository.revokeAllActiveTokensByUserId(userId);
+    }
 }

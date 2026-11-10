@@ -17,6 +17,7 @@ import com.gamagerecruiters.marketplace.modules.customer.dto.ChangePasswordReque
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressResponse;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerProfileResponse;
+import com.gamagerecruiters.marketplace.modules.customer.dto.DeactivateAccountRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.UpdateCustomerProfileRequest;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 
@@ -26,17 +27,20 @@ public class CustomerServiceImpl implements CustomerService {
     private final UserInternalService userInternalService;
     private final CustomerAddressRepository customerAddressRepository;
     private final DistrictCatalog districtCatalog;
+    private final OpenBookingsChecker openBookingsChecker;
     private final int maxAddresses;
 
     public CustomerServiceImpl(
             UserInternalService userInternalService,
             CustomerAddressRepository customerAddressRepository,
             DistrictCatalog districtCatalog,
+            OpenBookingsChecker openBookingsChecker,
             @Value("${app.customer.max-addresses:10}") int maxAddresses
     ) {
         this.userInternalService = userInternalService;
         this.customerAddressRepository = customerAddressRepository;
         this.districtCatalog = districtCatalog;
+        this.openBookingsChecker = openBookingsChecker;
         this.maxAddresses = maxAddresses;
     }
 
@@ -152,6 +156,21 @@ public class CustomerServiceImpl implements CustomerService {
         }
 
         return CustomerAddressResponse.fromEntity(address);
+    }
+
+    @Override
+    public void deactivateAccount(String customerId, DeactivateAccountRequest request) {
+        userInternalService.verifyPassword(customerId, request.password());
+
+        if (openBookingsChecker.hasOpenBookings(customerId)) {
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "OPEN_BOOKINGS_EXIST",
+                    "You cannot deactivate your account while you have active bookings"
+            );
+        }
+
+        userInternalService.deactivateOwnAccount(customerId);
     }
 
     private void validateDistrict(String district) {

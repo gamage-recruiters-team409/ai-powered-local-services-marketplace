@@ -19,4 +19,8 @@ public interface UserInternalService {
     User updateContactDetails(String userId, String fullName, String phone);
 
     void changePassword(String userId, String currentPassword, String newPassword);
+
+    void verifyPassword(String userId, String rawPassword);
+
+    void deactivateOwnAccount(String userId);
 }
