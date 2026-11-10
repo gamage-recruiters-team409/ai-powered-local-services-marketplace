@@ -5,9 +5,8 @@ import { useState } from 'react';
  * Features photo, verification badge, rating, description, response metrics,
  * next availability, hourly pricing, comparison checkbox, and "View profile" CTA.
  */
-export function SearchResultCard({ item, onSelect, onToggleComparison }) {
+export function SearchResultCard({ item, isSelected = false, onSelect, onToggleComparison }) {
   const [isFavorited, setIsFavorited] = useState(false);
-  const [inComparison, setInComparison] = useState(Boolean(item?.inComparison));
 
   if (!item) return null;
 
@@ -24,12 +23,6 @@ export function SearchResultCard({ item, onSelect, onToggleComparison }) {
     nextAvailable,
     pricing = {},
   } = item;
-
-  const handleComparisonChange = (e) => {
-    const checked = e.target.checked;
-    setInComparison(checked);
-    onToggleComparison?.(item, checked);
-  };
 
   return (
     <article className="provider-result-card" data-testid={`provider-card-${id}`}>
@@ -162,10 +155,10 @@ export function SearchResultCard({ item, onSelect, onToggleComparison }) {
             <input
               type="checkbox"
               className="compare-checkbox"
-              checked={inComparison}
-              onChange={handleComparisonChange}
+              checked={isSelected}
+              onChange={(e) => onToggleComparison?.(item, e.target.checked)}
             />
-            <span>{inComparison ? 'Added to comparison' : 'Add to comparison'}</span>
+            <span>{isSelected ? 'Added to comparison' : 'Add to comparison'}</span>
           </label>
         </div>
       </div>

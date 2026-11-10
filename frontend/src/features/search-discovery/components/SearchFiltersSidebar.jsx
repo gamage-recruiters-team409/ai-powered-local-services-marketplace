@@ -1,37 +1,8 @@
-import { useState } from 'react';
-
 /**
  * Filter Sidebar matching the approved design.
- * Includes Service Type, Hourly Budget slider, Availability,
- * Trust & Quality, and Distance controls.
+ * Fully controlled component connected to parent search state.
  */
-export function SearchFiltersSidebar({ onReset }) {
-  const [standardClean, setStandardClean] = useState(true);
-  const [deepClean, setDeepClean] = useState(false);
-  const [moveOutClean, setMoveOutClean] = useState(false);
-  const [recurringClean, setRecurringClean] = useState(false);
-
-  const [budgetMax, setBudgetMax] = useState(60);
-  const [availability, setAvailability] = useState('any');
-  const [verifiedOnly, setVerifiedOnly] = useState(true);
-  const [highRating, setHighRating] = useState(false);
-  const [backgroundChecked, setBackgroundChecked] = useState(false);
-  const [distance, setDistance] = useState('5');
-
-  const handleResetFilters = () => {
-    setStandardClean(true);
-    setDeepClean(false);
-    setMoveOutClean(false);
-    setRecurringClean(false);
-    setBudgetMax(60);
-    setAvailability('any');
-    setVerifiedOnly(true);
-    setHighRating(false);
-    setBackgroundChecked(false);
-    setDistance('5');
-    onReset?.();
-  };
-
+export function SearchFiltersSidebar({ filters = {}, onFilterChange, onReset }) {
   return (
     <aside className="filters-sidebar" aria-label="Search Filters">
       <div className="filters-card">
@@ -41,7 +12,7 @@ export function SearchFiltersSidebar({ onReset }) {
           <button
             type="button"
             className="filters-reset-btn"
-            onClick={handleResetFilters}
+            onClick={onReset}
           >
             Reset
           </button>
@@ -55,8 +26,8 @@ export function SearchFiltersSidebar({ onReset }) {
               <input
                 type="checkbox"
                 className="filter-checkbox"
-                checked={standardClean}
-                onChange={(e) => setStandardClean(e.target.checked)}
+                checked={Boolean(filters.standardClean)}
+                onChange={(e) => onFilterChange?.('standardClean', e.target.checked)}
               />
               <span>Standard home clean</span>
             </label>
@@ -64,8 +35,8 @@ export function SearchFiltersSidebar({ onReset }) {
               <input
                 type="checkbox"
                 className="filter-checkbox"
-                checked={deepClean}
-                onChange={(e) => setDeepClean(e.target.checked)}
+                checked={Boolean(filters.deepClean)}
+                onChange={(e) => onFilterChange?.('deepClean', e.target.checked)}
               />
               <span>Deep cleaning</span>
             </label>
@@ -73,8 +44,8 @@ export function SearchFiltersSidebar({ onReset }) {
               <input
                 type="checkbox"
                 className="filter-checkbox"
-                checked={moveOutClean}
-                onChange={(e) => setMoveOutClean(e.target.checked)}
+                checked={Boolean(filters.moveOutClean)}
+                onChange={(e) => onFilterChange?.('moveOutClean', e.target.checked)}
               />
               <span>Move-out cleaning</span>
             </label>
@@ -82,8 +53,8 @@ export function SearchFiltersSidebar({ onReset }) {
               <input
                 type="checkbox"
                 className="filter-checkbox"
-                checked={recurringClean}
-                onChange={(e) => setRecurringClean(e.target.checked)}
+                checked={Boolean(filters.recurringClean)}
+                onChange={(e) => onFilterChange?.('recurringClean', e.target.checked)}
               />
               <span>Recurring service</span>
             </label>
@@ -103,14 +74,14 @@ export function SearchFiltersSidebar({ onReset }) {
               min="30"
               max="80"
               step="5"
-              value={budgetMax}
-              onChange={(e) => setBudgetMax(Number(e.target.value))}
+              value={filters.budgetMax || 60}
+              onChange={(e) => onFilterChange?.('budgetMax', Number(e.target.value))}
               className="budget-range-slider"
               aria-label="Hourly budget upper limit"
             />
           </div>
           <div className="budget-selected-text">
-            Selected: $30–${budgetMax} per hour
+            Selected: $30–${filters.budgetMax || 60} per hour
           </div>
         </div>
 
@@ -124,8 +95,8 @@ export function SearchFiltersSidebar({ onReset }) {
                 name="availability"
                 value="any"
                 className="filter-radio"
-                checked={availability === 'any'}
-                onChange={() => setAvailability('any')}
+                checked={filters.availability === 'any'}
+                onChange={() => onFilterChange?.('availability', 'any')}
               />
               <span>Any date</span>
             </label>
@@ -135,8 +106,8 @@ export function SearchFiltersSidebar({ onReset }) {
                 name="availability"
                 value="today"
                 className="filter-radio"
-                checked={availability === 'today'}
-                onChange={() => setAvailability('today')}
+                checked={filters.availability === 'today'}
+                onChange={() => onFilterChange?.('availability', 'today')}
               />
               <span>Today</span>
             </label>
@@ -146,8 +117,8 @@ export function SearchFiltersSidebar({ onReset }) {
                 name="availability"
                 value="tomorrow"
                 className="filter-radio"
-                checked={availability === 'tomorrow'}
-                onChange={() => setAvailability('tomorrow')}
+                checked={filters.availability === 'tomorrow'}
+                onChange={() => onFilterChange?.('availability', 'tomorrow')}
               />
               <span>Tomorrow</span>
             </label>
@@ -157,8 +128,8 @@ export function SearchFiltersSidebar({ onReset }) {
                 name="availability"
                 value="custom"
                 className="filter-radio"
-                checked={availability === 'custom'}
-                onChange={() => setAvailability('custom')}
+                checked={filters.availability === 'custom'}
+                onChange={() => onFilterChange?.('availability', 'custom')}
               />
               <span>Choose a date</span>
             </label>
@@ -173,8 +144,8 @@ export function SearchFiltersSidebar({ onReset }) {
               <input
                 type="checkbox"
                 className="filter-checkbox"
-                checked={verifiedOnly}
-                onChange={(e) => setVerifiedOnly(e.target.checked)}
+                checked={Boolean(filters.verifiedOnly)}
+                onChange={(e) => onFilterChange?.('verifiedOnly', e.target.checked)}
               />
               <span>Verified providers</span>
             </label>
@@ -182,8 +153,8 @@ export function SearchFiltersSidebar({ onReset }) {
               <input
                 type="checkbox"
                 className="filter-checkbox"
-                checked={highRating}
-                onChange={(e) => setHighRating(e.target.checked)}
+                checked={Boolean(filters.highRating)}
+                onChange={(e) => onFilterChange?.('highRating', e.target.checked)}
               />
               <span>4.5 stars & above</span>
             </label>
@@ -191,8 +162,8 @@ export function SearchFiltersSidebar({ onReset }) {
               <input
                 type="checkbox"
                 className="filter-checkbox"
-                checked={backgroundChecked}
-                onChange={(e) => setBackgroundChecked(e.target.checked)}
+                checked={Boolean(filters.backgroundChecked)}
+                onChange={(e) => onFilterChange?.('backgroundChecked', e.target.checked)}
               />
               <span>Background checked</span>
             </label>
@@ -205,8 +176,8 @@ export function SearchFiltersSidebar({ onReset }) {
           <div className="distance-select-wrapper">
             <select
               className="distance-select"
-              value={distance}
-              onChange={(e) => setDistance(e.target.value)}
+              value={filters.distance || '5'}
+              onChange={(e) => onFilterChange?.('distance', e.target.value)}
               aria-label="Distance limit"
             >
               <option value="5">Within 5 miles ⌄</option>
@@ -221,4 +192,3 @@ export function SearchFiltersSidebar({ onReset }) {
 }
 
 export default SearchFiltersSidebar;
-

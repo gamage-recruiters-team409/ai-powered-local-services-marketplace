@@ -6,12 +6,26 @@ import SearchFiltersSidebar from '../components/SearchFiltersSidebar';
 import SearchResultCard from '../components/SearchResultCard';
 import SearchComparisonBanner from '../components/SearchComparisonBanner';
 import LocalServeFooter from '../components/LocalServeFooter';
+import FeaturePendingModal from '../components/FeaturePendingModal';
 import {
   SearchResultSkeleton,
   SearchEmptyState,
   SearchErrorState,
 } from '../components/SearchResultsState';
 import '../styles/search-discovery.css';
+
+const DEFAULT_FILTERS = {
+  standardClean: true,
+  deepClean: false,
+  moveOutClean: false,
+  recurringClean: false,
+  verifiedOnly: true,
+  budgetMax: 60,
+  availability: 'any',
+  highRating: false,
+  backgroundChecked: false,
+  distance: '5',
+};
 
 /**
  * Main Search Results Page matching the approved LocalServe design.
@@ -24,12 +38,21 @@ export function SearchResultsPage() {
   const [activeQuery, setActiveQuery] = useState('Home cleaning');
   const [activeLocation, setActiveLocation] = useState('Austin, TX 78701');
   const [sortBy, setSortBy] = useState('recommended');
+  const [filters, setFilters] = useState(DEFAULT_FILTERS);
 
   const [results, setResults] = useState([]);
-  const [totalCount, setTotalCount] = useState(18);
+  const [totalCount, setTotalCount] = useState(3);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedProviders, setSelectedProviders] = useState([]);
+
+  // Milestone Notice Modal
+  const [modalState, setModalState] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    badgeText: '',
+  });
 
   useEffect(() => {
     let isCancelled = false;
@@ -39,15 +62,21 @@ export function SearchResultsPage() {
         const data = await fetchSearchResults({
           query: activeQuery,
           location: activeLocation,
+          filters,
           sortBy,
         });
         if (!isCancelled) {
           const items = data.results || [];
           setResults(items);
           setTotalCount(data.totalCount || items.length);
-          // Pre-populate comparison with initial items that have inComparison: true
-          const initialComparing = items.filter((item) => item.inComparison);
-          setSelectedProviders(initialComparing);
+
+          // Seed default comparison on initial load
+          setSelectedProviders((prev) => {
+            if (prev.length === 0) {
+              return items.filter((item) => item.inComparison);
+            }
+            return prev;
+          });
           setError(null);
         }
       } catch (err) {
@@ -67,7 +96,7 @@ export function SearchResultsPage() {
     return () => {
       isCancelled = true;
     };
-  }, [activeQuery, activeLocation, sortBy]);
+  }, [activeQuery, activeLocation, filters, sortBy]);
 
   const handleSearchSubmit = ({ query: newQuery, location: newLocation }) => {
     setIsLoading(true);
@@ -75,27 +104,77 @@ export function SearchResultsPage() {
     setActiveLocation(newLocation);
   };
 
-  const handleResetSearch = () => {
+  const handleFilterChange = (key, value) => {
+    setIsLoading(true);
+    setFilters((prev) => ({
+      ...prev,
+      [key]: value,
+    }));
+  };
+
+  const handleClearAllChips = () => {
+    setIsLoading(true);
+    setFilters((prev) => ({
+      ...prev,
+      standardClean: false,
+      verifiedOnly: false,
+    }));
+  };
+
+  const handleResetAll = () => {
     setQuery('Home cleaning');
     setLocation('Austin, TX 78701');
     setIsLoading(true);
     setActiveQuery('Home cleaning');
     setActiveLocation('Austin, TX 78701');
+    setSortBy('recommended');
+    setFilters(DEFAULT_FILTERS);
   };
 
-  const handleToggleComparison = (provider, isAdded) => {
-    setSelectedProviders((prev) => {
-      if (isAdded) {
-        if (prev.some((p) => p.id === provider.id)) return prev;
-        if (prev.length >= 3) {
-          alert('You can select up to 3 providers to compare.');
-          return prev;
-        }
-        return [...prev, provider];
-      } else {
-        return prev.filter((p) => p.id !== provider.id);
+  const handleToggleComparison = (provider, isAdding) => {
+    if (isAdding) {
+      if (selectedProviders.some((p) => p.id === provider.id)) return;
+      if (selectedProviders.length >= 3) {
+        setModalState({
+          isOpen: true,
+          badgeText: 'LIMIT REACHED',
+          title: 'Maximum 3 Providers Allowed',
+          message:
+            'You can compare a maximum of 3 providers side-by-side. Please deselect one of your existing selections before adding another.',
+        });
+        return;
       }
+      setSelectedProviders((prev) => [...prev, provider]);
+    } else {
+      setSelectedProviders((prev) => prev.filter((p) => p.id !== provider.id));
+    }
+  };
+
+  const handleViewProfile = (provider) => {
+    setModalState({
+      isOpen: true,
+      badgeText: 'MILESTONE BOUNDARY',
+      title: `Provider Profile: ${provider.name}`,
+      message:
+        'The individual provider profile screen is scheduled for an upcoming milestone. Detailed credentials, services catalog, and booking availability will be available once that module is integrated.',
     });
+  };
+
+  const handleCompareClick = () => {
+    setModalState({
+      isOpen: true,
+      badgeText: 'SCHEDULED FOR MILESTONE 2',
+      title: 'Side-by-Side Comparison',
+      message: `The full side-by-side comparison screen for your ${selectedProviders.length} selected providers (${selectedProviders
+        .map((p) => p.name)
+        .join(', ')}) is scheduled for Milestone 2.`,
+    });
+  };
+
+  const formatPaginationText = () => {
+    if (results.length === 0) return 'Showing 0 of 0 providers';
+    if (results.length === 1) return `Showing 1 of ${totalCount} provider`;
+    return `Showing 1–${results.length} of ${totalCount} providers`;
   };
 
   return (
@@ -116,12 +195,19 @@ export function SearchResultsPage() {
             totalCount={totalCount}
             sortBy={sortBy}
             onSortChange={setSortBy}
+            filters={filters}
+            onToggleFilter={handleFilterChange}
+            onClearAll={handleClearAllChips}
           />
 
           {/* Two-Column Search Layout */}
           <div className="search-layout-grid">
             {/* Left Column: Filters Sidebar */}
-            <SearchFiltersSidebar onReset={handleResetSearch} />
+            <SearchFiltersSidebar
+              filters={filters}
+              onFilterChange={handleFilterChange}
+              onReset={handleResetAll}
+            />
 
             {/* Right Column: Cards, States, Comparison & Pagination */}
             <section className="search-results-column" aria-label="Search results list">
@@ -142,7 +228,7 @@ export function SearchResultsPage() {
                   ))}
                 </div>
               ) : results.length === 0 ? (
-                <SearchEmptyState query={activeQuery} onReset={handleResetSearch} />
+                <SearchEmptyState query={activeQuery} onReset={handleResetAll} />
               ) : (
                 <>
                   <div className="results-cards-list">
@@ -150,10 +236,9 @@ export function SearchResultsPage() {
                       <SearchResultCard
                         key={item.id}
                         item={item}
+                        isSelected={selectedProviders.some((p) => p.id === item.id)}
                         onToggleComparison={handleToggleComparison}
-                        onSelect={(selected) => {
-                          console.info('[LocalServe] Viewing profile for:', selected.name);
-                        }}
+                        onSelect={handleViewProfile}
                       />
                     ))}
                   </div>
@@ -161,15 +246,13 @@ export function SearchResultsPage() {
                   {/* Comparison Banner */}
                   <SearchComparisonBanner
                     selectedProviders={selectedProviders}
-                    onCompare={(providers) => {
-                      console.info('[LocalServe] Comparing providers:', providers.map((p) => p.name));
-                    }}
+                    onCompare={handleCompareClick}
                   />
 
                   {/* Pagination */}
                   <nav className="search-pagination-bar" aria-label="Search pagination">
                     <span className="pagination-info">
-                      Showing 1–{results.length} of {totalCount} providers
+                      {formatPaginationText()}
                     </span>
 
                     <div className="pagination-controls">
@@ -203,6 +286,15 @@ export function SearchResultsPage() {
 
       {/* Footer */}
       <LocalServeFooter />
+
+      {/* Explicit Milestone Limitation Modal */}
+      <FeaturePendingModal
+        isOpen={modalState.isOpen}
+        title={modalState.title}
+        message={modalState.message}
+        badgeText={modalState.badgeText}
+        onClose={() => setModalState({ isOpen: false, title: '', message: '', badgeText: '' })}
+      />
     </div>
   );
 }

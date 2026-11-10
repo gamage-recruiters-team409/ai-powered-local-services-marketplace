@@ -1213,3 +1213,102 @@
 .error-retry-btn:hover {
   background-color: #b91c1c;
 }
+
+/* ==========================================================================
+   10. Milestone Limitation Notice Modal & Mobile Overflow Safeguards
+   ========================================================================== */
+.pending-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(17, 24, 39, 0.5);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.pending-modal-card {
+  background-color: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.05);
+  max-width: 440px;
+  width: 100%;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.pending-modal-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.pending-modal-badge {
+  display: inline-block;
+  align-self: flex-start;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #0f766e;
+  background-color: #f0fdfa;
+  border: 1px solid #ccfbf1;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.pending-modal-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #111827;
+  margin: 0;
+}
+
+.pending-modal-message {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #4b5563;
+  margin: 0 0 20px;
+}
+
+.pending-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pending-modal-btn {
+  padding: 9px 20px;
+  background-color: #0f766e;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.pending-modal-btn:hover {
+  background-color: #115e59;
+}
+
+/* Horizontal overflow guard for mobile */
+@media (max-width: 640px) {
+  html, body, #root, .localserve-page-wrapper {
+    overflow-x: hidden !important;
+    max-width: 100vw !important;
+  }
+
+  .localserve-content-container,
+  .search-layout-grid,
+  .search-results-column,
+  .provider-result-card,
+  .comparison-banner-card {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+}

@@ -1,8 +1,7 @@
-import { useState } from 'react';
-
 /**
  * Search Bar, Breadcrumbs, Title Header, and Active Filter Chips
  * matching the approved LocalServe design.
+ * Fully synchronized with parent filter state and dynamic singular/plural count.
  */
 export function SearchInputHeader({
   query,
@@ -13,22 +12,21 @@ export function SearchInputHeader({
   totalCount,
   sortBy,
   onSortChange,
+  filters = {},
+  onToggleFilter,
+  onClearAll,
 }) {
-  const [activeChipClean, setActiveChipClean] = useState(true);
-  const [activeChipVerified, setActiveChipVerified] = useState(true);
-
   const handleSubmit = (e) => {
     e.preventDefault();
     onSearch?.({ query, location });
   };
 
-  const handleClearAll = () => {
-    setActiveChipClean(false);
-    setActiveChipVerified(false);
-    onQueryChange?.('');
-    onLocationChange?.('');
-    onSearch?.({ query: '', location: '' });
+  const formatCount = (count) => {
+    if (count === 1) return '1 local provider';
+    return `${count} local providers`;
   };
+
+  const hasActiveChips = filters.standardClean || filters.verifiedOnly;
 
   return (
     <div className="search-header-section">
@@ -83,7 +81,7 @@ export function SearchInputHeader({
         <div>
           <h1 className="search-title">Home cleaning in Austin</h1>
           <p className="search-subtitle">
-            {totalCount || 18} local providers · Prices shown before booking
+            {formatCount(totalCount)} · Prices shown before booking
           </p>
         </div>
 
@@ -106,24 +104,24 @@ export function SearchInputHeader({
       </div>
 
       {/* Active Filter Chips */}
-      {(activeChipClean || activeChipVerified) && (
+      {hasActiveChips && (
         <div className="active-chips-row" aria-label="Active filters">
-          {activeChipClean && (
+          {filters.standardClean && (
             <button
               type="button"
               className="filter-chip filter-chip-active"
-              onClick={() => setActiveChipClean(false)}
+              onClick={() => onToggleFilter?.('standardClean', false)}
               aria-label="Remove Standard clean filter"
             >
               Standard clean <span className="chip-x">✕</span>
             </button>
           )}
 
-          {activeChipVerified && (
+          {filters.verifiedOnly && (
             <button
               type="button"
               className="filter-chip"
-              onClick={() => setActiveChipVerified(false)}
+              onClick={() => onToggleFilter?.('verifiedOnly', false)}
               aria-label="Remove Verified filter"
             >
               Verified <span className="chip-x">✕</span>
@@ -133,7 +131,7 @@ export function SearchInputHeader({
           <button
             type="button"
             className="filter-chip-clear"
-            onClick={handleClearAll}
+            onClick={onClearAll}
           >
             Clear all
           </button>
