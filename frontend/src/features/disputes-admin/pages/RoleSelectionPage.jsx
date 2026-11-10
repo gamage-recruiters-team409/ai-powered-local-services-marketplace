@@ -5,7 +5,7 @@ export function RoleSelectionPage() {
   return (
     <AdminPage
       title="Choose a role area"
-      subtitle="Open your own area to work in it, or another area in view-only mode. You can switch at any time from your profile menu."
+      subtitle="Open an area your role can use. Locked areas aren't available to your role. You can switch at any time from your profile menu."
       breadcrumbs={['Role selection']}
       plain
     >

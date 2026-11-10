@@ -65,6 +65,7 @@ export function AdminSidebar({
   brand,
   user,
   sections,
+  drawerRef,
   closeButtonRef,
   onClose,
   onNavigate,
@@ -72,7 +73,15 @@ export function AdminSidebar({
   onSwitchRole,
 }) {
   return (
-    <aside id={id} className={cx(styles.sidebar, open && styles.sidebarOpen)} aria-label="Sidebar">
+    <aside
+      id={id}
+      ref={drawerRef}
+      className={cx(styles.sidebar, open && styles.sidebarOpen)}
+      // Open = mobile drawer over the page, so expose it as a modal dialog.
+      role={open ? 'dialog' : undefined}
+      aria-modal={open ? 'true' : undefined}
+      aria-label={open ? 'Navigation menu' : 'Sidebar'}
+    >
       <div className={cx(styles.drawerOnly, styles.drawerHeader)}>
         <span className={styles.drawerTitle}>
           <BrandLogo brand={brand} small />

@@ -22,8 +22,17 @@ export function SwitchRoleModal({ open, onClose }) {
     }
   }, [open])
 
+  // Close only for clicks on the backdrop, i.e. outside the dialog box. A click on the dialog's own
+  // scrollbar also has the dialog as its target, so check the position, not just the target.
   const handleBackdropClick = (event) => {
-    if (event.target === dialogRef.current) {
+    const dialog = dialogRef.current
+    if (!dialog || event.target !== dialog) {
+      return
+    }
+    const box = dialog.getBoundingClientRect()
+    const inside =
+      event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom
+    if (!inside) {
       onClose()
     }
   }
@@ -47,7 +56,7 @@ export function SwitchRoleModal({ open, onClose }) {
           </button>
         </div>
         <p id={textId} className={styles.dialogText}>
-          Choose which area to open. Areas marked View only are read-only for your role.
+          Choose which area to open. View only areas are read-only, and locked areas aren&apos;t available to your role.
         </p>
         {open && <RoleAreaCards compact onSelect={onClose} />}
       </div>

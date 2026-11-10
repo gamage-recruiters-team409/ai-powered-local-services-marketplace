@@ -142,9 +142,10 @@ export function AdminHeader({
   onNotificationsClick,
   onLogout,
   onSwitchRole,
+  inert = false,
 }) {
   return (
-    <header className={styles.header}>
+    <header className={styles.header} inert={inert}>
       <div className={styles.headerStart}>
         <button
           ref={menuButtonRef}
