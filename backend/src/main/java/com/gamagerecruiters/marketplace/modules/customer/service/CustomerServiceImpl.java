@@ -40,20 +40,20 @@ public class CustomerServiceImpl implements CustomerService {
     private final UserInternalService userInternalService;
     private final CustomerAddressRepository customerAddressRepository;
     private final DistrictCatalog districtCatalog;
-    private final OpenBookingsChecker openBookingsChecker;
+    private final ObjectProvider<OpenBookingsChecker> openBookingsCheckerProvider;
     private final int maxAddresses;
 
     public CustomerServiceImpl(
             UserInternalService userInternalService,
             CustomerAddressRepository customerAddressRepository,
             DistrictCatalog districtCatalog,
-            OpenBookingsChecker openBookingsChecker,
+            ObjectProvider<OpenBookingsChecker> openBookingsCheckerProvider,
             @Value("${app.customer.max-addresses:10}") int maxAddresses
     ) {
         this.userInternalService = userInternalService;
         this.customerAddressRepository = customerAddressRepository;
         this.districtCatalog = districtCatalog;
-        this.openBookingsChecker = openBookingsChecker;
+        this.openBookingsCheckerProvider = openBookingsCheckerProvider;
         this.maxAddresses = maxAddresses;
     }
 
@@ -296,7 +296,16 @@ public class CustomerServiceImpl implements CustomerService {
     public void deactivateAccount(String customerId, DeactivateAccountRequest request) {
         userInternalService.verifyPassword(customerId, request.password());
 
-        if (openBookingsChecker.hasOpenBookings(customerId)) {
+        OpenBookingsChecker checker = openBookingsCheckerProvider.getIfAvailable();
+        if (checker == null) {
+            throw new ApiException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "DEACTIVATION_UNAVAILABLE",
+                    "Account deactivation is temporarily unavailable"
+            );
+        }
+
+        if (checker.hasOpenBookings(customerId)) {
             throw new ApiException(
                     HttpStatus.CONFLICT,
                     "OPEN_BOOKINGS_EXIST",

@@ -67,7 +67,7 @@ class CustomerServiceTest {
                 userInternalService,
                 customerAddressRepository,
                 districtCatalog,
-                openBookingsChecker,
+                openBookingsCheckerProvider,
                 10
         );
     }
