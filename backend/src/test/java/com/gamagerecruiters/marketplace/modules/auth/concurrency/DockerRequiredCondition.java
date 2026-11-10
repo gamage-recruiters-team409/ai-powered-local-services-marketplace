@@ -20,7 +20,7 @@ import org.testcontainers.DockerClientFactory;
  *   <li>Otherwise the test runs normally.</li>
  * </ul>
  */
-class DockerRequiredCondition implements ExecutionCondition {
+public class DockerRequiredCondition implements ExecutionCondition {
 
     private static final Logger log = LoggerFactory.getLogger(DockerRequiredCondition.class);
 

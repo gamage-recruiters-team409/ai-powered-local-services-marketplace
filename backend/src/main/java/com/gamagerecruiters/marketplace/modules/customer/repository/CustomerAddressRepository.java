@@ -19,5 +19,7 @@ public interface CustomerAddressRepository extends MongoRepository<CustomerAddre
 
     Optional<CustomerAddress> findFirstByCustomerIdAndIsDefaultTrue(String customerId);
 
+    List<CustomerAddress> findByCustomerIdAndIsDefaultTrue(String customerId);
+
     Optional<CustomerAddress> findFirstByCustomerIdOrderByCreatedAtAsc(String customerId);
 }
