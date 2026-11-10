@@ -1,74 +1,123 @@
+import { useState } from 'react';
+
 /**
- * Reusable Provider & Listing Search Result Card.
- * Displays provider verification, service metadata, ratings, location,
- * pricing, and tags in a responsive card format.
+ * Reusable Provider & Listing Search Result Card matching the approved reference design.
+ * Features photo, verification badge, rating, description, response metrics,
+ * next availability, hourly pricing, comparison checkbox, and "View profile" CTA.
  */
-export function SearchResultCard({ item, onSelect }) {
+export function SearchResultCard({ item, onSelect, onToggleComparison }) {
+  const [isFavorited, setIsFavorited] = useState(false);
+  const [inComparison, setInComparison] = useState(Boolean(item?.inComparison));
+
   if (!item) return null;
 
   const {
     id,
-    title,
-    category,
-    provider = {},
-    location,
-    pricing = {},
+    name,
+    image,
+    isVerified,
+    rating,
+    reviewCount,
     description,
-    tags = [],
+    distanceText,
+    responseTimeText,
+    nextAvailable,
+    pricing = {},
   } = item;
 
-  const formattedPrice = pricing.startingPrice
-    ? `${pricing.currency || 'LKR'} ${Number(pricing.startingPrice).toLocaleString()}`
-    : 'Custom Quote';
-
-  const priceUnitText = pricing.priceUnit ? ` / ${pricing.priceUnit}` : '';
+  const handleComparisonChange = (e) => {
+    const checked = e.target.checked;
+    setInComparison(checked);
+    onToggleComparison?.(item, checked);
+  };
 
   return (
-    <article className="result-card" data-testid={`search-result-${id}`}>
-      <div>
-        {/* Provider Profile Header */}
-        <header className="card-provider-header">
-          <div className="provider-avatar" aria-hidden="true">
-            {provider.avatar || provider.name?.substring(0, 2).toUpperCase() || 'SP'}
-          </div>
-          <div className="provider-details">
-            <div className="provider-name-row">
-              <span className="provider-name">{provider.name}</span>
-              {provider.isVerified && (
-                <span
-                  className="verified-badge"
-                  title="Verified Service Provider"
-                  aria-label="Verified Service Provider"
-                >
-                  ✓
-                </span>
-              )}
-            </div>
-            {provider.businessName && (
-              <div className="provider-business">{provider.businessName}</div>
-            )}
-          </div>
-          {typeof provider.rating === 'number' && (
-            <div className="card-rating-badge" aria-label={`Rated ${provider.rating} stars`}>
-              <span className="star-icon" aria-hidden="true">★</span>
-              <span>{provider.rating.toFixed(1)}</span>
-              {provider.reviewCount != null && (
-                <span className="review-count">({provider.reviewCount})</span>
-              )}
-            </div>
-          )}
-        </header>
+    <article className="provider-result-card" data-testid={`provider-card-${id}`}>
+      {/* Provider Photo */}
+      <div className="provider-card-photo-wrapper">
+        <img
+          src={image}
+          alt={`${name} service presentation`}
+          className="provider-card-photo"
+          loading="lazy"
+        />
+      </div>
 
-        {/* Service Details */}
-        <div className="card-category-tag">{category}</div>
-        <h2 className="card-service-title">{title}</h2>
-        <p className="card-description">{description}</p>
-
-        {/* Location Info */}
-        {location && (
-          <div className="card-location-row">
+      {/* Provider Content */}
+      <div className="provider-card-content">
+        {/* Header: Name & Favorite */}
+        <div className="provider-card-top-row">
+          <h3 className="provider-card-title">{name}</h3>
+          <button
+            type="button"
+            className={`favorite-btn ${isFavorited ? 'favorite-btn-active' : ''}`}
+            onClick={() => setIsFavorited(!isFavorited)}
+            aria-label={isFavorited ? `Remove ${name} from favorites` : `Save ${name} to favorites`}
+          >
             <svg
-              className="location-icon"
+              className="heart-icon"
+              viewBox="0 0 24 24"
+              fill={isFavorited ? '#ef4444' : 'none'}
+              stroke={isFavorited ? '#ef4444' : 'currentColor'}
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Verification & Rating */}
+        <div className="provider-badges-row">
+          {isVerified && (
+            <span className="verified-badge" title="Verified Provider">
+              <svg
+                className="verified-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                <polyline points="22 4 12 14.01 9 11.01" />
+              </svg>
+              <span>Verified</span>
+            </span>
+          )}
+
+          {typeof rating === 'number' && (
+            <span className="rating-summary" aria-label={`Rated ${rating} out of 5 stars`}>
+              <span className="rating-star" aria-hidden="true">★</span>
+              <span className="rating-score">{rating.toFixed(1)}</span>
+              {reviewCount != null && (
+                <span className="rating-count">({reviewCount} reviews)</span>
+              )}
+            </span>
+          )}
+        </div>
+
+        {/* Description */}
+        <p className="provider-card-description">{description}</p>
+
+        {/* Distance & Response Time */}
+        {(distanceText || responseTimeText) && (
+          <div className="provider-meta-row">
+            {distanceText && <span>{distanceText}</span>}
+            {distanceText && responseTimeText && <span className="meta-dot">·</span>}
+            {responseTimeText && <span>{responseTimeText}</span>}
+          </div>
+        )}
+
+        {/* Availability Pill */}
+        {nextAvailable && (
+          <div className="provider-availability-row">
+            <svg
+              className="calendar-icon"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -77,43 +126,49 @@ export function SearchResultCard({ item, onSelect }) {
               strokeLinejoin="round"
               aria-hidden="true"
             >
-              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-              <circle cx="12" cy="10" r="3" />
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
             </svg>
-            <span>{location}</span>
+            <span>Next available: {nextAvailable}</span>
           </div>
         )}
 
-        {/* Tags */}
-        {tags.length > 0 && (
-          <div className="card-tags" aria-label="Service tags">
-            {tags.map((tag, idx) => (
-              <span key={idx} className="card-tag">
-                {tag}
-              </span>
-            ))}
+        {/* Pricing & CTA */}
+        <div className="provider-card-footer-row">
+          <div className="provider-pricing-block">
+            <div className="pricing-primary">
+              From <strong className="pricing-rate">{pricing.currency || '$'}{pricing.hourlyRate || 45}</strong>/{pricing.unit || 'hr'}
+            </div>
+            {pricing.minimumHours && (
+              <div className="pricing-secondary">{pricing.minimumHours}-hour minimum</div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* Footer / Pricing & Actions */}
-      <footer className="card-footer">
-        <div className="card-pricing-block">
-          <span className="pricing-label">Starting at</span>
-          <div>
-            <span className="pricing-amount">{formattedPrice}</span>
-            <span className="pricing-unit">{priceUnitText}</span>
-          </div>
+          <button
+            type="button"
+            className="view-profile-btn"
+            onClick={() => onSelect?.(item)}
+            aria-label={`View profile for ${name}`}
+          >
+            View profile
+          </button>
         </div>
-        <button
-          type="button"
-          className="card-action-btn"
-          onClick={() => onSelect?.(item)}
-          aria-label={`View service details for ${title}`}
-        >
-          View Service
-        </button>
-      </footer>
+
+        {/* Comparison Checkbox */}
+        <div className="provider-compare-row">
+          <label className="compare-checkbox-label">
+            <input
+              type="checkbox"
+              className="compare-checkbox"
+              checked={inComparison}
+              onChange={handleComparisonChange}
+            />
+            <span>{inComparison ? 'Added to comparison' : 'Add to comparison'}</span>
+          </label>
+        </div>
+      </div>
     </article>
   );
 }

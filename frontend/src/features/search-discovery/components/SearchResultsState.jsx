@@ -1,34 +1,33 @@
 /**
- * Skeleton Loader Card for Search Results.
+ * Skeleton Loader Card for Search Results matching the reference design layout.
  */
 export function SearchResultSkeleton() {
   return (
-    <div className="skeleton-card" aria-hidden="true">
-      <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-        <div className="skeleton-shimmer skeleton-avatar" />
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <div className="skeleton-shimmer skeleton-title" style={{ width: '50%' }} />
-          <div className="skeleton-shimmer skeleton-text" style={{ width: '35%' }} />
+    <div className="provider-result-card skeleton-card" aria-hidden="true">
+      <div className="skeleton-photo skeleton-shimmer" />
+      <div className="provider-card-content" style={{ gap: '10px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="skeleton-shimmer" style={{ width: '45%', height: '20px', borderRadius: '4px' }} />
+          <div className="skeleton-shimmer" style={{ width: '24px', height: '24px', borderRadius: '50%' }} />
         </div>
-      </div>
-      <div className="skeleton-shimmer skeleton-tag" />
-      <div className="skeleton-shimmer skeleton-title" />
-      <div className="skeleton-shimmer skeleton-text" />
-      <div className="skeleton-shimmer skeleton-text" style={{ width: '70%' }} />
-      <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-        <div className="skeleton-shimmer skeleton-tag" />
-        <div className="skeleton-shimmer skeleton-tag" />
-      </div>
-      <div style={{ borderTop: '1px solid var(--border)', paddingTop: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div className="skeleton-shimmer skeleton-title" style={{ width: '30%', height: '24px' }} />
-        <div className="skeleton-shimmer skeleton-btn" />
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <div className="skeleton-shimmer" style={{ width: '70px', height: '16px', borderRadius: '4px' }} />
+          <div className="skeleton-shimmer" style={{ width: '100px', height: '16px', borderRadius: '4px' }} />
+        </div>
+        <div className="skeleton-shimmer" style={{ width: '90%', height: '14px', borderRadius: '4px' }} />
+        <div className="skeleton-shimmer" style={{ width: '50%', height: '14px', borderRadius: '4px' }} />
+        <div className="skeleton-shimmer" style={{ width: '60%', height: '16px', borderRadius: '4px' }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+          <div className="skeleton-shimmer" style={{ width: '100px', height: '24px', borderRadius: '4px' }} />
+          <div className="skeleton-shimmer" style={{ width: '110px', height: '36px', borderRadius: '8px' }} />
+        </div>
       </div>
     </div>
   );
 }
 
 /**
- * Empty Search State with Recovery Action.
+ * Empty Search State with Recovery Action matching the approved theme.
  */
 export function SearchEmptyState({ query, onReset }) {
   return (
@@ -47,14 +46,14 @@ export function SearchEmptyState({ query, onReset }) {
         <line x1="21" y1="21" x2="16.65" y2="16.65" />
         <line x1="8" y1="11" x2="14" y2="11" />
       </svg>
-      <h2 className="empty-state-title">No Matching Services Found</h2>
+      <h2 className="empty-state-title">No matching providers found</h2>
       <p className="empty-state-desc">
         {query ? (
           <>
-            We couldn&rsquo;t find any service matching &ldquo;<strong>{query}</strong>&rdquo;. Try searching for general terms like <em>Electrical</em>, <em>Plumbing</em>, or <em>Cleaning</em>.
+            We couldn&rsquo;t find any service providers matching &ldquo;<strong>{query}</strong>&rdquo;. Try searching for &ldquo;Home cleaning&rdquo; or adjusting your filters.
           </>
         ) : (
-          'There are currently no listings matching your search criteria.'
+          'There are currently no providers matching your filter criteria.'
         )}
       </p>
       {onReset && (
@@ -67,7 +66,7 @@ export function SearchEmptyState({ query, onReset }) {
 }
 
 /**
- * Error State with Retry Action.
+ * Error State with Retry Action matching the approved theme.
  */
 export function SearchErrorState({ error, onRetry }) {
   return (
@@ -88,9 +87,9 @@ export function SearchErrorState({ error, onRetry }) {
           <line x1="12" y1="16" x2="12.01" y2="16" />
         </svg>
         <div>
-          <h3 className="error-title">Unable to Load Services</h3>
+          <h3 className="error-title">Unable to Load Providers</h3>
           <p className="error-message">
-            {error || 'An unexpected error occurred while fetching services. Please try again.'}
+            {error || 'An unexpected error occurred while fetching providers. Please try again.'}
           </p>
         </div>
       </div>

@@ -1,93 +1,145 @@
+import { useState } from 'react';
+
 /**
- * Search Input and Dynamic Results Heading Component.
- * Supports keyboard submission, clear button, and accessible labels.
+ * Search Bar, Breadcrumbs, Title Header, and Active Filter Chips
+ * matching the approved LocalServe design.
  */
 export function SearchInputHeader({
   query,
+  location,
   onQueryChange,
+  onLocationChange,
   onSearch,
   totalCount,
-  isLoading,
-  isLive,
+  sortBy,
+  onSortChange,
 }) {
+  const [activeChipClean, setActiveChipClean] = useState(true);
+  const [activeChipVerified, setActiveChipVerified] = useState(true);
+
   const handleSubmit = (e) => {
     e.preventDefault();
-    onSearch?.(query);
+    onSearch?.({ query, location });
   };
 
-  const handleClear = () => {
+  const handleClearAll = () => {
+    setActiveChipClean(false);
+    setActiveChipVerified(false);
     onQueryChange?.('');
-    onSearch?.('');
+    onLocationChange?.('');
+    onSearch?.({ query: '', location: '' });
   };
 
   return (
-    <header className="search-header">
-      <div className="search-header-headline">
-        <h1>Find Trusted Local Services</h1>
-        <p>Connect with verified trade professionals and service specialists across Sri Lanka</p>
-      </div>
-
-      <form className="search-input-wrapper" onSubmit={handleSubmit} role="search">
-        <div className="search-input-box">
-          <svg
-            className="search-input-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
+    <div className="search-header-section">
+      {/* Search Input Bar Card */}
+      <form className="search-bar-card" onSubmit={handleSubmit} role="search">
+        <div className="search-field-group">
+          <label className="search-field-label" htmlFor="search-service-input">
+            WHAT DO YOU NEED?
+          </label>
           <input
-            type="search"
-            className="search-input-field"
-            placeholder="Search by service, trade, location, or provider (e.g. Electrical, Colombo, AC)..."
+            id="search-service-input"
+            type="text"
+            className="search-field-input"
             value={query}
             onChange={(e) => onQueryChange?.(e.target.value)}
-            aria-label="Search services"
+            placeholder="Home cleaning"
           />
-          {query && (
-            <button
-              type="button"
-              className="search-clear-btn"
-              onClick={handleClear}
-              aria-label="Clear search query"
-            >
-              ✕
-            </button>
-          )}
         </div>
-        <button type="submit" className="search-submit-btn" disabled={isLoading}>
-          {isLoading ? 'Searching...' : 'Search Services'}
+
+        <div className="search-field-divider" aria-hidden="true" />
+
+        <div className="search-field-group">
+          <label className="search-field-label" htmlFor="search-location-input">
+            WHERE?
+          </label>
+          <input
+            id="search-location-input"
+            type="text"
+            className="search-field-input"
+            value={location}
+            onChange={(e) => onLocationChange?.(e.target.value)}
+            placeholder="Austin, TX 78701"
+          />
+        </div>
+
+        <button type="submit" className="search-bar-btn">
+          Search
         </button>
       </form>
 
-      {/* Dynamic Results Heading Bar */}
-      <div className="results-summary-bar">
-        <div className="results-count-text">
-          {isLoading ? (
-            <span>Updating results...</span>
-          ) : query ? (
-            <span>
-              Found <span className="results-count-highlight">{totalCount}</span> {totalCount === 1 ? 'service' : 'services'} for &ldquo;
-              <span className="results-count-highlight">{query}</span>&rdquo;
-            </span>
-          ) : (
-            <span>
-              Showing <span className="results-count-highlight">{totalCount}</span> available verified services
-            </span>
-          )}
+      {/* Breadcrumbs */}
+      <nav className="search-breadcrumbs" aria-label="Breadcrumbs">
+        <a href="/">Home</a>
+        <span className="breadcrumb-separator">/</span>
+        <a href="/search">Home cleaning</a>
+        <span className="breadcrumb-separator">/</span>
+        <span className="breadcrumb-current">Austin, TX</span>
+      </nav>
+
+      {/* Header Title & Sort Bar */}
+      <div className="search-title-bar">
+        <div>
+          <h1 className="search-title">Home cleaning in Austin</h1>
+          <p className="search-subtitle">
+            {totalCount || 18} local providers · Prices shown before booking
+          </p>
         </div>
 
-        <div className="results-pending-badge" title="Adapter status">
-          {isLive ? 'Live API Connected' : 'Fixture Adapter (Live Search Pending)'}
+        <div className="search-sort-wrapper">
+          <label htmlFor="search-sort-select" className="search-sort-label">
+            Sort:
+          </label>
+          <select
+            id="search-sort-select"
+            className="search-sort-select"
+            value={sortBy}
+            onChange={(e) => onSortChange?.(e.target.value)}
+          >
+            <option value="recommended">Recommended ⌄</option>
+            <option value="rating">Highest Rated</option>
+            <option value="price_asc">Price: Low to High</option>
+            <option value="price_desc">Price: High to Low</option>
+          </select>
         </div>
       </div>
-    </header>
+
+      {/* Active Filter Chips */}
+      {(activeChipClean || activeChipVerified) && (
+        <div className="active-chips-row" aria-label="Active filters">
+          {activeChipClean && (
+            <button
+              type="button"
+              className="filter-chip filter-chip-active"
+              onClick={() => setActiveChipClean(false)}
+              aria-label="Remove Standard clean filter"
+            >
+              Standard clean <span className="chip-x">✕</span>
+            </button>
+          )}
+
+          {activeChipVerified && (
+            <button
+              type="button"
+              className="filter-chip"
+              onClick={() => setActiveChipVerified(false)}
+              aria-label="Remove Verified filter"
+            >
+              Verified <span className="chip-x">✕</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="filter-chip-clear"
+            onClick={handleClearAll}
+          >
+            Clear all
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

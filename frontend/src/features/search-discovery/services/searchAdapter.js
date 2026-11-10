@@ -5,19 +5,22 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080
 
 /**
  * Search Adapter for WP04 Search & Discovery foundation.
- *
- * Checks if a live backend search endpoint exists at `${API_BASE_URL}/search`.
- * If live search endpoints are not yet implemented in backend, it falls back
- * to the isolated fixtures in `mockSearchResults.js` and records live integration
- * as pending.
+ * Checks for live backend endpoint at `${API_BASE_URL}/search`.
+ * Falls back to approved reference fixtures while backend integration is pending.
  */
-export async function fetchSearchResults({ query = '', category = '', sortBy = 'relevance' } = {}) {
+export async function fetchSearchResults({
+  query = '',
+  location = '',
+  category = '',
+  sortBy = 'recommended',
+} = {}) {
   const trimmedQuery = query.trim().toLowerCase();
+  const trimmedLocation = location.trim().toLowerCase();
 
   // Attempt live API if available
   try {
     const response = await axios.get(`${API_BASE_URL}/search`, {
-      params: { q: trimmedQuery, category, sort: sortBy },
+      params: { q: trimmedQuery, location: trimmedLocation, category, sort: sortBy },
       timeout: 2500,
     });
     if (response.data && Array.isArray(response.data.results)) {
@@ -28,46 +31,38 @@ export async function fetchSearchResults({ query = '', category = '', sortBy = '
       };
     }
   } catch (error) {
-    // Expected fallback while backend WP04 endpoints are under active development
+    // Expected fallback while backend WP04 search endpoints are in development
     console.info(
-      `[WP04 SearchAdapter] Live search endpoint (${API_BASE_URL}/search) pending (${error.message}). Serving isolated local fixtures.`,
+      `[WP04 SearchAdapter] Live search endpoint (${API_BASE_URL}/search) pending (${error.message}). Serving approved reference fixtures.`,
     );
   }
 
-  // Simulate minimal UI transition delay for realistic loading state verification
-  await new Promise((resolve) => setTimeout(resolve, 320));
+  // Brief latency simulation for realistic UI transition
+  await new Promise((resolve) => setTimeout(resolve, 280));
 
-  // Client-side filtering of fixtures
   let results = [...MOCK_SEARCH_RESULTS];
 
   if (trimmedQuery) {
     results = results.filter((item) => {
-      const matchTitle = item.title.toLowerCase().includes(trimmedQuery);
-      const matchCat = item.category.toLowerCase().includes(trimmedQuery);
+      const matchName = item.name.toLowerCase().includes(trimmedQuery);
       const matchDesc = item.description.toLowerCase().includes(trimmedQuery);
-      const matchProvider =
-        item.provider.name.toLowerCase().includes(trimmedQuery) ||
-        item.provider.businessName.toLowerCase().includes(trimmedQuery);
-      const matchLocation = item.location.toLowerCase().includes(trimmedQuery);
-      const matchTags = item.tags.some((tag) => tag.toLowerCase().includes(trimmedQuery));
-
-      return matchTitle || matchCat || matchDesc || matchProvider || matchLocation || matchTags;
+      const matchCat = item.category.toLowerCase().includes(trimmedQuery);
+      return matchName || matchDesc || matchCat;
     });
   }
 
-  if (category && category !== 'All') {
-    results = results.filter(
-      (item) => item.category.toLowerCase() === category.toLowerCase(),
+  if (trimmedLocation) {
+    results = results.filter((item) =>
+      item.location.toLowerCase().includes(trimmedLocation),
     );
   }
 
-  // Sorting
   if (sortBy === 'rating') {
-    results.sort((a, b) => b.provider.rating - a.provider.rating);
+    results.sort((a, b) => b.rating - a.rating);
   } else if (sortBy === 'price_asc') {
-    results.sort((a, b) => a.pricing.startingPrice - b.pricing.startingPrice);
+    results.sort((a, b) => a.pricing.hourlyRate - b.pricing.hourlyRate);
   } else if (sortBy === 'price_desc') {
-    results.sort((a, b) => b.pricing.startingPrice - a.pricing.startingPrice);
+    results.sort((a, b) => b.pricing.hourlyRate - a.pricing.hourlyRate);
   }
 
   return {
@@ -76,4 +71,3 @@ export async function fetchSearchResults({ query = '', category = '', sortBy = '
     totalCount: results.length,
   };
 }
-
