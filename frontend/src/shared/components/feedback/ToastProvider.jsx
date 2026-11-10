@@ -36,7 +36,19 @@ export default function ToastProvider({ children, maxToasts = 4 }) {
         action: options.action,
         duration: options.duration ?? DEFAULT_DURATION[variant] ?? 4000,
       }
-      setToasts((list) => [...list, toast].slice(-maxToasts))
+      setToasts((list) => {
+        const next = [...list, toast]
+        // Over the limit: drop the oldest toast that is safe to lose (it
+        // auto-dismisses and has no action). Sticky or actionable toasts are
+        // kept; only if every toast is protected is the oldest one dropped.
+        while (next.length > maxToasts) {
+          const index = next.findIndex(
+            (item, i) => i < next.length - 1 && item.duration > 0 && !item.action,
+          )
+          next.splice(index === -1 ? 0 : index, 1)
+        }
+        return next
+      })
       return id
     },
     [maxToasts],

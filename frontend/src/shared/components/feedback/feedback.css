@@ -24,6 +24,17 @@
   --fb-radius-lg: 12px;
 }
 
+/* Toasts and dialogs render into <body> (portals), so they set their own font. */
+.fb-toast-region,
+.fb-overlay {
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+.fb-sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
 /* ---------- Variant colours ---------- */
 .fb-v-success { --fb-accent: var(--fb-success); --fb-tint: var(--fb-success-tint); }
 .fb-v-error { --fb-accent: var(--fb-error); --fb-tint: var(--fb-error-tint); }
@@ -47,13 +58,13 @@
   gap: 8px;
 }
 .fb-btn:focus-visible { outline: 3px solid #99f6e4; outline-offset: 2px; }
-.fb-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.fb-btn:disabled, .fb-btn[aria-disabled='true'] { opacity: 0.6; cursor: not-allowed; }
 .fb-btn-primary { background: var(--fb-primary); color: #fff; }
-.fb-btn-primary:hover:not(:disabled) { background: var(--fb-primary-dark); }
+.fb-btn-primary:hover:not(:disabled):not([aria-disabled='true']) { background: var(--fb-primary-dark); }
 .fb-btn-danger { background: var(--fb-error); color: #fff; }
-.fb-btn-danger:hover:not(:disabled) { background: #b91c1c; }
+.fb-btn-danger:hover:not(:disabled):not([aria-disabled='true']) { background: #b91c1c; }
 .fb-btn-outline { background: var(--fb-surface); color: var(--fb-ink); border-color: var(--fb-border); }
-.fb-btn-outline:hover:not(:disabled) { background: var(--fb-bg); }
+.fb-btn-outline:hover:not(:disabled):not([aria-disabled='true']) { background: var(--fb-bg); }
 .fb-link-btn {
   font: inherit; font-size: 14px; font-weight: 600; background: none; border: 0;
   padding: 4px 0; min-height: 32px; color: var(--fb-primary-dark); text-decoration: underline; cursor: pointer;
@@ -133,6 +144,7 @@
   background: var(--fb-surface); color: var(--fb-ink); border-radius: var(--fb-radius-lg);
   box-shadow: 0 20px 48px rgba(15, 23, 42, 0.28); padding: 24px;
 }
+.fb-dialog:focus { outline: none; }
 .fb-dialog-head { display: flex; gap: 12px; align-items: flex-start; }
 .fb-dialog-icon { color: var(--fb-accent); flex: none; width: 24px; height: 24px; }
 .fb-dialog-title { margin: 0; font-size: 18px; font-weight: 700; line-height: 1.3; }

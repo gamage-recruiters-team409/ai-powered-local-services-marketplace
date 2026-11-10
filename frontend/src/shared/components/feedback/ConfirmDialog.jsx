@@ -8,6 +8,38 @@ const FOCUSABLE =
   'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
 const MAX_REASON = 500
 
+function getFocusable(root) {
+  return [...root.querySelectorAll(FOCUSABLE)].filter(
+    (el) => !el.disabled && el.getAttribute('aria-hidden') !== 'true',
+  )
+}
+
+/**
+ * Makes everything else in <body> inert (not clickable, not focusable, hidden
+ * from assistive technology) while the modal is open. Returns a function that
+ * restores each element to exactly the state it had before.
+ */
+function isolateBackground(keep) {
+  const changed = []
+  for (const el of [...document.body.children]) {
+    if (el === keep || el.tagName === 'SCRIPT') continue
+    changed.push({
+      el,
+      hadInert: el.hasAttribute('inert'),
+      ariaHidden: el.getAttribute('aria-hidden'),
+    })
+    el.setAttribute('inert', '')
+    el.setAttribute('aria-hidden', 'true')
+  }
+  return () => {
+    for (const { el, hadInert, ariaHidden } of changed) {
+      if (!hadInert) el.removeAttribute('inert')
+      if (ariaHidden === null) el.removeAttribute('aria-hidden')
+      else el.setAttribute('aria-hidden', ariaHidden)
+    }
+  }
+}
+
 function DialogBody({
   title,
   message,
@@ -22,6 +54,7 @@ function DialogBody({
   onCancel,
 }) {
   const [reason, setReason] = useState('')
+  const overlayRef = useRef(null)
   const dialogRef = useRef(null)
   const titleId = useId()
   const textId = useId()
@@ -32,35 +65,59 @@ function DialogBody({
   const canConfirm = !loading && (!requireReason || !reasonRequired || trimmed.length > 0)
 
   useEffect(() => {
+    const overlay = overlayRef.current
+    const dialog = dialogRef.current
     const previous = document.activeElement
-    const node = dialogRef.current
-    const target = node.querySelector('[data-autofocus]') ?? node.querySelector(FOCUSABLE)
-    target?.focus()
+
+    // 1. Background isolation: nothing outside the dialog can be reached.
+    const restoreBackground = isolateBackground(overlay)
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+
+    // 2. Safe initial focus (falls back to the dialog itself).
+    const target = dialog.querySelector('[data-autofocus]') ?? getFocusable(dialog)[0] ?? dialog
+    target.focus()
+
+    // 3. Safety net: if focus ever lands outside (for example a browser
+    //    without `inert` support), pull it straight back in.
+    const keepFocusInside = (event) => {
+      if (!overlay.contains(event.target)) {
+        ;(getFocusable(dialog)[0] ?? dialog).focus()
+      }
+    }
+    document.addEventListener('focusin', keepFocusInside)
+
     return () => {
+      document.removeEventListener('focusin', keepFocusInside)
+      restoreBackground()
       document.body.style.overflow = previousOverflow
       previous?.focus?.()
     }
   }, [])
 
   const handleKeyDown = (event) => {
-    if (event.key === 'Escape' && !loading) {
-      event.stopPropagation()
-      onCancel()
+    if (event.key === 'Escape') {
+      if (!loading) {
+        event.stopPropagation()
+        onCancel()
+      }
       return
     }
     if (event.key !== 'Tab') return
-    const items = [...dialogRef.current.querySelectorAll(FOCUSABLE)].filter(
-      (el) => !el.disabled,
-    )
-    if (items.length === 0) return
+    const dialog = dialogRef.current
+    const items = getFocusable(dialog)
+    if (items.length === 0) {
+      event.preventDefault()
+      dialog.focus()
+      return
+    }
     const first = items[0]
     const last = items[items.length - 1]
-    if (event.shiftKey && document.activeElement === first) {
+    const active = document.activeElement
+    if (event.shiftKey && (active === first || active === dialog)) {
       event.preventDefault()
       last.focus()
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && active === last) {
       event.preventDefault()
       first.focus()
     }
@@ -74,6 +131,7 @@ function DialogBody({
 
   return (
     <div
+      ref={overlayRef}
       className="fb-overlay"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !loading) onCancel()
@@ -86,6 +144,8 @@ function DialogBody({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={message ? textId : undefined}
+        aria-busy={loading || undefined}
+        tabIndex={-1}
         onKeyDown={handleKeyDown}
       >
         <div className="fb-dialog-head">
@@ -115,7 +175,7 @@ function DialogBody({
               maxLength={MAX_REASON}
               onChange={(event) => setReason(event.target.value)}
               data-autofocus={focusReason ? '' : undefined}
-              disabled={loading}
+              readOnly={loading}
             />
             <span className="fb-counter">
               {reason.length}/{MAX_REASON}
@@ -123,12 +183,20 @@ function DialogBody({
           </div>
         )}
 
+        {loading && (
+          <span className="fb-sr-only" role="status">
+            Please wait
+          </span>
+        )}
+
         <div className="fb-dialog-actions">
           <button
             type="button"
             className="fb-btn fb-btn-outline"
-            onClick={onCancel}
-            disabled={loading}
+            onClick={() => {
+              if (!loading) onCancel()
+            }}
+            aria-disabled={loading || undefined}
             data-autofocus={focusCancel ? '' : undefined}
           >
             {cancelLabel}
@@ -136,8 +204,10 @@ function DialogBody({
           <button
             type="button"
             className={`fb-btn ${destructive ? 'fb-btn-danger' : 'fb-btn-primary'}`}
-            onClick={() => onConfirm(requireReason ? trimmed : undefined)}
-            disabled={!canConfirm}
+            onClick={() => {
+              if (canConfirm) onConfirm(requireReason ? trimmed : undefined)
+            }}
+            aria-disabled={!canConfirm || undefined}
             data-autofocus={focusConfirm ? '' : undefined}
           >
             {loading && <Spinner size={16} label="" />}

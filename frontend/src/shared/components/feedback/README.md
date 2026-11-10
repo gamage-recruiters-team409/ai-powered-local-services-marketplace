@@ -24,3 +24,16 @@ Notes
 - `fb-btn` buttons are used only inside these components. They can be swapped for the shared
   Button component later without changing the public props.
 - Colours follow the team theme: teal #0F766E primary, status colours for success, warning, error, info.
+
+Behaviour notes
+- `ConfirmDialog` is a real modal: while open, the rest of the page is made `inert` and hidden from
+  assistive technology, focus stays inside (also while `loading`: its buttons use `aria-disabled`
+  so they remain focusable), Esc cancels unless loading, and focus returns to the opener.
+  Toasts also sit in the inert background while a dialog is open.
+- When more than `maxToasts` toasts are open, the oldest auto-dismissing toast without an action is
+  removed first. Sticky (`duration: 0`) and actionable toasts are kept; only if every open toast is
+  protected is the oldest one removed.
+
+Tests
+- `npm test` runs the accessibility regression tests (`ConfirmDialog.test.jsx`) and the toast tests
+  (`ToastProvider.test.jsx`).
