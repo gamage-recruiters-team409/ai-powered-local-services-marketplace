@@ -53,6 +53,9 @@ public final class AdminRolePolicy {
                     "Actor role '" + actor.getRole() + "' is not permitted to modify account status of target role '" + target.getRole() + "'"
             );
         }
+        if (target.getStatus() == UserStatus.DEACTIVATED) {
+            throw new AccessDeniedException("Cannot modify status of a DEACTIVATED account");
+        }
         if (target.getRole() == Role.SUPER_ADMIN && target.getStatus() == UserStatus.ACTIVE && newStatus != UserStatus.ACTIVE) {
             long activeSuperAdmins = userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE);
             if (activeSuperAdmins <= 1) {
