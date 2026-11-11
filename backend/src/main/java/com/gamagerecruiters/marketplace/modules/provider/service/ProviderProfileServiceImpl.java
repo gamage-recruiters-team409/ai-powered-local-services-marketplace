@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.provider.service;
 
 import java.time.Instant;
 
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
@@ -28,10 +29,7 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
         String userId = requireCurrentUserId();
 
         if (providerProfileRepository.existsByUserId(userId)) {
-            throw new ResourceConflictException(
-                    "PROVIDER_PROFILE_ALREADY_EXISTS",
-                    "A provider profile already exists for this user"
-            );
+            throw providerProfileAlreadyExists();
         }
 
         ProviderProfile profile = new ProviderProfile();
@@ -48,7 +46,16 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
         profile.setCreatedAt(now);
         profile.setUpdatedAt(now);
 
-        return toResponse(providerProfileRepository.save(profile));
+        try {
+            return toResponse(providerProfileRepository.save(profile));
+        } catch (DuplicateKeyException ex) {
+            /*
+             * The pre-check above provides a fast and friendly duplicate response,
+             * while the MongoDB unique index remains the final protection against
+             * two concurrent requests creating a profile for the same user.
+             */
+            throw providerProfileAlreadyExists();
+        }
     }
 
     @Override
@@ -105,6 +112,13 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
         profile.setUpdatedAt(Instant.now());
 
         return toResponse(providerProfileRepository.save(profile));
+    }
+
+    private ResourceConflictException providerProfileAlreadyExists() {
+        return new ResourceConflictException(
+                "PROVIDER_PROFILE_ALREADY_EXISTS",
+                "A provider profile already exists for this user"
+        );
     }
 
     private String requireCurrentUserId() {

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -69,14 +70,7 @@ class ProviderProfileServiceImplTest {
 
     @Test
     void createMyProfile_shouldCreateProfileForCurrentProvider() {
-        CreateProviderProfileRequest request = new CreateProviderProfileRequest();
-        request.setProviderType(ProviderType.INDIVIDUAL);
-        request.setDisplayName("Hiba Services");
-        request.setBio("Professional local service provider.");
-        request.setDistrict("Colombo");
-        request.setCity("Colombo");
-        request.setExperienceYears(2);
-        request.setProfileImageUrl("https://example.com/profile.jpg");
+        CreateProviderProfileRequest request = createProfileRequest();
 
         when(providerProfileRepository.existsByUserId(USER_ID))
                 .thenReturn(false);
@@ -101,26 +95,63 @@ class ProviderProfileServiceImplTest {
         assertEquals("Colombo", response.getCity());
         assertEquals(2, response.getExperienceYears());
 
-        verify(providerProfileRepository).save(any(ProviderProfile.class));
+        verify(providerProfileRepository)
+                .save(any(ProviderProfile.class));
     }
 
     @Test
-    void createMyProfile_shouldRejectDuplicateProfile() {
-        CreateProviderProfileRequest request = new CreateProviderProfileRequest();
-        request.setProviderType(ProviderType.INDIVIDUAL);
-        request.setDisplayName("Hiba Services");
-        request.setDistrict("Colombo");
-        request.setCity("Colombo");
+    void createMyProfile_shouldRejectDuplicateProfileDetectedByPreCheck() {
+        CreateProviderProfileRequest request = createProfileRequest();
 
         when(providerProfileRepository.existsByUserId(USER_ID))
                 .thenReturn(true);
 
-        assertThrows(
+        ResourceConflictException exception = assertThrows(
                 ResourceConflictException.class,
                 () -> providerProfileService.createMyProfile(request)
         );
 
+        assertEquals(
+                "PROVIDER_PROFILE_ALREADY_EXISTS",
+                exception.getErrorCode()
+        );
+
         verify(providerProfileRepository, never())
+                .save(any(ProviderProfile.class));
+    }
+
+    @Test
+    void createMyProfile_shouldReturnConflictWhenMongoUniqueIndexRejectsConcurrentDuplicate() {
+        CreateProviderProfileRequest request = createProfileRequest();
+
+        /*
+         * Simulates the race condition:
+         *
+         * Request A and Request B both pass existsByUserId().
+         * Request A inserts first.
+         * MongoDB's unique userId index rejects Request B.
+         */
+        when(providerProfileRepository.existsByUserId(USER_ID))
+                .thenReturn(false);
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenThrow(
+                        new DuplicateKeyException(
+                                "E11000 duplicate key error: userId_1"
+                        )
+                );
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> providerProfileService.createMyProfile(request)
+        );
+
+        assertEquals(
+                "PROVIDER_PROFILE_ALREADY_EXISTS",
+                exception.getErrorCode()
+        );
+
+        verify(providerProfileRepository)
                 .save(any(ProviderProfile.class));
     }
 
@@ -169,18 +200,50 @@ class ProviderProfileServiceImplTest {
         ProviderProfileResponse response =
                 providerProfileService.updateMyProfile(request);
 
-        assertEquals("Updated provider profile bio.", response.getBio());
+        assertEquals(
+                "Updated provider profile bio.",
+                response.getBio()
+        );
+
         assertEquals(3, response.getExperienceYears());
 
-        // Existing values should remain unchanged.
-        assertEquals("Hiba Services", response.getDisplayName());
-        assertEquals("Colombo", response.getDistrict());
-        assertEquals("Colombo", response.getCity());
+        // Omitted fields must remain unchanged.
+        assertEquals(
+                "Hiba Services",
+                response.getDisplayName()
+        );
+
+        assertEquals(
+                "Colombo",
+                response.getDistrict()
+        );
+
+        assertEquals(
+                "Colombo",
+                response.getCity()
+        );
 
         assertNotNull(response.getUpdatedAt());
 
         verify(providerProfileRepository)
                 .save(existingProfile);
+    }
+
+    private CreateProviderProfileRequest createProfileRequest() {
+        CreateProviderProfileRequest request =
+                new CreateProviderProfileRequest();
+
+        request.setProviderType(ProviderType.INDIVIDUAL);
+        request.setDisplayName("Hiba Services");
+        request.setBio("Professional local service provider.");
+        request.setDistrict("Colombo");
+        request.setCity("Colombo");
+        request.setExperienceYears(2);
+        request.setProfileImageUrl(
+                "https://example.com/profile.jpg"
+        );
+
+        return request;
     }
 
     private ProviderProfile createExistingProfile() {
@@ -194,7 +257,9 @@ class ProviderProfileServiceImplTest {
         profile.setDistrict("Colombo");
         profile.setCity("Colombo");
         profile.setExperienceYears(2);
-        profile.setProfileImageUrl("https://example.com/profile.jpg");
+        profile.setProfileImageUrl(
+                "https://example.com/profile.jpg"
+        );
         profile.setCreatedAt(Instant.now());
         profile.setUpdatedAt(Instant.now());
 

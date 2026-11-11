@@ -4,6 +4,7 @@ import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderType;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 public class UpdateProviderProfileRequest {
@@ -11,13 +12,18 @@ public class UpdateProviderProfileRequest {
     private ProviderType providerType;
 
     @Size(max = 100, message = "Display name must not exceed 100 characters")
+    @Pattern(regexp = ".*\\S.*", message = "Display name must not be blank")
     private String displayName;
 
     @Size(max = 1000, message = "Bio must not exceed 1000 characters")
     private String bio;
 
+    @Size(max = 100, message = "District must not exceed 100 characters")
+    @Pattern(regexp = ".*\\S.*", message = "District must not be blank")
     private String district;
 
+    @Size(max = 100, message = "City must not exceed 100 characters")
+    @Pattern(regexp = ".*\\S.*", message = "City must not be blank")
     private String city;
 
     @Min(value = 0, message = "Experience years cannot be negative")
