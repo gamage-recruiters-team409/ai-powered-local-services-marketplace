@@ -5,7 +5,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
@@ -29,8 +35,10 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MongoDBContainer;
 
+import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.initializer.BookingIndexInitializer;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
@@ -38,8 +46,8 @@ import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
 
 /**
  * Runs the booking foundation against a real MongoDB (Testcontainers):
- * index creation on a fresh database, BookingFacade queries on real data,
- * unique booking reference and optimistic locking.
+ * index creation on a fresh database, BookingFacade queries and status changes on real data,
+ * unique booking reference, optimistic locking and simultaneous status changes.
  * Requires Docker. Skip explicitly with -DSKIP_DOCKER_TESTS=true.
  */
 @SpringBootTest
@@ -162,7 +170,8 @@ class BookingMongoIntegrationTest {
         BookingParticipants participants = bookingFacade.getBookingParticipants(saved.getId());
 
         assertThat(participants).isEqualTo(new BookingParticipants(
-                saved.getId(), null, "listing-1", "customer-2", "provider-1", BookingStatus.CONFIRMED));
+                saved.getId(), null, "listing-1", "customer-2", "provider-1", BookingStatus.CONFIRMED,
+                Instant.parse("2026-12-01T04:30:00Z"), Instant.parse("2026-12-01T06:30:00Z")));
     }
 
     @Test
@@ -197,6 +206,74 @@ class BookingMongoIntegrationTest {
         Booking stored = bookingRepository.findById(saved.getId()).orElseThrow();
         assertThat(stored.getStatus()).isEqualTo(BookingStatus.AWAITING_PAYMENT);
         assertThat(stored.getTimeline()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: completion flow CONFIRMED -> IN_PROGRESS -> COMPLETION_PENDING -> COMPLETED (SYSTEM) is stored with timeline")
+    void completionFlowIsStoredWithTimeline() {
+        Booking saved = bookingRepository.save(booking("customer-6", BookingStatus.CONFIRMED));
+
+        bookingFacade.markInProgress(saved.getId(), "provider-1");
+        bookingFacade.markCompletionPending(saved.getId(), "provider-1");
+        BookingParticipants result = bookingFacade.markCompleted(saved.getId(), BookingFacade.SYSTEM_ACTOR);
+
+        Booking stored = bookingRepository.findById(saved.getId()).orElseThrow();
+        log.info("Completion flow stored: status={}, timeline={}", stored.getStatus(),
+                stored.getTimeline().stream().map(c -> c.getFromStatus() + "->" + c.getToStatus()
+                        + " by " + c.getChangedBy()).toList());
+
+        assertThat(result.status()).isEqualTo(BookingStatus.COMPLETED);
+        assertThat(stored.getStatus()).isEqualTo(BookingStatus.COMPLETED);
+        assertThat(stored.getTimeline()).extracting(BookingStatusChange::getToStatus).containsExactly(
+                BookingStatus.IN_PROGRESS, BookingStatus.COMPLETION_PENDING, BookingStatus.COMPLETED);
+        assertThat(stored.getTimeline()).extracting(BookingStatusChange::getChangedBy).containsExactly(
+                "provider-1", "provider-1", "SYSTEM");
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: 10 simultaneous markInProgress calls -> exactly one succeeds, others get 409, one timeline entry")
+    void simultaneousStatusChangesApplyOnce() throws Exception {
+        Booking saved = bookingRepository.save(booking("customer-7", BookingStatus.CONFIRMED));
+        int parallel = 10;
+        ExecutorService executor = Executors.newFixedThreadPool(parallel);
+        CountDownLatch ready = new CountDownLatch(parallel);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<String>> results = new ArrayList<>();
+
+        try {
+            for (int i = 0; i < parallel; i++) {
+                results.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    try {
+                        bookingFacade.markInProgress(saved.getId(), "provider-1");
+                        return "OK";
+                    } catch (ResourceConflictException e) {
+                        return e.getErrorCode();
+                    }
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            List<String> outcomes = new ArrayList<>();
+            for (Future<String> result : results) {
+                outcomes.add(result.get(30, TimeUnit.SECONDS));
+            }
+
+            Booking stored = bookingRepository.findById(saved.getId()).orElseThrow();
+            log.info("Simultaneous markInProgress: requests={}, succeeded={}, conflicts={}, timeline entries={}",
+                    parallel, outcomes.stream().filter("OK"::equals).count(),
+                    outcomes.stream().filter(o -> !"OK".equals(o)).count(), stored.getTimeline().size());
+
+            assertThat(outcomes).filteredOn("OK"::equals).hasSize(1);
+            assertThat(outcomes).filteredOn(o -> !"OK".equals(o))
+                    .allMatch(o -> o.equals("BOOKING_UPDATE_CONFLICT") || o.equals("INVALID_STATUS_TRANSITION"));
+            assertThat(stored.getStatus()).isEqualTo(BookingStatus.IN_PROGRESS);
+            assertThat(stored.getTimeline()).hasSize(1);
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private Document findIndex(String indexName) {
