@@ -1,6 +1,7 @@
 import { createBrowserRouter } from 'react-router-dom'
 
 import { adminRoutes } from '../features/disputes-admin/routes/adminRoutes'
+import { completionRoutes } from '../features/completion-reviews/routes/completionRoutes'
 import { NotFoundPage } from './NotFoundPage'
 
 /**
@@ -9,5 +10,6 @@ import { NotFoundPage } from './NotFoundPage'
  */
 export const router = createBrowserRouter([
   adminRoutes,
+  ...completionRoutes,
   { path: '*', element: <NotFoundPage /> },
 ])
