@@ -39,6 +39,8 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private CustomerAddressRepository customerAddressRepository;
+
+    @MockitoBean
     private ProviderProfileRepository providerProfileRepository;
 
     @MockitoBean
