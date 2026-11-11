@@ -16,9 +16,14 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
+import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
 import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepository;
+import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
+import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
+import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
+import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -29,7 +34,7 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private AuthTokenRepository authTokenRepository;
-    
+
     @MockitoBean
     private AvailabilityRuleRepository availabilityRuleRepository;
 
@@ -38,6 +43,19 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private CategoryRepository categoryRepository;
+    private BookingRepository bookingRepository;
+
+    @MockitoBean
+    private CustomerAddressRepository customerAddressRepository;
+
+    @MockitoBean
+    private ProviderProfileRepository providerProfileRepository;
+
+    @MockitoBean
+    private ServiceCompletionRepository serviceCompletionRepository;
+
+    @MockitoBean
+    private ReviewRepository reviewRepository;
 
     @MockitoBean
     private MongoTemplate mongoTemplate;
