@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -82,7 +83,7 @@ class UserInternalServiceTest {
     }
 
     @Test
-    @DisplayName("Issue A: ADMIN -> SUPER_ADMIN status change is denied (403 AccessDeniedException)")
+    @DisplayName("Issue A: ADMIN -> SUPER_ADMIN status change is denied (403 ROLE_HIERARCHY_VIOLATION)")
     void adminCannotChangeSuperAdminStatus() {
         authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
         User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
@@ -91,16 +92,18 @@ class UserInternalServiceTest {
         when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
         when(userRepository.findById("super-1")).thenReturn(Optional.of(targetSuper));
 
-        AccessDeniedException ex = assertThrows(
-                AccessDeniedException.class,
+        ApiException ex = assertThrows(
+                ApiException.class,
                 () -> userInternalService.changeStatus("super-1", UserStatus.SUSPENDED)
         );
+        assertEquals("ROLE_HIERARCHY_VIOLATION", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("not permitted"));
         verify(userRepository, never()).save(targetSuper);
     }
 
     @Test
-    @DisplayName("Issue A: ADMIN -> ADMIN status change is denied (403 AccessDeniedException)")
+    @DisplayName("Issue A: ADMIN -> ADMIN status change is denied (403 ROLE_HIERARCHY_VIOLATION)")
     void adminCannotChangeAnotherAdminStatus() {
         authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
         User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
@@ -109,10 +112,12 @@ class UserInternalServiceTest {
         when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
         when(userRepository.findById("admin-2")).thenReturn(Optional.of(targetAdmin));
 
-        AccessDeniedException ex = assertThrows(
-                AccessDeniedException.class,
+        ApiException ex = assertThrows(
+                ApiException.class,
                 () -> userInternalService.changeStatus("admin-2", UserStatus.SUSPENDED)
         );
+        assertEquals("ROLE_HIERARCHY_VIOLATION", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("not permitted"));
         verify(userRepository, never()).save(targetAdmin);
     }
@@ -150,23 +155,25 @@ class UserInternalServiceTest {
     }
 
     @Test
-    @DisplayName("Issue A: SUPER_ADMIN modifying own status is denied")
+    @DisplayName("Issue A: SUPER_ADMIN modifying own status is denied (403 CANNOT_MODIFY_SELF)")
     void superAdminCannotModifyOwnStatus() {
         authenticateAs("super-1", "super@marketplace.local", Role.SUPER_ADMIN);
         User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
 
         when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
 
-        AccessDeniedException ex = assertThrows(
-                AccessDeniedException.class,
+        ApiException ex = assertThrows(
+                ApiException.class,
                 () -> userInternalService.changeStatus("super-1", UserStatus.SUSPENDED)
         );
+        assertEquals("CANNOT_MODIFY_SELF", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertEquals("Self status modification is not allowed", ex.getMessage());
         verify(userRepository, never()).save(actor);
     }
 
     @Test
-    @DisplayName("Issue A: Suspending last remaining ACTIVE SUPER_ADMIN is denied")
+    @DisplayName("Issue A: Suspending last remaining ACTIVE SUPER_ADMIN is denied (409 LAST_ACTIVE_SUPER_ADMIN)")
     void cannotSuspendLastRemainingActiveSuperAdmin() {
         authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
         User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
@@ -176,10 +183,12 @@ class UserInternalServiceTest {
         when(userRepository.findById("super-2")).thenReturn(Optional.of(targetSuper));
         when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(1L);
 
-        AccessDeniedException ex = assertThrows(
-                AccessDeniedException.class,
+        ApiException ex = assertThrows(
+                ApiException.class,
                 () -> userInternalService.changeStatus("super-2", UserStatus.SUSPENDED)
         );
+        assertEquals("LAST_ACTIVE_SUPER_ADMIN", ex.getErrorCode());
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
         assertTrue(ex.getMessage().contains("last remaining ACTIVE SUPER_ADMIN"));
         verify(userRepository, never()).save(targetSuper);
     }
@@ -486,7 +495,7 @@ class UserInternalServiceTest {
     }
 
     @Test
-    @DisplayName("changeStatus: Admin cannot modify status of a DEACTIVATED account")
+    @DisplayName("changeStatus: Admin cannot modify status of a DEACTIVATED account (403 ACCOUNT_DEACTIVATED)")
     void shouldRejectAdminModifyingDeactivatedAccount() {
         authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
 
@@ -503,10 +512,12 @@ class UserInternalServiceTest {
         when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
         when(userRepository.findById("cust-1")).thenReturn(Optional.of(target));
 
-        AccessDeniedException ex = assertThrows(
-                AccessDeniedException.class,
+        ApiException ex = assertThrows(
+                ApiException.class,
                 () -> userInternalService.changeStatus("cust-1", UserStatus.ACTIVE)
         );
+        assertEquals("ACCOUNT_DEACTIVATED", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("Cannot modify status of a DEACTIVATED account"));
         verify(userRepository, never()).save(target);
     }
