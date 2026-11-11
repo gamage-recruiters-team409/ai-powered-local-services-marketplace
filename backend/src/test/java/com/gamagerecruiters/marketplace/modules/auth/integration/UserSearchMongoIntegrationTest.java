@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -31,6 +32,9 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -42,6 +46,7 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.dto.AdminUserSummary;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
+import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 
 @SpringBootTest
@@ -94,6 +99,19 @@ public class UserSearchMongoIntegrationTest {
     void setUpCleanData() {
         mongoTemplate.remove(new Query(), User.class);
         seedUser(SUPER_ACTOR_ID, "Super Root", "superroot@system.local", Role.SUPER_ADMIN, UserStatus.ACTIVE, Instant.parse("2024-01-01T00:00:00Z"));
+        authenticateAs(SUPER_ACTOR_ID, "superroot@system.local", Role.SUPER_ADMIN);
+    }
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    private void authenticateAs(String userId, String email, Role role) {
+        UserPrincipal principal = new UserPrincipal(userId, email, role);
+        UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
+                principal, null, List.of(new SimpleGrantedAuthority("ROLE_" + role.name())));
+        SecurityContextHolder.getContext().setAuthentication(auth);
     }
 
     @Test
@@ -262,6 +280,7 @@ public class UserSearchMongoIntegrationTest {
         seedAllRoles();
         String adminActorId = "actor-admin-live";
         seedUser(adminActorId, "Admin Actor", "adminactorlive@system.local", Role.ADMIN, UserStatus.ACTIVE, Instant.parse("2024-01-01T00:00:00Z"));
+        authenticateAs(adminActorId, "adminactorlive@system.local", Role.ADMIN);
 
         Page<AdminUserSummary> page = userInternalService.searchUsers(
                 adminActorId, null, null, null, PageRequest.of(0, 20)
@@ -279,6 +298,7 @@ public class UserSearchMongoIntegrationTest {
     void adminRequestingForbiddenRolesThrows403() {
         String adminActorId = "actor-admin-restricted";
         seedUser(adminActorId, "Admin Actor", "adminactor2@system.local", Role.ADMIN, UserStatus.ACTIVE, Instant.now());
+        authenticateAs(adminActorId, "adminactor2@system.local", Role.ADMIN);
 
         ApiException exSuper = assertThrows(ApiException.class, () ->
                 userInternalService.searchUsers(adminActorId, Set.of(Role.SUPER_ADMIN), null, null, PageRequest.of(0, 10))
@@ -302,6 +322,7 @@ public class UserSearchMongoIntegrationTest {
         for (Role role : deniedRoles) {
             String actorId = "denied-" + role.name();
             seedUser(actorId, "Denied User", actorId + "@test.local", role, UserStatus.ACTIVE, Instant.now());
+            authenticateAs(actorId, actorId + "@test.local", role);
 
             ApiException exSearch = assertThrows(ApiException.class, () ->
                     userInternalService.searchUsers(actorId, null, null, null, PageRequest.of(0, 10))
@@ -326,8 +347,12 @@ public class UserSearchMongoIntegrationTest {
         String adminActorId = "actor-admin-count";
         seedUser(adminActorId, "Admin Actor", "admincount@system.local", Role.ADMIN, UserStatus.ACTIVE, Instant.now());
 
+        // Authenticated as SUPER_ACTOR_ID from @BeforeEach
         long superCount = userInternalService.countByRoleAndStatus(SUPER_ACTOR_ID, Role.SUPER_ADMIN, UserStatus.ACTIVE);
         assertTrue(superCount >= 1);
+
+        // Switch to admin actor
+        authenticateAs(adminActorId, "admincount@system.local", Role.ADMIN);
 
         long adminCustCount = userInternalService.countByRoleAndStatus(adminActorId, Role.CUSTOMER, UserStatus.ACTIVE);
         assertTrue(adminCustCount >= 1);
@@ -340,6 +365,48 @@ public class UserSearchMongoIntegrationTest {
 
         log.info("RESULT: countByRoleAndStatus SUPER_ADMIN permitted={}, ADMIN permitted={}, forbidden role rejected with 403 code={}",
                 superCount, adminCustCount, exForbidden.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("Missing authentication throws 401 AUTHENTICATION_REQUIRED")
+    void searchUsersRejectsUnauthenticated() {
+        SecurityContextHolder.clearContext();
+
+        ApiException exSearch = assertThrows(ApiException.class, () ->
+                userInternalService.searchUsers(SUPER_ACTOR_ID, null, null, null, PageRequest.of(0, 10)));
+        assertEquals(HttpStatus.UNAUTHORIZED, exSearch.getStatus());
+        assertEquals("AUTHENTICATION_REQUIRED", exSearch.getErrorCode());
+
+        SecurityContextHolder.clearContext();
+
+        ApiException exCount = assertThrows(ApiException.class, () ->
+                userInternalService.countByRoleAndStatus(SUPER_ACTOR_ID, Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals(HttpStatus.UNAUTHORIZED, exCount.getStatus());
+        assertEquals("AUTHENTICATION_REQUIRED", exCount.getErrorCode());
+
+        log.info("RESULT: missing authentication rejected with 401 code={} for both searchUsers and countByRoleAndStatus",
+                exSearch.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("Mismatched actorId throws 403 ACTOR_IDENTITY_MISMATCH")
+    void searchUsersRejectsMismatchedActorId() {
+        // Authenticated as SUPER_ACTOR_ID (from @BeforeEach) but supplying a different actorId
+        String mismatchedId = "other-user-id";
+        seedUser(mismatchedId, "Other User", "other@test.com", Role.SUPER_ADMIN, UserStatus.ACTIVE, Instant.now());
+
+        ApiException exSearch = assertThrows(ApiException.class, () ->
+                userInternalService.searchUsers(mismatchedId, null, null, null, PageRequest.of(0, 10)));
+        assertEquals(HttpStatus.FORBIDDEN, exSearch.getStatus());
+        assertEquals("ACTOR_IDENTITY_MISMATCH", exSearch.getErrorCode());
+
+        ApiException exCount = assertThrows(ApiException.class, () ->
+                userInternalService.countByRoleAndStatus(mismatchedId, Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals(HttpStatus.FORBIDDEN, exCount.getStatus());
+        assertEquals("ACTOR_IDENTITY_MISMATCH", exCount.getErrorCode());
+
+        log.info("RESULT: mismatched actorId rejected with 403 code={} for both searchUsers and countByRoleAndStatus",
+                exSearch.getErrorCode());
     }
 
     private void seedAllRoles() {

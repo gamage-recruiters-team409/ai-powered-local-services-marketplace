@@ -17,6 +17,8 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -32,6 +34,7 @@ import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.AdminRolePolicy;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.auth.security.Roles;
+import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.customer.util.SriLankanPhoneUtil;
 
 @Service
@@ -308,10 +311,23 @@ public class UserInternalServiceImpl implements UserInternalService {
     }
 
     private User validateActorForRead(String actorId) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated() || !(auth.getPrincipal() instanceof UserPrincipal principal)) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_REQUIRED",
+                    "Authentication required: user could not be resolved from security context");
+        }
+
         if (actorId == null || actorId.trim().isEmpty()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ACTOR_NOT_FOUND",
                     "Authentication required: actor could not be resolved");
         }
+
+        String authenticatedUserId = principal.getUserId();
+        if (!actorId.equals(authenticatedUserId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ACTOR_IDENTITY_MISMATCH",
+                    "Supplied actor ID does not match authenticated user ID");
+        }
+
         User actor = userRepository.findById(actorId)
                 .orElseThrow(() -> new ApiException(HttpStatus.FORBIDDEN, "ACTOR_NOT_FOUND",
                         "Actor user not found in database"));
