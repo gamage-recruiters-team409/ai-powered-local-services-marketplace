@@ -1,4 +1,3 @@
-
 package com.gamagerecruiters.marketplace;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -20,6 +19,7 @@ import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationF
 import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
+import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 
 @SpringBootTest
@@ -37,6 +37,9 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private BlockedDateRepository blockedDateRepository;
+
+    @MockitoBean
+    private ProviderProfileRepository providerProfileRepository;
 
     @MockitoBean
     private ServiceCompletionRepository serviceCompletionRepository;
