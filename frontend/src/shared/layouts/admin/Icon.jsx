@@ -119,6 +119,17 @@ const ICONS = {
       <circle cx="12" cy="12" r="3" />
     </>
   ),
+  arrowRight: <path d="M5 12h14M13 6l6 6-6 6" />,
+  check: <path d="m5 12 5 5 9-10" />,
+  flag: <path d="M5 21V4M5 4h11l-2 4 2 4H5" />,
+  landmark: <path d="M3 21h18M4 10h16M12 3l8 5H4zM6 10v8M10 10v8M14 10v8M18 10v8" />,
+  userCircle: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="10" r="3" />
+      <path d="M6.2 18.2a7 7 0 0 1 11.6 0" />
+    </>
+  ),
   lock: (
     <>
       <rect x="4" y="11" width="16" height="10" rx="2" />

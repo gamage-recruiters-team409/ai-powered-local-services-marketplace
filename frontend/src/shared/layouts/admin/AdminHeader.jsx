@@ -4,7 +4,7 @@ import styles from './AdminLayout.module.css'
 import { Icon } from './Icon'
 import { cx, getInitials } from './adminLayoutUtils'
 
-function BrandName({ brand }) {
+export function BrandName({ brand }) {
   const { name, nameHighlight } = brand
   if (!nameHighlight || !name.endsWith(nameHighlight)) {
     return name

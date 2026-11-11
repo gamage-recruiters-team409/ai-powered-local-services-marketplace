@@ -1,6 +1,6 @@
 /**
  * Admin areas, one per admin role. The role values match the backend Role enum.
- * Labels, descriptions and URL slugs live here only.
+ * Labels, descriptions, role-card details (category, icon, tags) and URL slugs live here only.
  */
 export const ADMIN_ROLES = Object.freeze({
   SUPER_ADMIN: 'SUPER_ADMIN',
@@ -15,26 +15,41 @@ export const ADMIN_AREAS = Object.freeze({
     slug: 'super-admin',
     label: 'Super Admin',
     description: 'Platform dashboard, settings, admin accounts and audit log.',
+    category: 'Platform governance',
+    icon: 'shield',
+    tags: ['Dashboard', 'Settings', 'Admin accounts', 'Audit log'],
   },
   [ADMIN_ROLES.ADMIN]: {
     slug: 'admin',
     label: 'Admin',
     description: 'Disputes, users, provider verification, categories and announcements.',
+    category: 'Full operations',
+    icon: 'userCircle',
+    tags: ['Disputes', 'Users', 'Verification', 'Categories'],
   },
   [ADMIN_ROLES.SUPPORT_ADMIN]: {
     slug: 'support',
     label: 'Support Admin',
     description: 'Overdue bookings, late cases and repeat cancellations.',
+    category: 'Operations & fulfilment',
+    icon: 'clock',
+    tags: ['Overdue bookings', 'Late cases', 'Cancellations'],
   },
   [ADMIN_ROLES.MODERATOR]: {
     slug: 'moderator',
     label: 'Moderator',
     description: 'Reported content and review moderation.',
+    category: 'Trust & safety',
+    icon: 'flag',
+    tags: ['Reported content', 'Reviews'],
   },
   [ADMIN_ROLES.FINANCE_ADMIN]: {
     slug: 'finance',
     label: 'Finance Admin',
     description: 'Transactions, payout queue, refunds and reports.',
+    category: 'Financial operations',
+    icon: 'landmark',
+    tags: ['Transactions', 'Payouts', 'Refunds', 'Reports'],
   },
 })
 
