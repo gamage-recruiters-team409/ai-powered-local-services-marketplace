@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -51,11 +52,14 @@ class UserInternalServiceTest {
     @Mock
     private PasswordEncoder passwordEncoder;
 
+    @Mock
+    private MongoTemplate mongoTemplate;
+
     private UserInternalServiceImpl userInternalService;
 
     @BeforeEach
     void setUp() {
-        userInternalService = new UserInternalServiceImpl(userRepository, authTokenRepository, passwordEncoder);
+        userInternalService = new UserInternalServiceImpl(userRepository, authTokenRepository, passwordEncoder, mongoTemplate);
     }
 
     @AfterEach

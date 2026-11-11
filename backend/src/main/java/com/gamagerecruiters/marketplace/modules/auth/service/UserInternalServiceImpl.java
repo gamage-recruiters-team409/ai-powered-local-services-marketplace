@@ -47,14 +47,6 @@ public class UserInternalServiceImpl implements UserInternalService {
     public UserInternalServiceImpl(
             UserRepository userRepository,
             AuthTokenRepository authTokenRepository,
-            PasswordEncoder passwordEncoder
-    ) {
-        this(userRepository, authTokenRepository, passwordEncoder, null);
-    }
-
-    public UserInternalServiceImpl(
-            UserRepository userRepository,
-            AuthTokenRepository authTokenRepository,
             PasswordEncoder passwordEncoder,
             MongoTemplate mongoTemplate
     ) {
