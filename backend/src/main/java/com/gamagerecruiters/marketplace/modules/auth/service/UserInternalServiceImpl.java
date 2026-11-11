@@ -191,15 +191,29 @@ public class UserInternalServiceImpl implements UserInternalService {
     }
 
     @Override
-    public Page<AdminUserSummary> searchUsers(Set<Role> roles, UserStatus status, String nameOrEmail, Pageable pageable) {
+    public Page<AdminUserSummary> searchUsers(String actorId, Set<Role> roles, UserStatus status, String nameOrEmail, Pageable pageable) {
         if (pageable == null || pageable.isUnpaged()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PAGINATION", "Pagination is required; unpaged requests are not permitted");
         }
 
+        User actor = validateActorForRead(actorId);
+        Set<Role> visible = AdminRolePolicy.visibleRoles(actor.getRole());
+
         List<Criteria> criteriaList = new ArrayList<>();
 
         if (roles != null && !roles.isEmpty()) {
+            for (Role role : roles) {
+                if (!visible.contains(role)) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ROLE_NOT_PERMITTED",
+                            "Actor role '" + actor.getRole() + "' is not permitted to view role '" + role + "'");
+                }
+            }
             criteriaList.add(Criteria.where("role").in(roles));
+        } else {
+            // Unrestricted: limit to visible roles for non-SUPER_ADMIN
+            if (actor.getRole() != Role.SUPER_ADMIN) {
+                criteriaList.add(Criteria.where("role").in(visible));
+            }
         }
 
         if (status != null) {
@@ -266,17 +280,50 @@ public class UserInternalServiceImpl implements UserInternalService {
     }
 
     @Override
-    public long countByRoleAndStatus(Role role, UserStatus status) {
-        if (role != null && status != null) {
-            return userRepository.countByRoleAndStatus(role, status);
-        }
-        Query query = new Query();
+    public long countByRoleAndStatus(String actorId, Role role, UserStatus status) {
+        User actor = validateActorForRead(actorId);
+        Set<Role> visible = AdminRolePolicy.visibleRoles(actor.getRole());
+
         if (role != null) {
+            if (!visible.contains(role)) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ROLE_NOT_PERMITTED",
+                        "Actor role '" + actor.getRole() + "' is not permitted to view role '" + role + "'");
+            }
+            if (status != null) {
+                return userRepository.countByRoleAndStatus(role, status);
+            }
+            Query query = new Query();
             query.addCriteria(Criteria.where("role").is(role));
+            return mongoTemplate.count(query, User.class);
+        }
+
+        Query query = new Query();
+        if (actor.getRole() != Role.SUPER_ADMIN) {
+            query.addCriteria(Criteria.where("role").in(visible));
         }
         if (status != null) {
             query.addCriteria(Criteria.where("status").is(status));
         }
         return mongoTemplate.count(query, User.class);
+    }
+
+    private User validateActorForRead(String actorId) {
+        if (actorId == null || actorId.trim().isEmpty()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ACTOR_NOT_FOUND",
+                    "Authentication required: actor could not be resolved");
+        }
+        User actor = userRepository.findById(actorId)
+                .orElseThrow(() -> new ApiException(HttpStatus.FORBIDDEN, "ACTOR_NOT_FOUND",
+                        "Actor user not found in database"));
+        if (actor.getStatus() != UserStatus.ACTIVE) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ACTOR_ACCOUNT_INACTIVE",
+                    "Actor account must be active to view users");
+        }
+        Set<Role> visible = AdminRolePolicy.visibleRoles(actor.getRole());
+        if (visible.isEmpty()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ROLE_NOT_PERMITTED",
+                    "Actor role '" + actor.getRole() + "' is not permitted to view users");
+        }
+        return actor;
     }
 }

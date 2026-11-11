@@ -30,7 +30,14 @@ public interface UserInternalService {
 
     void deactivateOwnAccount(String userId);
 
-    Page<AdminUserSummary> searchUsers(Set<Role> roles, UserStatus status, String nameOrEmail, Pageable pageable);
+    /**
+     * Searches users across roles and statuses with name/email search, pagination, and sorting.
+     * Enforces administrative visibility boundaries based on the authenticated actor.
+     */
+    Page<AdminUserSummary> searchUsers(String actorId, Set<Role> roles, UserStatus status, String nameOrEmail, Pageable pageable);
 
-    long countByRoleAndStatus(Role role, UserStatus status);
+    /**
+     * Counts users matching role and status filters within the authenticated actor's visibility scope.
+     */
+    long countByRoleAndStatus(String actorId, Role role, UserStatus status);
 }

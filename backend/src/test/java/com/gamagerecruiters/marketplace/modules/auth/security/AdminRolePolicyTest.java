@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
 
+import java.util.Set;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -56,6 +58,31 @@ class AdminRolePolicyTest {
         for (Role targetRole : Role.values()) {
             assertFalse(AdminRolePolicy.canManage(role, targetRole), role + " should not manage " + targetRole);
         }
+    }
+
+    @Test
+    @DisplayName("visibleRoles: SUPER_ADMIN can view all roles")
+    void superAdminVisibleRolesIncludesAll() {
+        assertEquals(Role.values().length, AdminRolePolicy.visibleRoles(Role.SUPER_ADMIN).size());
+    }
+
+    @Test
+    @DisplayName("visibleRoles: ADMIN can view only CUSTOMER and PROVIDER")
+    void adminVisibleRolesIncludesCustomerAndProviderOnly() {
+        assertEquals(Set.of(Role.CUSTOMER, Role.PROVIDER), AdminRolePolicy.visibleRoles(Role.ADMIN));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"SUPPORT_ADMIN", "FINANCE_ADMIN", "MODERATOR", "CUSTOMER", "PROVIDER"})
+    @DisplayName("visibleRoles: Other roles have no visible roles (empty)")
+    void otherRolesVisibleRolesIsEmpty(Role role) {
+        assertTrue(AdminRolePolicy.visibleRoles(role).isEmpty());
+    }
+
+    @Test
+    @DisplayName("visibleRoles: null actor role returns empty set")
+    void nullActorRoleReturnsEmptyVisibleRoles() {
+        assertTrue(AdminRolePolicy.visibleRoles(null).isEmpty());
     }
 
     @Test

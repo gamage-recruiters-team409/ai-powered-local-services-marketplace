@@ -15,15 +15,21 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -524,5 +530,170 @@ class UserInternalServiceTest {
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("Cannot modify status of a DEACTIVATED account"));
         verify(userRepository, never()).save(target);
+    }
+
+    // --- Access control tests for searchUsers and countByRoleAndStatus ---
+
+    @Test
+    @DisplayName("searchUsers: Null or blank actorId throws 403 ACTOR_NOT_FOUND")
+    void searchUsersRejectsNullOrBlankActorId() {
+        ApiException ex1 = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers(null, null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_NOT_FOUND", ex1.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex1.getStatus());
+
+        ApiException ex2 = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("  ", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_NOT_FOUND", ex2.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("searchUsers: Unknown actorId throws 403 ACTOR_NOT_FOUND")
+    void searchUsersRejectsUnknownActorId() {
+        when(userRepository.findById("unknown")).thenReturn(Optional.empty());
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("unknown", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_NOT_FOUND", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("searchUsers: Inactive actor throws 403 ACTOR_ACCOUNT_INACTIVE")
+    void searchUsersRejectsInactiveActor() {
+        User inactive = createUser("actor-1", Role.ADMIN, UserStatus.SUSPENDED);
+        when(userRepository.findById("actor-1")).thenReturn(Optional.of(inactive));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("actor-1", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_ACCOUNT_INACTIVE", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"SUPPORT_ADMIN", "FINANCE_ADMIN", "MODERATOR", "CUSTOMER", "PROVIDER"})
+    @DisplayName("searchUsers: Non-permitted actor roles throw 403 ROLE_NOT_PERMITTED")
+    void searchUsersRejectsNonPermittedActorRoles(Role role) {
+        User actor = createUser("actor-1", role, UserStatus.ACTIVE);
+        when(userRepository.findById("actor-1")).thenReturn(Optional.of(actor));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("actor-1", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ROLE_NOT_PERMITTED", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("searchUsers: ADMIN actor explicitly requesting forbidden role throws 403 ROLE_NOT_PERMITTED")
+    void searchUsersAdminRequestingForbiddenRoleThrows() {
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("admin-1", Set.of(Role.CUSTOMER, Role.SUPER_ADMIN), null, null, PageRequest.of(0, 10)));
+        assertEquals("ROLE_NOT_PERMITTED", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("searchUsers: ADMIN actor unrestricted or requesting visible roles succeeds")
+    void searchUsersAdminPermitted() {
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+        when(mongoTemplate.count(any(Query.class), any())).thenReturn(0L);
+        when(mongoTemplate.find(any(Query.class), any())).thenReturn(List.of());
+
+        assertDoesNotThrow(() -> userInternalService.searchUsers("admin-1", null, null, null, PageRequest.of(0, 10)));
+        assertDoesNotThrow(() -> userInternalService.searchUsers("admin-1", Set.of(Role.CUSTOMER), null, null, PageRequest.of(0, 10)));
+    }
+
+    @Test
+    @DisplayName("searchUsers: SUPER_ADMIN actor can view any role")
+    void searchUsersSuperAdminPermitted() {
+        User superAdmin = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(superAdmin));
+        when(mongoTemplate.count(any(Query.class), any())).thenReturn(0L);
+        when(mongoTemplate.find(any(Query.class), any())).thenReturn(List.of());
+
+        assertDoesNotThrow(() -> userInternalService.searchUsers("super-1", null, null, null, PageRequest.of(0, 10)));
+        assertDoesNotThrow(() -> userInternalService.searchUsers("super-1", Set.of(Role.SUPER_ADMIN, Role.MODERATOR), null, null, PageRequest.of(0, 10)));
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: Null or blank actorId throws 403 ACTOR_NOT_FOUND")
+    void countByRoleAndStatusRejectsNullOrBlankActorId() {
+        ApiException ex1 = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus(null, Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_NOT_FOUND", ex1.getErrorCode());
+
+        ApiException ex2 = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus(" ", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_NOT_FOUND", ex2.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: Unknown actorId throws 403 ACTOR_NOT_FOUND")
+    void countByRoleAndStatusRejectsUnknownActorId() {
+        when(userRepository.findById("unknown")).thenReturn(Optional.empty());
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("unknown", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_NOT_FOUND", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: Inactive actor throws 403 ACTOR_ACCOUNT_INACTIVE")
+    void countByRoleAndStatusRejectsInactiveActor() {
+        User inactive = createUser("actor-1", Role.ADMIN, UserStatus.LOCKED);
+        when(userRepository.findById("actor-1")).thenReturn(Optional.of(inactive));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("actor-1", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_ACCOUNT_INACTIVE", ex.getErrorCode());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"SUPPORT_ADMIN", "FINANCE_ADMIN", "MODERATOR", "CUSTOMER", "PROVIDER"})
+    @DisplayName("countByRoleAndStatus: Non-permitted actor roles throw 403 ROLE_NOT_PERMITTED")
+    void countByRoleAndStatusRejectsNonPermittedActorRoles(Role role) {
+        User actor = createUser("actor-1", role, UserStatus.ACTIVE);
+        when(userRepository.findById("actor-1")).thenReturn(Optional.of(actor));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("actor-1", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ROLE_NOT_PERMITTED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: ADMIN requesting non-visible role throws 403 ROLE_NOT_PERMITTED")
+    void countByRoleAndStatusAdminRequestingForbiddenRoleThrows() {
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("admin-1", Role.SUPER_ADMIN, UserStatus.ACTIVE));
+        assertEquals("ROLE_NOT_PERMITTED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: ADMIN requesting visible role succeeds")
+    void countByRoleAndStatusAdminPermitted() {
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+        when(userRepository.countByRoleAndStatus(Role.CUSTOMER, UserStatus.ACTIVE)).thenReturn(5L);
+
+        long count = userInternalService.countByRoleAndStatus("admin-1", Role.CUSTOMER, UserStatus.ACTIVE);
+        assertEquals(5L, count);
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: SUPER_ADMIN requesting any role succeeds")
+    void countByRoleAndStatusSuperAdminPermitted() {
+        User superAdmin = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(superAdmin));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
+
+        long count = userInternalService.countByRoleAndStatus("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        assertEquals(2L, count);
     }
 }

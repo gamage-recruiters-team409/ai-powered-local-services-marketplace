@@ -1,5 +1,9 @@
 package com.gamagerecruiters.marketplace.modules.auth.security;
 
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 
@@ -31,6 +35,26 @@ public final class AdminRolePolicy {
             return targetRole == Role.CUSTOMER || targetRole == Role.PROVIDER;
         }
         return false;
+    }
+
+    /**
+     * Returns the set of roles an actor with actorRole is permitted to view/search.
+     * Reuses canManage rules:
+     * - SUPER_ADMIN can view all roles.
+     * - ADMIN can view only CUSTOMER and PROVIDER.
+     * - All other roles have an empty set (denied).
+     */
+    public static Set<Role> visibleRoles(Role actorRole) {
+        if (actorRole == null) {
+            return Set.of();
+        }
+        Set<Role> visible = new HashSet<>();
+        for (Role role : Role.values()) {
+            if (canManage(actorRole, role)) {
+                visible.add(role);
+            }
+        }
+        return Collections.unmodifiableSet(visible);
     }
 
     /**
