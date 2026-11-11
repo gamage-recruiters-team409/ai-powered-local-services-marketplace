@@ -19,6 +19,7 @@ import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationF
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
+import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
@@ -38,6 +39,9 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private BlockedDateRepository blockedDateRepository;
+
+    @MockitoBean
+    private BookingRepository bookingRepository;
 
     @MockitoBean
     private CustomerAddressRepository customerAddressRepository;
