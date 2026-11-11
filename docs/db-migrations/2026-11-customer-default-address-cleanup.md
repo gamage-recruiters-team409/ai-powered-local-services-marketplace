@@ -14,9 +14,19 @@ During application startup, `CustomerIndexInitializer` validates this index. If 
 ## Read-Only Pre-Check Query
 > **IMPORTANT:** In PowerShell, run:
 > ```powershell
+> # Optional environment variables (defaults: MONGODB_DATABASE="marketplace", CUSTOMER_MAX_ADDRESSES=10)
+> $env:MONGODB_DATABASE = "marketplace"
+> $env:CUSTOMER_MAX_ADDRESSES = "10"
 > mongosh $env:MONGODB_URI docs/db-migrations/precheck-customer-addresses.js
 > ```
-> against Atlas before the first startup of this branch; if it reports any rows, do not auto-fix data, and contact the Team Lead immediately.
+> against Atlas before the first startup of this branch; if it reports any problems (`PRE-CHECK RESULT: <n> PROBLEM(S) FOUND`), do not auto-fix data, and contact the Team Lead immediately.
+>
+> *(To test the pre-check script against scratch data before production use:)*
+> ```powershell
+> $env:MONGODB_DATABASE = "precheck_scratch"
+> mongosh $env:MONGODB_URI docs/db-migrations/seed-precheck-test-data.js
+> mongosh $env:MONGODB_URI docs/db-migrations/precheck-customer-addresses.js
+> ```
 
 To check whether any customer currently has more than 1 default address, run the following read-only aggregation in `mongosh`:
 

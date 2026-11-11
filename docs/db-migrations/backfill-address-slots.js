@@ -7,11 +7,18 @@
 // NEVER print credentials or connection strings in this script or its output.
 // ===========================================================================
 
-const DB_NAME = "marketplace";
-db = db.getSiblingDB(DB_NAME);
+const DB_NAME = typeof process !== "undefined" && process.env && process.env.MONGODB_DATABASE
+    ? process.env.MONGODB_DATABASE
+    : "marketplace";
+const targetDb = db.getSiblingDB(DB_NAME);
 
-const MAX_ADDRESSES = 10;
-const collection = db.getCollection("customer_addresses");
+const rawLimit = typeof process !== "undefined" && process.env
+    ? (process.env.CUSTOMER_MAX_ADDRESSES || process.env.MAX_ADDRESSES)
+    : null;
+const parsedLimit = rawLimit ? parseInt(rawLimit, 10) : 10;
+const MAX_ADDRESSES = (!isNaN(parsedLimit) && parsedLimit > 0) ? parsedLimit : 10;
+
+const collection = targetDb.getCollection("customer_addresses");
 
 print("=== STARTING ADDRESS SLOT BACKFILL ===");
 print("Max addresses configured: " + MAX_ADDRESSES);
