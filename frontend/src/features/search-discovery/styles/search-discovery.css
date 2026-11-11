@@ -1215,38 +1215,13 @@
 }
 
 /* ==========================================================================
-   10. Milestone Limitation Notice Modal & Mobile Overflow Safeguards
+   10. Milestone Limitation Notice Modal skin & Mobile Overflow Safeguards
+   Overlay, focus trapping, and Escape handling are provided by the shared
+   Modal component (native <dialog> + showModal()). Only WP04-specific visual
+   tokens are defined here.
    ========================================================================== */
-.pending-modal-overlay {
-  position: fixed;
-  inset: 0;
-  background-color: rgba(17, 24, 39, 0.5);
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-  padding: 16px;
-  box-sizing: border-box;
-}
 
-.pending-modal-card {
-  background-color: #ffffff;
-  border-radius: 12px;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.05);
-  max-width: 440px;
-  width: 100%;
-  padding: 24px;
-  box-sizing: border-box;
-}
-
-.pending-modal-header {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-
+/* Badge: teal milestone label inside the modal body */
 .pending-modal-badge {
   display: inline-block;
   align-self: flex-start;
@@ -1259,27 +1234,18 @@
   border: 1px solid #ccfbf1;
   padding: 2px 8px;
   border-radius: 4px;
+  margin-bottom: 8px;
 }
 
-.pending-modal-title {
-  font-size: 18px;
-  font-weight: 700;
-  color: #111827;
-  margin: 0;
-}
-
+/* Body copy */
 .pending-modal-message {
   font-size: 14px;
   line-height: 1.5;
   color: #4b5563;
-  margin: 0 0 20px;
+  margin: 0;
 }
 
-.pending-modal-footer {
-  display: flex;
-  justify-content: flex-end;
-}
-
+/* "Understood" button: teal primary action */
 .pending-modal-btn {
   padding: 9px 20px;
   background-color: #0f766e;
@@ -1294,6 +1260,11 @@
 
 .pending-modal-btn:hover {
   background-color: #115e59;
+}
+
+.pending-modal-btn:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
 }
 
 /* Horizontal overflow guard for mobile scoped strictly to search page wrapper */

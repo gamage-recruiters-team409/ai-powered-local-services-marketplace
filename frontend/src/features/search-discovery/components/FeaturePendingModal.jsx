@@ -1,43 +1,76 @@
-/**
- * Accessible Modal Dialog providing explicit milestone feedback
- * when users click pending actions like "View profile" or "Compare".
- */
-export function FeaturePendingModal({ isOpen, title, message, badgeText, onClose }) {
-  if (!isOpen) return null;
+import { useEffect } from 'react';
+import Modal from '../../../shared/components/forms/Modal';
 
-  return (
-    <div
-      className="pending-modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="pending-modal-title"
+/**
+ * FeaturePendingModal
+ *
+ * Wraps the project's shared accessible Modal dialog to provide
+ * explicit milestone-boundary notices when users click pending
+ * actions such as "View profile" or "Compare".
+ *
+ * Accessibility guarantees (delegated to the shared Modal):
+ * - Native <dialog> + showModal() places the dialog in the browser
+ *   top layer, automatically containing Tab/Shift-Tab within it and
+ *   isolating background content from keyboard and pointer access.
+ * - Escape key dismissal is handled natively by the browser and
+ *   forwarded to onClose via the shared Modal's onCancel handler.
+ * - Focus is moved into the dialog on open by the browser.
+ *
+ * Focus restoration:
+ * - The optional triggerRef prop should reference the DOM element
+ *   that opened the modal. Focus is returned to it on close so
+ *   keyboard users are not stranded at the top of the page.
+ *
+ * Props:
+ * - isOpen {boolean} – controlled visibility
+ * - title {string} – modal heading
+ * - message {string} – body copy
+ * - badgeText {string} – optional milestone badge label
+ * - onClose {function} – called when the modal should close
+ * - triggerRef {React.RefObject} – ref of the element that opened
+ *   the modal; focus is restored to it when the modal closes
+ */
+export function FeaturePendingModal({
+  isOpen,
+  title,
+  message,
+  badgeText,
+  onClose,
+  triggerRef,
+}) {
+  // Restore focus to the triggering element when the modal closes.
+  useEffect(() => {
+    if (!isOpen && triggerRef?.current) {
+      triggerRef.current.focus();
+    }
+  }, [isOpen, triggerRef]);
+
+  const footer = (
+    <button
+      type="button"
+      className="pending-modal-btn"
       onClick={onClose}
     >
-      <div
-        className="pending-modal-card"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="pending-modal-header">
-          {badgeText && <span className="pending-modal-badge">{badgeText}</span>}
-          <h3 id="pending-modal-title" className="pending-modal-title">{title}</h3>
-        </div>
+      Understood
+    </button>
+  );
 
-        <p className="pending-modal-message">{message}</p>
-
-        <div className="pending-modal-footer">
-          <button
-            type="button"
-            className="pending-modal-btn"
-            onClick={onClose}
-            autoFocus
-          >
-            Understood
-          </button>
-        </div>
-      </div>
-    </div>
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={title}
+      showCloseButton={false}
+      closeOnBackdrop
+      className="pending-modal-skin"
+      footer={footer}
+    >
+      {badgeText && (
+        <span className="pending-modal-badge">{badgeText}</span>
+      )}
+      <p className="pending-modal-message">{message}</p>
+    </Modal>
   );
 }
 
 export default FeaturePendingModal;
-

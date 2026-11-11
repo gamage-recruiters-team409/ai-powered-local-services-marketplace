@@ -142,7 +142,7 @@ export function SearchResultCard({ item, isSelected = false, onSelect, onToggleC
           <button
             type="button"
             className="view-profile-btn"
-            onClick={() => onSelect?.(item)}
+            onClick={(e) => onSelect?.(item, e.currentTarget)}
             aria-label={`View profile for ${name}`}
           >
             View profile
@@ -156,7 +156,7 @@ export function SearchResultCard({ item, isSelected = false, onSelect, onToggleC
               type="checkbox"
               className="compare-checkbox"
               checked={isSelected}
-              onChange={(e) => onToggleComparison?.(item, e.target.checked)}
+              onChange={(e) => onToggleComparison?.(item, e.target.checked, e.target)}
             />
             <span>{isSelected ? 'Added to comparison' : 'Add to comparison'}</span>
           </label>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { fetchSearchResults } from '../services/searchAdapter';
 import LocalServeNavbar from '../components/LocalServeNavbar';
 import SearchInputHeader from '../components/SearchInputHeader';
@@ -53,6 +53,8 @@ export function SearchResultsPage() {
     message: '',
     badgeText: '',
   });
+  // Ref to the element that last opened the modal; focus is restored on close.
+  const modalTriggerRef = useRef(null);
 
   useEffect(() => {
     let isCancelled = false;
@@ -131,10 +133,11 @@ export function SearchResultsPage() {
     setFilters(DEFAULT_FILTERS);
   };
 
-  const handleToggleComparison = (provider, isAdding) => {
+  const handleToggleComparison = (provider, isAdding, triggerEl) => {
     if (isAdding) {
       if (selectedProviders.some((p) => p.id === provider.id)) return;
       if (selectedProviders.length >= 3) {
+        modalTriggerRef.current = triggerEl ?? null;
         setModalState({
           isOpen: true,
           badgeText: 'LIMIT REACHED',
@@ -150,7 +153,8 @@ export function SearchResultsPage() {
     }
   };
 
-  const handleViewProfile = (provider) => {
+  const handleViewProfile = (provider, triggerEl) => {
+    modalTriggerRef.current = triggerEl ?? null;
     setModalState({
       isOpen: true,
       badgeText: 'MILESTONE BOUNDARY',
@@ -160,7 +164,8 @@ export function SearchResultsPage() {
     });
   };
 
-  const handleCompareClick = () => {
+  const handleCompareClick = (triggerEl) => {
+    modalTriggerRef.current = triggerEl ?? null;
     setModalState({
       isOpen: true,
       badgeText: 'SCHEDULED FOR MILESTONE 2',
@@ -293,6 +298,7 @@ export function SearchResultsPage() {
         title={modalState.title}
         message={modalState.message}
         badgeText={modalState.badgeText}
+        triggerRef={modalTriggerRef}
         onClose={() => setModalState({ isOpen: false, title: '', message: '', badgeText: '' })}
       />
     </div>
