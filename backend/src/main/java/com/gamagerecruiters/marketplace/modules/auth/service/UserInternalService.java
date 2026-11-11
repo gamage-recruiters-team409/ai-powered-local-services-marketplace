@@ -15,4 +15,12 @@ public interface UserInternalService {
     User changeStatus(String userId, UserStatus status);
 
     User createAdminAccount(String name, String email, String password, Role role);
+
+    User updateContactDetails(String userId, String fullName, String phone);
+
+    void changePassword(String userId, String currentPassword, String newPassword);
+
+    void verifyPassword(String userId, String rawPassword);
+
+    void deactivateOwnAccount(String userId);
 }

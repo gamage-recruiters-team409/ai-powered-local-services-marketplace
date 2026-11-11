@@ -6,7 +6,9 @@
 // NEVER print credentials or connection strings in this script or its output.
 // ===========================================================================
 
-const DB_NAME = "marketplace";
+const DB_NAME = typeof process !== "undefined" && process.env && process.env.MONGODB_DATABASE
+    ? process.env.MONGODB_DATABASE
+    : "marketplace";
 db = db.getSiblingDB(DB_NAME);
 
 function printCollectionIndexes(collName) {
@@ -43,5 +45,7 @@ print("");
 printCollectionIndexes("users");
 print("");
 printCollectionIndexes("auth_tokens");
+print("");
+printCollectionIndexes("customer_addresses");
 print("");
 print("[OK] Index inspection complete.");

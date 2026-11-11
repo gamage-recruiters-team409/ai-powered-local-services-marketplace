@@ -152,6 +152,32 @@ class AdminRolePolicyTest {
         assertTrue(ex.getMessage().contains("not permitted"));
     }
 
+    @Test
+    @DisplayName("validateStatusChange: DEACTIVATED target account is terminal and cannot be modified by ADMIN")
+    void adminCannotModifyDeactivatedAccount() {
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User deactivatedCustomer = createUser("cust-1", Role.CUSTOMER, UserStatus.DEACTIVATED);
+
+        AccessDeniedException ex = assertThrows(
+                AccessDeniedException.class,
+                () -> AdminRolePolicy.validateStatusChange(admin, deactivatedCustomer, UserStatus.ACTIVE, userRepository)
+        );
+        assertTrue(ex.getMessage().contains("Cannot modify status of a DEACTIVATED account"));
+    }
+
+    @Test
+    @DisplayName("validateStatusChange: DEACTIVATED target account is terminal and cannot be modified by SUPER_ADMIN")
+    void superAdminCannotModifyDeactivatedAccount() {
+        User superAdmin = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User deactivatedCustomer = createUser("cust-1", Role.CUSTOMER, UserStatus.DEACTIVATED);
+
+        AccessDeniedException ex = assertThrows(
+                AccessDeniedException.class,
+                () -> AdminRolePolicy.validateStatusChange(superAdmin, deactivatedCustomer, UserStatus.ACTIVE, userRepository)
+        );
+        assertTrue(ex.getMessage().contains("Cannot modify status of a DEACTIVATED account"));
+    }
+
     private User createUser(String id, Role role, UserStatus status) {
         User user = new User();
         user.setId(id);
