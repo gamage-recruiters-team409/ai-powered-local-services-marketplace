@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { FALLBACK_PROVIDER_IMAGE } from '../fixtures/providerImages.js';
 
 /**
  * Reusable Provider & Listing Search Result Card matching the approved reference design.
@@ -9,6 +10,13 @@ export function SearchResultCard({ item, isSelected = false, onSelect, onToggleC
   const [isFavorited, setIsFavorited] = useState(false);
 
   if (!item) return null;
+
+  const handleImageError = (event) => {
+    const image = event.currentTarget;
+    if (image.dataset.fallbackApplied) return;
+    image.dataset.fallbackApplied = 'true';
+    image.src = FALLBACK_PROVIDER_IMAGE;
+  };
 
   const {
     id,
@@ -33,6 +41,7 @@ export function SearchResultCard({ item, isSelected = false, onSelect, onToggleC
           alt={`${name} service presentation`}
           className="provider-card-photo"
           loading="lazy"
+          onError={handleImageError}
         />
       </div>
 

@@ -1,18 +1,17 @@
-import mayaImg from '../../../assets/providers/maya-home-care.jpg';
-import brightnestImg from '../../../assets/providers/brightnest-cleaning.jpg';
-import neatLocalImg from '../../../assets/providers/neat-and-local.jpg';
-import capitalCityImg from '../../../assets/providers/capital-city-cleaners.jpg';
+import { PROVIDER_IMAGES } from './providerImages.js';
 
 /**
  * Approved Reference Fixtures for WP04 Search & Discovery.
  * Source of truth: Reference Design (LocalServe Home Cleaning in Austin, TX).
+ * Provider photos are hosted on Cloudinary (see providerImages.js) and are not
+ * stored in this repository.
  */
 export const MOCK_SEARCH_RESULTS = [
   {
     id: 'prv-001',
     name: "Maya's Home Care",
     businessName: "Maya's Home Care",
-    image: mayaImg,
+    image: PROVIDER_IMAGES.maya,
     isVerified: true,
     backgroundChecked: true,
     rating: 4.9,
@@ -37,7 +36,7 @@ export const MOCK_SEARCH_RESULTS = [
     id: 'prv-002',
     name: 'BrightNest Cleaning',
     businessName: 'BrightNest Cleaning',
-    image: brightnestImg,
+    image: PROVIDER_IMAGES.brightnest,
     isVerified: true,
     backgroundChecked: true,
     rating: 4.8,
@@ -62,7 +61,7 @@ export const MOCK_SEARCH_RESULTS = [
     id: 'prv-003',
     name: 'Neat & Local',
     businessName: 'Neat & Local',
-    image: neatLocalImg,
+    image: PROVIDER_IMAGES.neatLocal,
     isVerified: true,
     backgroundChecked: true,
     rating: 4.7,
@@ -87,7 +86,7 @@ export const MOCK_SEARCH_RESULTS = [
     id: 'prv-004',
     name: 'Capital City Cleaners',
     businessName: 'Capital City Turnaround Care',
-    image: capitalCityImg,
+    image: PROVIDER_IMAGES.capitalCity,
     isVerified: false,
     backgroundChecked: false,
     rating: 4.6,

@@ -3,6 +3,25 @@
  * matching the approved LocalServe design.
  * Fully synchronized with parent filter state and dynamic singular/plural count.
  */
+const SERVICE_CHIPS = [
+  ['standardClean', 'Standard clean'],
+  ['deepClean', 'Deep cleaning'],
+  ['moveOutClean', 'Move-out cleaning'],
+  ['recurringClean', 'Recurring service'],
+];
+
+const TRUST_CHIPS = [
+  ['verifiedOnly', 'Verified'],
+  ['highRating', '4.5 stars & above'],
+  ['backgroundChecked', 'Background checked'],
+];
+
+const AVAILABILITY_LABELS = {
+  today: 'Available today',
+  tomorrow: 'Available tomorrow',
+  custom: 'Choose a date',
+};
+
 export function SearchInputHeader({
   query,
   location,
@@ -26,7 +45,12 @@ export function SearchInputHeader({
     return `${count} local providers`;
   };
 
-  const hasActiveChips = filters.standardClean || filters.verifiedOnly;
+  const activeFilterChips = [
+    ...SERVICE_CHIPS.filter(([key]) => filters[key]),
+    ...TRUST_CHIPS.filter(([key]) => filters[key]),
+  ];
+  const availabilityLabel = AVAILABILITY_LABELS[filters.availability];
+  const hasActiveChips = activeFilterChips.length > 0 || Boolean(availabilityLabel);
 
   return (
     <div className="search-header-section">
@@ -106,25 +130,26 @@ export function SearchInputHeader({
       {/* Active Filter Chips */}
       {hasActiveChips && (
         <div className="active-chips-row" aria-label="Active filters">
-          {filters.standardClean && (
+          {activeFilterChips.map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className="filter-chip filter-chip-active"
+              onClick={() => onToggleFilter?.(key, false)}
+              aria-label={`Remove ${label} filter`}
+            >
+              {label} <span className="chip-x">✕</span>
+            </button>
+          ))}
+
+          {availabilityLabel && (
             <button
               type="button"
               className="filter-chip filter-chip-active"
-              onClick={() => onToggleFilter?.('standardClean', false)}
-              aria-label="Remove Standard clean filter"
+              onClick={() => onToggleFilter?.('availability', 'any')}
+              aria-label={`Remove ${availabilityLabel} filter`}
             >
-              Standard clean <span className="chip-x">✕</span>
-            </button>
-          )}
-
-          {filters.verifiedOnly && (
-            <button
-              type="button"
-              className="filter-chip"
-              onClick={() => onToggleFilter?.('verifiedOnly', false)}
-              aria-label="Remove Verified filter"
-            >
-              Verified <span className="chip-x">✕</span>
+              {availabilityLabel} <span className="chip-x">✕</span>
             </button>
           )}
 

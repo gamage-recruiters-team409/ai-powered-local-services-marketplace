@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../services/searchAdapter', () => ({
@@ -83,6 +83,63 @@ describe('SearchResultsPage search lifecycle', () => {
     const lastCall = fetchSearchResults.mock.calls.at(-1)[0];
     expect(lastCall.filters.verifiedOnly).toBe(false);
   });
+
+  it('does not show stale results after a subsequent failed search', async () => {
+    fetchSearchResults
+      .mockResolvedValueOnce(fixtureResponse)
+      .mockRejectedValueOnce(new Error('Network Error'));
+
+    const user = userEvent.setup();
+    render(<SearchResultsPage />);
+
+    await screen.findByText("Maya's Home Care");
+
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+
+    await screen.findByText('Unable to Load Providers');
+    expect(screen.queryByText("Maya's Home Care")).toBeNull();
+  });
+});
+
+describe('SearchResultsPage clear all and reset', () => {
+  it('Clear all removes every restriction instead of excluding providers', async () => {
+    const user = userEvent.setup();
+    render(<SearchResultsPage />);
+
+    await screen.findByText("Maya's Home Care");
+
+    await user.click(screen.getByRole('button', { name: 'Clear all' }));
+
+    await waitFor(() => expect(fetchSearchResults).toHaveBeenCalledTimes(2));
+    const filters = fetchSearchResults.mock.calls.at(-1)[0].filters;
+    expect(filters.standardClean).toBe(false);
+    expect(filters.deepClean).toBe(false);
+    expect(filters.moveOutClean).toBe(false);
+    expect(filters.recurringClean).toBe(false);
+    expect(filters.verifiedOnly).toBe(false);
+    expect(filters.highRating).toBe(false);
+    expect(filters.backgroundChecked).toBe(false);
+    expect(filters.availability).toBe('any');
+    expect(filters.budgetMax).toBe(80);
+    expect(filters.distance).toBe('25');
+  });
+
+  it('Reset restores the default filters', async () => {
+    const user = userEvent.setup();
+    render(<SearchResultsPage />);
+
+    await screen.findByText("Maya's Home Care");
+
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+
+    await waitFor(() => expect(fetchSearchResults).toHaveBeenCalledTimes(2));
+    const filters = fetchSearchResults.mock.calls.at(-1)[0].filters;
+    expect(filters.standardClean).toBe(true);
+    expect(filters.verifiedOnly).toBe(true);
+    expect(filters.budgetMax).toBe(60);
+    expect(filters.distance).toBe('5');
+    expect(filters.availability).toBe('any');
+  });
 });
 
 describe('SearchResultsPage fixture labelling', () => {
@@ -90,5 +147,14 @@ describe('SearchResultsPage fixture labelling', () => {
     render(<SearchResultsPage />);
     const notice = await screen.findByRole('status');
     expect(notice.textContent).toMatch(/demo mode/i);
+  });
+
+  it('falls back to a placeholder when a provider image fails to load', async () => {
+    render(<SearchResultsPage />);
+
+    const image = await screen.findByAltText(/maya's home care service presentation/i);
+    fireEvent.error(image);
+
+    expect(image.src).toMatch(/^data:image\/svg\+xml/);
   });
 });

@@ -27,6 +27,22 @@ const DEFAULT_FILTERS = {
   distance: '5',
 };
 
+// "Clear all" removes every restriction (as opposed to Reset, which restores
+// the default filters). Budget and distance move to their widest values so no
+// provider is excluded.
+const CLEARED_FILTERS = {
+  standardClean: false,
+  deepClean: false,
+  moveOutClean: false,
+  recurringClean: false,
+  verifiedOnly: false,
+  budgetMax: 80,
+  availability: 'any',
+  highRating: false,
+  backgroundChecked: false,
+  distance: '25',
+};
+
 /**
  * Main Search Results Page matching the approved LocalServe design.
  * Features full-width responsive header/footer, sidebar filters,
@@ -91,6 +107,11 @@ export function SearchResultsPage() {
       } catch (err) {
         if (!isCancelled) {
           console.error('[SearchResultsPage] Search error:', err);
+          // A failed request must not leave results from a previous successful
+          // search visible as if they were the current result set.
+          setResults([]);
+          setTotalCount(0);
+          setSelectedProviders([]);
           setIsFixture(false);
           setError('Failed to fetch provider listings. Please try again.');
         }
@@ -125,11 +146,8 @@ export function SearchResultsPage() {
 
   const handleClearAllChips = () => {
     setIsLoading(true);
-    setFilters((prev) => ({
-      ...prev,
-      standardClean: false,
-      verifiedOnly: false,
-    }));
+    setFilters(CLEARED_FILTERS);
+    setSearchNonce((n) => n + 1);
   };
 
   const handleResetAll = () => {
@@ -244,7 +262,7 @@ export function SearchResultsPage() {
                 />
               )}
 
-              {isLoading ? (
+              {!error && (isLoading ? (
                 <div className="results-cards-list" aria-busy="true">
                   {Array.from({ length: 3 }).map((_, idx) => (
                     <SearchResultSkeleton key={idx} />
@@ -301,7 +319,7 @@ export function SearchResultsPage() {
                     </div>
                   </nav>
                 </>
-              )}
+              ))}
             </section>
           </div>
         </div>

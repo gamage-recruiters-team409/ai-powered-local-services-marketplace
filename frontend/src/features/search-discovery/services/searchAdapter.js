@@ -64,42 +64,42 @@ export function filterFixtureResults({
 } = {}) {
   const trimmedQuery = query.trim().toLowerCase();
   const trimmedLocation = location.trim().toLowerCase();
+  // Match on the city portion of the location so nearby reference providers are
+  // not excluded by an overly strict full ZIP-code comparison.
+  const locationCity = trimmedLocation.split(',')[0].trim();
+  const queryTokens = trimmedQuery.split(/\s+/).filter(Boolean);
 
   let results = [...MOCK_SEARCH_RESULTS];
 
   // 1. Text Query Filter
   if (trimmedQuery) {
     results = results.filter((item) => {
-      const matchName = item.name.toLowerCase().includes(trimmedQuery);
-      const matchDesc = item.description.toLowerCase().includes(trimmedQuery);
-      const matchCat = item.category.toLowerCase().includes(trimmedQuery);
-      return matchName || matchDesc || matchCat;
+      const haystack = `${item.name} ${item.description} ${item.category}`.toLowerCase();
+      if (haystack.includes(trimmedQuery)) return true;
+      // Lenient token matching: a multi-word service query such as
+      // "Home cleaning" should still match providers whose listings use
+      // related wording (e.g. "Standard home clean", "deep cleans").
+      return queryTokens.some((token) => haystack.includes(token));
     });
   }
 
   // 2. Location Filter
   if (trimmedLocation) {
-    results = results.filter((item) =>
-      item.location.toLowerCase().includes(trimmedLocation),
-    );
+    results = results.filter((item) => {
+      const itemLocation = item.location.toLowerCase();
+      if (itemLocation.includes(trimmedLocation)) return true;
+      return locationCity.length > 0 && itemLocation.includes(locationCity);
+    });
   }
 
   // 3. Service Type Filter
-  const hasServiceTypeFilter = SERVICE_TYPE_KEYS.some(
-    ([key]) => filters[key] !== undefined,
-  );
-
-  if (hasServiceTypeFilter) {
-    const activeServiceTypes = getActiveServiceTypes(filters);
-
-    if (activeServiceTypes.length > 0) {
-      results = results.filter((item) =>
-        item.serviceTypes?.some((t) => activeServiceTypes.includes(t)),
-      );
-    } else {
-      // If all service type checkboxes are explicitly unchecked, 0 results match
-      results = [];
-    }
+  // No selected service types means "no restriction", so clearing the service
+  // filters broadens the search instead of excluding every provider.
+  const activeServiceTypes = getActiveServiceTypes(filters);
+  if (activeServiceTypes.length > 0) {
+    results = results.filter((item) =>
+      item.serviceTypes?.some((t) => activeServiceTypes.includes(t)),
+    );
   }
 
   // 4. Verified Only Filter

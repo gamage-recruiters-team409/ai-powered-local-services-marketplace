@@ -18,6 +18,66 @@ afterEach(() => {
 });
 
 describe('filterFixtureResults', () => {
+  const DEFAULT_FILTERS = {
+    standardClean: true,
+    deepClean: false,
+    moveOutClean: false,
+    recurringClean: false,
+    verifiedOnly: true,
+    budgetMax: 60,
+    availability: 'any',
+    highRating: false,
+    backgroundChecked: false,
+    distance: '5',
+  };
+
+  const CLEARED_FILTERS = {
+    standardClean: false,
+    deepClean: false,
+    moveOutClean: false,
+    recurringClean: false,
+    verifiedOnly: false,
+    budgetMax: 80,
+    availability: 'any',
+    highRating: false,
+    backgroundChecked: false,
+    distance: '25',
+  };
+
+  it('returns the reference providers for the default search', () => {
+    const results = filterFixtureResults({
+      query: 'Home cleaning',
+      location: 'Austin, TX 78701',
+      filters: DEFAULT_FILTERS,
+    });
+
+    expect(results.map((item) => item.id).sort()).toEqual([
+      'prv-001',
+      'prv-002',
+      'prv-003',
+    ]);
+  });
+
+  it('does not exclude nearby providers because of a full ZIP code', () => {
+    const results = filterFixtureResults({ location: 'Austin, TX 78701', filters: {} });
+    expect(results).toHaveLength(4);
+  });
+
+  it('treats "no service types selected" as no restriction (Clear all)', () => {
+    const results = filterFixtureResults({
+      query: 'Home cleaning',
+      location: 'Austin, TX 78701',
+      filters: CLEARED_FILTERS,
+    });
+
+    expect(results.map((item) => item.id).sort()).toEqual([
+      'prv-001',
+      'prv-002',
+      'prv-003',
+      'prv-004',
+    ]);
+  });
+
   it('applies the 4.5-star rating threshold (not 4.8)', () => {
     expect(HIGH_RATING_THRESHOLD).toBe(4.5);
 
@@ -73,6 +133,14 @@ describe('fetchSearchResults', () => {
     expect(data.isFixture).toBe(true);
     expect(data.results.length).toBeGreaterThan(0);
     expect(axios.get).not.toHaveBeenCalled();
+  });
+
+  it('references Cloudinary-hosted provider images', async () => {
+    const data = await fetchSearchResults({ query: 'Home cleaning' });
+
+    data.results.forEach((item) => {
+      expect(item.image).toMatch(/^https:\/\/res\.cloudinary\.com\//);
+    });
   });
 });
 
