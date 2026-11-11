@@ -304,6 +304,7 @@ public class CustomerAddressMongoIntegrationTest {
 
         // Direct DB verification: EXACTLY 1 default address exists in MongoDB
         int finalDefaults = countDefaultsInDb(customerId);
+        log.info("RESULT: concurrent set-default -> {} default document", finalDefaults);
         assertEquals(1, finalDefaults, "Database must contain exactly 1 default address after concurrent setDefault calls");
     }
 
@@ -350,12 +351,14 @@ public class CustomerAddressMongoIntegrationTest {
         log.info("Concurrency Results: successes={}, conflicts (MAX_ADDRESSES_REACHED)={}, other errors={}",
                 successCount.get(), conflictCount.get(), otherErrors.get());
 
+        // Verify direct DB count
+        long dbCount = customerAddressRepository.countByCustomerId(customerId);
+        log.info("RESULT: 25 simultaneous creates, limit 10 -> {} created, {} MAX_ADDRESSES_REACHED, {} documents in collection",
+                successCount.get(), conflictCount.get(), dbCount);
+
         assertEquals(maxAllowed, successCount.get(), "Exactly 10 creates must succeed");
         assertEquals(totalRequests - maxAllowed, conflictCount.get(), "Exactly 15 creates must fail with MAX_ADDRESSES_REACHED");
         assertEquals(0, otherErrors.get(), "No other errors or exceptions should occur");
-
-        // Verify direct DB count
-        long dbCount = customerAddressRepository.countByCustomerId(customerId);
         assertEquals(maxAllowed, dbCount, "Direct DB document count must equal 10");
 
         // Verify slot numbers in DB are 1..10
@@ -421,6 +424,8 @@ public class CustomerAddressMongoIntegrationTest {
         executor.shutdown();
         assertTrue(executor.awaitTermination(15, TimeUnit.SECONDS));
 
+        log.info("RESULT: 8 legacy + 5 creates -> {} created", successCount.get());
+
         assertEquals(2, successCount.get(), "Exactly 2 of 5 concurrent creates must succeed to reach max 10");
         assertEquals(3, conflictCount.get(), "Exactly 3 must be rejected with MAX_ADDRESSES_REACHED");
         assertEquals(10, customerAddressRepository.countByCustomerId(customerId), "Total documents in DB must be 10");
@@ -454,6 +459,112 @@ public class CustomerAddressMongoIntegrationTest {
         );
         assertNotNull(newAddr);
         assertEquals(10, customerAddressRepository.countByCustomerId(customerId));
+    }
+
+    @Test
+    @DisplayName("Fresh DB: collection missing -> createCollection ensures collection exists and creates 3 required indexes")
+    void shouldInitializeIndexesSafelyOnFreshDatabase() {
+        if (mongoTemplate.collectionExists("customer_addresses")) {
+            mongoTemplate.dropCollection("customer_addresses");
+        }
+        assertFalse(mongoTemplate.collectionExists("customer_addresses"), "Collection must not exist prior to fresh DB test");
+
+        customerIndexInitializer.initializeIndexes();
+
+        assertTrue(mongoTemplate.collectionExists("customer_addresses"), "Collection must exist after initialization");
+
+        MongoCollection<Document> collection = mongoTemplate.getCollection("customer_addresses");
+        List<Document> indexes = new ArrayList<>();
+        collection.listIndexes().into(indexes);
+
+        List<Document> nonIdIndexes = indexes.stream()
+                .filter(idx -> !"_id_".equals(idx.getString("name")))
+                .toList();
+
+        for (Document idx : nonIdIndexes) {
+            log.info("FRESH-DB INDEX: name={}, key={}, unique={}, partialFilter={}",
+                    idx.getString("name"),
+                    idx.get("key"),
+                    idx.get("unique"),
+                    idx.get("partialFilterExpression"));
+        }
+
+        assertEquals(3, nonIdIndexes.size(), "Exactly 3 custom indexes must be created on fresh database");
+
+        assertThat(nonIdIndexes).anySatisfy(idx -> {
+            assertThat(idx.getString("name")).isEqualTo("customerId_1");
+            assertThat(idx.get("unique")).isNull();
+        });
+
+        assertThat(nonIdIndexes).anySatisfy(idx -> {
+            assertThat(idx.getString("name")).isEqualTo("customerId_1_isDefault_1_unique_default");
+            assertThat(idx.getBoolean("unique")).isTrue();
+            assertThat(idx.get("partialFilterExpression", Document.class)).isEqualTo(new Document("isDefault", true));
+        });
+
+        assertThat(nonIdIndexes).anySatisfy(idx -> {
+            assertThat(idx.getString("name")).isEqualTo("customerId_1_slot_1_unique");
+            assertThat(idx.getBoolean("unique")).isTrue();
+            assertThat(idx.get("partialFilterExpression", Document.class)).isEqualTo(new Document("slot", new Document("$gt", 0)));
+        });
+    }
+
+    @Test
+    @DisplayName("Idempotency: running initializeIndexes multiple times maintains exactly 3 indexes")
+    void shouldBeIdempotentWhenInitializedMultipleTimes() {
+        customerIndexInitializer.initializeIndexes();
+        customerIndexInitializer.initializeIndexes();
+
+        MongoCollection<Document> collection = mongoTemplate.getCollection("customer_addresses");
+        List<Document> indexes = new ArrayList<>();
+        collection.listIndexes().into(indexes);
+
+        List<Document> nonIdIndexes = indexes.stream()
+                .filter(idx -> !"_id_".equals(idx.getString("name")))
+                .toList();
+        assertEquals(3, nonIdIndexes.size(), "Multiple initializations must remain idempotent with exactly 3 indexes");
+    }
+
+    @Test
+    @DisplayName("Concurrent startup: multiple threads initializing on fresh database all succeed")
+    void shouldHandleConcurrentInitializationOnFreshDatabase() throws Exception {
+        if (mongoTemplate.collectionExists("customer_addresses")) {
+            mongoTemplate.dropCollection("customer_addresses");
+        }
+        assertFalse(mongoTemplate.collectionExists("customer_addresses"));
+
+        int threads = 2;
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
+        CountDownLatch latch = new CountDownLatch(1);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < threads; i++) {
+            futures.add(executor.submit(() -> {
+                try {
+                    latch.await();
+                    customerIndexInitializer.initializeIndexes();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }));
+        }
+
+        latch.countDown();
+        executor.shutdown();
+        assertTrue(executor.awaitTermination(15, TimeUnit.SECONDS));
+
+        for (Future<?> f : futures) {
+            f.get(); // ensures no exceptions were thrown
+        }
+
+        assertTrue(mongoTemplate.collectionExists("customer_addresses"));
+        MongoCollection<Document> collection = mongoTemplate.getCollection("customer_addresses");
+        List<Document> indexes = new ArrayList<>();
+        collection.listIndexes().into(indexes);
+        List<Document> nonIdIndexes = indexes.stream()
+                .filter(idx -> !"_id_".equals(idx.getString("name")))
+                .toList();
+        assertEquals(3, nonIdIndexes.size(), "Concurrent startup must finish with exactly 3 indexes");
     }
 
     private int countDefaultsInDb(String customerId) {

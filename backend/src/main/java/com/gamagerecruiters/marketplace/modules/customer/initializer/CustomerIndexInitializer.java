@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.Profile;
 import org.springframework.context.event.EventListener;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.Index;
@@ -16,6 +17,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.stereotype.Component;
 
 import com.gamagerecruiters.marketplace.modules.customer.domain.CustomerAddress;
+import com.mongodb.MongoCommandException;
 import com.mongodb.client.MongoCollection;
 
 @Component
@@ -38,6 +40,9 @@ public class CustomerIndexInitializer {
     @EventListener(ApplicationReadyEvent.class)
     public void initializeIndexes() {
         log.info("Initializing and validating MongoDB indexes for customer collections...");
+
+        ensureCollectionExists();
+
         MongoCollection<Document> collection = mongoTemplate.getCollection(COLLECTION_NAME);
 
         // Pre-checks on existing data before index creation
@@ -233,6 +238,34 @@ public class CustomerIndexInitializer {
         } catch (Exception e) {
             log.warn("Unable to perform pre-check on address slots (collection may be empty or uninitialized): {}", e.getMessage());
         }
+    }
+
+    private void ensureCollectionExists() {
+        if (!mongoTemplate.collectionExists(COLLECTION_NAME)) {
+            try {
+                mongoTemplate.createCollection(COLLECTION_NAME);
+                log.info("Created collection '{}'", COLLECTION_NAME);
+            } catch (Exception e) {
+                // NamespaceExists (error code 48) means another instance created it concurrently
+                if (isNamespaceExistsError(e) && mongoTemplate.collectionExists(COLLECTION_NAME)) {
+                    log.info("Collection '{}' was created concurrently by another instance", COLLECTION_NAME);
+                } else {
+                    throw new IllegalStateException(
+                            "Startup failed: Unable to create collection '" + COLLECTION_NAME + "'", e);
+                }
+            }
+        }
+    }
+
+    private boolean isNamespaceExistsError(Exception e) {
+        Throwable current = e;
+        while (current != null) {
+            if (current instanceof MongoCommandException mce && mce.getErrorCode() == 48) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private boolean isPlainCustomerIdIndex(Document key) {
