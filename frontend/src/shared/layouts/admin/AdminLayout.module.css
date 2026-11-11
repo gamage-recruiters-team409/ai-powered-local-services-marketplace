@@ -80,10 +80,9 @@
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  border: 1px solid var(--adm-color-primary-border);
   border-radius: var(--adm-radius-sm);
-  background: var(--adm-color-primary-soft);
-  color: var(--adm-color-primary);
+  background: var(--adm-color-primary);
+  color: #fff;
 }
 
 .logoSmall {
@@ -100,10 +99,14 @@
 
 .brandName {
   overflow: hidden;
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 700;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.brandNameHighlight {
+  color: var(--adm-color-primary);
 }
 
 .iconButton {
@@ -146,8 +149,8 @@
   padding: 0 5px;
   border: 2px solid var(--adm-color-surface);
   border-radius: 999px;
-  background: var(--adm-color-primary);
-  color: #fff;
+  background: var(--adm-color-accent);
+  color: var(--adm-color-heading);
   font-size: 10px;
   font-weight: 700;
   line-height: 14px;
@@ -641,7 +644,7 @@
     inset: 0;
     z-index: 45;
     display: block;
-    background: rgba(15, 30, 24, 0.45);
+    background: rgba(15, 23, 42, 0.45);
   }
 
   .main {

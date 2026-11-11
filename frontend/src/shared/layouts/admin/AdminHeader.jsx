@@ -4,10 +4,23 @@ import styles from './AdminLayout.module.css'
 import { Icon } from './Icon'
 import { cx, getInitials } from './adminLayoutUtils'
 
+function BrandName({ brand }) {
+  const { name, nameHighlight } = brand
+  if (!nameHighlight || !name.endsWith(nameHighlight)) {
+    return name
+  }
+  return (
+    <>
+      {name.slice(0, -nameHighlight.length)}
+      <span className={styles.brandNameHighlight}>{nameHighlight}</span>
+    </>
+  )
+}
+
 export function BrandLogo({ brand, small = false }) {
   return (
     <span className={cx(styles.logo, small && styles.logoSmall)} aria-hidden="true">
-      {brand.logoSrc ? <img src={brand.logoSrc} alt="" /> : <Icon name="home" size={small ? 16 : 20} />}
+      {brand.logoSrc ? <img src={brand.logoSrc} alt="" /> : <Icon name="wrench" size={small ? 16 : 20} strokeWidth={2} />}
     </span>
   )
 }
@@ -160,7 +173,9 @@ export function AdminHeader({
         </button>
         <span className={styles.brand}>
           <BrandLogo brand={brand} />
-          <span className={styles.brandName}>{brand.name}</span>
+          <span className={styles.brandName}>
+            <BrandName brand={brand} />
+          </span>
         </span>
       </div>
 
