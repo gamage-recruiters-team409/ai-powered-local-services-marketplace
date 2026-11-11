@@ -19,6 +19,8 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
@@ -42,7 +44,8 @@ class JwtAuthenticationFilterTest {
     void setUp() {
         SecurityContextHolder.clearContext();
         entryPoint = new JwtAuthenticationEntryPoint();
-        jwtAuthenticationFilter = new JwtAuthenticationFilter(tokenService, userInternalService, entryPoint);
+        ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        jwtAuthenticationFilter = new JwtAuthenticationFilter(tokenService, userInternalService, entryPoint, objectMapper);
     }
 
     @AfterEach

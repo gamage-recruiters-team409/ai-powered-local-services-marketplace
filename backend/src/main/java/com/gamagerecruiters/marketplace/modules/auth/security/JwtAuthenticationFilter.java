@@ -47,14 +47,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     public JwtAuthenticationFilter(
             TokenService tokenService,
             UserInternalService userInternalService,
-            JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint
-    ) {
-        this(tokenService, userInternalService, jwtAuthenticationEntryPoint, new ObjectMapper().registerModule(new JavaTimeModule()));
-    }
-
-    public JwtAuthenticationFilter(
-            TokenService tokenService,
-            UserInternalService userInternalService,
             JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint,
             ObjectMapper objectMapper
     ) {
