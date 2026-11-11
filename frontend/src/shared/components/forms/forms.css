@@ -1,0 +1,2026 @@
+/**
+ * File: forms.css
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides reusable styles for shared form and basic UI components.
+ *
+ * Current implementation:
+ * - Button variants
+ * - Button sizes
+ * - Button interaction states
+ * - Button icons and loading spinner
+ *
+ * Design reference:
+ * AI-Powered Local Services Marketplace Figma Design System.
+ *
+ * Note:
+ * Additional shared component styles will be added in
+ * clearly separated sections as development progresses.
+ */
+
+/* =====================================================
+   1. BASE BUTTON STYLES
+   ===================================================== */
+
+/*
+ * Defines the common appearance and layout for all
+ * reusable Button component variants.
+ */
+.shared-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+
+    padding: 10px 16px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 20px;
+
+    cursor: pointer;
+
+    transition:
+        background-color 0.2s ease,
+        border-color 0.2s ease,
+        color 0.2s ease;
+
+    white-space: nowrap;
+}
+
+/* =====================================================
+   2. BUTTON VARIANTS
+   ===================================================== */
+
+/* Primary: Main action button using the Figma teal colour. */
+.shared-btn--primary {
+    background-color: #0f766e;
+    color: #ffffff;
+}
+
+/* Darkens the primary button when hovered. */
+.shared-btn--primary:hover:not(:disabled) {
+    background-color: #115e59;
+}
+
+/* Secondary: Less prominent action button. */
+.shared-btn--secondary {
+    background-color: #ccfbf1;
+    color: #115e59;
+}
+
+.shared-btn--secondary:hover:not(:disabled) {
+    background-color: #99f6e4;
+}
+
+/* Outline: Neutral action button with a visible border. */
+.shared-btn--outline {
+    background-color: #ffffff;
+    border-color: #e2e8f0;
+    color: #0f172a;
+}
+
+.shared-btn--outline:hover:not(:disabled) {
+    background-color: #f8fafc;
+}
+
+/* Destructive: Used for actions such as delete or remove. */
+.shared-btn--destructive {
+    background-color: #dc2626;
+    color: #ffffff;
+}
+
+.shared-btn--destructive:hover:not(:disabled) {
+    background-color: #b91c1c;
+}
+
+/* =====================================================
+   3. BUTTON SIZES
+   ===================================================== */
+
+/* Small: Suitable for compact actions and table controls. */
+.shared-btn--small {
+    padding: 6px 12px;
+    font-size: 12px;
+    line-height: 18px;
+}
+
+/* Medium: Default button size used throughout the system. */
+.shared-btn--medium {
+    padding: 10px 16px;
+}
+
+/* Large: Suitable for prominent actions. */
+.shared-btn--large {
+    padding: 12px 20px;
+    font-size: 16px;
+    line-height: 24px;
+}
+
+/* =====================================================
+   4. BUTTON INTERACTION STATES
+   ===================================================== */
+
+/*
+ * Disabled:
+ * Prevents pointer interaction and visually indicates
+ * that the button is currently unavailable.
+ *
+ * Actual click prevention is handled by the native
+ * disabled attribute in Button.jsx.
+ */
+.shared-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/*
+ * Focus:
+ * Provides a visible focus indicator for users
+ * navigating with a keyboard.
+ */
+.shared-btn:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 2px;
+}
+
+/* =====================================================
+   5. BUTTON ICON
+   ===================================================== */
+
+/* Aligns optional icons with the button label. */
+.shared-btn__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* =====================================================
+   6. LOADING SPINNER
+   ===================================================== */
+
+/*
+ * Displays a spinner when the Button component
+ * receives loading={true}.
+ */
+.shared-btn__spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+
+    animation: shared-btn-spin 0.8s linear infinite;
+}
+
+/* Rotates the loading indicator continuously. */
+@keyframes shared-btn-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/*
+ * Accessibility:
+ * Disables non-essential animations for users
+ * who prefer reduced motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+    .shared-btn__spinner {
+        animation: none;
+    }
+
+    .shared-btn {
+        transition: none;
+    }
+}
+
+
+/* =====================================================
+   8. SHARED INPUT COMPONENT STYLES
+   ===================================================== */
+
+/*
+ * File: forms.css
+ * Component: Input.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides consistent input field styling based on
+ * the marketplace Figma Design System.
+ *
+ * Supported states:
+ * - Default
+ * - Focus
+ * - Error
+ * - Disabled
+ * - Required indicator
+ * - Helper and validation messages
+ */
+
+/* Groups the label, input and supporting messages. */
+.shared-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+}
+
+/* Displays the field label above the input. */
+.shared-field__label {
+    display: block;
+    color: #0f172a;
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+}
+
+/* Highlights mandatory fields with an asterisk. */
+.shared-field__required {
+    color: #dc2626;
+    margin-left: 2px;
+}
+
+/*
+ * Base input:
+ * Uses the Figma surface, border and text colours.
+ */
+.shared-input {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    min-height: 42px;
+
+    padding: 10px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+
+    background-color: #ffffff;
+    color: #0f172a;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 20px;
+
+    outline: none;
+
+    transition:
+        border-color 0.2s ease,
+        box-shadow 0.2s ease;
+}
+
+/* Shows muted placeholder text before user input. */
+.shared-input::placeholder {
+    color: #94a3b8;
+    opacity: 1;
+}
+
+/*
+ * Focus state:
+ * Displays a teal border and subtle focus ring.
+ */
+.shared-input:focus {
+    border-color: #0f766e;
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+/*
+ * Error state:
+ * Highlights invalid fields with a red border.
+ */
+.shared-input--error {
+    border-color: #dc2626;
+}
+
+/* Keeps the error styling visible during focus. */
+.shared-input--error:focus {
+    border-color: #dc2626;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
+
+/*
+ * Disabled state:
+ * Indicates that the input cannot be edited.
+ */
+.shared-input:disabled {
+    background-color: #f8fafc;
+    color: #94a3b8;
+    cursor: not-allowed;
+    opacity: 1;
+}
+
+/* Reduces the emphasis of disabled field labels. */
+.shared-field--disabled .shared-field__label {
+    color: #94a3b8;
+}
+
+/* Supporting information displayed below the input. */
+.shared-field__helper {
+    margin: 0;
+    color: #475569;
+    font-family: "Inter", sans-serif;
+    font-size: 12px;
+    line-height: 18px;
+}
+
+/*
+ * Validation feedback:
+ * Uses the design system error colour.
+ */
+.shared-field__error {
+    margin: 0;
+    color: #dc2626;
+    font-family: "Inter", sans-serif;
+    font-size: 12px;
+    line-height: 18px;
+}
+
+/*
+ * Accessibility:
+ * Removes decorative transitions when the user
+ * prefers reduced motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+    .shared-input {
+        transition: none;
+    }
+}
+
+/* =====================================================
+   9. PASSWORD INPUT COMPONENT STYLES
+   ===================================================== */
+
+/**
+ * Component: PasswordInput.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Styles the reusable password input and its
+ * show/hide visibility toggle.
+ *
+ * Supported states:
+ * - Default
+ * - Focus
+ * - Error
+ * - Disabled
+ * - Password visible / hidden
+ *
+ * Design reference:
+ * SharedForms/PasswordInput - Figma Component Sheet.
+ */
+
+/*
+ * Password field wrapper:
+ * Provides a positioning context for the eye button.
+ */
+.shared-password {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+}
+
+/*
+ * Password input:
+ * Reserves space on the right for the visibility icon.
+ */
+.shared-password__input {
+    padding-right: 48px;
+}
+
+/*
+ * Visibility toggle:
+ * Places the eye icon inside the input's right edge.
+ */
+.shared-password__toggle {
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    transform: translateY(-50%);
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    width: 28px;
+    height: 28px;
+    padding: 0;
+
+    border: none;
+    border-radius: 4px;
+
+    background: transparent;
+    color: #475569;
+
+    cursor: pointer;
+
+    transition:
+        color 0.2s ease,
+        background-color 0.2s ease;
+}
+
+/* Highlights the eye icon when hovered. */
+.shared-password__toggle:hover:not(:disabled) {
+    color: #0f766e;
+    background-color: #f0fdfa;
+}
+
+/*
+ * Keyboard accessibility:
+ * Shows a visible focus indicator on the toggle.
+ */
+.shared-password__toggle:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 2px;
+}
+
+/*
+ * Disabled state:
+ * Prevents interaction with the visibility toggle.
+ */
+.shared-password__toggle:disabled {
+    color: #94a3b8;
+    cursor: not-allowed;
+}
+
+/*
+ * Error state:
+ * The shared-input--error class already applies
+ * the red border and focus ring from Input styles.
+ */
+
+/*
+ * Reduced motion:
+ * Removes transitions for users who prefer
+ * minimal animation.
+ */
+@media (prefers-reduced-motion: reduce) {
+    .shared-password__toggle {
+        transition: none;
+    }
+}
+
+/* =====================================================
+   10. TEXTAREA COMPONENT STYLES
+   ===================================================== */
+
+/**
+ * Component: Textarea.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides consistent styling for reusable multi-line
+ * text fields based on the Figma Design System.
+ *
+ * Supported states:
+ * - Default
+ * - Focus
+ * - Error
+ * - Disabled
+ * - Required indicator and helper text
+ */
+
+/*
+ * Base textarea:
+ * Uses the shared design system's border, surface,
+ * typography, and spacing values.
+ */
+.shared-textarea {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    min-height: 100px;
+
+    padding: 10px 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+
+    background-color: #ffffff;
+    color: #0f172a;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 20px;
+
+    outline: none;
+    resize: vertical;
+
+    transition:
+        border-color 0.2s ease,
+        box-shadow 0.2s ease;
+}
+
+/* Displays muted placeholder text before user input. */
+.shared-textarea::placeholder {
+    color: #94a3b8;
+    opacity: 1;
+}
+
+/*
+ * Focus state:
+ * Displays the primary teal border and focus ring.
+ */
+.shared-textarea:focus {
+    border-color: #0f766e;
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+/*
+ * Error state:
+ * Highlights invalid textareas using the error colour.
+ */
+.shared-textarea--error {
+    border-color: #dc2626;
+}
+
+/* Maintains red validation styling when focused. */
+.shared-textarea--error:focus {
+    border-color: #dc2626;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
+
+/*
+ * Disabled state:
+ * Indicates that the textarea cannot be edited.
+ */
+.shared-textarea:disabled {
+    background-color: #f8fafc;
+    color: #94a3b8;
+    cursor: not-allowed;
+    opacity: 1;
+    resize: none;
+}
+
+/*
+ * Accessibility:
+ * Removes decorative transitions for users
+ * who prefer reduced motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+    .shared-textarea {
+        transition: none;
+    }
+}
+
+/* =====================================================
+   11. SELECT / DROPDOWN COMPONENT STYLES
+   ===================================================== */
+
+/**
+ * Component: Select.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides consistent styling for native dropdown
+ * fields based on the shared Figma Design System.
+ *
+ * Supported states:
+ * - Default
+ * - Focus
+ * - Error
+ * - Disabled
+ * - Placeholder
+ */
+
+/*
+ * Select wrapper:
+ * Provides a positioning context for the
+ * decorative dropdown arrow.
+ */
+.shared-select-wrapper {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+}
+
+/*
+ * Base select:
+ * Uses consistent typography, spacing, and colours.
+ * Native browser arrow is replaced with a custom icon.
+ */
+.shared-select {
+    display: block;
+    box-sizing: border-box;
+
+    width: 100%;
+    min-width: 0;
+    min-height: 42px;
+
+    padding: 10px 42px 10px 12px;
+
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+
+    background-color: #ffffff;
+    color: #0f172a;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 20px;
+
+    appearance: none;
+    -webkit-appearance: none;
+
+    outline: none;
+    cursor: pointer;
+
+    transition:
+        border-color 0.2s ease,
+        box-shadow 0.2s ease;
+}
+
+/*
+ * Placeholder state:
+ * Displays muted text before a value is selected.
+ */
+.shared-select--placeholder {
+    color: #94a3b8;
+}
+
+/*
+ * Focus state:
+ * Highlights the dropdown with the primary teal.
+ */
+.shared-select:focus {
+    border-color: #0f766e;
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+/*
+ * Error state:
+ * Uses the shared error colour for invalid selections.
+ */
+.shared-select--error {
+    border-color: #dc2626;
+}
+
+/* Preserves the red validation styling on focus. */
+.shared-select--error:focus {
+    border-color: #dc2626;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
+
+/*
+ * Disabled state:
+ * Indicates that the dropdown cannot be changed.
+ */
+.shared-select:disabled {
+    background-color: #f8fafc;
+    color: #94a3b8;
+    cursor: not-allowed;
+    opacity: 1;
+}
+
+/*
+ * Dropdown arrow:
+ * Positioned inside the right side of the select.
+ */
+.shared-select__arrow {
+    position: absolute;
+    top: 50%;
+    right: 12px;
+
+    transform: translateY(-50%);
+
+    color: #475569;
+    pointer-events: none;
+}
+
+/* Displays a muted arrow when the field is disabled. */
+.shared-select-wrapper:has(.shared-select:disabled) .shared-select__arrow {
+    color: #94a3b8;
+}
+
+/*
+ * Accessibility:
+ * Removes decorative transitions when reduced
+ * motion is preferred.
+ */
+@media (prefers-reduced-motion: reduce) {
+    .shared-select {
+        transition: none;
+    }
+}
+
+/* =====================================================
+   12. CHECKBOX COMPONENT STYLES
+   ===================================================== */
+
+/**
+ * Component: Checkbox.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides consistent styling for reusable checkboxes
+ * based on the shared Figma Design System.
+ *
+ * Supported states:
+ * - Unchecked
+ * - Checked
+ * - Focus
+ * - Error
+ * - Disabled
+ * - Required
+ */
+
+/*
+ * Checkbox field wrapper:
+ * Groups the checkbox, label, helper text,
+ * and validation feedback.
+ */
+.shared-checkbox-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+}
+
+/*
+ * Checkbox row:
+ * Aligns the checkbox and its label horizontally.
+ */
+.shared-checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+/*
+ * Native checkbox:
+ * Uses the browser's accessible checkbox behaviour
+ * with the shared primary teal accent colour.
+ */
+.shared-checkbox {
+    box-sizing: border-box;
+    flex-shrink: 0;
+
+    width: 18px;
+    height: 18px;
+    margin: 1px 0 0;
+
+    accent-color: #0f766e;
+    cursor: pointer;
+}
+
+/*
+ * Focus state:
+ * Displays a visible keyboard focus indicator.
+ */
+.shared-checkbox:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 3px;
+}
+
+/*
+ * Checkbox label:
+ * Matches the typography of other shared form fields.
+ */
+.shared-checkbox__label {
+    color: #0f172a;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+
+    cursor: pointer;
+}
+
+/*
+ * Error state:
+ * Highlights the checkbox and validation message.
+ */
+.shared-checkbox-field--error .shared-checkbox {
+    outline: 1px solid #dc2626;
+    outline-offset: 2px;
+}
+
+.shared-checkbox-field--error .shared-checkbox:focus-visible {
+    outline: 2px solid #dc2626;
+    outline-offset: 3px;
+}
+
+/*
+ * Disabled state:
+ * Uses muted colours and prevents interaction.
+ */
+.shared-checkbox:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.shared-checkbox-field--disabled .shared-checkbox__label {
+    color: #94a3b8;
+    cursor: not-allowed;
+}
+
+/*
+ * Helper text:
+ * Provides additional guidance below the checkbox.
+ */
+.shared-checkbox__helper {
+    margin: 0;
+    padding-left: 28px;
+
+    color: #475569;
+
+    font-family: "Inter", sans-serif;
+    font-size: 12px;
+    line-height: 18px;
+}
+
+/*
+ * Error message:
+ * Displays validation feedback in red.
+ */
+.shared-checkbox__error {
+    margin: 0;
+    padding-left: 28px;
+
+    color: #dc2626;
+
+    font-family: "Inter", sans-serif;
+    font-size: 12px;
+    line-height: 18px;
+}
+
+/* =====================================================
+   13. RADIO COMPONENT STYLES
+   ===================================================== */
+
+/**
+ * Component: Radio.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides consistent styling for reusable radio inputs
+ * based on the shared Figma Design System.
+ *
+ * Supported states:
+ * - Unchecked
+ * - Checked
+ * - Focus
+ * - Error
+ * - Disabled
+ * - Required
+ */
+
+/*
+ * Radio field wrapper:
+ * Groups the radio control, label, helper text,
+ * and validation feedback.
+ */
+.shared-radio-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+    text-align: left;
+}
+
+/*
+ * Radio row:
+ * Aligns the native radio button and its label.
+ */
+.shared-radio-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+/*
+ * Native radio input:
+ * Preserves browser keyboard and form behaviour
+ * while applying the shared primary teal colour.
+ */
+.shared-radio {
+    box-sizing: border-box;
+    flex-shrink: 0;
+
+    width: 18px;
+    height: 18px;
+    margin: 1px 0 0;
+
+    accent-color: #0f766e;
+    cursor: pointer;
+}
+
+/*
+ * Keyboard focus:
+ * Provides a visible focus indicator.
+ */
+.shared-radio:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 3px;
+}
+
+/*
+ * Radio label:
+ * Uses the same typography as other shared form inputs.
+ */
+.shared-radio__label {
+    color: #0f172a;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+
+    cursor: pointer;
+}
+
+/*
+ * Error state:
+ * Highlights the invalid radio input in red.
+ */
+.shared-radio-field--error .shared-radio {
+    outline: 1px solid #dc2626;
+    outline-offset: 2px;
+}
+
+/* Maintains the error colour during keyboard focus. */
+.shared-radio-field--error .shared-radio:focus-visible {
+    outline: 2px solid #dc2626;
+    outline-offset: 3px;
+}
+
+/*
+ * Disabled state:
+ * Uses muted colours and prevents interaction.
+ */
+.shared-radio:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.shared-radio-field--disabled .shared-radio__label {
+    color: #94a3b8;
+    cursor: not-allowed;
+}
+
+/*
+ * Helper text:
+ * Aligns supporting information beneath the label.
+ */
+.shared-radio__helper {
+    margin: 0;
+    padding-left: 28px;
+
+    color: #475569;
+
+    font-family: "Inter", sans-serif;
+    font-size: 12px;
+    line-height: 18px;
+}
+
+/*
+ * Error message:
+ * Displays validation feedback below the radio.
+ */
+.shared-radio__error {
+    margin: 0;
+    padding-left: 28px;
+
+    color: #dc2626;
+
+    font-family: "Inter", sans-serif;
+    font-size: 12px;
+    line-height: 18px;
+}
+
+/* =====================================================
+   14. STANDARD FORM STRUCTURE STYLES
+   ===================================================== */
+
+/**
+ * Component: FormStructure.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides a consistent layout for form headings,
+ * descriptions, fields, validation messages,
+ * and action buttons.
+ *
+ * Design reference:
+ * SharedForms/FormStructure - Figma Component Sheet.
+ */
+
+/*
+ * Main form container:
+ * Arranges form sections vertically with
+ * consistent spacing.
+ */
+.shared-form {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+
+    text-align: left;
+}
+
+/*
+ * Form header:
+ * Groups the form title and description.
+ */
+.shared-form__header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/*
+ * Form title:
+ * Uses the shared design system heading style.
+ */
+.shared-form__title {
+    margin: 0;
+
+    color: #0f172a;
+
+    font-family: "Poppins", sans-serif;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 28px;
+}
+
+/*
+ * Form description:
+ * Displays supporting information beneath the title.
+ */
+.shared-form__description {
+    margin: 0;
+
+    color: #475569;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 22px;
+}
+
+/*
+ * Form fields:
+ * Provides consistent vertical spacing between
+ * reusable Input, Select, Textarea, and other fields.
+ */
+.shared-form__fields {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+
+    width: 100%;
+    min-width: 0;
+}
+
+/*
+ * Form-level error:
+ * Displays validation feedback that applies
+ * to the entire form rather than one field.
+ */
+.shared-form__error {
+    margin: 0;
+    padding: 12px 16px;
+
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+
+    background-color: #fef2f2;
+    color: #dc2626;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    line-height: 20px;
+}
+
+/*
+ * Form actions:
+ * Aligns Cancel and Submit buttons to the right.
+ */
+.shared-form__actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    width: 100%;
+}
+
+/*
+ * Responsive layout:
+ * Stacks action buttons on narrow screens
+ * to improve usability.
+ */
+@media (max-width: 480px) {
+    .shared-form {
+        gap: 20px;
+    }
+
+    .shared-form__fields {
+        gap: 16px;
+    }
+
+    .shared-form__actions {
+        flex-direction: column-reverse;
+        align-items: stretch;
+    }
+
+    .shared-form__actions .shared-btn {
+        width: 100%;
+    }
+}
+
+/* =====================================================
+   15. DATA TABLE COMPONENT STYLES
+   ===================================================== */
+
+/**
+ * Component: DataTable.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides consistent table layouts, typography,
+ * row states, and responsive horizontal scrolling.
+ *
+ * Design reference:
+ * SharedForms/DataTable - Figma Component Sheet.
+ */
+
+/*
+ * Main table section:
+ * Groups the heading, toolbar, table, and pagination.
+ */
+.shared-table-section {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+
+    text-align: left;
+}
+
+/* Table heading and supporting description. */
+.shared-table__header {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.shared-table__title {
+    margin: 0;
+
+    color: #0f172a;
+
+    font-family: "Poppins", sans-serif;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 28px;
+}
+
+.shared-table__description {
+    margin: 0;
+
+    color: #475569;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    line-height: 22px;
+}
+
+/*
+ * Toolbar:
+ * Holds parent-provided search and filter controls.
+ */
+.shared-table__toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    width: 100%;
+    min-width: 0;
+}
+
+/*
+ * Table container:
+ * Allows horizontal scrolling on smaller screens.
+ */
+.shared-table__container {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+
+    background-color: #ffffff;
+}
+
+/* Visible focus indicator for keyboard scrolling. */
+.shared-table__container:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 2px;
+}
+
+/*
+ * Base table:
+ * Uses semantic HTML table layout.
+ */
+.shared-table {
+    width: 100%;
+    min-width: 600px;
+
+    border-collapse: collapse;
+
+    color: #0f172a;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    line-height: 20px;
+}
+
+/*
+ * Table header:
+ * Uses a light background to distinguish headings.
+ */
+.shared-table__head {
+    background-color: #f8fafc;
+}
+
+.shared-table__heading {
+    padding: 14px 16px;
+
+    border-bottom: 1px solid #e2e8f0;
+
+    color: #475569;
+
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 18px;
+
+    text-align: left;
+    white-space: nowrap;
+}
+
+/*
+ * Table rows:
+ * Separates records with subtle borders.
+ */
+.shared-table__row {
+    background-color: #ffffff;
+
+    transition: background-color 0.2s ease;
+}
+
+.shared-table__row:not(:last-child) {
+    border-bottom: 1px solid #e2e8f0;
+}
+
+/* Highlights a record when the pointer moves over it. */
+.shared-table__row:hover {
+    background-color: #f8fafc;
+}
+
+/*
+ * Table cells:
+ * Aligns content consistently across columns.
+ */
+.shared-table__cell {
+    padding: 14px 16px;
+
+    color: #0f172a;
+    vertical-align: middle;
+}
+
+/*
+ * Actions column:
+ * Keeps row action controls aligned and readable.
+ */
+.shared-table__cell--actions {
+    white-space: nowrap;
+}
+
+/*
+ * Loading, empty, and error states:
+ * Displays fallback content inside the table.
+ */
+.shared-table__state {
+    padding: 40px 20px;
+
+    color: #475569;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    line-height: 22px;
+
+    text-align: center;
+    vertical-align: middle;
+}
+
+/* Applies the shared error colour to retrieval errors. */
+.shared-table__state--error {
+    color: #dc2626;
+}
+
+/*
+ * Pagination container:
+ * Positions the parent-provided pagination control.
+ */
+.shared-table__pagination {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+
+    width: 100%;
+    min-width: 0;
+}
+
+/*
+ * Responsive layout:
+ * Reduces spacing on smaller screens while
+ * preserving horizontal table scrolling.
+ */
+@media (max-width: 640px) {
+    .shared-table-section {
+        gap: 16px;
+    }
+
+    .shared-table__heading,
+    .shared-table__cell {
+        padding: 12px;
+    }
+
+    .shared-table__toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .shared-table__pagination {
+        justify-content: center;
+    }
+}
+
+/*
+ * Accessibility:
+ * Removes decorative row transitions when
+ * reduced motion is preferred.
+ */
+@media (prefers-reduced-motion: reduce) {
+    .shared-table__row {
+        transition: none;
+    }
+}
+
+/* =====================================================
+   16. PAGINATION COMPONENT STYLES
+   ===================================================== */
+
+/**
+ * Component: Pagination.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides consistent pagination navigation styles
+ * for data tables and paginated content.
+ *
+ * Supported states:
+ * - Default
+ * - Hover
+ * - Active page
+ * - Keyboard focus
+ * - Disabled
+ * - Responsive layout
+ *
+ * Design reference:
+ * Shared Form & Basic UI Components - Figma.
+ */
+
+/*
+ * Main pagination container:
+ * Aligns previous, numbered pages, and next controls.
+ */
+.shared-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+
+    font-family: "Inter", sans-serif;
+}
+
+/*
+ * Page number group:
+ * Keeps numbered buttons and ellipses together.
+ */
+.shared-pagination__pages {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/*
+ * Base pagination button:
+ * Uses consistent dimensions and interaction styles.
+ */
+.shared-pagination__button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+
+    box-sizing: border-box;
+    min-width: 36px;
+    min-height: 36px;
+    padding: 8px 12px;
+
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+
+    background-color: #ffffff;
+    color: #475569;
+
+    font-family: "Inter", sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 20px;
+
+    cursor: pointer;
+
+    transition:
+        background-color 0.2s ease,
+        border-color 0.2s ease,
+        color 0.2s ease;
+}
+
+/*
+ * Hover state:
+ * Highlights interactive pagination buttons.
+ */
+.shared-pagination__button:hover:not(:disabled) {
+    background-color: #f0fdfa;
+    border-color: #0f766e;
+    color: #0f766e;
+}
+
+/*
+ * Keyboard focus:
+ * Provides a visible focus indicator.
+ */
+.shared-pagination__button:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 2px;
+}
+
+/*
+ * Page number buttons:
+ * Uses a compact square appearance.
+ */
+.shared-pagination__page {
+    min-width: 36px;
+    padding: 8px;
+}
+
+/*
+ * Active page:
+ * Highlights the currently selected page.
+ */
+.shared-pagination__page--active,
+.shared-pagination__page--active:hover:not(:disabled) {
+    background-color: #0f766e;
+    border-color: #0f766e;
+    color: #ffffff;
+}
+
+/*
+ * Disabled state:
+ * Indicates unavailable navigation actions.
+ */
+.shared-pagination__button:disabled {
+    background-color: #f8fafc;
+    border-color: #e2e8f0;
+    color: #94a3b8;
+
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+/*
+ * Preserve active-page appearance when the
+ * entire pagination component is disabled.
+ */
+.shared-pagination__page--active:disabled {
+    background-color: #0f766e;
+    border-color: #0f766e;
+    color: #ffffff;
+    opacity: 0.6;
+}
+
+/*
+ * Ellipsis:
+ * Indicates that intermediate page numbers
+ * are intentionally hidden.
+ */
+.shared-pagination__ellipsis {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    min-width: 28px;
+    min-height: 36px;
+
+    color: #94a3b8;
+
+    font-size: 14px;
+    line-height: 20px;
+
+    user-select: none;
+}
+
+/*
+ * Previous and Next buttons:
+ * Provide additional horizontal spacing.
+ */
+.shared-pagination__previous,
+.shared-pagination__next {
+    padding: 8px 14px;
+}
+
+/*
+ * Responsive layout:
+ * Reduces spacing and button dimensions
+ * for smaller screens.
+ */
+@media (max-width: 480px) {
+    .shared-pagination {
+        gap: 8px;
+    }
+
+    .shared-pagination__pages {
+        gap: 4px;
+    }
+
+    .shared-pagination__button {
+        min-width: 32px;
+        min-height: 32px;
+        padding: 6px 8px;
+
+        font-size: 12px;
+    }
+
+    .shared-pagination__page {
+        min-width: 32px;
+        padding: 6px;
+    }
+
+    .shared-pagination__previous,
+    .shared-pagination__next {
+        padding: 6px 10px;
+    }
+
+    .shared-pagination__ellipsis {
+        min-width: 20px;
+        min-height: 32px;
+    }
+}
+
+/*
+ * Accessibility:
+ * Removes decorative transitions when
+ * reduced motion is preferred.
+ */
+@media (prefers-reduced-motion: reduce) {
+    .shared-pagination__button {
+        transition: none;
+    }
+}
+
+/* =====================================================
+   17. BADGE COMPONENT STYLES
+   ===================================================== */
+
+/**
+ * Component: Badge.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides consistent status badge colours, spacing,
+ * typography, and sizing across the application.
+ *
+ * Supported variants:
+ * - Success
+ * - Warning
+ * - Error
+ * - Info
+ * - Neutral
+ *
+ * Design reference:
+ * Shared Form & Basic UI Components - Figma.
+ */
+
+/*
+ * Base badge:
+ * Uses a pill-shaped design with centered content.
+ */
+.shared-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+
+    box-sizing: border-box;
+    max-width: 100%;
+    width: fit-content;
+
+    border: 1px solid transparent;
+    border-radius: 9999px;
+
+    font-family: "Inter", sans-serif;
+    font-weight: 600;
+    line-height: 1.4;
+
+    vertical-align: middle;
+}
+
+/*
+ * Badge label:
+ * Allows longer status text to wrap when necessary.
+ */
+.shared-badge__label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+/*
+ * Optional badge icon:
+ * Keeps icons aligned with the status label.
+ */
+.shared-badge__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+/*
+ * Small badge:
+ * Suitable for compact tables and dense layouts.
+ */
+.shared-badge--small {
+    padding: 3px 8px;
+    font-size: 11px;
+}
+
+/*
+ * Medium badge:
+ * Default size for status indicators.
+ */
+.shared-badge--medium {
+    padding: 5px 12px;
+    font-size: 12px;
+}
+
+/*
+ * Success:
+ * Used for completed or active statuses.
+ */
+.shared-badge--success {
+    background-color: #dcfce7;
+    border-color: #bbf7d0;
+    color: #166534;
+}
+
+/*
+ * Warning:
+ * Used for pending or attention-required statuses.
+ */
+.shared-badge--warning {
+    background-color: #fef3c7;
+    border-color: #fde68a;
+    color: #92400e;
+}
+
+/*
+ * Error:
+ * Used for failed or rejected statuses.
+ */
+.shared-badge--error {
+    background-color: #fee2e2;
+    border-color: #fecaca;
+    color: #991b1b;
+}
+
+/*
+ * Info:
+ * Used for informational or in-progress statuses.
+ */
+.shared-badge--info {
+    background-color: #dbeafe;
+    border-color: #bfdbfe;
+    color: #1d4ed8;
+}
+
+/*
+ * Neutral:
+ * Used for draft, inactive, or unspecified statuses.
+ */
+.shared-badge--neutral {
+    background-color: #f1f5f9;
+    border-color: #e2e8f0;
+    color: #475569;
+}
+
+/* =====================================================
+   18. GENERIC MODAL COMPONENT STYLES
+   ===================================================== */
+
+/**
+ * Component: Modal.jsx
+ * Module: WP07 - Shared Form & Basic UI Components
+ *
+ * Purpose:
+ * Provides consistent modal layout, backdrop,
+ * typography, spacing, and responsive behaviour.
+ *
+ * Supported elements:
+ * - Modal container
+ * - Backdrop
+ * - Header and title
+ * - Description
+ * - Close button
+ * - Custom body content
+ * - Optional footer actions
+ *
+ * Design reference:
+ * Shared Form & Basic UI Components - Figma.
+ */
+
+/*
+ * Main modal:
+ * Uses the native dialog element and browser top layer.
+ * The modal remains hidden until showModal() is called.
+ */
+.shared-modal {
+    box-sizing: border-box;
+
+    width: calc(100% - 32px);
+    max-width: 520px;
+    max-height: calc(100dvh - 48px);
+
+    margin: auto;
+    padding: 0;
+
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+
+    background-color: #ffffff;
+    color: #0f172a;
+
+    font-family: "Inter", sans-serif;
+
+    overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.2);
+}
+
+/*
+ * Backdrop:
+ * Dims the page behind the open modal.
+ */
+.shared-modal::backdrop {
+    background-color: rgba(15, 23, 42, 0.55);
+}
+
+/*
+ * Inner content:
+ * Organizes header, body, and footer vertically.
+ */
+.shared-modal__content {
+    display: flex;
+    flex-direction: column;
+
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+}
+
+/*
+ * Header:
+ * Aligns heading content and close button.
+ */
+.shared-modal__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+
+    padding: 24px 24px 16px;
+}
+
+/*
+ * Heading wrapper:
+ * Allows long titles and descriptions to wrap.
+ */
+.shared-modal__heading {
+    flex: 1;
+    min-width: 0;
+}
+
+/*
+ * Modal title:
+ * Uses the design system's primary text colour.
+ */
+.shared-modal__title {
+    margin: 0;
+
+    color: #0f172a;
+
+    font-family: "Poppins", sans-serif;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.4;
+
+    overflow-wrap: anywhere;
+}
+
+/*
+ * Supporting description:
+ * Appears below the title when provided.
+ */
+.shared-modal__description {
+    margin: 8px 0 0;
+
+    color: #475569;
+
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.6;
+
+    overflow-wrap: anywhere;
+}
+
+/*
+ * Close button:
+ * Provides a clearly visible and accessible
+ * action for dismissing the modal.
+ */
+.shared-modal__close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+
+    box-sizing: border-box;
+    width: 36px;
+    height: 36px;
+    padding: 8px;
+
+    border: none;
+    border-radius: 8px;
+
+    background-color: transparent;
+    color: #64748b;
+
+    cursor: pointer;
+
+    transition:
+        background-color 0.2s ease,
+        color 0.2s ease;
+}
+
+/*
+ * Close button hover:
+ * Gives users visual interaction feedback.
+ */
+.shared-modal__close:hover {
+    background-color: #f1f5f9;
+    color: #0f172a;
+}
+
+/*
+ * Keyboard focus:
+ * Makes the close button accessible to
+ * keyboard users.
+ */
+.shared-modal__close:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: 2px;
+}
+
+/*
+ * Modal body:
+ * Contains any custom content supplied
+ * through the children prop.
+ */
+.shared-modal__body {
+    min-width: 0;
+    padding: 16px 24px 24px;
+
+    color: #475569;
+
+    font-size: 14px;
+    line-height: 1.6;
+
+    overflow-wrap: anywhere;
+}
+
+/*
+ * Remove unnecessary top spacing when
+ * no modal header is present.
+ */
+.shared-modal__content>.shared-modal__body:first-child {
+    padding-top: 24px;
+}
+
+/*
+ * Footer:
+ * Separates optional action buttons
+ * from the main modal content.
+ */
+.shared-modal__footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+
+    padding: 16px 24px;
+
+    border-top: 1px solid #e2e8f0;
+    background-color: #f8fafc;
+}
+
+/*
+ * Responsive layout:
+ * Reduces padding and title size on
+ * smaller mobile screens.
+ */
+@media (max-width: 480px) {
+    .shared-modal {
+        width: calc(100% - 24px);
+        max-height: calc(100dvh - 24px);
+    }
+
+    .shared-modal__header {
+        gap: 12px;
+        padding: 20px 16px 12px;
+    }
+
+    .shared-modal__title {
+        font-size: 18px;
+    }
+
+    .shared-modal__description {
+        font-size: 13px;
+    }
+
+    .shared-modal__body {
+        padding: 12px 16px 20px;
+    }
+
+    .shared-modal__content>.shared-modal__body:first-child {
+        padding-top: 20px;
+    }
+
+    .shared-modal__footer {
+        gap: 8px;
+        padding: 12px 16px;
+    }
+}
+
+/*
+ * Accessibility:
+ * Removes decorative transitions when
+ * reduced motion is preferred.
+ */
+@media (prefers-reduced-motion: reduce) {
+    .shared-modal__close {
+        transition: none;
+    }
+}
