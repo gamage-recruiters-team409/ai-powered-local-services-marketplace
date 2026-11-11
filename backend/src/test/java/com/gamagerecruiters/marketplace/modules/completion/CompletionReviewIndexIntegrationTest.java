@@ -1,6 +1,8 @@
 package com.gamagerecruiters.marketplace.modules.completion;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -28,14 +30,18 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MongoDBContainer;
 
 import com.gamagerecruiters.marketplace.modules.completion.domain.ServiceCompletion;
+import com.gamagerecruiters.marketplace.modules.completion.initializer.CompletionIndexInitializer;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.review.domain.Review;
 import com.gamagerecruiters.marketplace.modules.review.domain.ReviewStatus;
+import com.gamagerecruiters.marketplace.modules.review.initializer.ReviewIndexInitializer;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 
 /**
  * Runs the real index initializers against a Testcontainers MongoDB, then checks the
- * stored index definitions and that duplicate bookingId values are rejected.
+ * stored index definitions and that duplicate bookingId values are rejected. Also
+ * re-runs the initializers after dropping the collections to prove that a fresh
+ * database (collection not yet created) initializes and verifies correctly.
  * Skipped only when SKIP_DOCKER_TESTS=true (same switch as the auth integration test).
  */
 @SpringBootTest
@@ -82,6 +88,12 @@ class CompletionReviewIndexIntegrationTest {
     @Autowired
     private ReviewRepository reviewRepository;
 
+    @Autowired
+    private CompletionIndexInitializer completionIndexInitializer;
+
+    @Autowired
+    private ReviewIndexInitializer reviewIndexInitializer;
+
     @BeforeEach
     void cleanCollections() {
         // deleteAll removes documents only; the indexes stay in place
@@ -121,6 +133,36 @@ class CompletionReviewIndexIntegrationTest {
                 () -> mongoTemplate.insert(review("booking-duplicate-test")));
         assertEquals(1, reviewRepository.count());
         log.info("Duplicate bookingId rejected by reviews.bookingId_1 (DuplicateKeyException)");
+    }
+
+    @Test
+    @DisplayName("Fresh database: service_completions is created, indexed and verified when it does not exist")
+    void freshServiceCompletionsCollectionIsInitialized() {
+        mongoTemplate.dropCollection("service_completions");
+        assertFalse(mongoTemplate.collectionExists("service_completions"), "precondition: collection must not exist");
+
+        assertDoesNotThrow(() -> completionIndexInitializer.initializeIndexes());
+
+        assertTrue(mongoTemplate.collectionExists("service_completions"));
+        assertStoredUniqueBookingIdIndex("service_completions");
+        mongoTemplate.insert(completion("booking-fresh-test"));
+        assertThrows(DuplicateKeyException.class, () -> mongoTemplate.insert(completion("booking-fresh-test")));
+        log.info("Fresh collection initialization verified: service_completions created, bookingId_1 unique, duplicate rejected");
+    }
+
+    @Test
+    @DisplayName("Fresh database: reviews is created, indexed and verified when it does not exist")
+    void freshReviewsCollectionIsInitialized() {
+        mongoTemplate.dropCollection("reviews");
+        assertFalse(mongoTemplate.collectionExists("reviews"), "precondition: collection must not exist");
+
+        assertDoesNotThrow(() -> reviewIndexInitializer.initializeIndexes());
+
+        assertTrue(mongoTemplate.collectionExists("reviews"));
+        assertStoredUniqueBookingIdIndex("reviews");
+        mongoTemplate.insert(review("booking-fresh-test"));
+        assertThrows(DuplicateKeyException.class, () -> mongoTemplate.insert(review("booking-fresh-test")));
+        log.info("Fresh collection initialization verified: reviews created, bookingId_1 unique, duplicate rejected");
     }
 
     // ----------------------------------------------------------------- helpers

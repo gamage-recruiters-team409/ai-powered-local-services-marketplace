@@ -20,8 +20,8 @@ import com.mongodb.client.MongoCollection;
  * <p>The one-review-per-booking rule depends on a unique index on
  * {@code reviews.bookingId}. The stored index definition is read back from MongoDB
  * and checked (key, direction, unique, not partial/sparse) before it is reported as
- * valid. An incompatible existing index stops startup; it is never dropped or
- * replaced automatically.
+ * valid. A missing collection is created first (fresh database). An incompatible
+ * existing index stops startup; it is never dropped or replaced automatically.
  */
 @Component
 @Profile("!test")
@@ -52,6 +52,9 @@ public class ReviewIndexInitializer {
 
     private void initBookingIdUniqueIndex() {
         try {
+            // Fresh database: create the collection first so its indexes can be read safely
+            ensureCollectionExists();
+
             MongoCollection<Document> collection = mongoTemplate.getCollection(COLLECTION);
 
             // Inspect existing indexes first — never drop, only validate
@@ -94,6 +97,28 @@ public class ReviewIndexInitializer {
             throw new IllegalStateException(
                     "Startup failed: Unable to create required index '" + PROVIDER_STATUS_CREATED_INDEX + "' on "
                             + COLLECTION + ".", e);
+        }
+    }
+
+    /**
+     * Makes sure the collection exists before its indexes are read, so a fresh database
+     * never depends on listIndexes() behaviour for a missing namespace. Only creates;
+     * never drops or modifies an existing collection.
+     */
+    private void ensureCollectionExists() {
+        if (mongoTemplate.collectionExists(COLLECTION)) {
+            return;
+        }
+        try {
+            mongoTemplate.createCollection(COLLECTION);
+            log.info("Collection {} did not exist - created it before index verification", COLLECTION);
+        } catch (Exception e) {
+            // Another application instance may have created it at the same moment
+            if (!mongoTemplate.collectionExists(COLLECTION)) {
+                throw new IllegalStateException(
+                        "Startup failed: unable to create required collection '" + COLLECTION + "'.", e);
+            }
+            log.info("Collection {} was created concurrently - continuing with index verification", COLLECTION);
         }
     }
 

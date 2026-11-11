@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.stubbing.OngoingStubbing;
@@ -49,7 +51,8 @@ class CompletionIndexInitializerTest {
     @BeforeEach
     void setUp() {
         initializer = new CompletionIndexInitializer(mongoTemplate);
-        when(mongoTemplate.getCollection("service_completions")).thenReturn(collection);
+        lenient().when(mongoTemplate.getCollection("service_completions")).thenReturn(collection);
+        lenient().when(mongoTemplate.collectionExists("service_completions")).thenReturn(true);
     }
 
     @Test
@@ -149,6 +152,59 @@ class CompletionIndexInitializerTest {
 
         IllegalStateException ex = assertThrows(IllegalStateException.class, () -> initializer.initializeIndexes());
         assertTrue(ex.getMessage().contains("was not found when the stored indexes were read back"));
+    }
+
+    // ------------------------------------------------- fresh database / missing collection
+
+    @Test
+    @DisplayName("Fresh database: creates the missing service_completions collection before reading its indexes")
+    @SuppressWarnings("removal")
+    void shouldCreateMissingCollectionBeforeReadingIndexes() {
+        when(mongoTemplate.collectionExists("service_completions")).thenReturn(false);
+        when(mongoTemplate.indexOps(ServiceCompletion.class)).thenReturn(indexOps);
+        when(indexOps.ensureIndex(any())).thenReturn("bookingId_1");
+        stubListIndexes(List.of(idIndex()), List.of(idIndex(), bookingIndex(1, true)));
+
+        assertDoesNotThrow(() -> initializer.initializeIndexes());
+
+        InOrder order = inOrder(mongoTemplate, collection);
+        order.verify(mongoTemplate).createCollection("service_completions");
+        order.verify(collection, times(2)).listIndexes();
+        verify(collection, never()).dropIndex(anyString());
+    }
+
+    @Test
+    @DisplayName("Existing collection is reused (createCollection never called)")
+    void shouldNotCreateCollectionWhenItExists() {
+        stubListIndexes(List.of(idIndex(), bookingIndex(1, true)));
+
+        assertDoesNotThrow(() -> initializer.initializeIndexes());
+
+        verify(mongoTemplate, never()).createCollection(anyString());
+    }
+
+    @Test
+    @DisplayName("Continues when the collection is created concurrently by another instance")
+    void shouldContinueWhenCollectionCreatedConcurrently() {
+        when(mongoTemplate.collectionExists("service_completions")).thenReturn(false, true);
+        when(mongoTemplate.createCollection("service_completions")).thenThrow(new RuntimeException("NamespaceExists"));
+        stubListIndexes(List.of(idIndex(), bookingIndex(1, true)));
+
+        assertDoesNotThrow(() -> initializer.initializeIndexes());
+
+        verify(collection, never()).dropIndex(anyString());
+    }
+
+    @Test
+    @DisplayName("Fails startup when the missing collection cannot be created")
+    void shouldFailWhenCollectionCannotBeCreated() {
+        when(mongoTemplate.collectionExists("service_completions")).thenReturn(false, false);
+        when(mongoTemplate.createCollection("service_completions")).thenThrow(new RuntimeException("not authorized"));
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> initializer.initializeIndexes());
+        assertTrue(ex.getMessage().contains("unable to create required collection 'service_completions'"));
+        verify(collection, never()).listIndexes();
+        verify(collection, never()).dropIndex(anyString());
     }
 
     // ----------------------------------------------------------------- helpers
