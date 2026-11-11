@@ -1,6 +1,7 @@
-import mayaImg from '../../../assets/providers/maya-clean.png';
-import brightnestImg from '../../../assets/providers/brightnest.png';
-import neatLocalImg from '../../../assets/providers/neat-local.png';
+import mayaImg from '../../../assets/providers/maya-home-care.jpg';
+import brightnestImg from '../../../assets/providers/brightnest-cleaning.jpg';
+import neatLocalImg from '../../../assets/providers/neat-and-local.jpg';
+import capitalCityImg from '../../../assets/providers/capital-city-cleaners.jpg';
 
 /**
  * Approved Reference Fixtures for WP04 Search & Discovery.
@@ -13,6 +14,7 @@ export const MOCK_SEARCH_RESULTS = [
     businessName: "Maya's Home Care",
     image: mayaImg,
     isVerified: true,
+    backgroundChecked: true,
     rating: 4.9,
     reviewCount: 128,
     category: 'Standard home clean',
@@ -37,6 +39,7 @@ export const MOCK_SEARCH_RESULTS = [
     businessName: 'BrightNest Cleaning',
     image: brightnestImg,
     isVerified: true,
+    backgroundChecked: true,
     rating: 4.8,
     reviewCount: 96,
     category: 'Standard home clean',
@@ -61,6 +64,7 @@ export const MOCK_SEARCH_RESULTS = [
     businessName: 'Neat & Local',
     image: neatLocalImg,
     isVerified: true,
+    backgroundChecked: true,
     rating: 4.7,
     reviewCount: 84,
     category: 'Standard home clean',
@@ -83,8 +87,9 @@ export const MOCK_SEARCH_RESULTS = [
     id: 'prv-004',
     name: 'Capital City Cleaners',
     businessName: 'Capital City Turnaround Care',
-    image: mayaImg,
+    image: capitalCityImg,
     isVerified: false,
+    backgroundChecked: false,
     rating: 4.6,
     reviewCount: 42,
     category: 'Move-out cleaning',

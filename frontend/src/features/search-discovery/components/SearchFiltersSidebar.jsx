@@ -122,7 +122,7 @@ export function SearchFiltersSidebar({ filters = {}, onFilterChange, onReset }) 
               />
               <span>Tomorrow</span>
             </label>
-            <label className="filter-radio-label">
+            <label className="filter-radio-label filter-option-pending">
               <input
                 type="radio"
                 name="availability"
@@ -130,8 +130,11 @@ export function SearchFiltersSidebar({ filters = {}, onFilterChange, onReset }) 
                 className="filter-radio"
                 checked={filters.availability === 'custom'}
                 onChange={() => onFilterChange?.('availability', 'custom')}
+                disabled
               />
-              <span>Choose a date</span>
+              <span>
+                Choose a date <span className="filter-pending-tag">Coming soon</span>
+              </span>
             </label>
           </div>
         </div>

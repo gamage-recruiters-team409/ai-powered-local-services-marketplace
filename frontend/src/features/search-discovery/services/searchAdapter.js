@@ -1,14 +1,62 @@
 import axios from 'axios';
 import { MOCK_SEARCH_RESULTS } from '../fixtures/mockSearchResults.js';
 
-const API_BASE_URL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) || 'http://localhost:8080/api/v1';
+const API_BASE_URL =
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) ||
+  'http://localhost:8080/api/v1';
 
 /**
- * Search Adapter for WP04 Search & Discovery foundation.
- * Checks for live backend endpoint at `${API_BASE_URL}/search`.
- * Falls back to approved reference fixtures while backend integration is pending.
+ * Fixture mode is explicit and opt-in. It must never be enabled implicitly in
+ * live operation. Enable it for demos/local development with:
+ *   VITE_SEARCH_FIXTURE_MODE=true
  */
-export async function fetchSearchResults({
+export function isFixtureModeEnabled() {
+  return String(import.meta.env?.VITE_SEARCH_FIXTURE_MODE ?? '').toLowerCase() === 'true';
+}
+
+export const HIGH_RATING_THRESHOLD = 4.5;
+
+const AVAILABILITY_MATCHERS = {
+  today: (item) => /^today\b/i.test(item.nextAvailable || ''),
+  tomorrow: (item) => /^tomorrow\b/i.test(item.nextAvailable || ''),
+};
+
+const SERVICE_TYPE_KEYS = [
+  ['standardClean', 'standard'],
+  ['deepClean', 'deep'],
+  ['moveOutClean', 'moveout'],
+  ['recurringClean', 'recurring'],
+];
+
+function getActiveServiceTypes(filters = {}) {
+  return SERVICE_TYPE_KEYS.filter(([key]) => filters[key]).map(([, type]) => type);
+}
+
+function buildLiveParams({ trimmedQuery, trimmedLocation, filters, sortBy }) {
+  const availability =
+    filters.availability && filters.availability !== 'any' && filters.availability !== 'custom'
+      ? filters.availability
+      : undefined;
+
+  return {
+    q: trimmedQuery,
+    location: trimmedLocation,
+    sort: sortBy,
+    verified: filters.verifiedOnly,
+    serviceTypes: getActiveServiceTypes(filters).join(','),
+    maxHourlyRate: typeof filters.budgetMax === 'number' ? filters.budgetMax : undefined,
+    minRating: filters.highRating ? HIGH_RATING_THRESHOLD : undefined,
+    availability,
+    maxDistanceMiles: filters.distance != null ? Number(filters.distance) : undefined,
+    backgroundChecked: filters.backgroundChecked ? true : undefined,
+  };
+}
+
+/**
+ * Applies every visible sidebar filter to the fixture data so results match
+ * the controls the user can actually see and change.
+ */
+export function filterFixtureResults({
   query = '',
   location = '',
   filters = {},
@@ -16,39 +64,6 @@ export async function fetchSearchResults({
 } = {}) {
   const trimmedQuery = query.trim().toLowerCase();
   const trimmedLocation = location.trim().toLowerCase();
-
-  // Attempt live API if available
-  try {
-    const response = await axios.get(`${API_BASE_URL}/search`, {
-      params: {
-        q: trimmedQuery,
-        location: trimmedLocation,
-        sort: sortBy,
-        verified: filters.verifiedOnly,
-        serviceTypes: [
-          filters.standardClean && 'standard',
-          filters.deepClean && 'deep',
-          filters.moveOutClean && 'moveout',
-          filters.recurringClean && 'recurring',
-        ].filter(Boolean).join(','),
-      },
-      timeout: 2500,
-    });
-    if (response.data && Array.isArray(response.data.results)) {
-      return {
-        isLive: true,
-        results: response.data.results,
-        totalCount: response.data.totalCount || response.data.results.length,
-      };
-    }
-  } catch (error) {
-    console.info(
-      `[WP04 SearchAdapter] Live search endpoint (${API_BASE_URL}/search) pending (${error.message}). Serving approved reference fixtures.`,
-    );
-  }
-
-  // Brief latency simulation for realistic UI transition
-  await new Promise((resolve) => setTimeout(resolve, 200));
 
   let results = [...MOCK_SEARCH_RESULTS];
 
@@ -70,18 +85,12 @@ export async function fetchSearchResults({
   }
 
   // 3. Service Type Filter
-  const hasServiceTypeFilter =
-    filters.standardClean !== undefined ||
-    filters.deepClean !== undefined ||
-    filters.moveOutClean !== undefined ||
-    filters.recurringClean !== undefined;
+  const hasServiceTypeFilter = SERVICE_TYPE_KEYS.some(
+    ([key]) => filters[key] !== undefined,
+  );
 
   if (hasServiceTypeFilter) {
-    const activeServiceTypes = [];
-    if (filters.standardClean) activeServiceTypes.push('standard');
-    if (filters.deepClean) activeServiceTypes.push('deep');
-    if (filters.moveOutClean) activeServiceTypes.push('moveout');
-    if (filters.recurringClean) activeServiceTypes.push('recurring');
+    const activeServiceTypes = getActiveServiceTypes(filters);
 
     if (activeServiceTypes.length > 0) {
       results = results.filter((item) =>
@@ -105,10 +114,32 @@ export async function fetchSearchResults({
 
   // 6. Rating Filter (4.5 stars & above)
   if (filters.highRating) {
-    results = results.filter((item) => item.rating >= 4.8);
+    results = results.filter((item) => item.rating >= HIGH_RATING_THRESHOLD);
   }
 
-  // 7. Sorting
+  // 7. Background Checked Filter
+  if (filters.backgroundChecked) {
+    results = results.filter((item) => item.backgroundChecked === true);
+  }
+
+  // 8. Distance Filter
+  if (filters.distance != null) {
+    const maxDistance = Number(filters.distance);
+    if (Number.isFinite(maxDistance)) {
+      results = results.filter(
+        (item) =>
+          typeof item.distanceMiles !== 'number' || item.distanceMiles <= maxDistance,
+      );
+    }
+  }
+
+  // 9. Availability Filter ("custom" date is not supported yet and is disabled in the UI)
+  const availabilityMatcher = AVAILABILITY_MATCHERS[filters.availability];
+  if (availabilityMatcher) {
+    results = results.filter(availabilityMatcher);
+  }
+
+  // 10. Sorting
   if (sortBy === 'rating') {
     results.sort((a, b) => b.rating - a.rating);
   } else if (sortBy === 'price_asc') {
@@ -117,9 +148,54 @@ export async function fetchSearchResults({
     results.sort((a, b) => b.pricing.hourlyRate - a.pricing.hourlyRate);
   }
 
+  return results;
+}
+
+/**
+ * Search Adapter for WP04 Search & Discovery foundation.
+ *
+ * Two explicit modes:
+ * - Fixture mode (VITE_SEARCH_FIXTURE_MODE=true): serves clearly-labelled demo
+ *   providers and never calls the backend.
+ * - Live mode (default): calls `${API_BASE_URL}/search` and propagates genuine
+ *   failures so the page can show its error/retry state. It never falls back to
+ *   fixtures silently.
+ */
+export async function fetchSearchResults({
+  query = '',
+  location = '',
+  filters = {},
+  sortBy = 'recommended',
+} = {}) {
+  const trimmedQuery = query.trim().toLowerCase();
+  const trimmedLocation = location.trim().toLowerCase();
+
+  if (isFixtureModeEnabled()) {
+    // Brief latency simulation for realistic UI transition
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const results = filterFixtureResults({ query, location, filters, sortBy });
+    return {
+      isLive: false,
+      isFixture: true,
+      results,
+      totalCount: results.length,
+    };
+  }
+
+  const response = await axios.get(`${API_BASE_URL}/search`, {
+    params: buildLiveParams({ trimmedQuery, trimmedLocation, filters, sortBy }),
+    timeout: 2500,
+  });
+
+  const results = response?.data?.results;
+  if (!Array.isArray(results)) {
+    throw new Error('Search service returned an unexpected response.');
+  }
+
   return {
-    isLive: false,
+    isLive: true,
+    isFixture: false,
     results,
-    totalCount: results.length,
+    totalCount: response.data.totalCount ?? results.length,
   };
 }

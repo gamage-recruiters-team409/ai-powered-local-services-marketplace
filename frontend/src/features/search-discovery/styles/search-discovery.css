@@ -580,6 +580,27 @@
   margin: 0;
 }
 
+.filter-option-pending {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.filter-option-pending .filter-radio {
+  cursor: not-allowed;
+}
+
+.filter-pending-tag {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background-color: #f3f4f6;
+  color: #6b7280;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 /* Budget Slider */
 .budget-range-limits {
   display: flex;
@@ -631,6 +652,17 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+.search-demo-notice {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background-color: #fffbeb;
+  color: #92400e;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .results-cards-list {

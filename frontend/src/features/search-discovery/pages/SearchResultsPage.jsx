@@ -44,7 +44,11 @@ export function SearchResultsPage() {
   const [totalCount, setTotalCount] = useState(3);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [isFixture, setIsFixture] = useState(false);
   const [selectedProviders, setSelectedProviders] = useState([]);
+  // Incremented by every explicit Search / Retry / Reset action so the request
+  // effect runs even when the query and filters are unchanged.
+  const [searchNonce, setSearchNonce] = useState(0);
 
   // Milestone Notice Modal
   const [modalState, setModalState] = useState({
@@ -60,6 +64,8 @@ export function SearchResultsPage() {
     let isCancelled = false;
 
     async function loadData() {
+      setIsLoading(true);
+      setError(null);
       try {
         const data = await fetchSearchResults({
           query: activeQuery,
@@ -71,6 +77,7 @@ export function SearchResultsPage() {
           const items = data.results || [];
           setResults(items);
           setTotalCount(data.totalCount || items.length);
+          setIsFixture(Boolean(data.isFixture));
 
           // Seed default comparison on initial load
           setSelectedProviders((prev) => {
@@ -84,6 +91,7 @@ export function SearchResultsPage() {
       } catch (err) {
         if (!isCancelled) {
           console.error('[SearchResultsPage] Search error:', err);
+          setIsFixture(false);
           setError('Failed to fetch provider listings. Please try again.');
         }
       } finally {
@@ -98,12 +106,13 @@ export function SearchResultsPage() {
     return () => {
       isCancelled = true;
     };
-  }, [activeQuery, activeLocation, filters, sortBy]);
+  }, [activeQuery, activeLocation, filters, sortBy, searchNonce]);
 
   const handleSearchSubmit = ({ query: newQuery, location: newLocation }) => {
     setIsLoading(true);
     setActiveQuery(newQuery);
     setActiveLocation(newLocation);
+    setSearchNonce((n) => n + 1);
   };
 
   const handleFilterChange = (key, value) => {
@@ -131,6 +140,7 @@ export function SearchResultsPage() {
     setActiveLocation('Austin, TX 78701');
     setSortBy('recommended');
     setFilters(DEFAULT_FILTERS);
+    setSearchNonce((n) => n + 1);
   };
 
   const handleToggleComparison = (provider, isAdding, triggerEl) => {
@@ -216,12 +226,20 @@ export function SearchResultsPage() {
 
             {/* Right Column: Cards, States, Comparison & Pagination */}
             <section className="search-results-column" aria-label="Search results list">
+              {isFixture && (
+                <p className="search-demo-notice" role="status">
+                  Demo mode: showing sample providers while live search is not connected.
+                </p>
+              )}
+
               {error && (
                 <SearchErrorState
                   error={error}
                   onRetry={() => {
                     setIsLoading(true);
                     setActiveQuery(query);
+                    setActiveLocation(location);
+                    setSearchNonce((n) => n + 1);
                   }}
                 />
               )}

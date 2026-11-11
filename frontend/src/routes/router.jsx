@@ -12,6 +12,5 @@ export const router = createBrowserRouter([
   adminRoutes,
   // WP04 – Search & Discovery routes
   { path: '/search', element: <SearchResultsPage /> },
-  { path: '/', element: <SearchResultsPage /> },
   { path: '*', element: <NotFoundPage /> },
 ])
