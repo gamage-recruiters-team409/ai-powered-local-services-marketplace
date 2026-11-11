@@ -19,6 +19,9 @@ import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationF
 import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
+import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
+import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
+import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -29,7 +32,7 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private AuthTokenRepository authTokenRepository;
-    
+
     @MockitoBean
     private AvailabilityRuleRepository availabilityRuleRepository;
 
@@ -38,6 +41,15 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private BookingRepository bookingRepository;
+
+    @MockitoBean
+    private ProviderProfileRepository providerProfileRepository;
+
+    @MockitoBean
+    private ServiceCompletionRepository serviceCompletionRepository;
+
+    @MockitoBean
+    private ReviewRepository reviewRepository;
 
     @MockitoBean
     private MongoTemplate mongoTemplate;
