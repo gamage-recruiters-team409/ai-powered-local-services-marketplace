@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -600,8 +601,8 @@ class UserInternalServiceTest {
     void searchUsersAdminPermitted() {
         User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
         when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
-        when(mongoTemplate.count(any(Query.class), any())).thenReturn(0L);
-        when(mongoTemplate.find(any(Query.class), any())).thenReturn(List.of());
+        when(mongoTemplate.count(any(Query.class), eq(User.class))).thenReturn(0L);
+        when(mongoTemplate.find(any(Query.class), eq(User.class))).thenReturn(List.of());
 
         assertDoesNotThrow(() -> userInternalService.searchUsers("admin-1", null, null, null, PageRequest.of(0, 10)));
         assertDoesNotThrow(() -> userInternalService.searchUsers("admin-1", Set.of(Role.CUSTOMER), null, null, PageRequest.of(0, 10)));
@@ -612,8 +613,8 @@ class UserInternalServiceTest {
     void searchUsersSuperAdminPermitted() {
         User superAdmin = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
         when(userRepository.findById("super-1")).thenReturn(Optional.of(superAdmin));
-        when(mongoTemplate.count(any(Query.class), any())).thenReturn(0L);
-        when(mongoTemplate.find(any(Query.class), any())).thenReturn(List.of());
+        when(mongoTemplate.count(any(Query.class), eq(User.class))).thenReturn(0L);
+        when(mongoTemplate.find(any(Query.class), eq(User.class))).thenReturn(List.of());
 
         assertDoesNotThrow(() -> userInternalService.searchUsers("super-1", null, null, null, PageRequest.of(0, 10)));
         assertDoesNotThrow(() -> userInternalService.searchUsers("super-1", Set.of(Role.SUPER_ADMIN, Role.MODERATOR), null, null, PageRequest.of(0, 10)));
