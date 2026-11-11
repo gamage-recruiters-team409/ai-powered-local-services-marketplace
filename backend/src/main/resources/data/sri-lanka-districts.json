@@ -1,0 +1,40 @@
+{
+  "provinces": [
+    {
+      "name": "Western",
+      "districts": ["Colombo", "Gampaha", "Kalutara"]
+    },
+    {
+      "name": "Central",
+      "districts": ["Kandy", "Matale", "Nuwara Eliya"]
+    },
+    {
+      "name": "Southern",
+      "districts": ["Galle", "Matara", "Hambantota"]
+    },
+    {
+      "name": "Northern",
+      "districts": ["Jaffna", "Kilinochchi", "Mannar", "Vavuniya", "Mullaitivu"]
+    },
+    {
+      "name": "Eastern",
+      "districts": ["Batticaloa", "Ampara", "Trincomalee"]
+    },
+    {
+      "name": "North Western",
+      "districts": ["Kurunegala", "Puttalam"]
+    },
+    {
+      "name": "North Central",
+      "districts": ["Anuradhapura", "Polonnaruwa"]
+    },
+    {
+      "name": "Uva",
+      "districts": ["Badulla", "Monaragala"]
+    },
+    {
+      "name": "Sabaragamuwa",
+      "districts": ["Ratnapura", "Kegalle"]
+    }
+  ]
+}
