@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
+import org.springframework.security.access.AccessDeniedException;
 
 /**
  * Validates customer access to bookings used by the payment module.
@@ -51,7 +52,7 @@ public class PaymentBookingAuthorizationService {
      * @param customerId authenticated customer's user identifier
      * @return verified booking participants
      * @throws IllegalArgumentException if an identifier is missing
-     * @throws SecurityException        if the customer does not own the booking
+     * @throws AccessDeniedException    if the customer does not own the booking
      */
     public BookingParticipants requireCustomerOwnership(
             String bookingId,
@@ -72,7 +73,7 @@ public class PaymentBookingAuthorizationService {
         }
 
         if (!validatedCustomerId.equals(participants.customerId())) {
-            throw new SecurityException(
+            throw new AccessDeniedException(
                     "Customer is not authorized to access this booking");
         }
 

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
+import org.springframework.security.access.AccessDeniedException;
 
 /**
  * Unit tests for payment-related booking authorization.
@@ -83,8 +84,8 @@ class PaymentBookingAuthorizationServiceTest {
                 .thenReturn(
                         booking("another-customer", BookingStatus.CONFIRMED));
 
-        SecurityException exception = assertThrows(
-                SecurityException.class,
+        AccessDeniedException exception = assertThrows(
+                AccessDeniedException.class,
                 () -> authorizationService.requireCustomerOwnership(
                         BOOKING_ID,
                         CUSTOMER_ID));
@@ -226,7 +227,7 @@ class PaymentBookingAuthorizationServiceTest {
                                 BookingStatus.AWAITING_PAYMENT));
 
         assertThrows(
-                SecurityException.class,
+                AccessDeniedException.class,
                 () -> authorizationService.requirePaymentInitiationStatus(
                         BOOKING_ID,
                         CUSTOMER_ID));
