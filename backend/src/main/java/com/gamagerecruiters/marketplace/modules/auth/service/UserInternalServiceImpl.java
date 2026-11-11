@@ -1,8 +1,19 @@
 package com.gamagerecruiters.marketplace.modules.auth.service;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -15,6 +26,7 @@ import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundExcepti
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
+import com.gamagerecruiters.marketplace.modules.auth.dto.AdminUserSummary;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.AdminRolePolicy;
@@ -30,15 +42,26 @@ public class UserInternalServiceImpl implements UserInternalService {
     private final UserRepository userRepository;
     private final AuthTokenRepository authTokenRepository;
     private final PasswordEncoder passwordEncoder;
+    private final MongoTemplate mongoTemplate;
 
     public UserInternalServiceImpl(
             UserRepository userRepository,
             AuthTokenRepository authTokenRepository,
             PasswordEncoder passwordEncoder
     ) {
+        this(userRepository, authTokenRepository, passwordEncoder, null);
+    }
+
+    public UserInternalServiceImpl(
+            UserRepository userRepository,
+            AuthTokenRepository authTokenRepository,
+            PasswordEncoder passwordEncoder,
+            MongoTemplate mongoTemplate
+    ) {
         this.userRepository = userRepository;
         this.authTokenRepository = authTokenRepository;
         this.passwordEncoder = passwordEncoder;
+        this.mongoTemplate = mongoTemplate;
     }
 
     @Override
@@ -171,5 +194,95 @@ public class UserInternalServiceImpl implements UserInternalService {
         user.setStatus(UserStatus.DEACTIVATED);
         userRepository.save(user);
         authTokenRepository.revokeAllActiveTokensByUserId(userId);
+    }
+
+    @Override
+    public Page<AdminUserSummary> searchUsers(Set<Role> roles, UserStatus status, String nameOrEmail, Pageable pageable) {
+        if (pageable == null || pageable.isUnpaged()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PAGINATION", "Pagination is required; unpaged requests are not permitted");
+        }
+
+        List<Criteria> criteriaList = new ArrayList<>();
+
+        if (roles != null && !roles.isEmpty()) {
+            criteriaList.add(Criteria.where("role").in(roles));
+        }
+
+        if (status != null) {
+            criteriaList.add(Criteria.where("status").is(status));
+        }
+
+        if (nameOrEmail != null) {
+            String trimmed = nameOrEmail.trim();
+            if (!trimmed.isEmpty()) {
+                String escaped = Pattern.quote(trimmed);
+                criteriaList.add(new Criteria().orOperator(
+                        Criteria.where("name").regex(escaped, "i"),
+                        Criteria.where("email").regex(escaped, "i")
+                ));
+            }
+        }
+
+        Query query = new Query();
+        if (!criteriaList.isEmpty()) {
+            query.addCriteria(new Criteria().andOperator(criteriaList.toArray(new Criteria[0])));
+        }
+
+        // Exact same criteria used for total count
+        long total = mongoTemplate.count(query, User.class);
+
+        // Cap page size at 100, minimum 1
+        int pageSize = Math.min(Math.max(1, pageable.getPageSize()), 100);
+        int pageNumber = Math.max(0, pageable.getPageNumber());
+
+        // Sort whitelist: only createdAt, fullName (maps to stored field "name"), or email
+        Sort sanitizedSort = null;
+        if (pageable.getSort().isSorted()) {
+            List<Sort.Order> validOrders = new ArrayList<>();
+            boolean hasInvalid = false;
+            for (Sort.Order order : pageable.getSort()) {
+                String prop = order.getProperty();
+                if ("fullName".equalsIgnoreCase(prop) || "name".equalsIgnoreCase(prop)) {
+                    validOrders.add(new Sort.Order(order.getDirection(), "name"));
+                } else if ("email".equalsIgnoreCase(prop)) {
+                    validOrders.add(new Sort.Order(order.getDirection(), "email"));
+                } else if ("createdAt".equalsIgnoreCase(prop)) {
+                    validOrders.add(new Sort.Order(order.getDirection(), "createdAt"));
+                } else {
+                    hasInvalid = true;
+                    break;
+                }
+            }
+            if (!hasInvalid && !validOrders.isEmpty()) {
+                sanitizedSort = Sort.by(validOrders);
+            }
+        }
+
+        if (sanitizedSort == null) {
+            sanitizedSort = Sort.by(Sort.Direction.DESC, "createdAt");
+        }
+
+        Pageable sanitizedPageable = PageRequest.of(pageNumber, pageSize, sanitizedSort);
+        query.with(sanitizedPageable);
+
+        List<User> users = mongoTemplate.find(query, User.class);
+        List<AdminUserSummary> summaries = users.stream().map(AdminUserSummary::fromUser).toList();
+
+        return new PageImpl<>(summaries, sanitizedPageable, total);
+    }
+
+    @Override
+    public long countByRoleAndStatus(Role role, UserStatus status) {
+        if (role != null && status != null) {
+            return userRepository.countByRoleAndStatus(role, status);
+        }
+        Query query = new Query();
+        if (role != null) {
+            query.addCriteria(Criteria.where("role").is(role));
+        }
+        if (status != null) {
+            query.addCriteria(Criteria.where("status").is(status));
+        }
+        return mongoTemplate.count(query, User.class);
     }
 }

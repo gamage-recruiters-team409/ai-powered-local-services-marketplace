@@ -1,8 +1,14 @@
 package com.gamagerecruiters.marketplace.modules.auth.service;
 
+import java.util.Set;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
+import com.gamagerecruiters.marketplace.modules.auth.dto.AdminUserSummary;
 
 /**
  * Cross-module user management interface.
@@ -23,4 +29,8 @@ public interface UserInternalService {
     void verifyPassword(String userId, String rawPassword);
 
     void deactivateOwnAccount(String userId);
+
+    Page<AdminUserSummary> searchUsers(Set<Role> roles, UserStatus status, String nameOrEmail, Pageable pageable);
+
+    long countByRoleAndStatus(Role role, UserStatus status);
 }
