@@ -21,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamagerecruiters.marketplace.common.exception.GlobalExceptionHandler;
 import com.gamagerecruiters.marketplace.config.SecurityConfig;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.dto.ChangePasswordRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.LoginRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterRequest;
 import com.gamagerecruiters.marketplace.modules.auth.security.CustomAccessDeniedHandler;
@@ -29,6 +30,7 @@ import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationF
 import com.gamagerecruiters.marketplace.modules.auth.service.AuthService;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
+import org.springframework.security.test.context.support.WithMockUser;
 
 @WebMvcTest(AuthController.class)
 @Import({
@@ -154,5 +156,45 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.status").value(400))
                 .andExpect(jsonPath("$.error").value("MALFORMED_REQUEST"))
                 .andExpect(jsonPath("$.message").value("Malformed or unreadable request body"));
+    }
+
+    @Test
+    @WithMockUser(username = "u-123")
+    @DisplayName("POST /api/v1/auth/change-password with valid payload returns 204 No Content")
+    void shouldChangePasswordSuccessfully() throws Exception {
+        ChangePasswordRequest request = new ChangePasswordRequest("OldPass123", "NewPass123");
+
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @WithMockUser(username = "u-123")
+    @DisplayName("POST /api/v1/auth/change-password with weak password returns 400 VALIDATION_FAILED")
+    void shouldRejectWeakNewPassword() throws Exception {
+        ChangePasswordRequest request = new ChangePasswordRequest("OldPass123", "weak");
+
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+    }
+
+    @Test
+    @WithMockUser(username = "u-123")
+    @DisplayName("POST /api/v1/auth/change-password with blank current password returns 400 VALIDATION_FAILED")
+    void shouldRejectBlankCurrentPassword() throws Exception {
+        ChangePasswordRequest request = new ChangePasswordRequest("", "NewPass123");
+
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
     }
 }

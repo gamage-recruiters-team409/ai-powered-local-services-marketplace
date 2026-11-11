@@ -1,7 +1,10 @@
 package com.gamagerecruiters.marketplace.modules.auth.security;
 
 import java.io.IOException;
+import java.util.Set;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -10,6 +13,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.gamagerecruiters.marketplace.common.dto.ErrorResponse;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
@@ -27,18 +33,35 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
 
+    private static final Set<String> ALLOWED_PASSWORD_CHANGE_PATHS = Set.of(
+            "/api/v1/auth/change-password",
+            "/api/v1/auth/logout",
+            "/api/v1/auth/refresh"
+    );
+
     private final TokenService tokenService;
     private final UserInternalService userInternalService;
     private final JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
+    private final ObjectMapper objectMapper;
 
     public JwtAuthenticationFilter(
             TokenService tokenService,
             UserInternalService userInternalService,
             JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint
     ) {
+        this(tokenService, userInternalService, jwtAuthenticationEntryPoint, new ObjectMapper().registerModule(new JavaTimeModule()));
+    }
+
+    public JwtAuthenticationFilter(
+            TokenService tokenService,
+            UserInternalService userInternalService,
+            JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint,
+            ObjectMapper objectMapper
+    ) {
         this.tokenService = tokenService;
         this.userInternalService = userInternalService;
         this.jwtAuthenticationEntryPoint = jwtAuthenticationEntryPoint;
+        this.objectMapper = objectMapper != null ? objectMapper : new ObjectMapper().registerModule(new JavaTimeModule());
     }
 
     @Override
@@ -92,6 +115,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     return;
                 }
 
+                // Reject if user must change password and request is not on the allow-list
+                if (user.isMustChangePassword() && !isAllowedDuringPasswordChange(request)) {
+                    response.setStatus(HttpStatus.FORBIDDEN.value());
+                    response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                    ErrorResponse errorResponse = new ErrorResponse(
+                            HttpStatus.FORBIDDEN.value(),
+                            "PASSWORD_CHANGE_REQUIRED",
+                            "Password change required before accessing this resource",
+                            request.getRequestURI()
+                    );
+                    objectMapper.writeValue(response.getOutputStream(), errorResponse);
+                    return;
+                }
+
                 // Build principal using current database role and state
                 UserPrincipal principal = new UserPrincipal(user.getId(), user.getEmail(), user.getRole());
                 UsernamePasswordAuthenticationToken authentication =
@@ -118,5 +155,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return bearerToken.substring(BEARER_PREFIX.length()).trim();
         }
         return null;
+    }
+
+    private boolean isAllowedDuringPasswordChange(HttpServletRequest request) {
+        if (!"POST".equalsIgnoreCase(request.getMethod())) {
+            return false;
+        }
+        String uri = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        String path = (StringUtils.hasText(contextPath) && uri.startsWith(contextPath))
+                ? uri.substring(contextPath.length())
+                : uri;
+        return ALLOWED_PASSWORD_CHANGE_PATHS.contains(path);
     }
 }

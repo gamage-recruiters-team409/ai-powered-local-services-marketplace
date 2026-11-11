@@ -131,6 +131,7 @@ public class UserInternalServiceImpl implements UserInternalService {
         admin.setEmailVerified(true);
         admin.setFailedLoginCount(0);
         admin.setCreatedAt(Instant.now());
+        admin.setMustChangePassword(true);
 
         return userRepository.save(admin);
     }
@@ -173,6 +174,7 @@ public class UserInternalServiceImpl implements UserInternalService {
         }
 
         user.setPasswordHash(passwordEncoder.encode(newPassword));
+        user.setMustChangePassword(false);
         userRepository.save(user);
         authTokenRepository.revokeAllActiveTokensByUserId(userId);
     }

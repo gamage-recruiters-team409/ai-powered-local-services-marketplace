@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.auth.service;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -228,6 +229,7 @@ class UserInternalServiceTest {
         assertNull(admin1.getPhone(), "Phone must be absent/null for admin accounts");
         assertEquals(Role.ADMIN, admin1.getRole());
         assertEquals(UserStatus.ACTIVE, admin1.getStatus());
+        assertTrue(admin1.isMustChangePassword(), "Admin created via createAdminAccount must have mustChangePassword=true");
 
         // Admin 2: Support Admin
         User admin2 = userInternalService.createAdminAccount("Admin Two", "admin2@marketplace.local", "AdminPass2", Role.SUPPORT_ADMIN);
@@ -334,11 +336,12 @@ class UserInternalServiceTest {
     }
 
     @Test
-    @DisplayName("changePassword: Valid current and new password should update hash and revoke tokens")
+    @DisplayName("changePassword: Valid current and new password should update hash, set mustChangePassword=false and revoke tokens")
     void shouldChangePasswordAndRevokeTokens() {
         User user = new User();
         user.setId("u-1");
         user.setPasswordHash("hashed-old-pass");
+        user.setMustChangePassword(true);
 
         when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("OldPass123!", "hashed-old-pass")).thenReturn(true);
@@ -348,8 +351,16 @@ class UserInternalServiceTest {
         userInternalService.changePassword("u-1", "OldPass123!", "NewPass123!");
 
         assertEquals("hashed-new-pass", user.getPasswordHash());
+        assertFalse(user.isMustChangePassword(), "mustChangePassword must be reset to false after successful change");
         verify(userRepository).save(user);
         verify(authTokenRepository).revokeAllActiveTokensByUserId("u-1");
+    }
+
+    @Test
+    @DisplayName("Legacy user document without mustChangePassword field defaults safely to false")
+    void shouldDefaultMustChangePasswordToFalseForLegacyUser() {
+        User legacyUser = new User();
+        assertFalse(legacyUser.isMustChangePassword(), "Default mustChangePassword for legacy user must be false");
     }
 
     @Test
