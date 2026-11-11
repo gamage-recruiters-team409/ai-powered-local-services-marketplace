@@ -21,9 +21,11 @@ public class CreateProviderProfileRequest {
     private String bio;
 
     @NotBlank(message = "District is required")
+    @Size(max = 100, message = "District must not exceed 100 characters")
     private String district;
 
     @NotBlank(message = "City is required")
+    @Size(max = 100, message = "City must not exceed 100 characters")
     private String city;
 
     @Min(value = 0, message = "Experience years cannot be negative")
