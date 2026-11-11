@@ -176,6 +176,56 @@ class BookingIndexInitializerTest {
     }
 
     @Test
+    @DisplayName("Fails when ref index exists as unique but sparse (never drops it)")
+    void failsWhenRefIndexIsUniqueSparse() {
+        Document uniqueSparse = new Document("v", 2)
+                .append("key", new Document("ref", 1)).append("name", "ref_1")
+                .append("unique", true).append("sparse", true);
+        when(mongoTemplate.getCollection("bookings")).thenReturn(bookingsCollection);
+        ListIndexesIterable<Document> existing = indexes(ID_INDEX, uniqueSparse);
+        when(bookingsCollection.listIndexes()).thenReturn(existing);
+
+        assertThatThrownBy(() -> initializer.ensureIndex("bookings", List.of("ref"), "ref_1", true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Incompatible index")
+                .hasMessageContaining("not sparse")
+                .hasMessageContaining("Manual migration required");
+
+        verify(bookingsCollection, never()).createIndex(any(Bson.class), any(IndexOptions.class));
+        verify(bookingsCollection, never()).dropIndex(anyString());
+        verify(bookingsCollection, never()).dropIndex(any(Bson.class));
+    }
+
+    @Test
+    @DisplayName("Fails when sparse is stored as the number 1 instead of true")
+    void failsWhenRefIndexSparseIsNumeric() {
+        Document uniqueSparseNumeric = new Document("v", 2)
+                .append("key", new Document("ref", 1)).append("name", "ref_1")
+                .append("unique", true).append("sparse", 1);
+        when(mongoTemplate.getCollection("bookings")).thenReturn(bookingsCollection);
+        ListIndexesIterable<Document> existing = indexes(ID_INDEX, uniqueSparseNumeric);
+        when(bookingsCollection.listIndexes()).thenReturn(existing);
+
+        assertThatThrownBy(() -> initializer.ensureIndex("bookings", List.of("ref"), "ref_1", true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Incompatible index");
+    }
+
+    @Test
+    @DisplayName("Accepts a unique ref index that explicitly has sparse: false")
+    void acceptsRefIndexWithSparseFalse() {
+        Document uniqueNotSparse = new Document("v", 2)
+                .append("key", new Document("ref", 1)).append("name", "ref_1")
+                .append("unique", true).append("sparse", false);
+        when(mongoTemplate.getCollection("bookings")).thenReturn(bookingsCollection);
+        ListIndexesIterable<Document> existing = indexes(ID_INDEX, uniqueNotSparse);
+        when(bookingsCollection.listIndexes()).thenReturn(existing);
+
+        assertThatCode(() -> initializer.ensureIndex("bookings", List.of("ref"), "ref_1", true))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     @DisplayName("Fails when the index is still missing after creation")
     void failsWhenMissingAfterCreation() {
         when(mongoTemplate.getCollection("bookings")).thenReturn(bookingsCollection);

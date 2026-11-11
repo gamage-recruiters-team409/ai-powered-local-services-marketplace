@@ -12,6 +12,10 @@ public interface BookingFacade {
      * Returns true if the customer has any booking in
      * PENDING_PROVIDER, AWAITING_PAYMENT, CONFIRMED, IN_PROGRESS, COMPLETION_PENDING or DISPUTED.
      * Used by customer account deactivation (FR-CUST-006).
+     *
+     * <p>Integration note: the customer module checks open bookings through its own
+     * {@code OpenBookingsChecker} interface. The customer module owner adds a small adapter in the
+     * customer module that delegates to this method, after this facade is merged into develop.
      */
     boolean hasOpenBookingsForCustomer(String customerId);
 

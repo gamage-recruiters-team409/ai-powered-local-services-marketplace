@@ -128,6 +128,8 @@ class BookingMongoIntegrationTest {
 
         assertThat(new ArrayList<>(ref.get("key", Document.class).keySet())).containsExactly("ref");
         assertThat(ref.getBoolean("unique")).isTrue();
+        assertThat(ref.getBoolean("sparse", false)).isFalse();
+        assertThat(ref.containsKey("partialFilterExpression")).isFalse();
         assertThat(new ArrayList<>(providerSlot.get("key", Document.class).keySet()))
                 .containsExactly("providerId", "slotStart");
         assertThat(providerSlot.getBoolean("unique", false)).isFalse();
@@ -174,6 +176,7 @@ class BookingMongoIntegrationTest {
         second.setRef("BK-DUPLICATE-1");
 
         assertThatThrownBy(() -> bookingRepository.save(second)).isInstanceOf(DuplicateKeyException.class);
+        log.info("Duplicate booking reference BK-DUPLICATE-1 rejected by unique index ref_1");
     }
 
     @Test

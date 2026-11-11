@@ -21,8 +21,8 @@ import com.mongodb.client.model.Indexes;
  * unique {@code ref}, and compound {@code (providerId, slotStart)} and {@code (customerId, status)}.
  *
  * <p>Creates the collection first on a fresh database, reads the real index definitions from
- * MongoDB, checks key fields, order, direction and the unique flag, and fails startup on an
- * incompatible index. Existing indexes are never dropped automatically.
+ * MongoDB, checks key fields, order, direction, the unique flag, and that the index is neither
+ * partial nor sparse, and fails startup on an incompatible index. Existing indexes are never dropped automatically.
  */
 @Component
 @Profile("!test")
@@ -75,7 +75,11 @@ public class BookingIndexInitializer {
                 }
             }
 
-            if (isUniqueTrue(existing) != unique || existing.containsKey("partialFilterExpression")) {
+            // A partial or sparse index skips documents without the field, so a unique one would
+            // allow many bookings without a ref. Required indexes must cover every document.
+            if (isUniqueTrue(existing) != unique
+                    || existing.containsKey("partialFilterExpression")
+                    || isSparseTrue(existing)) {
                 throw incompatible(collectionName, fields, unique, existing);
             }
 
@@ -153,11 +157,22 @@ public class BookingIndexInitializer {
         return false;
     }
 
+    private boolean isSparseTrue(Document index) {
+        Object value = index.get("sparse");
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        if (value instanceof Number n) {
+            return n.intValue() == 1;
+        }
+        return false;
+    }
+
     private IllegalStateException incompatible(String collectionName, List<String> fields, boolean unique,
                                                Document found) {
         return new IllegalStateException("Incompatible index '" + found.getString("name") + "' detected on "
                 + collectionName + ". Expected " + (unique ? "a unique" : "a non-unique") + " ascending index on "
-                + fields + " (no partial filter), but found " + found.toJson() + ". "
+                + fields + " (no partial filter, not sparse), but found " + found.toJson() + ". "
                 + "Automatic drop is disabled for safety. Manual migration required.");
     }
 }
