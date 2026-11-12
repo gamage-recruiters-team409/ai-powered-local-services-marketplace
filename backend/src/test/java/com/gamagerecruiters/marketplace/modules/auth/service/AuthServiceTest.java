@@ -239,6 +239,33 @@ class AuthServiceTest {
         assertEquals(900L, response.expiresIn());
         assertEquals("u-1", response.user().id());
         assertEquals("user@marketplace.local", response.user().email());
+        assertFalse(response.mustChangePassword(), "mustChangePassword must be false by default");
+    }
+
+    @Test
+    @DisplayName("Should include mustChangePassword=true in login response when flag is set on user")
+    void shouldIncludeMustChangePasswordTrueInLoginResponse() {
+        LoginRequest request = new LoginRequest("admin@marketplace.local", "CorrectPass1");
+        User user = new User();
+        user.setId("u-admin");
+        user.setEmail("admin@marketplace.local");
+        user.setPasswordHash("hashed-pw");
+        user.setRole(Role.ADMIN);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setMustChangePassword(true);
+
+        when(userRepository.findByEmail("admin@marketplace.local")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("CorrectPass1", "hashed-pw")).thenReturn(true);
+        when(tokenService.generateAccessToken("u-admin", "admin@marketplace.local", Role.ADMIN)).thenReturn("jwt.token.here");
+        when(tokenService.generateRefreshToken()).thenReturn("opaque-refresh-token");
+        when(tokenService.hashToken("opaque-refresh-token")).thenReturn("hashed-refresh-token");
+        when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
+        when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
+
+        AuthResponse response = authService.login(request);
+
+        assertNotNull(response);
+        assertTrue(response.mustChangePassword(), "Login response must expose mustChangePassword=true");
     }
 
     @Test

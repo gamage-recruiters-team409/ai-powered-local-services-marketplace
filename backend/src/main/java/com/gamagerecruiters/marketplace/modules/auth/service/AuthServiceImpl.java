@@ -323,7 +323,8 @@ public class AuthServiceImpl implements AuthService {
                 accessToken,
                 rawRefreshToken,
                 tokenService.getAccessTokenExpirationSeconds(),
-                summary
+                summary,
+                user.isMustChangePassword()
         );
     }
 }
