@@ -64,18 +64,23 @@ public class AdminAuditLogService {
     }
 
     public void markSuccess(String auditLogId) {
-        completeOnce(auditLogId, AuditOutcome.SUCCESS, null);
+        completeOnce(auditLogId, AuditOutcome.SUCCESS, null, null);
+    }
+
+    /** SUCCESS for an account creation: also records the id of the account that was created. */
+    public void markCreated(String auditLogId, String createdUserId) {
+        completeOnce(auditLogId, AuditOutcome.SUCCESS, null, createdUserId);
     }
 
     public void markFailed(String auditLogId, String failureCode) {
-        completeOnce(auditLogId, AuditOutcome.FAILED, failureCode);
+        completeOnce(auditLogId, AuditOutcome.FAILED, failureCode, null);
     }
 
     /**
      * Sets the outcome only while the record is still PENDING (atomic conditional update), so a record
      * can be completed once and never changed again.
      */
-    private void completeOnce(String auditLogId, AuditOutcome outcome, String failureCode) {
+    private void completeOnce(String auditLogId, AuditOutcome outcome, String failureCode, String targetUserId) {
         Query stillPending = Query.query(Criteria.where(AdminAuditLog.FIELD_ID).is(auditLogId)
                 .and(AdminAuditLog.FIELD_OUTCOME).is(AuditOutcome.PENDING));
         Update update = new Update()
@@ -83,6 +88,9 @@ public class AdminAuditLogService {
                 .set(AdminAuditLog.FIELD_COMPLETED_AT, clock.instant());
         if (failureCode != null) {
             update.set(AdminAuditLog.FIELD_FAILURE_CODE, failureCode);
+        }
+        if (targetUserId != null) {
+            update.set(AdminAuditLog.FIELD_TARGET_USER_ID, targetUserId);
         }
         long modified = mongoTemplate.updateFirst(stillPending, update, AdminAuditLog.class).getModifiedCount();
         if (modified != 1) {

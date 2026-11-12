@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import com.gamagerecruiters.marketplace.common.dto.ErrorResponse;
+import com.gamagerecruiters.marketplace.modules.admin.service.AdminErrors;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -27,7 +28,7 @@ public class AdminExceptionHandler {
     ) {
         ErrorResponse response = new ErrorResponse(
                 HttpStatus.BAD_REQUEST.value(),
-                "INVALID_PARAMETER",
+                AdminErrors.INVALID_PARAMETER,
                 "Invalid value for parameter '" + ex.getName() + "'",
                 request.getRequestURI()
         );

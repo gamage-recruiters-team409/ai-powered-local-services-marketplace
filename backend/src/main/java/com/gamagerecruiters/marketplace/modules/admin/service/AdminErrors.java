@@ -8,11 +8,10 @@ import com.gamagerecruiters.marketplace.common.exception.ApiException;
 /**
  * The ONE place for admin-module error codes and for reading error codes coming from the auth module.
  *
- * <p>Agreed status codes: 403 for data-independent rules (self status change), 409 only for the last
- * active SUPER_ADMIN, 400 for disallowed target statuses and validation. Errors thrown by the auth
- * module are never mapped by message text: they are re-thrown unchanged, so the response keeps the
- * auth module's own status and "error" code. When the auth module's codes change (for example a 409 for
- * the last active SUPER_ADMIN), nothing here needs to change.</p>
+ * <p>Errors thrown by the auth module are never mapped by message text: they are re-thrown unchanged, so
+ * the response keeps the auth module's own status and "error" code (for example 403 CANNOT_MODIFY_SELF,
+ * ROLE_HIERARCHY_VIOLATION, ACTOR_ACCOUNT_INACTIVE, ACCOUNT_DEACTIVATED, 409 LAST_ACTIVE_SUPER_ADMIN,
+ * 409 EMAIL_ALREADY_EXISTS). The codes below are the admin module's own.</p>
  */
 public final class AdminErrors {
 
@@ -22,17 +21,20 @@ public final class AdminErrors {
     /** 400: the account already has the requested status. */
     public static final String STATUS_UNCHANGED = "STATUS_UNCHANGED";
 
-    /** 400: reason missing or outside 10..500 characters after trimming. */
-    public static final String INVALID_REASON = "INVALID_REASON";
+    /** 400: a request value failed validation (same code as Bean Validation failures). */
+    public static final String VALIDATION_FAILED = "VALIDATION_FAILED";
 
-    /** 403: an admin tried to change their own status. */
-    public static final String SELF_STATUS_CHANGE = "SELF_STATUS_CHANGE";
+    /** 400: an admin account can only be created with ADMIN, SUPPORT_ADMIN, MODERATOR or FINANCE_ADMIN. */
+    public static final String ROLE_NOT_ALLOWED = "ROLE_NOT_ALLOWED";
 
     /** 404: the user exists but is not an admin account (customer/provider management is a separate task). */
     public static final String ADMIN_ACCOUNT_NOT_FOUND = "ADMIN_ACCOUNT_NOT_FOUND";
 
-    /** 400: invalid audit-log filter or paging parameter. */
+    /** 400: invalid filter value (unknown role/status/action, bad date, text too long). */
     public static final String INVALID_FILTER = "INVALID_FILTER";
+
+    /** 400: invalid paging or sort parameter, or a parameter of the wrong type. */
+    public static final String INVALID_PARAMETER = "INVALID_PARAMETER";
 
     /** Audit failure code for an AccessDeniedException thrown by the auth module. */
     static final String ACCESS_DENIED = "ACCESS_DENIED";
@@ -56,10 +58,6 @@ public final class AdminErrors {
 
     static ApiException badRequest(String code, String message) {
         return new ApiException(HttpStatus.BAD_REQUEST, code, message);
-    }
-
-    static ApiException forbidden(String code, String message) {
-        return new ApiException(HttpStatus.FORBIDDEN, code, message);
     }
 
     static ApiException notFound(String code, String message) {

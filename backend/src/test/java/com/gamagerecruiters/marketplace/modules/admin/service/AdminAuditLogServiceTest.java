@@ -112,6 +112,24 @@ class AdminAuditLogServiceTest {
     }
 
     @Test
+    @DisplayName("markCreated sets SUCCESS and the created account id, only while PENDING")
+    void markCreatedSetsTargetId() {
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(AdminAuditLog.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+
+        service.markCreated("audit-1", "new-admin-1");
+
+        ArgumentCaptor<Query> query = ArgumentCaptor.forClass(Query.class);
+        ArgumentCaptor<Update> update = ArgumentCaptor.forClass(Update.class);
+        verify(mongoTemplate).updateFirst(query.capture(), update.capture(), eq(AdminAuditLog.class));
+        assertThat(query.getValue().getQueryObject().get("outcome")).isEqualTo(AuditOutcome.PENDING);
+        Document set = (Document) update.getValue().getUpdateObject().get("$set");
+        assertThat(set.keySet()).containsExactlyInAnyOrder("outcome", "completedAt", "targetUserId");
+        assertThat(set.get("outcome")).isEqualTo(AuditOutcome.SUCCESS);
+        assertThat(set.get("targetUserId")).isEqualTo("new-admin-1");
+    }
+
+    @Test
     @DisplayName("search: applies every filter, newest first, and maps to DTOs")
     void searchAppliesFilters() {
         when(mongoTemplate.find(any(Query.class), eq(AdminAuditLog.class))).thenReturn(List.of(pending()));
