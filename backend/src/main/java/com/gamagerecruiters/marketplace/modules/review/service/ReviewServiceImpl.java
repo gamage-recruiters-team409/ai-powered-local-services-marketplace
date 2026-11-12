@@ -37,8 +37,12 @@ import com.gamagerecruiters.marketplace.modules.review.repository.ReviewReposito
  * Review rules (agreed for WP08):
  * - only the booking's customer can review, only when the booking is COMPLETED;
  * - within 7 days of completion; one review per booking (unique bookingId index);
+ *   if the completion time cannot be verified, the review is rejected (never unlimited);
  * - a new review is PUBLISHED straight away (moderation/reports can remove it later, WP09);
  * - the customer can edit within 48 hours, and not after the provider has replied;
+ *   a review without a posting time cannot be edited;
+ * - edits and replies are atomic conditional updates (ReviewAtomicUpdates), so concurrent
+ *   requests cannot overwrite each other; a lost race gets 409 instead of a silent overwrite;
  * - the provider has one reply per published review and can edit it;
  * - public lists and the rating summary use PUBLISHED reviews only, newest first.
  */
@@ -55,20 +59,24 @@ public class ReviewServiceImpl implements ReviewService {
     private final BookingFacade bookingFacade;
     private final CompletionLookup completionLookup;
     private final ReviewRatingQuery ratingQuery;
+    private final ReviewAtomicUpdates reviewUpdates;
     private final Clock clock;
 
     @Autowired
     public ReviewServiceImpl(ReviewRepository reviewRepository, BookingFacade bookingFacade,
-                             CompletionLookup completionLookup, ReviewRatingQuery ratingQuery) {
-        this(reviewRepository, bookingFacade, completionLookup, ratingQuery, Clock.systemUTC());
+                             CompletionLookup completionLookup, ReviewRatingQuery ratingQuery,
+                             ReviewAtomicUpdates reviewUpdates) {
+        this(reviewRepository, bookingFacade, completionLookup, ratingQuery, reviewUpdates, Clock.systemUTC());
     }
 
     ReviewServiceImpl(ReviewRepository reviewRepository, BookingFacade bookingFacade,
-                      CompletionLookup completionLookup, ReviewRatingQuery ratingQuery, Clock clock) {
+                      CompletionLookup completionLookup, ReviewRatingQuery ratingQuery,
+                      ReviewAtomicUpdates reviewUpdates, Clock clock) {
         this.reviewRepository = reviewRepository;
         this.bookingFacade = bookingFacade;
         this.completionLookup = completionLookup;
         this.ratingQuery = ratingQuery;
+        this.reviewUpdates = reviewUpdates;
         this.clock = clock;
     }
 
@@ -83,8 +91,11 @@ public class ReviewServiceImpl implements ReviewService {
         }
 
         Instant now = clock.instant();
-        Optional<Instant> completedAt = completionLookup.findConfirmedAt(booking.bookingId());
-        if (completedAt.isPresent() && now.isAfter(completedAt.get().plus(REVIEW_WINDOW))) {
+        // No trustworthy completion time = no review (a missing timestamp must not remove the 7-day limit)
+        Instant completedAt = completionLookup.findConfirmedAt(booking.bookingId())
+                .orElseThrow(() -> new ResourceConflictException("REVIEW_WINDOW_UNAVAILABLE",
+                        "The completion time of this booking could not be verified, so a review cannot be submitted"));
+        if (now.isAfter(completedAt.plus(REVIEW_WINDOW))) {
             throw new ResourceConflictException("REVIEW_WINDOW_CLOSED",
                     "Reviews can be submitted within 7 days of completion");
         }
@@ -126,17 +137,21 @@ public class ReviewServiceImpl implements ReviewService {
                     "This review cannot be edited because the provider has already replied");
         }
         Instant now = clock.instant();
-        if (review.getCreatedAt() != null && now.isAfter(review.getCreatedAt().plus(EDIT_WINDOW))) {
+        // No posting time = no edit (a missing timestamp must not remove the 48-hour limit)
+        if (review.getCreatedAt() == null) {
+            throw new ResourceConflictException("REVIEW_EDIT_WINDOW_UNAVAILABLE",
+                    "The posting time of this review could not be verified, so it cannot be edited");
+        }
+        if (now.isAfter(review.getCreatedAt().plus(EDIT_WINDOW))) {
             throw new ResourceConflictException("REVIEW_EDIT_WINDOW_CLOSED",
                     "Reviews can be edited within 48 hours of posting");
         }
 
-        review.setRating(request.rating());
-        review.setComment(trimToNull(request.comment()));
-        review.setEdited(true);
-        review.setEditedAt(now);
-        review.setUpdatedAt(now);
-        return ReviewMapper.toResponse(reviewRepository.save(review));
+        // The same rules are checked again inside one atomic MongoDB update
+        return reviewUpdates.applyCustomerEdit(reviewId, customerId, request.rating(),
+                        trimToNull(request.comment()), now.minus(EDIT_WINDOW), now)
+                .map(ReviewMapper::toResponse)
+                .orElseThrow(() -> editRejectedByConcurrentChange(reviewId));
     }
 
     @Override
@@ -159,12 +174,14 @@ public class ReviewServiceImpl implements ReviewService {
         }
 
         Instant now = clock.instant();
-        ProviderReply reply = review.getProviderReply() != null ? review.getProviderReply() : new ProviderReply();
+        ProviderReply reply = new ProviderReply();
         reply.setText(request.text().trim());
         reply.setRepliedAt(now);
-        review.setProviderReply(reply);
-        review.setUpdatedAt(now);
-        return ReviewMapper.toResponse(reviewRepository.save(review));
+
+        // Writes only the reply fields, and only while the review is still PUBLISHED
+        return reviewUpdates.applyProviderReply(reviewId, providerId, reply, now)
+                .map(ReviewMapper::toResponse)
+                .orElseThrow(ReviewServiceImpl::concurrentUpdateConflict);
     }
 
     @Override
@@ -207,6 +224,21 @@ public class ReviewServiceImpl implements ReviewService {
 
     private static ReviewPageResponse toPage(org.springframework.data.domain.Page<Review> page) {
         return ReviewPageResponse.from(page.map(ReviewMapper::toResponse));
+    }
+
+    /** The atomic edit matched nothing: explain why, using the latest stored review. */
+    private ResourceConflictException editRejectedByConcurrentChange(String reviewId) {
+        Optional<Review> latest = reviewRepository.findById(reviewId);
+        if (latest.isPresent() && latest.get().getProviderReply() != null) {
+            return new ResourceConflictException("REVIEW_NOT_EDITABLE",
+                    "This review cannot be edited because the provider has already replied");
+        }
+        return concurrentUpdateConflict();
+    }
+
+    private static ResourceConflictException concurrentUpdateConflict() {
+        return new ResourceConflictException("REVIEW_UPDATE_CONFLICT",
+                "This review was changed by another request at the same time. Please reload it and try again");
     }
 
     private static ResourceConflictException reviewAlreadyExists() {

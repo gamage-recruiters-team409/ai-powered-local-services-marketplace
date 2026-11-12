@@ -6,7 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -71,17 +75,42 @@ class ReviewServiceImplTest {
     @Mock
     private ReviewRatingQuery ratingQuery;
 
+    @Mock
+    private ReviewAtomicUpdates reviewUpdates;
+
     private ReviewServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new ReviewServiceImpl(reviewRepository, bookingFacade, completionLookup, ratingQuery,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                reviewUpdates, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
-    /** The only place the record is built (the booking follow-up PR adds slotStart/slotEnd). */
+    /**
+     * Booking data as returned by BookingFacade. Built as a mock instead of calling the record
+     * constructor, so these tests compile both before and after WP05 PR #16 adds slotStart/slotEnd.
+     * Use it with doReturn(...).when(...): it stubs its own mock, which must finish before the
+     * BookingFacade stub starts.
+     */
     private static BookingParticipants booking(BookingStatus status) {
-        return new BookingParticipants(BOOKING, null, "listing-1", CUSTOMER, PROVIDER, status);
+        BookingParticipants booking = mock(BookingParticipants.class);
+        lenient().when(booking.bookingId()).thenReturn(BOOKING);
+        lenient().when(booking.listingId()).thenReturn("listing-1");
+        lenient().when(booking.customerId()).thenReturn(CUSTOMER);
+        lenient().when(booking.providerId()).thenReturn(PROVIDER);
+        lenient().when(booking.status()).thenReturn(status);
+        return booking;
+    }
+
+    /** Stands in for the atomic MongoDB edit: returns the review as it would be stored after the edit. */
+    private static Optional<Review> editedReview(Instant createdAt, int rating, String comment) {
+        Review edited = review(createdAt);
+        edited.setRating(rating);
+        edited.setComment(comment);
+        edited.setEdited(true);
+        edited.setEditedAt(NOW);
+        edited.setUpdatedAt(NOW);
+        return Optional.of(edited);
     }
 
     private static Review review(Instant createdAt) {
@@ -111,7 +140,7 @@ class ReviewServiceImplTest {
         @Test
         @DisplayName("Customer reviews a COMPLETED booking within 7 days: PUBLISHED, ids copied from the booking")
         void createsPublishedReview() {
-            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETED));
+            doReturn(booking(BookingStatus.COMPLETED)).when(bookingFacade).getBookingParticipants(BOOKING);
             when(completionLookup.findConfirmedAt(BOOKING)).thenReturn(Optional.of(NOW.minus(Duration.ofDays(2))));
             when(reviewRepository.existsByBookingId(BOOKING)).thenReturn(false);
             when(reviewRepository.save(any(Review.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -129,7 +158,7 @@ class ReviewServiceImplTest {
         @Test
         @DisplayName("Another customer gets 403 ACCESS_DENIED")
         void rejectsOtherCustomer() {
-            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETED));
+            doReturn(booking(BookingStatus.COMPLETED)).when(bookingFacade).getBookingParticipants(BOOKING);
 
             assertThrows(AccessDeniedException.class,
                     () -> service.createReview("cust-2", new CreateReviewRequest(BOOKING, 5, null)));
@@ -139,7 +168,7 @@ class ReviewServiceImplTest {
         @Test
         @DisplayName("Booking not COMPLETED gets 409 BOOKING_NOT_COMPLETED")
         void rejectsNotCompleted() {
-            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
+            doReturn(booking(BookingStatus.COMPLETION_PENDING)).when(bookingFacade).getBookingParticipants(BOOKING);
 
             ApiException ex = assertThrows(ApiException.class,
                     () -> service.createReview(CUSTOMER, new CreateReviewRequest(BOOKING, 5, null)));
@@ -150,7 +179,7 @@ class ReviewServiceImplTest {
         @Test
         @DisplayName("More than 7 days after completion gets 409 REVIEW_WINDOW_CLOSED")
         void rejectsAfterWindow() {
-            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETED));
+            doReturn(booking(BookingStatus.COMPLETED)).when(bookingFacade).getBookingParticipants(BOOKING);
             when(completionLookup.findConfirmedAt(BOOKING))
                     .thenReturn(Optional.of(NOW.minus(Duration.ofDays(7)).minusSeconds(1)));
 
@@ -162,9 +191,23 @@ class ReviewServiceImplTest {
         }
 
         @Test
+        @DisplayName("Missing completion record or timestamp gets 409 REVIEW_WINDOW_UNAVAILABLE (no unlimited review)")
+        void rejectsWhenCompletionTimeMissing() {
+            doReturn(booking(BookingStatus.COMPLETED)).when(bookingFacade).getBookingParticipants(BOOKING);
+            when(completionLookup.findConfirmedAt(BOOKING)).thenReturn(Optional.empty());
+
+            ApiException ex = assertThrows(ApiException.class,
+                    () -> service.createReview(CUSTOMER, new CreateReviewRequest(BOOKING, 5, null)));
+
+            assertConflict(ex, "REVIEW_WINDOW_UNAVAILABLE");
+            verify(reviewRepository, never()).existsByBookingId(any());
+            verify(reviewRepository, never()).save(any());
+        }
+
+        @Test
         @DisplayName("Exactly 7 days after completion is still allowed")
         void allowsOnLastMoment() {
-            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETED));
+            doReturn(booking(BookingStatus.COMPLETED)).when(bookingFacade).getBookingParticipants(BOOKING);
             when(completionLookup.findConfirmedAt(BOOKING)).thenReturn(Optional.of(NOW.minus(Duration.ofDays(7))));
             when(reviewRepository.existsByBookingId(BOOKING)).thenReturn(false);
             when(reviewRepository.save(any(Review.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -175,7 +218,7 @@ class ReviewServiceImplTest {
         @Test
         @DisplayName("Second review for the same booking gets 409 REVIEW_ALREADY_EXISTS")
         void rejectsDuplicate() {
-            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETED));
+            doReturn(booking(BookingStatus.COMPLETED)).when(bookingFacade).getBookingParticipants(BOOKING);
             when(completionLookup.findConfirmedAt(BOOKING)).thenReturn(Optional.of(NOW));
             when(reviewRepository.existsByBookingId(BOOKING)).thenReturn(true);
 
@@ -188,7 +231,7 @@ class ReviewServiceImplTest {
         @Test
         @DisplayName("Concurrent duplicate (unique index) gets 409 REVIEW_ALREADY_EXISTS")
         void concurrentDuplicateHitsUniqueIndex() {
-            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETED));
+            doReturn(booking(BookingStatus.COMPLETED)).when(bookingFacade).getBookingParticipants(BOOKING);
             when(completionLookup.findConfirmedAt(BOOKING)).thenReturn(Optional.of(NOW));
             when(reviewRepository.existsByBookingId(BOOKING)).thenReturn(false);
             when(reviewRepository.save(any(Review.class))).thenThrow(new DuplicateKeyException("dup"));
@@ -205,28 +248,87 @@ class ReviewServiceImplTest {
     class UpdateReview {
 
         @Test
-        @DisplayName("Owner edits within 48 hours: marked edited")
+        @DisplayName("Owner edits within 48 hours: atomic update with the 48-hour limit, marked edited")
         void editsWithinWindow() {
-            when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(NOW.minus(Duration.ofHours(47)))));
-            when(reviewRepository.save(any(Review.class))).thenAnswer(inv -> inv.getArgument(0));
+            Instant createdAt = NOW.minus(Duration.ofHours(47));
+            when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(createdAt)));
+            when(reviewUpdates.applyCustomerEdit("rev-1", CUSTOMER, 3, "Okay", NOW.minus(Duration.ofHours(48)), NOW))
+                    .thenReturn(editedReview(createdAt, 3, "Okay"));
 
-            ReviewResponse response = service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(3, "Okay"));
+            ReviewResponse response = service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(3, "  Okay "));
 
             assertEquals(3, response.rating());
             assertEquals("Okay", response.comment());
             assertTrue(response.edited());
             assertEquals(NOW, response.editedAt());
+            verify(reviewRepository, never()).save(any());
         }
 
         @Test
-        @DisplayName("After 48 hours gets 409 REVIEW_EDIT_WINDOW_CLOSED")
+        @DisplayName("Exactly 48 hours after posting is still allowed")
+        void allowsOnLastMoment() {
+            Instant createdAt = NOW.minus(Duration.ofHours(48));
+            when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(createdAt)));
+            when(reviewUpdates.applyCustomerEdit("rev-1", CUSTOMER, 2, null, createdAt, NOW))
+                    .thenReturn(editedReview(createdAt, 2, null));
+
+            assertEquals(2, service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(2, null)).rating());
+        }
+
+        @Test
+        @DisplayName("One second after 48 hours gets 409 REVIEW_EDIT_WINDOW_CLOSED")
         void rejectsAfterWindow() {
-            when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(NOW.minus(Duration.ofHours(49)))));
+            when(reviewRepository.findById("rev-1"))
+                    .thenReturn(Optional.of(review(NOW.minus(Duration.ofHours(48)).minusSeconds(1))));
 
             ApiException ex = assertThrows(ApiException.class,
                     () -> service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(3, null)));
 
             assertConflict(ex, "REVIEW_EDIT_WINDOW_CLOSED");
+            verify(reviewUpdates, never()).applyCustomerEdit(any(), any(), anyInt(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Missing createdAt gets 409 REVIEW_EDIT_WINDOW_UNAVAILABLE (no unlimited editing)")
+        void rejectsWhenCreatedAtMissing() {
+            when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(null)));
+
+            ApiException ex = assertThrows(ApiException.class,
+                    () -> service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(3, null)));
+
+            assertConflict(ex, "REVIEW_EDIT_WINDOW_UNAVAILABLE");
+            verify(reviewUpdates, never()).applyCustomerEdit(any(), any(), anyInt(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Provider replied at the same moment (atomic update matched nothing) gets 409 REVIEW_NOT_EDITABLE")
+        void raceLostToProviderReply() {
+            Review beforeReply = review(NOW.minus(Duration.ofHours(1)));
+            Review afterReply = review(NOW.minus(Duration.ofHours(1)));
+            afterReply.setProviderReply(new ProviderReply());
+            when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(beforeReply), Optional.of(afterReply));
+            when(reviewUpdates.applyCustomerEdit(eq("rev-1"), eq(CUSTOMER), eq(3), any(), any(), any()))
+                    .thenReturn(Optional.empty());
+
+            ApiException ex = assertThrows(ApiException.class,
+                    () -> service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(3, null)));
+
+            assertConflict(ex, "REVIEW_NOT_EDITABLE");
+            verify(reviewRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Other change at the same moment gets 409 REVIEW_UPDATE_CONFLICT, nothing overwritten")
+        void raceLostToOtherChange() {
+            when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(NOW.minus(Duration.ofHours(1)))));
+            when(reviewUpdates.applyCustomerEdit(eq("rev-1"), eq(CUSTOMER), eq(3), any(), any(), any()))
+                    .thenReturn(Optional.empty());
+
+            ApiException ex = assertThrows(ApiException.class,
+                    () -> service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(3, null)));
+
+            assertConflict(ex, "REVIEW_UPDATE_CONFLICT");
+            verify(reviewRepository, never()).save(any());
         }
 
         @Test
@@ -282,17 +384,37 @@ class ReviewServiceImplTest {
     class ReplyToReview {
 
         @Test
-        @DisplayName("Provider adds a reply, then edits it (still one reply)")
+        @DisplayName("Provider adds a reply, then edits it (still one reply), written by the atomic update only")
         void addsAndEditsReply() {
             Review review = review(NOW.minus(Duration.ofDays(1)));
             when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review));
-            when(reviewRepository.save(any(Review.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(reviewUpdates.applyProviderReply(eq("rev-1"), eq(PROVIDER), any(ProviderReply.class), eq(NOW)))
+                    .thenAnswer(inv -> {
+                        Review stored = review(NOW.minus(Duration.ofDays(1)));
+                        stored.setProviderReply(inv.getArgument(2));
+                        return Optional.of(stored);
+                    });
 
-            service.replyToReview(PROVIDER, "rev-1", new ProviderReplyRequest(" Thank you! "));
+            ReviewResponse first = service.replyToReview(PROVIDER, "rev-1", new ProviderReplyRequest(" Thank you! "));
             ReviewResponse edited = service.replyToReview(PROVIDER, "rev-1", new ProviderReplyRequest("Thanks again"));
 
+            assertEquals("Thank you!", first.providerReply().text());
             assertEquals("Thanks again", edited.providerReply().text());
             assertEquals(NOW, edited.providerReply().repliedAt());
+            verify(reviewRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Review changed at the same moment (atomic update matched nothing) gets 409 REVIEW_UPDATE_CONFLICT")
+        void raceLost() {
+            when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(NOW)));
+            when(reviewUpdates.applyProviderReply(eq("rev-1"), eq(PROVIDER), any(ProviderReply.class), eq(NOW)))
+                    .thenReturn(Optional.empty());
+
+            ApiException ex = assertThrows(ApiException.class,
+                    () -> service.replyToReview(PROVIDER, "rev-1", new ProviderReplyRequest("Hi")));
+
+            assertConflict(ex, "REVIEW_UPDATE_CONFLICT");
         }
 
         @Test
