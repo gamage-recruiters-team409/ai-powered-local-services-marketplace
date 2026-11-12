@@ -13,7 +13,7 @@ import {
   StatePage,
 } from './components/AccessStates'
 import { SwitchRoleModal } from './components/SwitchRoleModal'
-import { roleLabel } from './config/adminAreas'
+import { ADMIN_PATHS, roleLabel } from './config/adminAreas'
 import { buildNavSections } from './config/navModel'
 import { endSession, LOGIN_PATH } from './services/authBridge'
 
@@ -62,6 +62,15 @@ export function AdminShell() {
   const displayUser = {
     name: user?.name || roleLabel(access.role),
     roleLabel: roleLabel(access.role),
+  }
+
+  // Role selection is a full page of its own (no sidebar); it gets the user and logout from the outlet context.
+  if (pathname.replace(/\/+$/, '') === ADMIN_PATHS.selectRole) {
+    return (
+      <Suspense fallback={<LoadingState label="Loading page…" />}>
+        <Outlet context={{ user: displayUser, onLogout: logout }} />
+      </Suspense>
+    )
   }
 
   return (

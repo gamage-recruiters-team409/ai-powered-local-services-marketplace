@@ -13,6 +13,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import com.gamagerecruiters.marketplace.modules.admin.repository.AdminAuditLogRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
@@ -48,6 +49,9 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private ProviderProfileRepository providerProfileRepository;
+
+    @MockitoBean
+    private AdminAuditLogRepository adminAuditLogRepository;
 
     @MockitoBean
     private ServiceCompletionRepository serviceCompletionRepository;

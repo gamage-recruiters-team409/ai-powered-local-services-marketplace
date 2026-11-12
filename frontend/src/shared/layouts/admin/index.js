@@ -1,5 +1,6 @@
 export { AdminLayout } from './AdminLayout'
 export { AdminPage } from './AdminPage'
+export { BrandLogo, BrandName } from './AdminHeader'
 export { ViewOnlyBanner } from './ViewOnlyBanner'
 export { Icon } from './Icon'
 export { ADMIN_BRAND } from './adminBrand'
