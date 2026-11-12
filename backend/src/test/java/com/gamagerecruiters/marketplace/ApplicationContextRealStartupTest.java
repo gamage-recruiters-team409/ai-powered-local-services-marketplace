@@ -43,6 +43,8 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private CategoryRepository categoryRepository;
+
+    @MockitoBean
     private BookingRepository bookingRepository;
 
     @MockitoBean
@@ -66,6 +68,7 @@ class ApplicationContextRealStartupTest {
     @Test
     @DisplayName("Verify real Spring context loads without circular dependencies and key security beans exist")
     void contextLoadsAndKeySecurityBeansExist() {
+                
         assertNotNull(applicationContext.getBean(PasswordEncoder.class), "PasswordEncoder bean must exist");
         assertNotNull(applicationContext.getBean(JwtAuthenticationFilter.class), "JwtAuthenticationFilter bean must exist");
         assertNotNull(applicationContext.getBean(SecurityFilterChain.class), "SecurityFilterChain bean must exist");
