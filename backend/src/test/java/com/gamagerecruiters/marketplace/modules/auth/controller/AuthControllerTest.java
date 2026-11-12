@@ -6,6 +6,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -346,7 +347,15 @@ class AuthControllerTest {
         org.mockito.Mockito.doThrow(new RateLimitExceededException(30))
                 .when(rateLimitService).checkRegister(org.mockito.ArgumentMatchers.anyString());
 
-        RegisterRequest request = new RegisterRequest("Test User", "test@example.com", "Password123!", Role.CUSTOMER);
+        RegisterRequest request = new RegisterRequest(
+                "Test User",
+                "test@example.com",
+                "+94771234567",
+                "Password123!",
+                Role.CUSTOMER,
+                Boolean.TRUE,
+                "v1.0"
+        );
 
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
