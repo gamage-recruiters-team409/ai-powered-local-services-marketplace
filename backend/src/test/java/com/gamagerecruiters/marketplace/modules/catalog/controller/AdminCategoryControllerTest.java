@@ -37,6 +37,7 @@ import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationE
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
+import com.gamagerecruiters.marketplace.modules.admin.service.AdminAccessPolicyService;
 import com.gamagerecruiters.marketplace.modules.catalog.dto.CategoryResponse;
 import com.gamagerecruiters.marketplace.modules.catalog.dto.CategoryTreeResponse;
 import com.gamagerecruiters.marketplace.modules.catalog.dto.CreateCategoryRequest;
@@ -49,7 +50,8 @@ import com.gamagerecruiters.marketplace.modules.catalog.service.CategoryService;
         JwtAuthenticationFilter.class,
         JwtAuthenticationEntryPoint.class,
         CustomAccessDeniedHandler.class,
-        GlobalExceptionHandler.class
+        GlobalExceptionHandler.class,
+        AdminAccessPolicyService.class
 })
 @ActiveProfiles("test")
 class AdminCategoryControllerTest {
@@ -93,6 +95,19 @@ class AdminCategoryControllerTest {
         customer.setRole(Role.CUSTOMER);
         customer.setStatus(UserStatus.ACTIVE);
         when(userInternalService.getById(customerId)).thenReturn(customer);
+    }
+
+    private void mockSuperAdminToken(String token, String superAdminId) {
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getUserIdFromToken(token)).thenReturn(superAdminId);
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.SUPER_ADMIN);
+
+        User superAdmin = new User();
+        superAdmin.setId(superAdminId);
+        superAdmin.setEmail("superadmin@test.local");
+        superAdmin.setRole(Role.SUPER_ADMIN);
+        superAdmin.setStatus(UserStatus.ACTIVE);
+        when(userInternalService.getById(superAdminId)).thenReturn(superAdmin);
     }
 
     @Test
@@ -200,6 +215,67 @@ class AdminCategoryControllerTest {
         mockMvc.perform(delete("/api/v1/admin/categories/cat-roof")
                         .header("Authorization", "Bearer admin-token"))
                 .andExpect(status().isNoContent());
+    }
+
+    @Test
+    @DisplayName("SUPER_ADMIN role can GET all categories (view-only access per AdminAccessPolicyService, returns 200)")
+    void shouldAllowSuperAdminToGetAllCategories() throws Exception {
+        mockSuperAdminToken("super-token", "super-1");
+
+        CategoryTreeResponse root = new CategoryTreeResponse(
+                "cat-1", "Plumbing", "plumbing", "Plumbing desc", "wrench", new BigDecimal("0.10"), true, List.of());
+        when(categoryService.getAllCategoriesForAdmin()).thenReturn(List.of(root));
+
+        mockMvc.perform(get("/api/v1/admin/categories")
+                        .header("Authorization", "Bearer super-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].name").value("Plumbing"));
+    }
+
+    @Test
+    @DisplayName("SUPER_ADMIN role cannot POST create category (least-privilege restriction, returns 403 Forbidden)")
+    void shouldForbidSuperAdminFromCreatingCategory() throws Exception {
+        mockSuperAdminToken("super-token", "super-1");
+
+        CreateCategoryRequest request = new CreateCategoryRequest(
+                "Roofing", "roofing", "Roofing work", "home", null, new BigDecimal("0.12"));
+
+        mockMvc.perform(post("/api/v1/admin/categories")
+                        .header("Authorization", "Bearer super-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    @DisplayName("SUPER_ADMIN role cannot PUT update category (least-privilege restriction, returns 403 Forbidden)")
+    void shouldForbidSuperAdminFromUpdatingCategory() throws Exception {
+        mockSuperAdminToken("super-token", "super-1");
+
+        UpdateCategoryRequest request = new UpdateCategoryRequest(
+                "Updated Roofing", "roofing", "Updated desc", "home", new BigDecimal("0.15"), true);
+
+        mockMvc.perform(put("/api/v1/admin/categories/cat-roof")
+                        .header("Authorization", "Bearer super-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    @DisplayName("SUPER_ADMIN role cannot DELETE deactivate category (least-privilege restriction, returns 403 Forbidden)")
+    void shouldForbidSuperAdminFromDeactivatingCategory() throws Exception {
+        mockSuperAdminToken("super-token", "super-1");
+
+        mockMvc.perform(delete("/api/v1/admin/categories/cat-roof")
+                        .header("Authorization", "Bearer super-token"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
     }
 }
 
