@@ -1,26 +1,26 @@
 package com.gamagerecruiters.marketplace.modules.booking.service;
 
-import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 
 /**
  * The only entry point other modules use to read or change booking information.
  * Other modules must not use the booking repository directly.
  *
- * <p>Status-change methods check that the actor belongs to the booking, apply only transitions
- * allowed by {@code BookingStatus}, record the change in the booking timeline and return the
- * updated booking. Errors:
+ * <p>User-initiated status changes are bound to the authenticated caller: the {@code actorId}
+ * must be the logged-in user ({@code CurrentUser}) and a participant of the booking. Each method
+ * accepts only its own starting status, records the change in the booking timeline and returns
+ * the updated booking. Errors:
  * <ul>
+ *   <li>401 {@code UNAUTHORIZED} – no authenticated user (user-initiated methods)</li>
  *   <li>404 {@code BOOKING_NOT_FOUND} – unknown booking ({@code ResourceNotFoundException})</li>
- *   <li>403 {@code ACCESS_DENIED} – actor is not allowed for this booking ({@code AccessDeniedException})</li>
- *   <li>409 {@code INVALID_STATUS_TRANSITION} – the move is not allowed from the current status</li>
+ *   <li>403 {@code ACCESS_DENIED} – actor is not the authenticated user or not allowed for this booking</li>
+ *   <li>409 {@code INVALID_STATUS_TRANSITION} – the booking is not in the status this method starts from</li>
+ *   <li>409 {@code AUTO_COMPLETION_NOT_DUE} – automatic completion requested before 48 h (BR-007)</li>
+ *   <li>409 {@code DISPUTE_WINDOW_CLOSED} – dispute after the 72 h window (BR-008)</li>
  *   <li>409 {@code BOOKING_UPDATE_CONFLICT} – another change saved the booking at the same time</li>
  * </ul>
  */
 public interface BookingFacade {
-
-    /** Actor ID used for automatic changes (for example the 48 h auto-confirm). */
-    String SYSTEM_ACTOR = BookingStatusChange.SYSTEM;
 
     /**
      * Returns true if the customer has any booking in
@@ -41,21 +41,31 @@ public interface BookingFacade {
      */
     BookingParticipants getBookingParticipants(String bookingId);
 
-    /** CONFIRMED → IN_PROGRESS. Only the booking's provider. */
+    /** CONFIRMED → IN_PROGRESS. The authenticated user must be the booking's provider. */
     BookingParticipants markInProgress(String bookingId, String providerId);
 
-    /** IN_PROGRESS → COMPLETION_PENDING. Only the booking's provider. */
+    /** IN_PROGRESS → COMPLETION_PENDING. The authenticated user must be the booking's provider. */
     BookingParticipants markCompletionPending(String bookingId, String providerId);
 
     /**
-     * COMPLETION_PENDING → COMPLETED. The booking's customer, or {@link #SYSTEM_ACTOR} for the
-     * 48 h auto-confirm. Pass SYSTEM only from scheduled jobs, never from request input.
+     * COMPLETION_PENDING → COMPLETED (customer confirms completion).
+     * The authenticated user must be the booking's customer. A DISPUTED booking cannot be
+     * completed here; dispute resolution stays with the admin dispute workflow.
      */
-    BookingParticipants markCompleted(String bookingId, String actorId);
+    BookingParticipants markCompleted(String bookingId, String customerId);
 
     /**
-     * Moves the booking to DISPUTED (from CONFIRMED, IN_PROGRESS, COMPLETION_PENDING or COMPLETED).
-     * Only the booking's customer or provider.
+     * COMPLETION_PENDING → COMPLETED by the system (48 h auto-confirm, BR-007).
+     * Trusted internal path for scheduled jobs only: rejected when called during an HTTP request
+     * or with an authenticated user, and only allowed 48 h after the booking entered COMPLETION_PENDING.
+     * Recorded as SYSTEM in the timeline.
+     */
+    BookingParticipants markCompletedBySystem(String bookingId);
+
+    /**
+     * Moves the booking to DISPUTED from CONFIRMED, IN_PROGRESS or COMPLETION_PENDING, or from
+     * COMPLETED within 72 h of completion (BR-008). The authenticated user must be the booking's
+     * customer or provider.
      */
     BookingParticipants markDisputed(String bookingId, String actorId, String reason);
 }

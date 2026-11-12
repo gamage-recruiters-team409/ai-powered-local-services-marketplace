@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.booking.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -30,12 +32,16 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MongoDBContainer;
 
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
+import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
@@ -96,6 +102,11 @@ class BookingMongoIntegrationTest {
 
     @Autowired
     private MongoTemplate mongoTemplate;
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
 
     @BeforeEach
     void cleanData() {
@@ -209,13 +220,30 @@ class BookingMongoIntegrationTest {
     }
 
     @Test
-    @DisplayName("Real MongoDB: completion flow CONFIRMED -> IN_PROGRESS -> COMPLETION_PENDING -> COMPLETED (SYSTEM) is stored with timeline")
-    void completionFlowIsStoredWithTimeline() {
+    @DisplayName("Real MongoDB: provider starts and marks completion (authenticated), internal job auto-confirms after 48 h as SYSTEM")
+    void completionFlowIsStoredWithTimeline() throws Exception {
         Booking saved = bookingRepository.save(booking("customer-6", BookingStatus.CONFIRMED));
 
+        loginAs("provider-1", Role.PROVIDER);
         bookingFacade.markInProgress(saved.getId(), "provider-1");
         bookingFacade.markCompletionPending(saved.getId(), "provider-1");
-        BookingParticipants result = bookingFacade.markCompleted(saved.getId(), BookingFacade.SYSTEM_ACTOR);
+        SecurityContextHolder.clearContext();
+
+        // Simulate that 49 hours have passed since the provider marked completion.
+        Booking pending = bookingRepository.findById(saved.getId()).orElseThrow();
+        pending.getTimeline().get(pending.getTimeline().size() - 1)
+                .setChangedAt(Instant.now().minus(Duration.ofHours(49)));
+        bookingRepository.save(pending);
+
+        // Run like a scheduled job: separate thread, no HTTP request, no logged-in user.
+        ExecutorService scheduler = Executors.newSingleThreadExecutor();
+        BookingParticipants result;
+        try {
+            result = scheduler.submit(() -> bookingFacade.markCompletedBySystem(saved.getId()))
+                    .get(30, TimeUnit.SECONDS);
+        } finally {
+            scheduler.shutdownNow();
+        }
 
         Booking stored = bookingRepository.findById(saved.getId()).orElseThrow();
         log.info("Completion flow stored: status={}, timeline={}", stored.getStatus(),
@@ -243,6 +271,7 @@ class BookingMongoIntegrationTest {
         try {
             for (int i = 0; i < parallel; i++) {
                 results.add(executor.submit(() -> {
+                    loginAs("provider-1", Role.PROVIDER);
                     ready.countDown();
                     start.await();
                     try {
@@ -250,6 +279,8 @@ class BookingMongoIntegrationTest {
                         return "OK";
                     } catch (ResourceConflictException e) {
                         return e.getErrorCode();
+                    } finally {
+                        SecurityContextHolder.clearContext();
                     }
                 }));
             }
@@ -274,6 +305,12 @@ class BookingMongoIntegrationTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    private static void loginAs(String userId, Role role) {
+        UserPrincipal principal = new UserPrincipal(userId, userId + "@test.local", role);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
     }
 
     private Document findIndex(String indexName) {
