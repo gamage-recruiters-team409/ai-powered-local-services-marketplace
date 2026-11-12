@@ -66,6 +66,7 @@ public class AdminAccountService {
     public static final int MAX_PAGE_SIZE = 100;
     public static final int MAX_SEARCH_LENGTH = 100;
     public static final String DEFAULT_SORT = "createdAt,desc";
+    public static final int MAX_USER_ID_LENGTH = 64;
 
     /** BCrypt only reads the first 72 bytes of a password. */
     static final int MAX_PASSWORD_BYTES = 72;
@@ -113,6 +114,11 @@ public class AdminAccountService {
         if (cleanReason.length() < MIN_REASON_LENGTH || cleanReason.length() > MAX_REASON_LENGTH) {
             throw AdminErrors.badRequest(AdminErrors.VALIDATION_FAILED,
                     "reason must be between " + MIN_REASON_LENGTH + " and " + MAX_REASON_LENGTH + " characters");
+        }
+
+        // An id that cannot be a user id is rejected without a database lookup (and is never echoed back).
+        if (targetUserId == null || targetUserId.isBlank() || targetUserId.length() > MAX_USER_ID_LENGTH) {
+            throw AdminErrors.notFound(AdminErrors.ADMIN_ACCOUNT_NOT_FOUND, "Admin account not found");
         }
 
         // getById's errors (e.g. 404 USER_NOT_FOUND) pass through unchanged.

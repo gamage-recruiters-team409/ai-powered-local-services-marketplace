@@ -5,6 +5,7 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
@@ -21,6 +22,7 @@ import jakarta.validation.constraints.Size;
 public record CreateAdminAccountRequest(
         @NotBlank(message = "fullName is required")
         @Size(max = 100, message = "fullName must not exceed 100 characters")
+        @Pattern(regexp = "^[^\\p{Cntrl}<>]*$", message = "fullName must not contain control characters, < or >")
         String fullName,
 
         @NotBlank(message = "email is required")

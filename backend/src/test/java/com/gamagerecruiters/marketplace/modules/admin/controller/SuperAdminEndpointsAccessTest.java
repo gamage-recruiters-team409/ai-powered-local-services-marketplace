@@ -273,7 +273,7 @@ class SuperAdminEndpointsAccessTest {
     }
 
     @Test
-    @DisplayName("POST /accounts: bad email, long name or long email -> 400 VALIDATION_FAILED; the password is never echoed")
+    @DisplayName("POST /accounts: bad/long email, long name, HTML or control characters in name -> 400 VALIDATION_FAILED; password never echoed")
     void createFieldValidation() throws Exception {
         // The password policy itself is checked in the service (see AdminAccountEndToEndWebTest).
         String auth = bearer(Role.SUPER_ADMIN);
@@ -281,6 +281,8 @@ class SuperAdminEndpointsAccessTest {
                 {"{\"fullName\":\"Nimal\",\"email\":\"not-an-email\",\"role\":\"ADMIN\",\"temporaryPassword\":\"" + PASSWORD + "\"}", "email"},
                 {"{\"fullName\":\"" + "n".repeat(101) + "\",\"email\":\"a@b.lk\",\"role\":\"ADMIN\",\"temporaryPassword\":\"" + PASSWORD + "\"}", "fullName"},
                 {"{\"fullName\":\"Nimal\",\"email\":\"" + "a".repeat(250) + "@b.lk\",\"role\":\"ADMIN\",\"temporaryPassword\":\"" + PASSWORD + "\"}", "email"},
+                {"{\"fullName\":\"<script>alert(1)</script>\",\"email\":\"a@b.lk\",\"role\":\"ADMIN\",\"temporaryPassword\":\"" + PASSWORD + "\"}", "fullName"},
+                {"{\"fullName\":\"Nimal\\nINFO forged log line\",\"email\":\"a@b.lk\",\"role\":\"ADMIN\",\"temporaryPassword\":\"" + PASSWORD + "\"}", "fullName"},
         };
         for (String[] c : cases) {
             String response = mockMvc.perform(create(c[0]).header("Authorization", auth))

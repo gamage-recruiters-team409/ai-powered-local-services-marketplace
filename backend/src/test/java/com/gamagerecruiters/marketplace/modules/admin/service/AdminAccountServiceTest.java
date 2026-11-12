@@ -232,6 +232,15 @@ class AdminAccountServiceTest {
             assertNoAuditAndNoChange();
         }
 
+        @ParameterizedTest
+        @NullSource
+        @ValueSource(strings = {"", "   ", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+        @DisplayName("Blank or over-long target id -> 404 ADMIN_ACCOUNT_NOT_FOUND without a database lookup")
+        void rejectsImpossibleId(String id) {
+            assertApiError(catchThrowable(() -> suspend(id)), HttpStatus.NOT_FOUND, AdminErrors.ADMIN_ACCOUNT_NOT_FOUND);
+            verifyNoInteractions(userInternalService, auditLogService);
+        }
+
         @Test
         @DisplayName("Unknown user: auth's 404 USER_NOT_FOUND passes through unchanged, no audit")
         void unknownUserPassesThrough() {
