@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
+import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitService;
 import com.gamagerecruiters.marketplace.modules.customer.dto.ChangePasswordRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressResponse;
@@ -32,12 +33,12 @@ import jakarta.validation.Valid;
 @PreAuthorize("hasRole('CUSTOMER')")
 public class CustomerController {
 
-    // TODO: Add rate limiting on customer endpoints (FR-CUST, deferred per specification)
-
     private final CustomerService customerService;
+    private final RateLimitService rateLimitService;
 
-    public CustomerController(CustomerService customerService) {
+    public CustomerController(CustomerService customerService, RateLimitService rateLimitService) {
         this.customerService = customerService;
+        this.rateLimitService = rateLimitService;
     }
 
     @GetMapping
@@ -56,6 +57,7 @@ public class CustomerController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
         String currentUserId = CurrentUser.getUserId();
+        rateLimitService.checkSensitive(currentUserId);
         customerService.changePassword(currentUserId, request);
         return ResponseEntity.noContent().build();
     }
@@ -102,6 +104,7 @@ public class CustomerController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public ResponseEntity<Void> deactivateAccount(@Valid @RequestBody DeactivateAccountRequest request) {
         String currentUserId = CurrentUser.getUserId();
+        rateLimitService.checkSensitive(currentUserId);
         customerService.deactivateAccount(currentUserId, request);
         return ResponseEntity.noContent().build();
     }

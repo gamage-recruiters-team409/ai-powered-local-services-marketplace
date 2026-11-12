@@ -3,12 +3,14 @@ package com.gamagerecruiters.marketplace.modules.customer.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -35,6 +37,8 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.security.CustomAccessDeniedHandler;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationEntryPoint;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
+import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitExceededException;
+import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitService;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 import com.gamagerecruiters.marketplace.modules.customer.dto.ChangePasswordRequest;
@@ -70,6 +74,9 @@ class CustomerControllerTest {
 
     @MockitoBean
     private UserInternalService userInternalService;
+
+    @MockitoBean
+    private RateLimitService rateLimitService;
 
     private void mockAuth(String token, String userId, Role role) {
         when(tokenService.validateToken(token)).thenReturn(true);
@@ -362,5 +369,49 @@ class CustomerControllerTest {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error").value("DEACTIVATION_UNAVAILABLE"))
                 .andExpect(jsonPath("$.message").value("Account deactivation is temporarily unavailable"));
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/customers/me/password returns 429 RATE_LIMITED when sensitive limit exceeded")
+    void changePasswordReturns429WhenSensitiveRateLimited() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        org.mockito.Mockito.doThrow(new RateLimitExceededException(45))
+                .when(rateLimitService).checkSensitive("cust-1");
+
+        ChangePasswordRequest req = new ChangePasswordRequest("OldPass123!", "NewPass123!");
+
+        mockMvc.perform(put("/api/v1/customers/me/password")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "45"))
+                .andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"))
+                .andExpect(jsonPath("$.message").value("Too many requests. Please try again later."));
+
+        verify(customerService, never()).changePassword(any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/customers/me/deactivate returns 429 RATE_LIMITED when sensitive limit exceeded")
+    void deactivateReturns429WhenSensitiveRateLimited() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        org.mockito.Mockito.doThrow(new RateLimitExceededException(55))
+                .when(rateLimitService).checkSensitive("cust-1");
+
+        DeactivateAccountRequest req = new DeactivateAccountRequest("ValidPass123!");
+
+        mockMvc.perform(post("/api/v1/customers/me/deactivate")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "55"))
+                .andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"))
+                .andExpect(jsonPath("$.message").value("Too many requests. Please try again later."));
+
+        verify(customerService, never()).deactivateAccount(any(), any());
     }
 }

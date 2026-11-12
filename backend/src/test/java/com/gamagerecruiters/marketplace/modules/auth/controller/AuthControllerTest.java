@@ -6,6 +6,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -32,6 +33,8 @@ import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterRequest;
 import com.gamagerecruiters.marketplace.modules.auth.security.CustomAccessDeniedHandler;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationEntryPoint;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
+import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitExceededException;
+import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitService;
 import com.gamagerecruiters.marketplace.modules.auth.service.AuthService;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
@@ -61,6 +64,9 @@ class AuthControllerTest {
 
     @MockitoBean
     private UserInternalService userInternalService;
+
+    @MockitoBean
+    private RateLimitService rateLimitService;
 
     private void mockAuth(String token, String userId, Role role) {
         when(tokenService.validateToken(token)).thenReturn(true);
@@ -292,6 +298,93 @@ class AuthControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400))
                 .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+
+        verify(userInternalService, never()).changePassword(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/auth/login returns 429 RATE_LIMITED with Retry-After header when IP limit exceeded")
+    void loginReturns429WhenIpRateLimited() throws Exception {
+        org.mockito.Mockito.doThrow(new RateLimitExceededException(45))
+                .when(rateLimitService).checkLoginIp(org.mockito.ArgumentMatchers.anyString());
+
+        LoginRequest request = new LoginRequest("user@example.com", "Password123!");
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "45"))
+                .andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"))
+                .andExpect(jsonPath("$.message").value("Too many requests. Please try again later."));
+
+        verify(authService, never()).login(any());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/auth/login returns 429 RATE_LIMITED with Retry-After header when account limit exceeded")
+    void loginReturns429WhenAccountRateLimited() throws Exception {
+        org.mockito.Mockito.doThrow(new RateLimitExceededException(60))
+                .when(rateLimitService).checkLoginAccount(org.mockito.ArgumentMatchers.anyString());
+
+        LoginRequest request = new LoginRequest("user@example.com", "Password123!");
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "60"))
+                .andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
+
+        verify(authService, never()).login(any());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/auth/register returns 429 RATE_LIMITED with Retry-After header when limit exceeded")
+    void registerReturns429WhenRateLimited() throws Exception {
+        org.mockito.Mockito.doThrow(new RateLimitExceededException(30))
+                .when(rateLimitService).checkRegister(org.mockito.ArgumentMatchers.anyString());
+
+        RegisterRequest request = new RegisterRequest(
+                "Test User",
+                "test@example.com",
+                "+94771234567",
+                "Password123!",
+                Role.CUSTOMER,
+                Boolean.TRUE,
+                "v1.0"
+        );
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "30"))
+                .andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
+
+        verify(authService, never()).register(any());
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/auth/change-password returns 429 RATE_LIMITED when sensitive limit exceeded")
+    void changePasswordReturns429WhenSensitiveRateLimited() throws Exception {
+        mockAuth("valid-token", "u-123", Role.CUSTOMER);
+        org.mockito.Mockito.doThrow(new RateLimitExceededException(90))
+                .when(rateLimitService).checkSensitive("u-123");
+
+        ChangePasswordRequest request = new ChangePasswordRequest("OldPass123!", "NewPass123!");
+
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer valid-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "90"))
+                .andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
 
         verify(userInternalService, never()).changePassword(any(), any(), any());
     }

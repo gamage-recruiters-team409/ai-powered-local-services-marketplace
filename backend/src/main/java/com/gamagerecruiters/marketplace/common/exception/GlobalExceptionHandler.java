@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.common.exception;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -17,6 +18,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.gamagerecruiters.marketplace.common.dto.ErrorResponse;
 import com.gamagerecruiters.marketplace.common.dto.FieldErrorItem;
+import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitExceededException;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
@@ -75,6 +77,22 @@ public class GlobalExceptionHandler {
                 fieldErrors
         );
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorResponse> handleRateLimitExceeded(
+            RateLimitExceededException ex,
+            HttpServletRequest request
+    ) {
+        ErrorResponse response = new ErrorResponse(
+                HttpStatus.TOO_MANY_REQUESTS.value(),
+                ex.getErrorCode(),
+                ex.getMessage(),
+                request.getRequestURI()
+        );
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()))
+                .body(response);
     }
 
     @ExceptionHandler(ApiException.class)

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,7 @@ import org.springframework.http.HttpStatus;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
+import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
 import com.gamagerecruiters.marketplace.modules.customer.dto.DeactivateAccountRequest;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 
@@ -79,6 +81,28 @@ class CustomerDeactivationContextTest {
                     );
                     assertEquals(HttpStatus.CONFLICT, ex.getStatus());
                     assertEquals("OPEN_BOOKINGS_EXIST", ex.getErrorCode());
+                });
+    }
+
+    @Test
+    @DisplayName("Context with real BookingOpenBookingsChecker bean: Deactivates cleanly when facade has no open bookings")
+    void contextWithBookingOpenBookingsCheckerBean() {
+        BookingFacade mockFacade = mock(BookingFacade.class);
+        when(mockFacade.hasOpenBookingsForCustomer("cust-1")).thenReturn(false);
+
+        contextRunner
+                .withUserConfiguration(BookingOpenBookingsChecker.class)
+                .withBean(BookingFacade.class, () -> mockFacade)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(OpenBookingsChecker.class);
+
+                    CustomerService service = context.getBean(CustomerService.class);
+                    UserInternalService userInternalService = context.getBean(UserInternalService.class);
+
+                    service.deactivateAccount("cust-1", new DeactivateAccountRequest("ValidPassword123!"));
+                    verify(userInternalService).deactivateOwnAccount("cust-1");
+                    verify(mockFacade).hasOpenBookingsForCustomer("cust-1");
                 });
     }
 }
