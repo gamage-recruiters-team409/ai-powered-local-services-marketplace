@@ -19,6 +19,8 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
@@ -42,7 +44,8 @@ class JwtAuthenticationFilterTest {
     void setUp() {
         SecurityContextHolder.clearContext();
         entryPoint = new JwtAuthenticationEntryPoint();
-        jwtAuthenticationFilter = new JwtAuthenticationFilter(tokenService, userInternalService, entryPoint);
+        ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        jwtAuthenticationFilter = new JwtAuthenticationFilter(tokenService, userInternalService, entryPoint, objectMapper);
     }
 
     @AfterEach
@@ -246,5 +249,166 @@ class JwtAuthenticationFilterTest {
         assertThat(response.getStatus()).isEqualTo(401);
         assertThat(response.getContentAsString()).contains("\"status\":401");
         assertThat(response.getContentAsString()).contains("Token permissions have been superseded by account changes");
+    }
+
+    @Test
+    @DisplayName("User with mustChangePassword=true accessing standard endpoint gets 403 PASSWORD_CHANGE_REQUIRED")
+    void shouldRejectNormalEndpointWith403PasswordChangeRequiredWhenUserMustChangePassword() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/customers/me");
+        request.addHeader("Authorization", "Bearer valid-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain filterChain = spy(new MockFilterChain());
+
+        when(tokenService.validateToken("valid-token")).thenReturn(true);
+        when(tokenService.getUserIdFromToken("valid-token")).thenReturn("u-flagged");
+        when(tokenService.getRoleFromToken("valid-token")).thenReturn(Role.ADMIN);
+
+        User flaggedUser = new User();
+        flaggedUser.setId("u-flagged");
+        flaggedUser.setEmail("flagged@marketplace.local");
+        flaggedUser.setRole(Role.ADMIN);
+        flaggedUser.setStatus(UserStatus.ACTIVE);
+        flaggedUser.setMustChangePassword(true);
+        when(userInternalService.getById("u-flagged")).thenReturn(flaggedUser);
+
+        jwtAuthenticationFilter.doFilter(request, response, filterChain);
+
+        verify(filterChain, never()).doFilter(request, response);
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getContentAsString()).contains("\"status\":403");
+        assertThat(response.getContentAsString()).contains("PASSWORD_CHANGE_REQUIRED");
+    }
+
+    @Test
+    @DisplayName("User with mustChangePassword=true calling POST /api/v1/auth/change-password is allowed to proceed")
+    void shouldAllowPasswordChangePostWhenUserMustChangePassword() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/auth/change-password");
+        request.addHeader("Authorization", "Bearer valid-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain filterChain = spy(new MockFilterChain());
+
+        when(tokenService.validateToken("valid-token")).thenReturn(true);
+        when(tokenService.getUserIdFromToken("valid-token")).thenReturn("u-flagged");
+        when(tokenService.getRoleFromToken("valid-token")).thenReturn(Role.ADMIN);
+
+        User flaggedUser = new User();
+        flaggedUser.setId("u-flagged");
+        flaggedUser.setEmail("flagged@marketplace.local");
+        flaggedUser.setRole(Role.ADMIN);
+        flaggedUser.setStatus(UserStatus.ACTIVE);
+        flaggedUser.setMustChangePassword(true);
+        when(userInternalService.getById("u-flagged")).thenReturn(flaggedUser);
+
+        jwtAuthenticationFilter.doFilter(request, response, filterChain);
+
+        verify(filterChain).doFilter(request, response);
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("User with mustChangePassword=true calling POST /api/v1/auth/logout is allowed to proceed")
+    void shouldAllowLogoutPostWhenUserMustChangePassword() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/auth/logout");
+        request.addHeader("Authorization", "Bearer valid-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain filterChain = spy(new MockFilterChain());
+
+        when(tokenService.validateToken("valid-token")).thenReturn(true);
+        when(tokenService.getUserIdFromToken("valid-token")).thenReturn("u-flagged");
+        when(tokenService.getRoleFromToken("valid-token")).thenReturn(Role.ADMIN);
+
+        User flaggedUser = new User();
+        flaggedUser.setId("u-flagged");
+        flaggedUser.setEmail("flagged@marketplace.local");
+        flaggedUser.setRole(Role.ADMIN);
+        flaggedUser.setStatus(UserStatus.ACTIVE);
+        flaggedUser.setMustChangePassword(true);
+        when(userInternalService.getById("u-flagged")).thenReturn(flaggedUser);
+
+        jwtAuthenticationFilter.doFilter(request, response, filterChain);
+
+        verify(filterChain).doFilter(request, response);
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("User with mustChangePassword=true calling POST /api/v1/auth/refresh is allowed to proceed")
+    void shouldAllowRefreshPostWhenUserMustChangePassword() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/auth/refresh");
+        request.addHeader("Authorization", "Bearer valid-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain filterChain = spy(new MockFilterChain());
+
+        when(tokenService.validateToken("valid-token")).thenReturn(true);
+        when(tokenService.getUserIdFromToken("valid-token")).thenReturn("u-flagged");
+        when(tokenService.getRoleFromToken("valid-token")).thenReturn(Role.ADMIN);
+
+        User flaggedUser = new User();
+        flaggedUser.setId("u-flagged");
+        flaggedUser.setEmail("flagged@marketplace.local");
+        flaggedUser.setRole(Role.ADMIN);
+        flaggedUser.setStatus(UserStatus.ACTIVE);
+        flaggedUser.setMustChangePassword(true);
+        when(userInternalService.getById("u-flagged")).thenReturn(flaggedUser);
+
+        jwtAuthenticationFilter.doFilter(request, response, filterChain);
+
+        verify(filterChain).doFilter(request, response);
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("GET to /api/v1/auth/change-password is NOT allow-listed and returns 403 PASSWORD_CHANGE_REQUIRED")
+    void shouldRejectChangePasswordGetWith403PasswordChangeRequired() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/auth/change-password");
+        request.addHeader("Authorization", "Bearer valid-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain filterChain = spy(new MockFilterChain());
+
+        when(tokenService.validateToken("valid-token")).thenReturn(true);
+        when(tokenService.getUserIdFromToken("valid-token")).thenReturn("u-flagged");
+        when(tokenService.getRoleFromToken("valid-token")).thenReturn(Role.ADMIN);
+
+        User flaggedUser = new User();
+        flaggedUser.setId("u-flagged");
+        flaggedUser.setEmail("flagged@marketplace.local");
+        flaggedUser.setRole(Role.ADMIN);
+        flaggedUser.setStatus(UserStatus.ACTIVE);
+        flaggedUser.setMustChangePassword(true);
+        when(userInternalService.getById("u-flagged")).thenReturn(flaggedUser);
+
+        jwtAuthenticationFilter.doFilter(request, response, filterChain);
+
+        verify(filterChain, never()).doFilter(request, response);
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getContentAsString()).contains("PASSWORD_CHANGE_REQUIRED");
+    }
+
+    @Test
+    @DisplayName("Similar-looking path /api/v1/auth/change-password-x returns 403 PASSWORD_CHANGE_REQUIRED")
+    void shouldRejectSimilarLookingPathWith403PasswordChangeRequired() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/auth/change-password-x");
+        request.addHeader("Authorization", "Bearer valid-token");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain filterChain = spy(new MockFilterChain());
+
+        when(tokenService.validateToken("valid-token")).thenReturn(true);
+        when(tokenService.getUserIdFromToken("valid-token")).thenReturn("u-flagged");
+        when(tokenService.getRoleFromToken("valid-token")).thenReturn(Role.ADMIN);
+
+        User flaggedUser = new User();
+        flaggedUser.setId("u-flagged");
+        flaggedUser.setEmail("flagged@marketplace.local");
+        flaggedUser.setRole(Role.ADMIN);
+        flaggedUser.setStatus(UserStatus.ACTIVE);
+        flaggedUser.setMustChangePassword(true);
+        when(userInternalService.getById("u-flagged")).thenReturn(flaggedUser);
+
+        jwtAuthenticationFilter.doFilter(request, response, filterChain);
+
+        verify(filterChain, never()).doFilter(request, response);
+        assertThat(response.getStatus()).isEqualTo(403);
+        assertThat(response.getContentAsString()).contains("PASSWORD_CHANGE_REQUIRED");
     }
 }

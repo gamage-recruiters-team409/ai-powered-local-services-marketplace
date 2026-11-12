@@ -2,27 +2,39 @@ package com.gamagerecruiters.marketplace.modules.auth.service;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -49,11 +61,14 @@ class UserInternalServiceTest {
     @Mock
     private PasswordEncoder passwordEncoder;
 
+    @Mock
+    private MongoTemplate mongoTemplate;
+
     private UserInternalServiceImpl userInternalService;
 
     @BeforeEach
     void setUp() {
-        userInternalService = new UserInternalServiceImpl(userRepository, authTokenRepository, passwordEncoder);
+        userInternalService = new UserInternalServiceImpl(userRepository, authTokenRepository, passwordEncoder, mongoTemplate);
     }
 
     @AfterEach
@@ -81,7 +96,7 @@ class UserInternalServiceTest {
     }
 
     @Test
-    @DisplayName("Issue A: ADMIN -> SUPER_ADMIN status change is denied (403 AccessDeniedException)")
+    @DisplayName("Issue A: ADMIN -> SUPER_ADMIN status change is denied (403 ROLE_HIERARCHY_VIOLATION)")
     void adminCannotChangeSuperAdminStatus() {
         authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
         User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
@@ -90,16 +105,18 @@ class UserInternalServiceTest {
         when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
         when(userRepository.findById("super-1")).thenReturn(Optional.of(targetSuper));
 
-        AccessDeniedException ex = assertThrows(
-                AccessDeniedException.class,
+        ApiException ex = assertThrows(
+                ApiException.class,
                 () -> userInternalService.changeStatus("super-1", UserStatus.SUSPENDED)
         );
+        assertEquals("ROLE_HIERARCHY_VIOLATION", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("not permitted"));
         verify(userRepository, never()).save(targetSuper);
     }
 
     @Test
-    @DisplayName("Issue A: ADMIN -> ADMIN status change is denied (403 AccessDeniedException)")
+    @DisplayName("Issue A: ADMIN -> ADMIN status change is denied (403 ROLE_HIERARCHY_VIOLATION)")
     void adminCannotChangeAnotherAdminStatus() {
         authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
         User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
@@ -108,10 +125,12 @@ class UserInternalServiceTest {
         when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
         when(userRepository.findById("admin-2")).thenReturn(Optional.of(targetAdmin));
 
-        AccessDeniedException ex = assertThrows(
-                AccessDeniedException.class,
+        ApiException ex = assertThrows(
+                ApiException.class,
                 () -> userInternalService.changeStatus("admin-2", UserStatus.SUSPENDED)
         );
+        assertEquals("ROLE_HIERARCHY_VIOLATION", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("not permitted"));
         verify(userRepository, never()).save(targetAdmin);
     }
@@ -149,23 +168,25 @@ class UserInternalServiceTest {
     }
 
     @Test
-    @DisplayName("Issue A: SUPER_ADMIN modifying own status is denied")
+    @DisplayName("Issue A: SUPER_ADMIN modifying own status is denied (403 CANNOT_MODIFY_SELF)")
     void superAdminCannotModifyOwnStatus() {
         authenticateAs("super-1", "super@marketplace.local", Role.SUPER_ADMIN);
         User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
 
         when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
 
-        AccessDeniedException ex = assertThrows(
-                AccessDeniedException.class,
+        ApiException ex = assertThrows(
+                ApiException.class,
                 () -> userInternalService.changeStatus("super-1", UserStatus.SUSPENDED)
         );
+        assertEquals("CANNOT_MODIFY_SELF", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertEquals("Self status modification is not allowed", ex.getMessage());
         verify(userRepository, never()).save(actor);
     }
 
     @Test
-    @DisplayName("Issue A: Suspending last remaining ACTIVE SUPER_ADMIN is denied")
+    @DisplayName("Issue A: Suspending last remaining ACTIVE SUPER_ADMIN is denied (409 LAST_ACTIVE_SUPER_ADMIN)")
     void cannotSuspendLastRemainingActiveSuperAdmin() {
         authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
         User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
@@ -175,10 +196,12 @@ class UserInternalServiceTest {
         when(userRepository.findById("super-2")).thenReturn(Optional.of(targetSuper));
         when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(1L);
 
-        AccessDeniedException ex = assertThrows(
-                AccessDeniedException.class,
+        ApiException ex = assertThrows(
+                ApiException.class,
                 () -> userInternalService.changeStatus("super-2", UserStatus.SUSPENDED)
         );
+        assertEquals("LAST_ACTIVE_SUPER_ADMIN", ex.getErrorCode());
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
         assertTrue(ex.getMessage().contains("last remaining ACTIVE SUPER_ADMIN"));
         verify(userRepository, never()).save(targetSuper);
     }
@@ -228,6 +251,7 @@ class UserInternalServiceTest {
         assertNull(admin1.getPhone(), "Phone must be absent/null for admin accounts");
         assertEquals(Role.ADMIN, admin1.getRole());
         assertEquals(UserStatus.ACTIVE, admin1.getStatus());
+        assertTrue(admin1.isMustChangePassword(), "Admin created via createAdminAccount must have mustChangePassword=true");
 
         // Admin 2: Support Admin
         User admin2 = userInternalService.createAdminAccount("Admin Two", "admin2@marketplace.local", "AdminPass2", Role.SUPPORT_ADMIN);
@@ -334,11 +358,12 @@ class UserInternalServiceTest {
     }
 
     @Test
-    @DisplayName("changePassword: Valid current and new password should update hash and revoke tokens")
+    @DisplayName("changePassword: Valid current and new password should update hash, set mustChangePassword=false and revoke tokens")
     void shouldChangePasswordAndRevokeTokens() {
         User user = new User();
         user.setId("u-1");
         user.setPasswordHash("hashed-old-pass");
+        user.setMustChangePassword(true);
 
         when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("OldPass123!", "hashed-old-pass")).thenReturn(true);
@@ -348,8 +373,16 @@ class UserInternalServiceTest {
         userInternalService.changePassword("u-1", "OldPass123!", "NewPass123!");
 
         assertEquals("hashed-new-pass", user.getPasswordHash());
+        assertFalse(user.isMustChangePassword(), "mustChangePassword must be reset to false after successful change");
         verify(userRepository).save(user);
         verify(authTokenRepository).revokeAllActiveTokensByUserId("u-1");
+    }
+
+    @Test
+    @DisplayName("Legacy user document without mustChangePassword field defaults safely to false")
+    void shouldDefaultMustChangePasswordToFalseForLegacyUser() {
+        User legacyUser = new User();
+        assertFalse(legacyUser.isMustChangePassword(), "Default mustChangePassword for legacy user must be false");
     }
 
     @Test
@@ -475,7 +508,7 @@ class UserInternalServiceTest {
     }
 
     @Test
-    @DisplayName("changeStatus: Admin cannot modify status of a DEACTIVATED account")
+    @DisplayName("changeStatus: Admin cannot modify status of a DEACTIVATED account (403 ACCOUNT_DEACTIVATED)")
     void shouldRejectAdminModifyingDeactivatedAccount() {
         authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
 
@@ -492,11 +525,338 @@ class UserInternalServiceTest {
         when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
         when(userRepository.findById("cust-1")).thenReturn(Optional.of(target));
 
-        AccessDeniedException ex = assertThrows(
-                AccessDeniedException.class,
+        ApiException ex = assertThrows(
+                ApiException.class,
                 () -> userInternalService.changeStatus("cust-1", UserStatus.ACTIVE)
         );
+        assertEquals("ACCOUNT_DEACTIVATED", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertTrue(ex.getMessage().contains("Cannot modify status of a DEACTIVATED account"));
         verify(userRepository, never()).save(target);
+    }
+
+    // --- Access control tests for searchUsers and countByRoleAndStatus ---
+
+    @Test
+    @DisplayName("searchUsers: No authentication in SecurityContext throws 401 AUTHENTICATION_REQUIRED and performs no data access")
+    void searchUsersRejectsUnauthenticated() {
+        SecurityContextHolder.clearContext();
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("u-1", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("searchUsers: Anonymous authentication throws 401 AUTHENTICATION_REQUIRED and performs no data access")
+    void searchUsersRejectsAnonymousAuthentication() {
+        AnonymousAuthenticationToken anon = new AnonymousAuthenticationToken(
+                "key", "anonymousUser", List.of(new SimpleGrantedAuthority("ROLE_ANONYMOUS")));
+        SecurityContextHolder.getContext().setAuthentication(anon);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("u-1", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("searchUsers: Non-UserPrincipal authentication throws 401 AUTHENTICATION_REQUIRED and performs no data access")
+    void searchUsersRejectsNonAppPrincipal() {
+        UsernamePasswordAuthenticationToken nonAppAuth = new UsernamePasswordAuthenticationToken(
+                "plain-username", null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+        SecurityContextHolder.getContext().setAuthentication(nonAppAuth);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("u-1", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("searchUsers: Mismatched actorId throws 403 ACTOR_IDENTITY_MISMATCH and performs no data access")
+    void searchUsersRejectsMismatchedActorId() {
+        authenticateAs("u-1", "u1@marketplace.local", Role.ADMIN);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("u-2", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_IDENTITY_MISMATCH", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("searchUsers: Privilege spoofing in both directions throws 403 ACTOR_IDENTITY_MISMATCH")
+    void searchUsersRejectsPrivilegeSpoofingInBothDirections() {
+        // 1. Authenticated ADMIN supplies SUPER_ADMIN id
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        ApiException ex1 = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("super-1", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_IDENTITY_MISMATCH", ex1.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex1.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+
+        // 2. Authenticated SUPER_ADMIN supplies ADMIN id
+        authenticateAs("super-1", "super@marketplace.local", Role.SUPER_ADMIN);
+        ApiException ex2 = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("admin-1", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_IDENTITY_MISMATCH", ex2.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex2.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("searchUsers: Null or blank actorId throws 403 ACTOR_NOT_FOUND")
+    void searchUsersRejectsNullOrBlankActorId() {
+        authenticateAs("actor-1", "actor1@marketplace.local", Role.ADMIN);
+
+        ApiException ex1 = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers(null, null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_NOT_FOUND", ex1.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex1.getStatus());
+
+        ApiException ex2 = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("  ", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_NOT_FOUND", ex2.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("searchUsers: Unknown actorId throws 403 ACTOR_NOT_FOUND")
+    void searchUsersRejectsUnknownActorId() {
+        authenticateAs("unknown", "unknown@marketplace.local", Role.ADMIN);
+        when(userRepository.findById("unknown")).thenReturn(Optional.empty());
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("unknown", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_NOT_FOUND", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("searchUsers: Inactive actor throws 403 ACTOR_ACCOUNT_INACTIVE")
+    void searchUsersRejectsInactiveActor() {
+        authenticateAs("actor-1", "actor1@marketplace.local", Role.ADMIN);
+        User inactive = createUser("actor-1", Role.ADMIN, UserStatus.SUSPENDED);
+        when(userRepository.findById("actor-1")).thenReturn(Optional.of(inactive));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("actor-1", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ACTOR_ACCOUNT_INACTIVE", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"SUPPORT_ADMIN", "FINANCE_ADMIN", "MODERATOR", "CUSTOMER", "PROVIDER"})
+    @DisplayName("searchUsers: Non-permitted actor roles throw 403 ROLE_NOT_PERMITTED")
+    void searchUsersRejectsNonPermittedActorRoles(Role role) {
+        authenticateAs("actor-1", "actor1@marketplace.local", role);
+        User actor = createUser("actor-1", role, UserStatus.ACTIVE);
+        when(userRepository.findById("actor-1")).thenReturn(Optional.of(actor));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("actor-1", null, null, null, PageRequest.of(0, 10)));
+        assertEquals("ROLE_NOT_PERMITTED", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("searchUsers: ADMIN actor explicitly requesting forbidden role throws 403 ROLE_NOT_PERMITTED")
+    void searchUsersAdminRequestingForbiddenRoleThrows() {
+        authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.searchUsers("admin-1", Set.of(Role.CUSTOMER, Role.SUPER_ADMIN), null, null, PageRequest.of(0, 10)));
+        assertEquals("ROLE_NOT_PERMITTED", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("searchUsers: ADMIN actor unrestricted or requesting visible roles succeeds")
+    void searchUsersAdminPermitted() {
+        authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+        when(mongoTemplate.count(any(Query.class), eq(User.class))).thenReturn(0L);
+        when(mongoTemplate.find(any(Query.class), eq(User.class))).thenReturn(List.of());
+
+        assertDoesNotThrow(() -> userInternalService.searchUsers("admin-1", null, null, null, PageRequest.of(0, 10)));
+        assertDoesNotThrow(() -> userInternalService.searchUsers("admin-1", Set.of(Role.CUSTOMER), null, null, PageRequest.of(0, 10)));
+    }
+
+    @Test
+    @DisplayName("searchUsers: SUPER_ADMIN actor can view any role")
+    void searchUsersSuperAdminPermitted() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User superAdmin = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(superAdmin));
+        when(mongoTemplate.count(any(Query.class), eq(User.class))).thenReturn(0L);
+        when(mongoTemplate.find(any(Query.class), eq(User.class))).thenReturn(List.of());
+
+        assertDoesNotThrow(() -> userInternalService.searchUsers("super-1", null, null, null, PageRequest.of(0, 10)));
+        assertDoesNotThrow(() -> userInternalService.searchUsers("super-1", Set.of(Role.SUPER_ADMIN, Role.MODERATOR), null, null, PageRequest.of(0, 10)));
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: No authentication in SecurityContext throws 401 AUTHENTICATION_REQUIRED and performs no data access")
+    void countByRoleAndStatusRejectsUnauthenticated() {
+        SecurityContextHolder.clearContext();
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("u-1", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: Anonymous authentication throws 401 AUTHENTICATION_REQUIRED and performs no data access")
+    void countByRoleAndStatusRejectsAnonymousAuthentication() {
+        AnonymousAuthenticationToken anon = new AnonymousAuthenticationToken(
+                "key", "anonymousUser", List.of(new SimpleGrantedAuthority("ROLE_ANONYMOUS")));
+        SecurityContextHolder.getContext().setAuthentication(anon);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("u-1", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: Non-UserPrincipal authentication throws 401 AUTHENTICATION_REQUIRED and performs no data access")
+    void countByRoleAndStatusRejectsNonAppPrincipal() {
+        UsernamePasswordAuthenticationToken nonAppAuth = new UsernamePasswordAuthenticationToken(
+                "plain-username", null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+        SecurityContextHolder.getContext().setAuthentication(nonAppAuth);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("u-1", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: Mismatched actorId throws 403 ACTOR_IDENTITY_MISMATCH and performs no data access")
+    void countByRoleAndStatusRejectsMismatchedActorId() {
+        authenticateAs("u-1", "u1@marketplace.local", Role.ADMIN);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("u-2", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_IDENTITY_MISMATCH", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: Privilege spoofing in both directions throws 403 ACTOR_IDENTITY_MISMATCH")
+    void countByRoleAndStatusRejectsPrivilegeSpoofingInBothDirections() {
+        // 1. Authenticated ADMIN supplies SUPER_ADMIN id
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        ApiException ex1 = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("super-1", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_IDENTITY_MISMATCH", ex1.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex1.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+
+        // 2. Authenticated SUPER_ADMIN supplies ADMIN id
+        authenticateAs("super-1", "super@marketplace.local", Role.SUPER_ADMIN);
+        ApiException ex2 = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("admin-1", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_IDENTITY_MISMATCH", ex2.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex2.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: Null or blank actorId throws 403 ACTOR_NOT_FOUND")
+    void countByRoleAndStatusRejectsNullOrBlankActorId() {
+        authenticateAs("actor-1", "actor1@marketplace.local", Role.ADMIN);
+
+        ApiException ex1 = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus(null, Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_NOT_FOUND", ex1.getErrorCode());
+
+        ApiException ex2 = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus(" ", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_NOT_FOUND", ex2.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: Unknown actorId throws 403 ACTOR_NOT_FOUND")
+    void countByRoleAndStatusRejectsUnknownActorId() {
+        authenticateAs("unknown", "unknown@marketplace.local", Role.ADMIN);
+        when(userRepository.findById("unknown")).thenReturn(Optional.empty());
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("unknown", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_NOT_FOUND", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: Inactive actor throws 403 ACTOR_ACCOUNT_INACTIVE")
+    void countByRoleAndStatusRejectsInactiveActor() {
+        authenticateAs("actor-1", "actor1@marketplace.local", Role.ADMIN);
+        User inactive = createUser("actor-1", Role.ADMIN, UserStatus.LOCKED);
+        when(userRepository.findById("actor-1")).thenReturn(Optional.of(inactive));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("actor-1", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ACTOR_ACCOUNT_INACTIVE", ex.getErrorCode());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"SUPPORT_ADMIN", "FINANCE_ADMIN", "MODERATOR", "CUSTOMER", "PROVIDER"})
+    @DisplayName("countByRoleAndStatus: Non-permitted actor roles throw 403 ROLE_NOT_PERMITTED")
+    void countByRoleAndStatusRejectsNonPermittedActorRoles(Role role) {
+        authenticateAs("actor-1", "actor1@marketplace.local", role);
+        User actor = createUser("actor-1", role, UserStatus.ACTIVE);
+        when(userRepository.findById("actor-1")).thenReturn(Optional.of(actor));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("actor-1", Role.CUSTOMER, UserStatus.ACTIVE));
+        assertEquals("ROLE_NOT_PERMITTED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: ADMIN requesting non-visible role throws 403 ROLE_NOT_PERMITTED")
+    void countByRoleAndStatusAdminRequestingForbiddenRoleThrows() {
+        authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countByRoleAndStatus("admin-1", Role.SUPER_ADMIN, UserStatus.ACTIVE));
+        assertEquals("ROLE_NOT_PERMITTED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: ADMIN requesting visible role succeeds")
+    void countByRoleAndStatusAdminPermitted() {
+        authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+        when(userRepository.countByRoleAndStatus(Role.CUSTOMER, UserStatus.ACTIVE)).thenReturn(5L);
+
+        long count = userInternalService.countByRoleAndStatus("admin-1", Role.CUSTOMER, UserStatus.ACTIVE);
+        assertEquals(5L, count);
+    }
+
+    @Test
+    @DisplayName("countByRoleAndStatus: SUPER_ADMIN requesting any role succeeds")
+    void countByRoleAndStatusSuperAdminPermitted() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User superAdmin = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(superAdmin));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
+
+        long count = userInternalService.countByRoleAndStatus("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        assertEquals(2L, count);
     }
 }
