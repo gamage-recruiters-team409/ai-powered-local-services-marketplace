@@ -7,7 +7,10 @@ import { cx } from './providerLayoutUtils'
 function normalizeCount(value) {
   const number = Number(value)
 
-  if (!Number.isFinite(number) || number <= 0) {
+  if (
+    !Number.isFinite(number) ||
+    number <= 0
+  ) {
     return 0
   }
 
@@ -17,6 +20,7 @@ function normalizeCount(value) {
 export function ProviderMobileBottomNav({
   items = [],
   messageCount = 0,
+  inert = false,
 }) {
   const safeMessageCount =
     normalizeCount(messageCount)
@@ -25,6 +29,7 @@ export function ProviderMobileBottomNav({
     <nav
       className={styles.bottomNav}
       aria-label="Provider mobile navigation"
+      inert={inert}
     >
       {items.map((item) => {
         const isMessages =
@@ -40,7 +45,9 @@ export function ProviderMobileBottomNav({
             key={item.id}
             to={item.to}
             end={item.end}
-            className={({ isActive }) =>
+            className={({
+              isActive,
+            }) =>
               cx(
                 styles.bottomNavLink,
                 isActive &&
@@ -59,21 +66,25 @@ export function ProviderMobileBottomNav({
               />
 
               {isMessages &&
-                safeMessageCount > 0 && (
+                safeMessageCount >
+                  0 && (
                   <span
                     className={
                       styles.bottomNavBadge
                     }
                     aria-hidden="true"
                   >
-                    {safeMessageCount > 99
+                    {safeMessageCount >
+                    99
                       ? '99+'
                       : safeMessageCount}
                   </span>
                 )}
             </span>
 
-            <span>{item.label}</span>
+            <span>
+              {item.label}
+            </span>
           </NavLink>
         )
       })}

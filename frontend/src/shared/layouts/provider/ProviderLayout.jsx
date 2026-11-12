@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react'
@@ -22,9 +23,33 @@ const MAIN_ID = 'provider-main'
 
 const MOBILE_QUERY = '(max-width: 767px)'
 
+const FOCUS_MENU_BUTTON = 'menu-button'
+const FOCUS_MAIN = 'main'
+
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ')
+
 const FALLBACK_USER = {
   name: 'Provider Name',
   email: 'providername@email.com',
+}
+
+function getFocusable(container) {
+  if (!container) {
+    return []
+  }
+
+  return [
+    ...container.querySelectorAll(
+      FOCUSABLE_SELECTOR,
+    ),
+  ]
 }
 
 function getInitialMobileState() {
@@ -49,104 +74,243 @@ export function ProviderLayout({
   brand = PROVIDER_BRAND,
   children,
 }) {
-  const [mobile, setMobile] = useState(getInitialMobileState)
-  const [drawerOpen, setDrawerOpen] = useState(false)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [mobile, setMobile] =
+    useState(getInitialMobileState)
+
+  const [drawerOpen, setDrawerOpen] =
+    useState(false)
+
+  const [
+    sidebarCollapsed,
+    setSidebarCollapsed,
+  ] = useState(false)
 
   const menuButtonRef = useRef(null)
   const drawerRef = useRef(null)
   const mainRef = useRef(null)
 
-  const closeDrawer = useCallback(() => {
-    setDrawerOpen(false)
-  }, [])
+  const focusAfterCloseRef = useRef(null)
+
+  const closeDrawer = useCallback(
+    (focusTarget = null) => {
+      focusAfterCloseRef.current =
+        focusTarget
+
+      setDrawerOpen(false)
+    },
+    [],
+  )
 
   /*
-   * Listen only for future viewport changes.
-   *
-   * The initial value is already provided by getInitialMobileState(),
-   * so there is no need to call setMobile() synchronously inside
-   * this effect.
+   * Restore focus only after the drawer has closed
+   * and the background is no longer inert.
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (drawerOpen) {
+      return
+    }
+
+    const focusTarget =
+      focusAfterCloseRef.current
+
+    if (!focusTarget) {
+      return
+    }
+
+    focusAfterCloseRef.current = null
+
     if (
-      typeof window === 'undefined' ||
-      typeof window.matchMedia !== 'function'
+      focusTarget ===
+      FOCUS_MENU_BUTTON
     ) {
-      return undefined
+      menuButtonRef.current?.focus()
+      return
     }
 
-    const mediaQuery = window.matchMedia(MOBILE_QUERY)
-
-    const handleChange = (event) => {
-      setMobile(event.matches)
-
-      if (!event.matches) {
-        setDrawerOpen(false)
-      }
+    if (
+      focusTarget ===
+      FOCUS_MAIN
+    ) {
+      mainRef.current?.focus()
     }
-
-    mediaQuery.addEventListener('change', handleChange)
-
-    return () => {
-      mediaQuery.removeEventListener('change', handleChange)
-    }
-  }, [])
+  }, [drawerOpen])
 
   /*
-   * Allow Escape to close the mobile navigation drawer.
+   * Mobile drawer keyboard accessibility.
+   *
+   * - Moves focus inside the drawer.
+   * - Traps Tab / Shift+Tab.
+   * - Escape closes the drawer.
    */
   useEffect(() => {
     if (!drawerOpen || !mobile) {
       return undefined
     }
 
+    const drawer = drawerRef.current
+
+    const initialFocusTarget =
+      getFocusable(drawer)[0] ?? drawer
+
+    initialFocusTarget?.focus()
+
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
         event.preventDefault()
-        closeDrawer()
-        menuButtonRef.current?.focus()
+
+        closeDrawer(
+          FOCUS_MENU_BUTTON,
+        )
+
+        return
+      }
+
+      if (event.key !== 'Tab') {
+        return
+      }
+
+      const items =
+        getFocusable(drawer)
+
+      if (items.length === 0) {
+        event.preventDefault()
+        drawer?.focus()
+
+        return
+      }
+
+      const first = items[0]
+      const last =
+        items[items.length - 1]
+
+      const active =
+        document.activeElement
+
+      if (!drawer?.contains(active)) {
+        event.preventDefault()
+        first.focus()
+
+        return
+      }
+
+      if (
+        event.shiftKey &&
+        active === first
+      ) {
+        event.preventDefault()
+        last.focus()
+
+        return
+      }
+
+      if (
+        !event.shiftKey &&
+        active === last
+      ) {
+        event.preventDefault()
+        first.focus()
       }
     }
 
-    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener(
+      'keydown',
+      handleKeyDown,
+    )
 
     return () => {
-      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener(
+        'keydown',
+        handleKeyDown,
+      )
     }
-  }, [drawerOpen, mobile, closeDrawer])
+  }, [
+    drawerOpen,
+    mobile,
+    closeDrawer,
+  ])
+
+  /*
+   * Listen for future viewport changes.
+   */
+  useEffect(() => {
+    if (
+      typeof window === 'undefined' ||
+      typeof window.matchMedia !==
+        'function'
+    ) {
+      return undefined
+    }
+
+    const mediaQuery =
+      window.matchMedia(MOBILE_QUERY)
+
+    const handleChange = (event) => {
+      setMobile(event.matches)
+
+      if (!event.matches) {
+        closeDrawer(null)
+      }
+    }
+
+    mediaQuery.addEventListener(
+      'change',
+      handleChange,
+    )
+
+    return () => {
+      mediaQuery.removeEventListener(
+        'change',
+        handleChange,
+      )
+    }
+  }, [closeDrawer])
 
   /*
    * Desktop:
-   *   toggles the expanded/collapsed sidebar.
+   *   expand/collapse sidebar.
    *
    * Mobile:
-   *   opens/closes the navigation drawer.
+   *   open/close navigation drawer.
    */
   const handleMenuClick = () => {
     if (mobile) {
-      setDrawerOpen((value) => !value)
+      if (drawerOpen) {
+        closeDrawer(
+          FOCUS_MENU_BUTTON,
+        )
+      } else {
+        setDrawerOpen(true)
+      }
+
       return
     }
 
-    setSidebarCollapsed((value) => !value)
+    setSidebarCollapsed(
+      (value) => !value,
+    )
   }
 
   /*
-   * Close the mobile drawer after selecting a navigation item.
+   * Navigation from the mobile drawer
+   * closes it and moves focus to main.
    */
   const handleNavigate = () => {
     if (mobile) {
-      closeDrawer()
-      mainRef.current?.focus()
+      closeDrawer(FOCUS_MAIN)
     }
   }
 
+  const drawerModalActive =
+    mobile && drawerOpen
+
   return (
-    <div className={`providerTheme ${styles.layout}`}>
+    <div
+      className={`providerTheme ${styles.layout}`}
+    >
       <a
         href={`#${MAIN_ID}`}
         className={styles.skipLink}
+        inert={drawerModalActive}
       >
         Skip to main content
       </a>
@@ -156,22 +320,40 @@ export function ProviderLayout({
         user={user}
         mobile={mobile}
         drawerOpen={drawerOpen}
-        sidebarCollapsed={sidebarCollapsed}
+        sidebarCollapsed={
+          sidebarCollapsed
+        }
         menuButtonRef={menuButtonRef}
         sidebarId={SIDEBAR_ID}
         onMenuClick={handleMenuClick}
-        notificationCount={notificationCount}
-        onNotificationsClick={onNotificationsClick}
+        notificationCount={
+          notificationCount
+        }
+        onNotificationsClick={
+          onNotificationsClick
+        }
         onLogout={onLogout}
+        inert={drawerModalActive}
       />
 
       <div className={styles.body}>
-        {mobile && drawerOpen && (
-          <button
-            type="button"
+        {drawerModalActive && (
+          <div
             className={styles.overlay}
-            aria-label="Close navigation menu"
-            onClick={closeDrawer}
+            aria-hidden="true"
+            data-testid="provider-drawer-backdrop"
+            onMouseDown={(event) => {
+              /*
+               * Keep focus inside the drawer until
+               * the close state has rendered.
+               */
+              event.preventDefault()
+            }}
+            onClick={() =>
+              closeDrawer(
+                FOCUS_MENU_BUTTON,
+              )
+            }
           />
         )}
 
@@ -179,7 +361,9 @@ export function ProviderLayout({
           id={SIDEBAR_ID}
           mobile={mobile}
           open={drawerOpen}
-          collapsed={sidebarCollapsed}
+          collapsed={
+            sidebarCollapsed
+          }
           user={user}
           sections={navSections}
           drawerRef={drawerRef}
@@ -192,33 +376,47 @@ export function ProviderLayout({
           id={MAIN_ID}
           className={styles.main}
           tabIndex={-1}
-          inert={mobile && drawerOpen}
+          inert={drawerModalActive}
         >
           {children ?? <Outlet />}
         </main>
       </div>
 
-      <footer className={styles.footer}>
-        <strong>{brand.footerBrand}</strong>
+      <footer
+        className={styles.footer}
+        inert={drawerModalActive}
+      >
+        <strong>
+          {brand.footerBrand}
+        </strong>
 
         <nav aria-label="Footer">
-          <ul className={styles.footerLinks}>
-            {brand.footerLinks.map((link) => (
-              <li key={link.label}>
-                <a href={link.href}>
-                  {link.label}
-                </a>
-              </li>
-            ))}
+          <ul
+            className={
+              styles.footerLinks
+            }
+          >
+            {brand.footerLinks.map(
+              (link) => (
+                <li key={link.label}>
+                  <a href={link.href}>
+                    {link.label}
+                  </a>
+                </li>
+              ),
+            )}
           </ul>
         </nav>
 
-        <span>{brand.footerText}</span>
+        <span>
+          {brand.footerText}
+        </span>
       </footer>
 
       <ProviderMobileBottomNav
         items={bottomNavItems}
         messageCount={messageCount}
+        inert={drawerModalActive}
       />
     </div>
   )

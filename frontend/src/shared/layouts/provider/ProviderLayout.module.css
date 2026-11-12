@@ -174,7 +174,11 @@
   flex-shrink: 0;
   border: 1px solid var(--prv-color-primary-border);
   border-radius: 50%;
-  background: linear-gradient(135deg, #99f6e4, var(--prv-color-primary));
+  background: linear-gradient(
+    135deg,
+    #99f6e4,
+    var(--prv-color-primary)
+  );
   color: #fff;
   font-size: 10px;
   font-weight: 700;
@@ -258,6 +262,7 @@
 }
 
 .providerIdentity {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 11px;
@@ -310,6 +315,7 @@
 
 .sidebarNav {
   flex: 1;
+  min-height: 0;
   padding: 14px 12px;
 }
 
@@ -378,6 +384,7 @@
 }
 
 .sidebarFooter {
+  flex-shrink: 0;
   margin: 0 12px;
   padding: 12px 0 18px;
   border-top: 1px solid var(--prv-color-border);
@@ -566,7 +573,15 @@
     padding-bottom: 14px;
   }
 
+  /*
+   * Only the navigation region scrolls on short mobile screens.
+   * Provider identity and Logout remain available.
+   */
   .sidebarNav {
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     padding-top: 10px;
     padding-bottom: 8px;
   }
