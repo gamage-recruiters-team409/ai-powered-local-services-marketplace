@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.catalog.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -28,6 +29,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamagerecruiters.marketplace.common.exception.GlobalExceptionHandler;
+import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.config.SecurityConfig;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
@@ -276,6 +278,78 @@ class AdminCategoryControllerTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403))
                 .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    @DisplayName("PUT update with active=false when category has active subcategories returns 409 RESOURCE_CONFLICT")
+    void shouldReturn409WhenDeactivatingParentViaPutWithActiveSubcategories() throws Exception {
+        mockAdminToken("admin-token", "admin-1");
+
+        UpdateCategoryRequest request = new UpdateCategoryRequest(
+                "Home Repair", "home-repair", "General repairs", "wrench", new BigDecimal("0.10"), false);
+        when(categoryService.updateCategory(eq("parent-1"), any(UpdateCategoryRequest.class)))
+                .thenThrow(new ResourceConflictException("Cannot deactivate category while it has active subcategories"));
+
+        mockMvc.perform(put("/api/v1/admin/categories/parent-1")
+                        .header("Authorization", "Bearer admin-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("RESOURCE_CONFLICT"));
+    }
+
+    @Test
+    @DisplayName("DELETE deactivate when category has active subcategories returns 409 RESOURCE_CONFLICT")
+    void shouldReturn409WhenDeactivatingParentViaDeleteWithActiveSubcategories() throws Exception {
+        mockAdminToken("admin-token", "admin-1");
+
+        doThrow(new ResourceConflictException("Cannot deactivate category while it has active subcategories"))
+                .when(categoryService).deactivateCategory("parent-1");
+
+        mockMvc.perform(delete("/api/v1/admin/categories/parent-1")
+                        .header("Authorization", "Bearer admin-token"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("RESOURCE_CONFLICT"));
+    }
+
+    @Test
+    @DisplayName("POST create subcategory under inactive parent returns 409 RESOURCE_CONFLICT")
+    void shouldReturn409WhenCreatingSubcategoryUnderInactiveParent() throws Exception {
+        mockAdminToken("admin-token", "admin-1");
+
+        CreateCategoryRequest request = new CreateCategoryRequest(
+                "Sub Category", "sub-category", "Desc", "icon", "inactive-parent", new BigDecimal("0.10"));
+        when(categoryService.createCategory(any(CreateCategoryRequest.class)))
+                .thenThrow(new ResourceConflictException("Cannot create subcategory under an inactive parent category"));
+
+        mockMvc.perform(post("/api/v1/admin/categories")
+                        .header("Authorization", "Bearer admin-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("RESOURCE_CONFLICT"));
+    }
+
+    @Test
+    @DisplayName("PUT reactivate subcategory under inactive parent returns 409 RESOURCE_CONFLICT")
+    void shouldReturn409WhenReactivatingSubcategoryUnderInactiveParent() throws Exception {
+        mockAdminToken("admin-token", "admin-1");
+
+        UpdateCategoryRequest request = new UpdateCategoryRequest(
+                "Sub Category", "sub-category", "Desc", "icon", new BigDecimal("0.10"), true);
+        when(categoryService.updateCategory(eq("sub-1"), any(UpdateCategoryRequest.class)))
+                .thenThrow(new ResourceConflictException("Cannot activate subcategory while its parent category is inactive"));
+
+        mockMvc.perform(put("/api/v1/admin/categories/sub-1")
+                        .header("Authorization", "Bearer admin-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("RESOURCE_CONFLICT"));
     }
 }
 
