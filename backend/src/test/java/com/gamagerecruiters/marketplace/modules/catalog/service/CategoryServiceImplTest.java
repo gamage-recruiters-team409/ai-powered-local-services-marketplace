@@ -211,5 +211,65 @@ class CategoryServiceImplTest {
                 .isInstanceOf(ResourceConflictException.class)
                 .hasMessageContaining("active subcategories");
     }
+
+    @Test
+    @DisplayName("updateCategory with active=false throws ResourceConflictException if category has active subcategories")
+    void updateCategory_deactivatingWithActiveSubcategories_throwsConflict() {
+        Category existing = new Category("Parent Cat", "parent-cat", null, new BigDecimal("0.10"));
+        existing.setId("parent-1");
+        existing.setActive(true);
+
+        UpdateCategoryRequest request = new UpdateCategoryRequest(
+                "Parent Cat", "parent-cat", null, null, new BigDecimal("0.10"), false);
+
+        when(categoryRepository.findById("parent-1")).thenReturn(Optional.of(existing));
+        when(categoryRepository.existsBySlugAndIdNot("parent-cat", "parent-1")).thenReturn(false);
+        when(categoryRepository.existsByParentIdAndActiveTrue("parent-1")).thenReturn(true);
+
+        assertThatThrownBy(() -> categoryService.updateCategory("parent-1", request))
+                .isInstanceOf(ResourceConflictException.class)
+                .hasMessageContaining("Cannot deactivate category while it has active subcategories");
+    }
+
+    @Test
+    @DisplayName("createCategory throws ResourceConflictException when parent category is inactive")
+    void createCategory_underInactiveParent_throwsConflict() {
+        Category inactiveParent = new Category("Inactive Parent", "inactive-parent", null, new BigDecimal("0.10"));
+        inactiveParent.setId("parent-inactive");
+        inactiveParent.setActive(false);
+
+        CreateCategoryRequest request = new CreateCategoryRequest(
+                "Sub Category", "sub-category", null, null, "parent-inactive", null);
+
+        when(categoryRepository.existsBySlug("sub-category")).thenReturn(false);
+        when(categoryRepository.findById("parent-inactive")).thenReturn(Optional.of(inactiveParent));
+
+        assertThatThrownBy(() -> categoryService.createCategory(request))
+                .isInstanceOf(ResourceConflictException.class)
+                .hasMessageContaining("Cannot create subcategory under an inactive parent category");
+    }
+
+    @Test
+    @DisplayName("updateCategory throws ResourceConflictException when activating subcategory under inactive parent")
+    void updateCategory_activatingUnderInactiveParent_throwsConflict() {
+        Category inactiveParent = new Category("Inactive Parent", "inactive-parent", null, new BigDecimal("0.10"));
+        inactiveParent.setId("parent-inactive");
+        inactiveParent.setActive(false);
+
+        Category subCategory = new Category("Sub Category", "sub-category", "parent-inactive", new BigDecimal("0.10"));
+        subCategory.setId("sub-1");
+        subCategory.setActive(false);
+
+        UpdateCategoryRequest request = new UpdateCategoryRequest(
+                "Sub Category", "sub-category", null, null, new BigDecimal("0.10"), true);
+
+        when(categoryRepository.findById("sub-1")).thenReturn(Optional.of(subCategory));
+        when(categoryRepository.existsBySlugAndIdNot("sub-category", "sub-1")).thenReturn(false);
+        when(categoryRepository.findById("parent-inactive")).thenReturn(Optional.of(inactiveParent));
+
+        assertThatThrownBy(() -> categoryService.updateCategory("sub-1", request))
+                .isInstanceOf(ResourceConflictException.class)
+                .hasMessageContaining("Cannot activate subcategory while its parent category is inactive");
+    }
 }
 
