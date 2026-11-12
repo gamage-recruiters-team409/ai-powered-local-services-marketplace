@@ -1,7 +1,19 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+
+// jsdom does not implement the native <dialog> methods used by the shared Modal.
+// Provide minimal behaviour so focus-management can be exercised in tests.
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function showModal() {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function close() {
+    this.open = false;
+    this.dispatchEvent(new Event('close'));
+  };
+});
 
 vi.mock('../services/searchAdapter', () => ({
   fetchSearchResults: vi.fn(),
@@ -156,5 +168,50 @@ describe('SearchResultsPage fixture labelling', () => {
     fireEvent.error(image);
 
     expect(image.src).toMatch(/^data:image\/svg\+xml/);
+  });
+});
+
+describe('SearchResultsPage comparison modal', () => {
+  const comparisonResponse = {
+    isLive: false,
+    isFixture: true,
+    results: [
+      { ...provider, inComparison: true },
+      { ...provider, id: 'prv-002', name: 'BrightNest Cleaning', inComparison: true },
+    ],
+    totalCount: 2,
+  };
+
+  beforeEach(() => {
+    fetchSearchResults.mockResolvedValue(comparisonResponse);
+  });
+
+  async function openComparisonModal() {
+    const user = userEvent.setup();
+    render(<SearchResultsPage />);
+
+    const compareButton = await screen.findByRole('button', { name: /compare \(2\)/i });
+    await user.click(compareButton);
+
+    return { user, compareButton };
+  }
+
+  it('dismisses with Understood and restores focus to the Compare button', async () => {
+    const { user, compareButton } = await openComparisonModal();
+
+    expect(screen.getByText('Side-by-Side Comparison')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Understood' }));
+
+    await waitFor(() => expect(document.activeElement).toBe(compareButton));
+  });
+
+  it('dismisses with Escape and restores focus to the Compare button', async () => {
+    const { compareButton } = await openComparisonModal();
+
+    const dialog = screen.getByRole('dialog');
+    fireEvent(dialog, new Event('cancel', { bubbles: true, cancelable: true }));
+
+    await waitFor(() => expect(document.activeElement).toBe(compareButton));
   });
 });

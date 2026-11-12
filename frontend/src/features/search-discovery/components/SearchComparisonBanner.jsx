@@ -23,7 +23,7 @@ export function SearchComparisonBanner({ selectedProviders = [], onCompare }) {
         <button
           type="button"
           className="comparison-banner-btn"
-          onClick={(e) => onCompare?.(selectedProviders, e.currentTarget)}
+          onClick={(e) => onCompare?.(e.currentTarget)}
         >
           Compare ({count})
         </button>
