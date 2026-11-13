@@ -49,6 +49,7 @@ import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.initializer.BookingIndexInitializer;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
+import com.gamagerecruiters.marketplace.modules.booking.service.SlotServiceImpl;
 
 /**
  * Runs the booking foundation against a real MongoDB (Testcontainers):
@@ -305,6 +306,30 @@ class BookingMongoIntegrationTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: slot conflict query returns only time-holding bookings of this provider that overlap the window")
+    void slotConflictQueryOnRealData() {
+        Instant from = Instant.parse("2026-12-01T03:30:00Z");
+        Instant to = Instant.parse("2026-12-01T11:30:00Z");
+
+        Booking overlappingConfirmed = booking("customer-8", BookingStatus.CONFIRMED);   // 04:30–06:30 UTC
+        Booking overlappingDeclined = booking("customer-9", BookingStatus.DECLINED);
+        Booking otherDay = booking("customer-10", BookingStatus.CONFIRMED);
+        otherDay.setSlotStart(Instant.parse("2026-12-02T04:30:00Z"));
+        otherDay.setSlotEnd(Instant.parse("2026-12-02T06:30:00Z"));
+        Booking otherProvider = booking("customer-11", BookingStatus.PENDING_PROVIDER);
+        otherProvider.setProviderId("provider-2");
+        bookingRepository.saveAll(List.of(overlappingConfirmed, overlappingDeclined, otherDay, otherProvider));
+
+        List<Booking> found = bookingRepository.findByProviderIdAndStatusInAndSlotStartLessThanAndSlotEndGreaterThan(
+                "provider-1", SlotServiceImpl.TIME_BLOCKING_STATUSES, to, from);
+
+        log.info("Slot conflict query: found={} (expected only the overlapping CONFIRMED booking of provider-1)",
+                found.stream().map(b -> b.getCustomerId() + ":" + b.getStatus()).toList());
+
+        assertThat(found).extracting(Booking::getCustomerId).containsExactly("customer-8");
     }
 
     private static void loginAs(String userId, Role role) {
