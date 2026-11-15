@@ -1,3 +1,4 @@
+
 package com.gamagerecruiters.marketplace;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -16,13 +17,15 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
-import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
+import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
+import com.gamagerecruiters.marketplace.modules.verification.repository.VerificationDocumentRepository;
+import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -56,16 +59,37 @@ class ApplicationContextRealStartupTest {
     private ReviewRepository reviewRepository;
 
     @MockitoBean
+    private VerificationDocumentRepository verificationDocumentRepository;
+
+    // Mock the newly introduced provider verification repository
+    @MockitoBean
+    private ProviderVerificationRepository providerVerificationRepository;
+
+    @MockitoBean
     private MongoTemplate mongoTemplate;
 
     @Autowired
     private ApplicationContext applicationContext;
 
     @Test
-    @DisplayName("Verify real Spring context loads without circular dependencies and key security beans exist")
+    @DisplayName(
+            "Verify real Spring context loads without circular dependencies and key security beans exist"
+    )
     void contextLoadsAndKeySecurityBeansExist() {
-        assertNotNull(applicationContext.getBean(PasswordEncoder.class), "PasswordEncoder bean must exist");
-        assertNotNull(applicationContext.getBean(JwtAuthenticationFilter.class), "JwtAuthenticationFilter bean must exist");
-        assertNotNull(applicationContext.getBean(SecurityFilterChain.class), "SecurityFilterChain bean must exist");
+
+        assertNotNull(
+                applicationContext.getBean(PasswordEncoder.class),
+                "PasswordEncoder bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(JwtAuthenticationFilter.class),
+                "JwtAuthenticationFilter bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(SecurityFilterChain.class),
+                "SecurityFilterChain bean must exist"
+        );
     }
 }
