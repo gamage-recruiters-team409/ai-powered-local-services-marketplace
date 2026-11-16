@@ -2,16 +2,35 @@ package com.gamagerecruiters.marketplace.modules.auth.security;
 
 import java.time.Clock;
 import java.time.Duration;
-import java.util.Iterator;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+/**
+ * In-memory fixed-window rate limiter with per-bucket bounded memory and atomic capacity enforcement.
+ *
+ * <p>Capacity ({@code maxTrackedKeys}) is enforced <b>per bucket</b>. When a bucket reaches capacity:
+ * <ul>
+ *   <li>Expired entries (where {@code now >= windowEnd}) are purged first.</li>
+ *   <li>Active counters are <b>never</b> evicted, ensuring blocked callers cannot bypass limits by inserting new keys.</li>
+ *   <li>If no room remains after purging, the limiter <b>fails closed</b> for new keys, throwing
+ *       {@link RateLimitExceededException} (HTTP 429 RATE_LIMITED) with {@code retryAfterSeconds} set to
+ *       the time until the earliest active window in that bucket expires.</li>
+ *   <li>Keys already tracked continue to be evaluated and rate-limited normally during saturation.</li>
+ * </ul>
+ */
 @Service
 public class RateLimitService {
+
+    private static final Logger log = LoggerFactory.getLogger(RateLimitService.class);
 
     public static final String BUCKET_LOGIN_IP = "login-ip";
     public static final String BUCKET_LOGIN_ACCOUNT = "login-account";
@@ -31,6 +50,8 @@ public class RateLimitService {
     private final Clock clock;
 
     private final ConcurrentMap<String, WindowCounter> storage = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, AtomicInteger> bucketKeyCounts = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, AtomicLong> bucketLastWarnTimes = new ConcurrentHashMap<>();
 
     public RateLimitService(
             @Value("${app.rate-limit.enabled:true}") boolean enabled,
@@ -84,18 +105,117 @@ public class RateLimitService {
         long windowStart = (now / windowMillis) * windowMillis;
         long windowEnd = windowStart + windowMillis;
 
-        ensureCapacity(compositeKey, now);
+        AtomicInteger bucketCount = bucketKeyCounts.computeIfAbsent(bucket, b -> new AtomicInteger(0));
 
-        WindowCounter counter = storage.compute(compositeKey, (k, existing) -> {
-            if (existing == null || now >= existing.windowEnd || existing.windowStart != windowStart) {
-                return new WindowCounter(windowStart, windowEnd, 1);
+        WindowCounter existing = storage.get(compositeKey);
+        WindowCounter counter;
+
+        if (existing != null) {
+            // Key is already tracked. Update counter atomically without consuming a new slot permit.
+            counter = storage.compute(compositeKey, (k, current) -> {
+                if (current == null) {
+                    return null;
+                }
+                if (now >= current.windowEnd || current.windowStart != windowStart) {
+                    return new WindowCounter(windowStart, windowEnd, 1);
+                }
+                return new WindowCounter(current.windowStart, current.windowEnd, current.count + 1);
+            });
+            if (counter == null) {
+                // If it was purged in the split-second between get and compute, acquire slot through reservation
+                counter = insertWithCapacityReservation(bucket, compositeKey, windowStart, windowEnd, windowMillis, now, bucketCount);
             }
-            return new WindowCounter(existing.windowStart, existing.windowEnd, existing.count + 1);
-        });
+        } else {
+            // New key requires slot reservation under per-bucket capacity
+            counter = insertWithCapacityReservation(bucket, compositeKey, windowStart, windowEnd, windowMillis, now, bucketCount);
+        }
 
         if (counter.count > maxRequests) {
             long retryAfterSeconds = Math.max(1, (counter.windowEnd - now + 999) / 1000);
             throw new RateLimitExceededException(retryAfterSeconds);
+        }
+    }
+
+    private WindowCounter insertWithCapacityReservation(
+            String bucket,
+            String compositeKey,
+            long windowStart,
+            long windowEnd,
+            long windowMillis,
+            long now,
+            AtomicInteger bucketCount
+    ) {
+        // 1. If at or above capacity, purge expired entries for this bucket first
+        if (bucketCount.get() >= maxTrackedKeys) {
+            purgeExpiredEntries(bucket, bucketCount, now);
+        }
+
+        // 2. Atomically reserve a slot via CAS loop (fail closed if still full)
+        while (true) {
+            int current = bucketCount.get();
+            if (current >= maxTrackedKeys) {
+                long earliestEnd = findEarliestWindowEnd(bucket, now, windowEnd);
+                long retryAfterSeconds = Math.max(1, (earliestEnd - now + 999) / 1000);
+                logSaturationWarning(bucket, now, windowMillis);
+                throw new RateLimitExceededException(retryAfterSeconds);
+            }
+            if (bucketCount.compareAndSet(current, current + 1)) {
+                break;
+            }
+        }
+
+        // 3. Insert new key or increment if inserted concurrently
+        boolean[] newlyAdded = new boolean[1];
+        WindowCounter counter = storage.compute(compositeKey, (k, existing) -> {
+            if (existing == null || now >= existing.windowEnd || existing.windowStart != windowStart) {
+                newlyAdded[0] = (existing == null);
+                return new WindowCounter(windowStart, windowEnd, 1);
+            }
+            newlyAdded[0] = false;
+            return new WindowCounter(existing.windowStart, existing.windowEnd, existing.count + 1);
+        });
+
+        // If another thread inserted this key concurrently, release our duplicate reservation
+        if (!newlyAdded[0]) {
+            bucketCount.updateAndGet(c -> Math.max(0, c - 1));
+        }
+
+        return counter;
+    }
+
+    private void purgeExpiredEntries(String bucket, AtomicInteger bucketCount, long now) {
+        String prefix = bucket + ":";
+        for (Map.Entry<String, WindowCounter> entry : storage.entrySet()) {
+            if (entry.getKey().startsWith(prefix)) {
+                WindowCounter val = entry.getValue();
+                if (now >= val.windowEnd) {
+                    if (storage.remove(entry.getKey(), val)) {
+                        bucketCount.updateAndGet(c -> Math.max(0, c - 1));
+                    }
+                }
+            }
+        }
+    }
+
+    private long findEarliestWindowEnd(String bucket, long now, long fallbackWindowEnd) {
+        String prefix = bucket + ":";
+        long earliest = Long.MAX_VALUE;
+        for (Map.Entry<String, WindowCounter> entry : storage.entrySet()) {
+            if (entry.getKey().startsWith(prefix)) {
+                long end = entry.getValue().windowEnd;
+                if (end > now && end < earliest) {
+                    earliest = end;
+                }
+            }
+        }
+        return earliest == Long.MAX_VALUE ? fallbackWindowEnd : earliest;
+    }
+
+    private void logSaturationWarning(String bucket, long now, long windowMillis) {
+        AtomicLong lastWarn = bucketLastWarnTimes.computeIfAbsent(bucket, b -> new AtomicLong(0));
+        long prev = lastWarn.get();
+        if (now - prev >= windowMillis && lastWarn.compareAndSet(prev, now)) {
+            log.warn("Rate limit bucket '{}' has reached key tracking capacity. Rejecting new keys until active windows expire.", bucket);
         }
     }
 
@@ -134,25 +254,9 @@ public class RateLimitService {
         return storage.size();
     }
 
-    private synchronized void ensureCapacity(String compositeKey, long now) {
-        if (storage.containsKey(compositeKey)) {
-            return;
-        }
-        if (storage.size() >= maxTrackedKeys) {
-            // 1. Purge expired entries first
-            storage.entrySet().removeIf(entry -> now >= entry.getValue().windowEnd);
-
-            // 2. If still full, purge oldest/arbitrary keys until under capacity
-            while (storage.size() >= maxTrackedKeys) {
-                Iterator<String> it = storage.keySet().iterator();
-                if (it.hasNext()) {
-                    it.next();
-                    it.remove();
-                } else {
-                    break;
-                }
-            }
-        }
+    public int getTrackedKeyCount(String bucket) {
+        AtomicInteger count = bucketKeyCounts.get(bucket);
+        return count != null ? count.get() : 0;
     }
 
     private static final class WindowCounter {
