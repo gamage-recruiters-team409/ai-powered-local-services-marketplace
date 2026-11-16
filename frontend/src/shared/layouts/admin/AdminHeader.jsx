@@ -91,6 +91,9 @@ function ProfileMenu({ user, onLogout, onSwitchRole }) {
 
   const choose = (action) => {
     setOpen(false)
+    // The focused menu item is removed when the menu closes. Move focus to the menu button first, so a
+    // dialog opened by the action (Switch role) returns focus there when it closes.
+    buttonRef.current?.focus()
     action()
   }
 
