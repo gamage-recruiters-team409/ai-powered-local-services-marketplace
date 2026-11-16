@@ -21,6 +21,7 @@ import com.gamagerecruiters.marketplace.modules.availability.repository.Availabi
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 
@@ -54,6 +55,9 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private ReviewRepository reviewRepository;
+
+    @MockitoBean
+    private PaymentRepository paymentRepository;
 
     @MockitoBean
     private MongoTemplate mongoTemplate;
