@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -142,7 +143,7 @@ class SlotServiceImplTest {
     }
 
     @Test
-    @DisplayName("Only time-holding statuses are queried (declined/cancelled/expired bookings free the slot)")
+    @DisplayName("Conflict query uses all open lifecycle statuses (BookingStatus.OPEN_STATUSES)")
     void queriesOnlyTimeBlockingStatuses() {
         givenWeekdaySchedule();
         givenNotBlocked(MONDAY);
@@ -154,7 +155,52 @@ class SlotServiceImplTest {
                 eq(PROVIDER), eq(SlotServiceImpl.TIME_BLOCKING_STATUSES), any(Instant.class), any(Instant.class));
         assertThat(SlotServiceImpl.TIME_BLOCKING_STATUSES).containsExactlyInAnyOrder(
                 BookingStatus.PENDING_PROVIDER, BookingStatus.AWAITING_PAYMENT,
-                BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS);
+                BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS,
+                BookingStatus.COMPLETION_PENDING, BookingStatus.DISPUTED);
+        assertThat(SlotServiceImpl.TIME_BLOCKING_STATUSES).isEqualTo(BookingStatus.OPEN_STATUSES);
+    }
+
+    /** Repository stub that behaves like the real query: returns only bookings whose status is in the queried set. */
+    private void givenStoredBookingsFilteredByStatus(List<Booking> stored) {
+        when(bookingRepository.findByProviderIdAndStatusInAndSlotStartLessThanAndSlotEndGreaterThan(
+                eq(PROVIDER), any(), any(Instant.class), any(Instant.class)))
+                .thenAnswer(invocation -> {
+                    java.util.Collection<BookingStatus> statuses = invocation.getArgument(1);
+                    return stored.stream().filter(b -> statuses.contains(b.getStatus())).toList();
+                });
+    }
+
+    @ParameterizedTest(name = "{0} booking 12:00–13:00 still blocks 11:00–13:00 starts")
+    @EnumSource(value = BookingStatus.class, names = {"COMPLETION_PENDING", "DISPUTED"})
+    @DisplayName("Regression: unresolved COMPLETION_PENDING / DISPUTED bookings keep their reserved time")
+    void unresolvedStatusesKeepReservedTime(BookingStatus status) {
+        givenWeekdaySchedule();
+        givenNotBlocked(MONDAY);
+        Booking unresolved = booking("2026-11-23T06:30:00Z", "2026-11-23T07:30:00Z");
+        unresolved.setStatus(status);
+        givenStoredBookingsFilteredByStatus(List.of(unresolved));
+
+        AvailableSlotsResponse response = service.getAvailableSlots(PROVIDER, MONDAY, "60");
+
+        assertThat(starts(response)).doesNotContain("11:00", "11:30", "12:00", "12:30", "13:00")
+                .contains("10:30", "13:30")
+                .hasSize(10);
+    }
+
+    @ParameterizedTest(name = "{0} booking 12:00–13:00 releases the time")
+    @EnumSource(value = BookingStatus.class, names = {"DECLINED", "EXPIRED", "CANCELLED_BY_CUSTOMER",
+            "CANCELLED_BY_PROVIDER", "COMPLETED", "REFUNDED", "PARTIALLY_REFUNDED"})
+    @DisplayName("Final / resolved bookings release the provider's time")
+    void finalStatusesReleaseTime(BookingStatus status) {
+        givenWeekdaySchedule();
+        givenNotBlocked(MONDAY);
+        Booking finished = booking("2026-11-23T06:30:00Z", "2026-11-23T07:30:00Z");
+        finished.setStatus(status);
+        givenStoredBookingsFilteredByStatus(List.of(finished));
+
+        AvailableSlotsResponse response = service.getAvailableSlots(PROVIDER, MONDAY, "60");
+
+        assertThat(starts(response)).contains("11:00", "12:00", "13:00").hasSize(15);
     }
 
     @Test

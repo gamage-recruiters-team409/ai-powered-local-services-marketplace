@@ -9,7 +9,6 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 
@@ -48,12 +47,15 @@ public class SlotServiceImpl implements SlotService {
     static final int MIN_DURATION_MINUTES = 15;
     static final int MAX_DURATION_MINUTES = 480;
 
-    /** Bookings that hold the provider's time. Declined, expired, cancelled and finished ones do not. */
-    public static final Set<BookingStatus> TIME_BLOCKING_STATUSES = EnumSet.of(
-            BookingStatus.PENDING_PROVIDER,
-            BookingStatus.AWAITING_PAYMENT,
-            BookingStatus.CONFIRMED,
-            BookingStatus.IN_PROGRESS);
+    /**
+     * Bookings that hold the provider's time: every open (unresolved) booking status from the
+     * Booking lifecycle – PENDING_PROVIDER, AWAITING_PAYMENT, CONFIRMED, IN_PROGRESS,
+     * COMPLETION_PENDING and DISPUTED. Uses {@link BookingStatus#OPEN_STATUSES} so slot conflicts
+     * follow the same lifecycle contract as the rest of the booking module.
+     * Only final or resolved bookings release the time: DECLINED, EXPIRED, CANCELLED_BY_CUSTOMER,
+     * CANCELLED_BY_PROVIDER, COMPLETED, REFUNDED and PARTIALLY_REFUNDED.
+     */
+    public static final Set<BookingStatus> TIME_BLOCKING_STATUSES = BookingStatus.OPEN_STATUSES;
 
     private static final DateTimeFormatter HH_MM = DateTimeFormatter.ofPattern("HH:mm");
 

@@ -332,6 +332,28 @@ class BookingMongoIntegrationTest {
         assertThat(found).extracting(Booking::getCustomerId).containsExactly("customer-8");
     }
 
+    @Test
+    @DisplayName("Real MongoDB: COMPLETION_PENDING and DISPUTED bookings still block their time; resolved bookings do not")
+    void unresolvedStatusesStillBlockTimeOnRealData() {
+        Instant from = Instant.parse("2026-12-01T03:30:00Z");
+        Instant to = Instant.parse("2026-12-01T11:30:00Z");
+
+        Booking completionPending = booking("customer-12", BookingStatus.COMPLETION_PENDING);
+        Booking disputed = booking("customer-13", BookingStatus.DISPUTED);
+        Booking completed = booking("customer-14", BookingStatus.COMPLETED);
+        Booking cancelled = booking("customer-15", BookingStatus.CANCELLED_BY_CUSTOMER);
+        bookingRepository.saveAll(List.of(completionPending, disputed, completed, cancelled));
+
+        List<Booking> found = bookingRepository.findByProviderIdAndStatusInAndSlotStartLessThanAndSlotEndGreaterThan(
+                "provider-1", SlotServiceImpl.TIME_BLOCKING_STATUSES, to, from);
+
+        log.info("Unresolved status conflict query: found={} (expected COMPLETION_PENDING and DISPUTED only)",
+                found.stream().map(b -> b.getCustomerId() + ":" + b.getStatus()).toList());
+
+        assertThat(found).extracting(Booking::getStatus)
+                .containsExactlyInAnyOrder(BookingStatus.COMPLETION_PENDING, BookingStatus.DISPUTED);
+    }
+
     private static void loginAs(String userId, Role role) {
         UserPrincipal principal = new UserPrincipal(userId, userId + "@test.local", role);
         SecurityContextHolder.getContext().setAuthentication(
