@@ -9,6 +9,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -299,6 +300,88 @@ class AdminAccountEndToEndWebTest {
         mockMvc.perform(authed(get(ACCOUNTS_URL)).param("q", ".*(a+)+$")).andExpect(status().isOk());
 
         verify(userInternalService).searchUsers(eq(SUPER_ID), any(), eq(null), eq(".*(a+)+$"), any(Pageable.class));
+    }
+
+    // ---------- Finding 2: self target gets auth's 403 even with an unchanged status ----------
+
+    private static final String STATUS_BODY_ACTIVE = "{\"status\":\"ACTIVE\",\"reason\":\"Testing self status change is blocked\"}";
+    private static final String STATUS_BODY_SUSPENDED = "{\"status\":\"SUSPENDED\",\"reason\":\"Testing self status change is blocked\"}";
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"ACTIVE", "SUSPENDED"})
+    @DisplayName("Finding 2: PATCH own status (same ACTIVE, or different SUSPENDED) -> 403 CANNOT_MODIFY_SELF, record FAILED")
+    void selfStatusChangeIsForbidden(String requested) throws Exception {
+        UserStatus requestedStatus = UserStatus.valueOf(requested);
+        when(userInternalService.changeStatus(SUPER_ID, requestedStatus)).thenThrow(new com.gamagerecruiters.marketplace.common.exception.ApiException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "CANNOT_MODIFY_SELF", "Self status modification is not allowed"));
+
+        mockMvc.perform(authed(patch(ACCOUNTS_URL + "/" + SUPER_ID + "/status")).contentType(MediaType.APPLICATION_JSON)
+                        .content(requestedStatus == UserStatus.ACTIVE ? STATUS_BODY_ACTIVE : STATUS_BODY_SUSPENDED))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("CANNOT_MODIFY_SELF"));
+
+        AdminAuditLog record = pendingRecord();
+        assertThat(record.getTargetUserId()).isEqualTo(SUPER_ID);
+        assertThat(record.getFromStatus()).isEqualTo(UserStatus.ACTIVE);
+        assertThat(record.getToStatus()).isEqualTo(requestedStatus);
+        verify(auditLogService).markFailed("audit-9", "CANNOT_MODIFY_SELF");
+        verify(auditLogService, never()).markSuccess(anyString());
+    }
+
+    @Test
+    @DisplayName("Finding 2: PATCH another admin to the status it already has -> still 400 STATUS_UNCHANGED, no audit, no auth call")
+    void otherAdminSameStatusIsUnchanged() throws Exception {
+        User other = new User();
+        other.setId("admin-7");
+        other.setRole(Role.ADMIN);
+        other.setStatus(UserStatus.ACTIVE);
+        when(userInternalService.getById("admin-7")).thenReturn(other);
+
+        mockMvc.perform(authed(patch(ACCOUNTS_URL + "/admin-7/status")).contentType(MediaType.APPLICATION_JSON)
+                        .content(STATUS_BODY_ACTIVE))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("STATUS_UNCHANGED"));
+
+        verify(auditLogService, never()).recordPending(any());
+        verify(userInternalService, never()).changeStatus(anyString(), any());
+    }
+
+    // ---------- Finding 1: completion failure after the action still returns the normal success ----------
+
+    @Test
+    @DisplayName("Finding 1: create succeeds but its record cannot be completed -> 201 with the account, reconciliation written, created once")
+    void createCompletionFailureStillCreated() throws Exception {
+        User created = new User();
+        created.setId("new-9");
+        created.setName("Nimal Perera");
+        created.setEmail("nimal.ops@example.com");
+        created.setRole(Role.FINANCE_ADMIN);
+        created.setStatus(UserStatus.ACTIVE);
+        created.setCreatedAt(Instant.parse("2026-11-16T08:00:00Z"));
+        created.setMustChangePassword(true);
+        when(userInternalService.createAdminAccount("Nimal Perera", "nimal.ops@example.com", PASSWORD, Role.FINANCE_ADMIN))
+                .thenReturn(created);
+        org.mockito.Mockito.doThrow(new com.gamagerecruiters.marketplace.modules.admin.service.AuditCompletionException(
+                        "audit-9", com.gamagerecruiters.marketplace.modules.admin.domain.AuditOutcome.SUCCESS,
+                        com.gamagerecruiters.marketplace.modules.admin.service.AuditCompletionException.Reason.NOT_PENDING, null))
+                .when(auditLogService).markCreated("audit-9", "new-9");
+        when(auditLogService.recordReconciliation(any(), anyString(), anyString())).thenAnswer(inv -> {
+            AdminAuditLog recon = AdminAuditLog.reconciliation(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2),
+                    Instant.parse("2026-11-16T08:00:01Z"));
+            ReflectionTestUtils.setField(recon, "id", "recon-9");
+            return recon;
+        });
+
+        mockMvc.perform(authed(post(ACCOUNTS_URL)).contentType(MediaType.APPLICATION_JSON).content(createBody(PASSWORD)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value("new-9"));
+
+        verify(userInternalService, org.mockito.Mockito.times(1))
+                .createAdminAccount(anyString(), anyString(), anyString(), any());
+        verify(auditLogService).recordReconciliation(any(), eq("new-9"), eq("AUDIT_COMPLETION_FAILED"));
+        assertThat(logs.list).anyMatch(e -> e.getFormattedMessage().contains("event=AUDIT_COMPLETION_FAILED")
+                && e.getFormattedMessage().contains("reconciliationId=recon-9"));
+        assertNotLogged(PASSWORD);
     }
 
     // ---------- service-level guard ----------

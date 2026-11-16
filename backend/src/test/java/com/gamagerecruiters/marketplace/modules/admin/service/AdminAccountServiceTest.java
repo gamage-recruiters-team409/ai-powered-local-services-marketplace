@@ -104,6 +104,15 @@ class AdminAccountServiceTest {
         });
     }
 
+    private void reconciliationInsertSucceeds() {
+        when(auditLogService.recordReconciliation(any(AdminAuditLog.class), anyString(), anyString())).thenAnswer(invocation -> {
+            AdminAuditLog recon = AdminAuditLog.reconciliation(
+                    invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2), NOW);
+            ReflectionTestUtils.setField(recon, "id", "recon-1");
+            return recon;
+        });
+    }
+
     private AdminAuditLog capturedPending() {
         ArgumentCaptor<AdminAuditLog> captor = ArgumentCaptor.forClass(AdminAuditLog.class);
         verify(auditLogService).recordPending(captor.capture());
@@ -264,6 +273,65 @@ class AdminAccountServiceTest {
             verify(auditLogService, never()).markSuccess(anyString());
         }
 
+        @ParameterizedTest(name = "{0} -> {1}")
+        @MethodSource("selfTargetStatuses")
+        @DisplayName("Finding 2: self target gets auth's 403 CANNOT_MODIFY_SELF even when the status is unchanged; record FAILED")
+        void selfTargetAlwaysGetsAuthDecision(UserStatus current, UserStatus requested) {
+            when(userInternalService.getById(ACTOR_ID)).thenReturn(user(ACTOR_ID, Role.SUPER_ADMIN, current));
+            auditInsertReturnsId();
+            ApiException selfChange = new ApiException(HttpStatus.FORBIDDEN, "CANNOT_MODIFY_SELF", "Self status modification is not allowed");
+            when(userInternalService.changeStatus(ACTOR_ID, requested)).thenThrow(selfChange);
+
+            Throwable thrown = catchThrowable(
+                    () -> service.changeStatus(ACTOR_ID, Role.SUPER_ADMIN, ACTOR_ID, requested, REASON));
+
+            assertThat(thrown).isSameAs(selfChange);
+            assertApiError(thrown, HttpStatus.FORBIDDEN, "CANNOT_MODIFY_SELF");
+            AdminAuditLog record = capturedPending();
+            assertThat(record.getTargetUserId()).isEqualTo(ACTOR_ID);
+            assertThat(record.getFromStatus()).isEqualTo(current);
+            assertThat(record.getToStatus()).isEqualTo(requested);
+            verify(auditLogService).markFailed(AUDIT_ID, "CANNOT_MODIFY_SELF");
+            verify(auditLogService, never()).markSuccess(anyString());
+        }
+
+        static Stream<Arguments> selfTargetStatuses() {
+            return Stream.of(
+                    Arguments.of(UserStatus.ACTIVE, UserStatus.ACTIVE),
+                    Arguments.of(UserStatus.ACTIVE, UserStatus.SUSPENDED));
+        }
+
+        @Test
+        @DisplayName("Finding 2: a non-self target with the same status still gets 400 STATUS_UNCHANGED, no audit, no auth call")
+        void nonSelfSameStatusStillUnchanged() {
+            when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.ACTIVE));
+
+            Throwable thrown = catchThrowable(
+                    () -> service.changeStatus(ACTOR_ID, Role.SUPER_ADMIN, TARGET_ID, UserStatus.ACTIVE, REASON));
+
+            assertApiError(thrown, HttpStatus.BAD_REQUEST, AdminErrors.STATUS_UNCHANGED);
+            assertNoAuditAndNoChange();
+        }
+
+        @Test
+        @DisplayName("Each request gets its own random correlationId on the PENDING record")
+        void correlationIdPerRequest() {
+            when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.ACTIVE));
+            auditInsertReturnsId();
+            when(userInternalService.changeStatus(TARGET_ID, UserStatus.SUSPENDED))
+                    .thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.SUSPENDED));
+
+            suspend(TARGET_ID);
+            suspend(TARGET_ID);
+
+            ArgumentCaptor<AdminAuditLog> captor = ArgumentCaptor.forClass(AdminAuditLog.class);
+            verify(auditLogService, org.mockito.Mockito.times(2)).recordPending(captor.capture());
+            String first = captor.getAllValues().get(0).getCorrelationId();
+            String second = captor.getAllValues().get(1).getCorrelationId();
+            assertThat(first).matches("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}");
+            assertThat(second).isNotEqualTo(first);
+        }
+
         static Stream<Arguments> authRejections() {
             return Stream.of(
                     Arguments.of(HttpStatus.FORBIDDEN, "ACTOR_ACCOUNT_INACTIVE"),
@@ -332,8 +400,11 @@ class AdminAccountServiceTest {
             when(userInternalService.changeStatus(TARGET_ID, UserStatus.SUSPENDED))
                     .thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.SUSPENDED));
             doThrow(new IllegalStateException("db down")).when(auditLogService).markSuccess(AUDIT_ID);
+            reconciliationInsertSucceeds();
 
             assertThat(suspend(TARGET_ID).status()).isEqualTo(UserStatus.SUSPENDED);
+            verify(userInternalService, org.mockito.Mockito.times(1)).changeStatus(TARGET_ID, UserStatus.SUSPENDED);
+            verify(auditLogService).recordReconciliation(any(), eq(TARGET_ID), eq(AdminAccountService.AUDIT_COMPLETION_FAILED));
         }
 
         @Test
@@ -517,8 +588,11 @@ class AdminAccountServiceTest {
             when(userInternalService.createAdminAccount(anyString(), anyString(), anyString(), any()))
                     .thenReturn(created(Role.MODERATOR));
             doThrow(new IllegalStateException("db down")).when(auditLogService).markCreated(AUDIT_ID, NEW_ID);
+            reconciliationInsertSucceeds();
 
             assertThat(service.createAdminAccount(ACTOR_ID, Role.SUPER_ADMIN, request(Role.MODERATOR)).id()).isEqualTo(NEW_ID);
+            verify(userInternalService, org.mockito.Mockito.times(1)).createAdminAccount(anyString(), anyString(), anyString(), any());
+            verify(auditLogService).recordReconciliation(any(), eq(NEW_ID), eq(AdminAccountService.AUDIT_COMPLETION_FAILED));
             assertPasswordNeverLogged();
         }
 

@@ -11,7 +11,7 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 /**
  * One administrative action. Immutable from the outside: there is no update or delete endpoint, and the
  * only change after insert is the one-time outcome update (PENDING -> SUCCESS or FAILED) made by
- * {@code AdminAuditLogService}.
+ * {@code AdminAuditLogService}. AUDIT_RECONCILIATION_REQUIRED records are complete at insert and never updated.
  *
  * <p>Never stores passwords, tokens, secrets or emails. Only ids, roles, statuses, the reason and an
  * error code.</p>
@@ -28,9 +28,15 @@ public class AdminAuditLog {
     public static final String FIELD_FAILURE_CODE = "failureCode";
     public static final String FIELD_COMPLETED_AT = "completedAt";
     public static final String FIELD_CREATED_AT = "createdAt";
+    public static final String FIELD_CORRELATION_ID = "correlationId";
+    public static final String FIELD_RELATED_AUDIT_LOG_ID = "relatedAuditLogId";
 
     @Id
     private String id;
+    /** Random id generated once per request; shared by the action's record and any reconciliation record. */
+    private String correlationId;
+    /** Only on AUDIT_RECONCILIATION_REQUIRED records: the id of the record that could not be completed. */
+    private String relatedAuditLogId;
     private String actorId;
     private Role actorRole;
     private AdminAuditAction action;
@@ -49,11 +55,12 @@ public class AdminAuditLog {
     }
 
     /** A new PENDING record for an action that is about to run. */
-    public static AdminAuditLog pending(String actorId, Role actorRole, AdminAuditAction action,
+    public static AdminAuditLog pending(String correlationId, String actorId, Role actorRole, AdminAuditAction action,
                                         String targetUserId, Role targetRole,
                                         UserStatus fromStatus, UserStatus toStatus,
                                         String reason, Instant createdAt) {
         AdminAuditLog log = new AdminAuditLog();
+        log.correlationId = correlationId;
         log.actorId = actorId;
         log.actorRole = actorRole;
         log.action = action;
@@ -67,8 +74,41 @@ public class AdminAuditLog {
         return log;
     }
 
+    /**
+     * A complete, insert-only record saying that {@code original}'s action was applied but its own record
+     * could not be set to SUCCESS. It is never updated: outcome FAILED and completedAt are set at insert,
+     * failureCode holds the reason code. It copies only ids, roles and statuses from the original (never
+     * the free-text reason) and takes the target id from the action's result, which the original may lack.
+     */
+    public static AdminAuditLog reconciliation(AdminAuditLog original, String targetUserId,
+                                               String reasonCode, Instant createdAt) {
+        AdminAuditLog log = new AdminAuditLog();
+        log.correlationId = original.correlationId;
+        log.relatedAuditLogId = original.id;
+        log.actorId = original.actorId;
+        log.actorRole = original.actorRole;
+        log.action = AdminAuditAction.AUDIT_RECONCILIATION_REQUIRED;
+        log.targetUserId = targetUserId;
+        log.targetRole = original.targetRole;
+        log.fromStatus = original.fromStatus;
+        log.toStatus = original.toStatus;
+        log.outcome = AuditOutcome.FAILED;
+        log.failureCode = reasonCode;
+        log.createdAt = createdAt;
+        log.completedAt = createdAt;
+        return log;
+    }
+
     public String getId() {
         return id;
+    }
+
+    public String getCorrelationId() {
+        return correlationId;
+    }
+
+    public String getRelatedAuditLogId() {
+        return relatedAuditLogId;
     }
 
     public String getActorId() {

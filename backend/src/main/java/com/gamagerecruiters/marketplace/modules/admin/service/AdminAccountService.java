@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
@@ -36,8 +37,13 @@ import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService
  * Super Admin management of admin accounts. Uses the auth module only through UserInternalService.
  *
  * <p>Every write follows the same audit flow: validate what this module owns (no audit record on a
- * rejection here), insert a PENDING record, call the auth module, then set the record to SUCCESS, or to
- * FAILED with the auth error code, and re-throw the original error unchanged.</p>
+ * rejection here), insert a PENDING record with a new random correlationId, call the auth module, then set
+ * the record to SUCCESS, or to FAILED with the auth error code, and re-throw the original error unchanged.</p>
+ *
+ * <p>If the action succeeded but its record cannot be set to SUCCESS, the action is never repeated or rolled
+ * back. An insert-only AUDIT_RECONCILIATION_REQUIRED record and an ERROR log (ids and codes only) are
+ * written instead, and the normal success response is returned: the change exists, and an error response
+ * would invite the caller to repeat it (a second account, or a second status change).</p>
  *
  * <p>The actor id is always supplied by the controller from the authenticated principal
  * (CurrentUser.getUserId()), never from the request. The auth module checks it again.</p>
@@ -77,6 +83,9 @@ public class AdminAccountService {
     static final String PASSWORD_POLICY_MESSAGE = "temporaryPassword must be 8 to " + MAX_PASSWORD_LENGTH
             + " characters and contain at least one uppercase letter, one lowercase letter, and one digit";
 
+    /** Reason code on reconciliation records and logs when an applied action's record could not be completed. */
+    public static final String AUDIT_COMPLETION_FAILED = "AUDIT_COMPLETION_FAILED";
+
     /** Sort fields accepted by the list (auth's searchUsers maps fullName to the stored "name"). */
     private static final Set<String> SORT_FIELDS = Set.of("createdAt", "fullName", "email");
 
@@ -103,6 +112,9 @@ public class AdminAccountService {
      * Rules owned here: status ACTIVE/SUSPENDED only, reason 10..500, target is an admin account, status changes.
      * Rules owned by auth (self change, hierarchy, inactive actor, deactivated target, last active SUPER_ADMIN)
      * are applied by auth's changeStatus; their errors are recorded as FAILED and passed through unchanged.
+     *
+     * <p>STATUS_UNCHANGED is not checked when the target is the actor: auth owns the self-change rule and
+     * must answer 403 CANNOT_MODIFY_SELF even when the requested status is the current one.</p>
      */
     public AdminStatusChangeResponse changeStatus(String actorId, Role actorRole, String targetUserId,
                                                   UserStatus newStatus, String reason) {
@@ -126,12 +138,13 @@ public class AdminAccountService {
         if (!Roles.ADMIN_ROLES.contains(target.getRole())) {
             throw AdminErrors.notFound(AdminErrors.ADMIN_ACCOUNT_NOT_FOUND, "Admin account not found");
         }
-        if (target.getStatus() == newStatus) {
+        boolean selfTarget = target.getId() != null && target.getId().equals(actorId);
+        if (target.getStatus() == newStatus && !selfTarget) {
             throw AdminErrors.badRequest(AdminErrors.STATUS_UNCHANGED, "The account already has this status");
         }
 
         AdminAuditLog pending = auditLogService.recordPending(AdminAuditLog.pending(
-                actorId, actorRole, AdminAuditAction.ADMIN_STATUS_CHANGED,
+                newCorrelationId(), actorId, actorRole, AdminAuditAction.ADMIN_STATUS_CHANGED,
                 target.getId(), target.getRole(), target.getStatus(), newStatus,
                 cleanReason, clock.instant()));
 
@@ -143,7 +156,7 @@ public class AdminAccountService {
             throw e;
         }
 
-        markQuietly(pending.getId(), () -> auditLogService.markSuccess(pending.getId()));
+        completeAfterAction(pending, updated.getId(), () -> auditLogService.markSuccess(pending.getId()));
         log.info("Admin status change applied, audit record {}", pending.getId());
         return new AdminStatusChangeResponse(
                 updated.getId(), updated.getRole(), target.getStatus(), updated.getStatus(), pending.getId());
@@ -166,7 +179,7 @@ public class AdminAccountService {
 
         // The new account's id is not known yet; it is added to the record on SUCCESS. No email, no password.
         AdminAuditLog pending = auditLogService.recordPending(AdminAuditLog.pending(
-                actorId, actorRole, AdminAuditAction.ADMIN_ACCOUNT_CREATED,
+                newCorrelationId(), actorId, actorRole, AdminAuditAction.ADMIN_ACCOUNT_CREATED,
                 null, request.role(), null, null, null, clock.instant()));
 
         User created;
@@ -178,7 +191,8 @@ public class AdminAccountService {
             throw e;
         }
 
-        markQuietly(pending.getId(), () -> auditLogService.markCreated(pending.getId(), created.getId()));
+        // Called once. If it fails, the account is not created again, not rolled back and not deleted.
+        completeAfterAction(pending, created.getId(), () -> auditLogService.markCreated(pending.getId(), created.getId()));
         log.info("Admin account created with role {}, audit record {}", created.getRole(), pending.getId());
         return AdminAccountResponse.fromCreated(created);
     }
@@ -290,16 +304,56 @@ public class AdminAccountService {
         return value != null && !value.isBlank();
     }
 
-    private void markFailedQuietly(String auditLogId, String failureCode) {
-        markQuietly(auditLogId, () -> auditLogService.markFailed(auditLogId, failureCode));
+    private static String newCorrelationId() {
+        return UUID.randomUUID().toString();
     }
 
-    /** The action already ran; an audit update error is logged (by record id only) and never hides the result. */
-    private static void markQuietly(String auditLogId, Runnable mark) {
+    /**
+     * The auth call was rejected, so nothing changed; the caller re-throws the original error. If even FAILED
+     * cannot be recorded, the record stays PENDING. Logged with ids and codes only: the database error's
+     * type, never its message (which can contain host names).
+     */
+    private void markFailedQuietly(String auditLogId, String failureCode) {
         try {
-            mark.run();
+            auditLogService.markFailed(auditLogId, failureCode);
         } catch (RuntimeException e) {
-            log.error("Audit record {} could not be completed; it stays PENDING and must be reconciled", auditLogId, e);
+            log.error("event=AUDIT_FAILED_MARK_FAILED auditLogId={} failureCode={} cause={}",
+                    auditLogId, failureCode, causeType(e));
         }
+    }
+
+    /**
+     * The action has been applied. Runs the one completion call; if it fails (any error, including
+     * AuditCompletionException), writes a reconciliation record and an ERROR log and returns normally.
+     * Nothing is retried, repeated or rolled back.
+     */
+    private void completeAfterAction(AdminAuditLog pending, String targetUserId, Runnable completion) {
+        try {
+            completion.run();
+        } catch (RuntimeException e) {
+            String reconciliationId = null;
+            try {
+                reconciliationId = auditLogService
+                        .recordReconciliation(pending, targetUserId, AUDIT_COMPLETION_FAILED).getId();
+            } catch (RuntimeException insertError) {
+                log.error("event=AUDIT_RECONCILIATION_INSERT_FAILED correlationId={} auditLogId={} action={} "
+                                + "actorId={} targetUserId={} targetRole={} reasonCode={} cause={}",
+                        pending.getCorrelationId(), pending.getId(), pending.getAction(), pending.getActorId(),
+                        targetUserId, pending.getTargetRole(), AUDIT_COMPLETION_FAILED, causeType(insertError));
+            }
+            log.error("event=AUDIT_COMPLETION_FAILED correlationId={} auditLogId={} action={} actorId={} "
+                            + "targetUserId={} targetRole={} reasonCode={} reconciliationId={} cause={} timestamp={}",
+                    pending.getCorrelationId(), pending.getId(), pending.getAction(), pending.getActorId(),
+                    targetUserId, pending.getTargetRole(), AUDIT_COMPLETION_FAILED, reconciliationId,
+                    causeType(e), clock.instant());
+        }
+    }
+
+    /** The failure's reason or type, never its message. */
+    private static String causeType(RuntimeException e) {
+        if (e instanceof AuditCompletionException completion) {
+            return completion.getReason().name();
+        }
+        return e.getClass().getSimpleName();
     }
 }

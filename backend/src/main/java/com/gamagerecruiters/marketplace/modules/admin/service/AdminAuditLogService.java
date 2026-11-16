@@ -6,8 +6,6 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Locale;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -18,6 +16,7 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.data.support.PageableExecutionUtils;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 
 import com.gamagerecruiters.marketplace.modules.admin.domain.AdminAuditAction;
@@ -26,10 +25,15 @@ import com.gamagerecruiters.marketplace.modules.admin.domain.AuditOutcome;
 import com.gamagerecruiters.marketplace.modules.admin.dto.AdminAuditLogResponse;
 import com.gamagerecruiters.marketplace.modules.admin.dto.AdminPageResponse;
 import com.gamagerecruiters.marketplace.modules.admin.repository.AdminAuditLogRepository;
+import com.gamagerecruiters.marketplace.modules.admin.security.SuperAdminAccess;
 
 /**
  * Owns the admin audit log. Records are inserted as PENDING and their outcome is set exactly once.
  * There is no method to edit any other field or to delete a record.
+ *
+ * <p>The write methods are called by the admin workflows after their own SUPER_ADMIN check and are not
+ * guarded here. {@link #search} is guarded directly so no other caller can read the log without
+ * SUPER_ADMIN.</p>
  */
 @Service
 public class AdminAuditLogService {
@@ -37,8 +41,6 @@ public class AdminAuditLogService {
     public static final int DEFAULT_PAGE_SIZE = 20;
     public static final int MAX_PAGE_SIZE = 100;
     private static final int MAX_ID_FILTER_LENGTH = 100;
-
-    private static final Logger log = LoggerFactory.getLogger(AdminAuditLogService.class);
 
     private final AdminAuditLogRepository repository;
     private final MongoTemplate mongoTemplate;
@@ -63,15 +65,29 @@ public class AdminAuditLogService {
         return repository.insert(pending);
     }
 
+    /**
+     * Inserts an AUDIT_RECONCILIATION_REQUIRED record for {@code original}, whose action was applied but which
+     * could not be completed. Insert only, so it does not depend on the update that failed.
+     */
+    public AdminAuditLog recordReconciliation(AdminAuditLog original, String targetUserId, String reasonCode) {
+        return repository.insert(AdminAuditLog.reconciliation(original, targetUserId, reasonCode, clock.instant()));
+    }
+
+    /** @throws AuditCompletionException if the record was not set to SUCCESS */
     public void markSuccess(String auditLogId) {
         completeOnce(auditLogId, AuditOutcome.SUCCESS, null, null);
     }
 
-    /** SUCCESS for an account creation: also records the id of the account that was created. */
+    /**
+     * SUCCESS for an account creation: also records the id of the account that was created.
+     *
+     * @throws AuditCompletionException if the record was not set to SUCCESS
+     */
     public void markCreated(String auditLogId, String createdUserId) {
         completeOnce(auditLogId, AuditOutcome.SUCCESS, null, createdUserId);
     }
 
+    /** @throws AuditCompletionException if the record was not set to FAILED */
     public void markFailed(String auditLogId, String failureCode) {
         completeOnce(auditLogId, AuditOutcome.FAILED, failureCode, null);
     }
@@ -79,6 +95,10 @@ public class AdminAuditLogService {
     /**
      * Sets the outcome only while the record is still PENDING (atomic conditional update), so a record
      * can be completed once and never changed again.
+     *
+     * <p>Strict, not idempotent: exactly one record must change. Each workflow completes its record once,
+     * so a record that is already completed or missing at that point is an anomaly (a second writer or a
+     * lost record), and the caller must be told so it can write a reconciliation record.</p>
      */
     private void completeOnce(String auditLogId, AuditOutcome outcome, String failureCode, String targetUserId) {
         Query stillPending = Query.query(Criteria.where(AdminAuditLog.FIELD_ID).is(auditLogId)
@@ -92,13 +112,25 @@ public class AdminAuditLogService {
         if (targetUserId != null) {
             update.set(AdminAuditLog.FIELD_TARGET_USER_ID, targetUserId);
         }
-        long modified = mongoTemplate.updateFirst(stillPending, update, AdminAuditLog.class).getModifiedCount();
+        long modified;
+        try {
+            modified = mongoTemplate.updateFirst(stillPending, update, AdminAuditLog.class).getModifiedCount();
+        } catch (RuntimeException e) {
+            throw new AuditCompletionException(auditLogId, outcome, AuditCompletionException.Reason.DATABASE_ERROR, e);
+        }
+        if (modified == 0) {
+            throw new AuditCompletionException(auditLogId, outcome, AuditCompletionException.Reason.NOT_PENDING, null);
+        }
         if (modified != 1) {
-            log.error("Audit record {} could not be set to {}; it was not PENDING or no longer exists", auditLogId, outcome);
+            throw new AuditCompletionException(auditLogId, outcome, AuditCompletionException.Reason.UNEXPECTED_COUNT, null);
         }
     }
 
-    /** Newest first. Every filter is optional; dates are ISO-8601 instants, e.g. 2026-11-01T00:00:00Z. */
+    /**
+     * Newest first, then by record id in the same direction, so records with the same createdAt keep a stable
+     * order across pages. Every filter is optional; dates are ISO-8601 instants, e.g. 2026-11-01T00:00:00Z.
+     */
+    @PreAuthorize(SuperAdminAccess.SUPER_ADMIN_AREA_EDIT)
     public AdminPageResponse<AdminAuditLogResponse> search(String actorId, String targetUserId, String action,
                                                            String from, String to, int page, int size) {
         if (page < 0 || size < 1 || size > MAX_PAGE_SIZE) {
@@ -131,7 +163,8 @@ public class AdminAuditLogService {
             }
         }
 
-        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, AdminAuditLog.FIELD_CREATED_AT));
+        Pageable pageable = PageRequest.of(page, size,
+                Sort.by(Sort.Direction.DESC, AdminAuditLog.FIELD_CREATED_AT, AdminAuditLog.FIELD_ID));
         List<AdminAuditLog> content = mongoTemplate.find(new Query(criteria).with(pageable), AdminAuditLog.class);
         Page<AdminAuditLog> result = PageableExecutionUtils.getPage(content, pageable,
                 () -> mongoTemplate.count(new Query(criteria), AdminAuditLog.class));

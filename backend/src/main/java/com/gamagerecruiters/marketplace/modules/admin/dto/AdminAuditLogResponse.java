@@ -21,13 +21,16 @@ public record AdminAuditLogResponse(
         AuditOutcome outcome,
         String failureCode,
         Instant createdAt,
-        Instant completedAt
+        Instant completedAt,
+        String correlationId,
+        String relatedAuditLogId
 ) {
 
     public static AdminAuditLogResponse from(AdminAuditLog log) {
         return new AdminAuditLogResponse(
                 log.getId(), log.getActorId(), log.getActorRole(), log.getAction(),
                 log.getTargetUserId(), log.getTargetRole(), log.getFromStatus(), log.getToStatus(),
-                log.getReason(), log.getOutcome(), log.getFailureCode(), log.getCreatedAt(), log.getCompletedAt());
+                log.getReason(), log.getOutcome(), log.getFailureCode(), log.getCreatedAt(), log.getCompletedAt(),
+                log.getCorrelationId(), log.getRelatedAuditLogId());
     }
 }
