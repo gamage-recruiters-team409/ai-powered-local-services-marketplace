@@ -103,8 +103,13 @@ public class RateLimitService {
         check(BUCKET_LOGIN_IP, clientIp, loginIpMaxRequests, Duration.ofMinutes(loginIpWindowMinutes));
     }
 
-    public void checkLoginAccount(String ipAndEmailKey) {
-        check(BUCKET_LOGIN_ACCOUNT, ipAndEmailKey, loginAccountMaxRequests, Duration.ofMinutes(loginAccountWindowMinutes));
+    /**
+     * Checks rate limits for the login-account bucket, keyed by normalized email only.
+     *
+     * @param normalizedEmail normalized email of the account being logged into
+     */
+    public void checkLoginAccount(String normalizedEmail) {
+        check(BUCKET_LOGIN_ACCOUNT, normalizedEmail, loginAccountMaxRequests, Duration.ofMinutes(loginAccountWindowMinutes));
     }
 
     public void checkRegister(String clientIp) {

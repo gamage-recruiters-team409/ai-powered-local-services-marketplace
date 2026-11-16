@@ -63,8 +63,8 @@ public class AuthController {
         String clientIp = getClientIp(httpRequest);
         rateLimitService.checkLoginIp(clientIp);
 
-        String normalizedEmail = request.email() != null ? request.email().trim().toLowerCase(Locale.ROOT) : "";
-        rateLimitService.checkLoginAccount(clientIp + ":" + normalizedEmail);
+        String normalizedEmail = normalizeEmail(request.email());
+        rateLimitService.checkLoginAccount(normalizedEmail);
 
         AuthResponse response = authService.login(request);
         return ResponseEntity.ok(response);
@@ -96,5 +96,9 @@ public class AuthController {
     // configure server.forward-headers-strategy properly so Spring sets remoteAddr safely.
     private String getClientIp(HttpServletRequest request) {
         return request != null && request.getRemoteAddr() != null ? request.getRemoteAddr() : "unknown";
+    }
+
+    private String normalizeEmail(String email) {
+        return email != null ? email.trim().toLowerCase(Locale.ROOT) : "";
     }
 }
