@@ -192,7 +192,8 @@ public class AdminAccountService {
         }
 
         // Called once. If it fails, the account is not created again, not rolled back and not deleted.
-        completeAfterAction(pending, created.getId(), () -> auditLogService.markCreated(pending.getId(), created.getId()));
+        completeAfterAction(pending, created.getId(),
+                () -> auditLogService.markCreated(pending.getId(), created.getId()));
         log.info("Admin account created with role {}, audit record {}", created.getRole(), pending.getId());
         return AdminAccountResponse.fromCreated(created);
     }

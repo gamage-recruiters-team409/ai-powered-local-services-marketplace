@@ -28,8 +28,6 @@ public class AdminAuditLog {
     public static final String FIELD_FAILURE_CODE = "failureCode";
     public static final String FIELD_COMPLETED_AT = "completedAt";
     public static final String FIELD_CREATED_AT = "createdAt";
-    public static final String FIELD_CORRELATION_ID = "correlationId";
-    public static final String FIELD_RELATED_AUDIT_LOG_ID = "relatedAuditLogId";
 
     @Id
     private String id;
