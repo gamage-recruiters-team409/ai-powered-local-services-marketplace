@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.auth.controller;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -447,7 +448,7 @@ class AuthControllerTest {
     }
 
     @Test
-    @DisplayName("Email casing and surrounding whitespace share one account limit counter")
+    @DisplayName("Email letter-casing variations share one account limit counter")
     void accountRateLimitNormalizesEmailVariations() throws Exception {
         wireRealRateLimiter(50, 3);
         when(authService.login(any(LoginRequest.class)))
@@ -455,11 +456,11 @@ class AuthControllerTest {
 
         String[] emailVariants = {
                 "Target@example.com",
-                "  target@EXAMPLE.COM  ",
-                "TARGET@example.com"
+                "TARGET@EXAMPLE.COM",
+                "tArGeT@ExAmPlE.cOm"
         };
 
-        // Attempts 1 to 3 with different casings/whitespace from different IPs succeed
+        // Attempts 1 to 3 with different letter-casings from different IPs succeed
         for (int i = 0; i < emailVariants.length; i++) {
             final String ip = "10.1.0." + (i + 1);
             LoginRequest req = new LoginRequest(emailVariants[i], "Password123!");
@@ -479,6 +480,16 @@ class AuthControllerTest {
                 .andExpect(status().isTooManyRequests())
                 .andExpect(header().exists("Retry-After"))
                 .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
+    }
+
+    @Test
+    @DisplayName("normalizeEmail trims surrounding whitespace and converts to lower case")
+    void normalizeEmailTrimsWhitespaceAndLowercases() {
+        assertEquals("target@example.com", AuthController.normalizeEmail("  Target@EXAMPLE.COM  "));
+        assertEquals("target@example.com", AuthController.normalizeEmail("target@example.com"));
+        assertEquals("target@example.com", AuthController.normalizeEmail("TARGET@EXAMPLE.COM"));
+        assertEquals("", AuthController.normalizeEmail(null));
+        assertEquals("", AuthController.normalizeEmail("   "));
     }
 
     @Test
