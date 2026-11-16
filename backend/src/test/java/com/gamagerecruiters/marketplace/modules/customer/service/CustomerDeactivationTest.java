@@ -15,6 +15,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.http.HttpStatus;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
@@ -116,6 +118,23 @@ class CustomerDeactivationTest {
         assertEquals("INVALID_PASSWORD", ex.getErrorCode());
 
         verify(openBookingsCheckerProvider, never()).getIfAvailable();
+        verify(userInternalService, never()).deactivateOwnAccount(any());
+    }
+
+    @Test
+    @DisplayName("deactivateAccount: When checker throws DataAccessException, request fails and user stays unchanged")
+    void shouldNotDeactivateWhenCheckerThrowsDataAccessException() {
+        when(openBookingsCheckerProvider.getIfAvailable()).thenReturn(openBookingsChecker);
+        when(openBookingsChecker.hasOpenBookings("cust-1"))
+                .thenThrow(new TransientDataAccessResourceException("Database unavailable"));
+
+        assertThrows(
+                DataAccessException.class,
+                () -> customerService.deactivateAccount("cust-1", new DeactivateAccountRequest("ValidPassword123!"))
+        );
+
+        verify(userInternalService).verifyPassword("cust-1", "ValidPassword123!");
+        verify(openBookingsChecker).hasOpenBookings("cust-1");
         verify(userInternalService, never()).deactivateOwnAccount(any());
     }
 }
