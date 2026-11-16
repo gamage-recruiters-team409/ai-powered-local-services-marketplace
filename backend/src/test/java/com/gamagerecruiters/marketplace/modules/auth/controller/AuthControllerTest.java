@@ -1,7 +1,9 @@
 package com.gamagerecruiters.marketplace.modules.auth.controller;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -29,6 +31,7 @@ import com.gamagerecruiters.marketplace.config.SecurityConfig;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
+import com.gamagerecruiters.marketplace.modules.auth.dto.AuthResponse;
 import com.gamagerecruiters.marketplace.modules.auth.dto.ChangePasswordRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.LoginRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterRequest;
@@ -401,15 +404,15 @@ class AuthControllerTest {
                 5, 15,
                 Optional.empty()
         );
-        org.mockito.Mockito.doAnswer(inv -> {
-            realLimiter.checkLoginIp(inv.getArgument(0));
+        doAnswer(inv -> {
+            realLimiter.checkLoginIp(inv.getArgument(0, String.class));
             return null;
-        }).when(rateLimitService).checkLoginIp(org.mockito.ArgumentMatchers.anyString());
+        }).when(rateLimitService).checkLoginIp(anyString());
 
-        org.mockito.Mockito.doAnswer(inv -> {
-            realLimiter.checkLoginAccount(inv.getArgument(0));
+        doAnswer(inv -> {
+            realLimiter.checkLoginAccount(inv.getArgument(0, String.class));
             return null;
-        }).when(rateLimitService).checkLoginAccount(org.mockito.ArgumentMatchers.anyString());
+        }).when(rateLimitService).checkLoginAccount(anyString());
     }
 
     @Test
@@ -518,8 +521,9 @@ class AuthControllerTest {
         // Drive targeted account to limit
         LoginRequest targetedReq = new LoginRequest("victim@example.com", "Password123!");
         for (int i = 1; i <= 2; i++) {
+            final String ip = "10.2.0." + i;
             mockMvc.perform(post("/api/v1/auth/login")
-                            .with(r -> { r.setRemoteAddr("10.2.0." + i); return r; })
+                            .with(r -> { r.setRemoteAddr(ip); return r; })
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(targetedReq)))
                     .andExpect(status().isOk());
