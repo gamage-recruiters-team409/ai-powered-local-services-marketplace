@@ -1,7 +1,7 @@
-
 package com.gamagerecruiters.marketplace.modules.verification.domain;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
@@ -29,6 +29,16 @@ public class ProviderVerification {
     private Instant createdAt;
 
     private Instant updatedAt;
+
+    // Exact document IDs included in the current submission.
+    private List<String> submittedDocumentIds;
+
+    // Incremented whenever an upload reservation or workflow transition occurs.
+    // Used as a compare-and-set value when submitting a verification.
+    private long coordinationRevision;
+
+    // Number of uploads that have reserved a slot but have not finished persistence.
+    private int inFlightUploadCount;
 
     public ProviderVerification() {
     }
@@ -103,5 +113,29 @@ public class ProviderVerification {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public List<String> getSubmittedDocumentIds() {
+        return submittedDocumentIds;
+    }
+
+    public void setSubmittedDocumentIds(List<String> submittedDocumentIds) {
+        this.submittedDocumentIds = submittedDocumentIds;
+    }
+
+    public long getCoordinationRevision() {
+        return coordinationRevision;
+    }
+
+    public void setCoordinationRevision(long coordinationRevision) {
+        this.coordinationRevision = coordinationRevision;
+    }
+
+    public int getInFlightUploadCount() {
+        return inFlightUploadCount;
+    }
+
+    public void setInFlightUploadCount(int inFlightUploadCount) {
+        this.inFlightUploadCount = inFlightUploadCount;
     }
 }

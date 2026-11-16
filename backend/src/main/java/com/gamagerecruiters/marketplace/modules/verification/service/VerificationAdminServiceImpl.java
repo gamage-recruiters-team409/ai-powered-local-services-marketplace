@@ -1,4 +1,3 @@
-
 package com.gamagerecruiters.marketplace.modules.verification.service;
 
 import java.time.Duration;
@@ -31,32 +30,30 @@ import com.gamagerecruiters.marketplace.modules.verification.repository.Verifica
 @Service
 public class VerificationAdminServiceImpl implements VerificationAdminService {
 
-    private static final Duration DOCUMENT_ACCESS_URL_TTL =
-            Duration.ofMinutes(5);
+    private static final Duration DOCUMENT_ACCESS_URL_TTL = Duration.ofMinutes(5);
 
     private final ProviderVerificationRepository providerVerificationRepository;
-
     private final VerificationDocumentRepository verificationDocumentRepository;
-
     private final ProviderProfileRepository providerProfileRepository;
-
     private final VerificationFileStorageService verificationFileStorageService;
+    private final VerificationAtomicUpdates verificationAtomicUpdates;
 
     public VerificationAdminServiceImpl(
             ProviderVerificationRepository providerVerificationRepository,
             VerificationDocumentRepository verificationDocumentRepository,
             ProviderProfileRepository providerProfileRepository,
-            VerificationFileStorageService verificationFileStorageService
+            VerificationFileStorageService verificationFileStorageService,
+            VerificationAtomicUpdates verificationAtomicUpdates
     ) {
         this.providerVerificationRepository = providerVerificationRepository;
         this.verificationDocumentRepository = verificationDocumentRepository;
         this.providerProfileRepository = providerProfileRepository;
         this.verificationFileStorageService = verificationFileStorageService;
+        this.verificationAtomicUpdates = verificationAtomicUpdates;
     }
 
     @Override
     public List<AdminVerificationQueueItemResponse> getPendingVerifications() {
-
         return providerVerificationRepository
                 .findAllByStatusInOrderBySubmittedAtAsc(
                         List.of(
@@ -70,12 +67,8 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
     }
 
     @Override
-    public AdminVerificationDetailResponse getVerificationDetails(
-            String providerId
-    ) {
-
+    public AdminVerificationDetailResponse getVerificationDetails(String providerId) {
         ProviderVerification verification = requireVerification(providerId);
-
         ProviderProfile profile = requireProviderProfile(providerId);
 
         List<VerificationDocumentResponse> documents =
@@ -102,36 +95,22 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
         );
     }
 
-    /**
-     * Generates temporary secure access to a provider verification document.
-     *
-     * The document must belong to the requested provider.
-     * The generated Cloudinary URL expires after five minutes.
-     */
     @Override
     public VerificationDocumentAccessResponse getVerificationDocumentAccess(
             String providerId,
             String documentId
     ) {
-
-        // Verify that the provider has a verification record.
         requireVerification(providerId);
 
-        // Retrieve the document using both its ID and provider ID.
-        // This prevents accessing another provider's documents.
         VerificationDocument document =
                 verificationDocumentRepository
                         .findByIdAndProviderId(documentId, providerId)
-                        .orElseThrow(
-                                () -> new ResourceNotFoundException(
-                                        "VERIFICATION_DOCUMENT_NOT_FOUND",
-                                        "Verification document not found"
-                                )
-                        );
+                        .orElseThrow(() -> new ResourceNotFoundException(
+                                "VERIFICATION_DOCUMENT_NOT_FOUND",
+                                "Verification document not found"
+                        ));
 
-        // Generate a short-lived access URL.
-        Instant expiresAt =
-                Instant.now().plus(DOCUMENT_ACCESS_URL_TTL);
+        Instant expiresAt = Instant.now().plus(DOCUMENT_ACCESS_URL_TTL);
 
         String accessUrl =
                 verificationFileStorageService.generateTemporaryAccessUrl(
@@ -142,8 +121,6 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
                         expiresAt
                 );
 
-        // Return document information without exposing internal
-        // Cloudinary storage references or API credentials.
         return new VerificationDocumentAccessResponse(
                 document.getId(),
                 document.getOriginalFileName(),
@@ -155,35 +132,31 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
 
     @Override
     public ProviderVerificationResponse startReview(String providerId) {
-
-        ProviderVerification verification = requireVerification(providerId);
-
-        if (verification.getStatus() == ProviderVerificationStatus.UNDER_REVIEW) {
-            return toResponse(verification);
-        }
-
-        if (verification.getStatus() != ProviderVerificationStatus.SUBMITTED) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "This verification is not available for review"
-            );
-        }
-
-        verification.setStatus(
-                ProviderVerificationStatus.UNDER_REVIEW
+        var updated = verificationAtomicUpdates.startReview(
+                providerId,
+                Instant.now()
         );
 
-        verification.setUpdatedAt(Instant.now());
+        if (updated.isPresent()) {
+            return toResponse(updated.get());
+        }
 
-        return toResponse(
-                providerVerificationRepository.save(verification)
+        // Idempotent for a request that another Admin already started.
+        ProviderVerification current = requireVerification(providerId);
+
+        if (current.getStatus() == ProviderVerificationStatus.UNDER_REVIEW) {
+            return toResponse(current);
+        }
+
+        throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This verification is not available for review"
         );
     }
 
     @Override
     @Transactional
     public ProviderVerificationResponse approveVerification(String providerId) {
-
         return completeDecision(
                 providerId,
                 ProviderVerificationStatus.APPROVED,
@@ -198,7 +171,6 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
             String providerId,
             String reason
     ) {
-
         return completeDecision(
                 providerId,
                 ProviderVerificationStatus.REJECTED,
@@ -213,7 +185,6 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
             String providerId,
             String reason
     ) {
-
         return completeDecision(
                 providerId,
                 ProviderVerificationStatus.RESUBMISSION_REQUESTED,
@@ -228,53 +199,64 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
             String reason,
             VerificationDocumentStatus documentStatus
     ) {
+        ProviderVerification current = requireVerification(providerId);
+        validateReviewable(current);
 
-        ProviderVerification verification = requireVerification(providerId);
+        List<String> submittedDocumentIds = current.getSubmittedDocumentIds();
 
-        validateReviewable(verification);
+        if (submittedDocumentIds == null || submittedDocumentIds.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "The submitted verification document snapshot is unavailable. The provider must submit the verification again"
+            );
+        }
 
         String reviewerId = CurrentUser.getUserId();
-
         if (reviewerId == null) {
             throw new AccessDeniedException("Authentication required");
         }
 
         Instant now = Instant.now();
 
-        verification.setStatus(newStatus);
-        verification.setReviewedAt(now);
-        verification.setReviewedByUserId(reviewerId);
-        verification.setDecisionReason(reason);
-        verification.setUpdatedAt(now);
-
-        ProviderVerification savedVerification =
-                providerVerificationRepository.save(verification);
+        ProviderVerification updated =
+                verificationAtomicUpdates.applyDecision(
+                        providerId,
+                        submittedDocumentIds,
+                        newStatus,
+                        reviewerId,
+                        reason,
+                        now
+                ).orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "This verification has already been processed or its submitted documents have changed"
+                ));
 
         if (documentStatus != null) {
+            long matchedDocuments =
+                    verificationAtomicUpdates.updateSubmittedDocumentStatuses(
+                            providerId,
+                            submittedDocumentIds,
+                            documentStatus,
+                            now
+                    );
 
-            List<VerificationDocument> documents =
-                    verificationDocumentRepository
-                            .findAllByProviderIdOrderByUploadedAtDesc(providerId);
-
-            documents.forEach(document -> {
-                document.setStatus(documentStatus);
-                document.setUpdatedAt(now);
-            });
-
-            verificationDocumentRepository.saveAll(documents);
+            if (matchedDocuments != submittedDocumentIds.size()) {
+                // Runtime exception causes the Mongo transaction to roll back
+                // both the verification decision and document status changes.
+                throw new IllegalStateException(
+                        "Verification decision was not completed because one or more submitted documents could not be updated"
+                );
+            }
         }
 
-        return toResponse(savedVerification);
+        return toResponse(updated);
     }
 
     private void validateReviewable(ProviderVerification verification) {
-
         ProviderVerificationStatus status = verification.getStatus();
 
-        if (
-                status != ProviderVerificationStatus.SUBMITTED
-                && status != ProviderVerificationStatus.UNDER_REVIEW
-        ) {
+        if (status != ProviderVerificationStatus.SUBMITTED
+                && status != ProviderVerificationStatus.UNDER_REVIEW) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "This verification has already been processed or is not ready for review"
@@ -283,7 +265,6 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
     }
 
     private String validateReason(String reason) {
-
         if (reason == null || reason.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -304,35 +285,25 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
     }
 
     private ProviderVerification requireVerification(String providerId) {
-
-        return providerVerificationRepository
-                .findByProviderId(providerId)
-                .orElseThrow(
-                        () -> new ResourceNotFoundException(
-                                "PROVIDER_VERIFICATION_NOT_FOUND",
-                                "Provider verification not found"
-                        )
-                );
+        return providerVerificationRepository.findByProviderId(providerId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "PROVIDER_VERIFICATION_NOT_FOUND",
+                        "Provider verification not found"
+                ));
     }
 
     private ProviderProfile requireProviderProfile(String providerId) {
-
-        return providerProfileRepository
-                .findById(providerId)
-                .orElseThrow(
-                        () -> new ResourceNotFoundException(
-                                "PROVIDER_PROFILE_NOT_FOUND",
-                                "Provider profile not found"
-                        )
-                );
+        return providerProfileRepository.findById(providerId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "PROVIDER_PROFILE_NOT_FOUND",
+                        "Provider profile not found"
+                ));
     }
 
     private AdminVerificationQueueItemResponse toQueueResponse(
             ProviderVerification verification
     ) {
-
-        ProviderProfile profile =
-                requireProviderProfile(verification.getProviderId());
+        ProviderProfile profile = requireProviderProfile(verification.getProviderId());
 
         long documentCount =
                 verificationDocumentRepository
@@ -357,7 +328,6 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
     private VerificationDocumentResponse toDocumentResponse(
             VerificationDocument document
     ) {
-
         return new VerificationDocumentResponse(
                 document.getId(),
                 document.getDocumentType(),
@@ -374,7 +344,6 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
     private ProviderVerificationResponse toResponse(
             ProviderVerification verification
     ) {
-
         return new ProviderVerificationResponse(
                 verification.getId(),
                 verification.getStatus(),

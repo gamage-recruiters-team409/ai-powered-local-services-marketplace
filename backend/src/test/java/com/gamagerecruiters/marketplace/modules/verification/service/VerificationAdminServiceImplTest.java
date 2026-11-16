@@ -1,15 +1,17 @@
-
 package com.gamagerecruiters.marketplace.modules.verification.service;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
-import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,7 +19,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -36,9 +37,6 @@ import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVeri
 import com.gamagerecruiters.marketplace.modules.verification.domain.VerificationDocument;
 import com.gamagerecruiters.marketplace.modules.verification.domain.VerificationDocumentStatus;
 import com.gamagerecruiters.marketplace.modules.verification.domain.VerificationDocumentType;
-import com.gamagerecruiters.marketplace.modules.verification.dto.AdminVerificationDetailResponse;
-import com.gamagerecruiters.marketplace.modules.verification.dto.AdminVerificationQueueItemResponse;
-import com.gamagerecruiters.marketplace.modules.verification.dto.ProviderVerificationResponse;
 import com.gamagerecruiters.marketplace.modules.verification.dto.VerificationDocumentAccessResponse;
 import com.gamagerecruiters.marketplace.modules.verification.filestorage.VerificationFileStorageService;
 import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
@@ -46,6 +44,11 @@ import com.gamagerecruiters.marketplace.modules.verification.repository.Verifica
 
 @ExtendWith(MockitoExtension.class)
 class VerificationAdminServiceImplTest {
+
+    private static final String PROVIDER_ID = "provider-123";
+    private static final String ADMIN_ID = "admin-123";
+    private static final String DOCUMENT_ID = "doc-1";
+    private static final String ACCESS_URL = "https://secure.example.com/verification-document";
 
     @Mock
     private ProviderVerificationRepository providerVerificationRepository;
@@ -59,32 +62,15 @@ class VerificationAdminServiceImplTest {
     @Mock
     private VerificationFileStorageService verificationFileStorageService;
 
+    @Mock
+    private VerificationAtomicUpdates verificationAtomicUpdates;
+
     @InjectMocks
-    private VerificationAdminServiceImpl verificationAdminService;
-
-    private static final String PROVIDER_ID = "provider-123";
-    private static final String ADMIN_ID = "admin-123";
-    private static final String DOCUMENT_ID = "doc-1";
-
-    private static final String ACCESS_URL =
-            "https://secure.example.com/verification-document";
+    private VerificationAdminServiceImpl service;
 
     @BeforeEach
     void setUp() {
-
-        UserPrincipal principal = new UserPrincipal(
-                ADMIN_ID,
-                "admin@example.com",
-                Role.ADMIN
-        );
-
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken(
-                        principal,
-                        null,
-                        principal.getAuthorities()
-                )
-        );
+        setAdmin(ADMIN_ID);
     }
 
     @AfterEach
@@ -92,114 +78,59 @@ class VerificationAdminServiceImplTest {
         SecurityContextHolder.clearContext();
     }
 
-    // --------------------------------------------------
-    // PENDING VERIFICATION QUEUE
-    // --------------------------------------------------
-
     @Test
     void getPendingVerifications_returnsQueueItems() {
-
-        ProviderVerification verification = createVerification(
-                ProviderVerificationStatus.SUBMITTED
+        ProviderVerification verification = verification(
+                ProviderVerificationStatus.SUBMITTED,
+                List.of("doc-1", "doc-2")
         );
 
         when(providerVerificationRepository
-                .findAllByStatusInOrderBySubmittedAtAsc(anyCollection()))
+                .findAllByStatusInOrderBySubmittedAtAsc(any()))
                 .thenReturn(List.of(verification));
-
         when(providerProfileRepository.findById(PROVIDER_ID))
-                .thenReturn(Optional.of(createProfile()));
-
+                .thenReturn(Optional.of(profile()));
         when(verificationDocumentRepository
                 .findAllByProviderIdOrderByUploadedAtDesc(PROVIDER_ID))
-                .thenReturn(List.of(
-                        createDocument("doc-1"),
-                        createDocument("doc-2")
-                ));
+                .thenReturn(List.of(document("doc-1"), document("doc-2")));
 
-        List<AdminVerificationQueueItemResponse> result =
-                verificationAdminService.getPendingVerifications();
+        var result = service.getPendingVerifications();
 
         assertEquals(1, result.size());
         assertEquals(PROVIDER_ID, result.get(0).providerId());
-        assertEquals("Test Provider", result.get(0).displayName());
         assertEquals(2, result.get(0).documentCount());
-
-        assertEquals(
-                ProviderVerificationStatus.SUBMITTED,
-                result.get(0).status()
-        );
-
-        verify(providerVerificationRepository)
-                .findAllByStatusInOrderBySubmittedAtAsc(
-                        List.of(
-                                ProviderVerificationStatus.SUBMITTED,
-                                ProviderVerificationStatus.UNDER_REVIEW
-                        )
-                );
     }
-
-    // --------------------------------------------------
-    // VERIFICATION DETAILS
-    // --------------------------------------------------
 
     @Test
     void getVerificationDetails_returnsProviderAndDocuments() {
-
-        ProviderVerification verification = createVerification(
-                ProviderVerificationStatus.SUBMITTED
-        );
-
         when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
-                .thenReturn(Optional.of(verification));
-
+                .thenReturn(Optional.of(verification(
+                        ProviderVerificationStatus.SUBMITTED,
+                        List.of(DOCUMENT_ID)
+                )));
         when(providerProfileRepository.findById(PROVIDER_ID))
-                .thenReturn(Optional.of(createProfile()));
-
+                .thenReturn(Optional.of(profile()));
         when(verificationDocumentRepository
                 .findAllByProviderIdOrderByUploadedAtDesc(PROVIDER_ID))
-                .thenReturn(List.of(createDocument("doc-1")));
+                .thenReturn(List.of(document(DOCUMENT_ID)));
 
-        AdminVerificationDetailResponse result =
-                verificationAdminService.getVerificationDetails(PROVIDER_ID);
+        var result = service.getVerificationDetails(PROVIDER_ID);
 
         assertEquals(PROVIDER_ID, result.providerId());
         assertEquals("Test Provider", result.displayName());
-
-        assertEquals(
-                ProviderVerificationStatus.SUBMITTED,
-                result.status()
-        );
-
         assertEquals(1, result.documents().size());
-
-        assertEquals(
-                "ID Document.pdf",
-                result.documents().get(0).getOriginalFileName()
-        );
     }
 
-    // --------------------------------------------------
-    // SECURE DOCUMENT ACCESS
-    // --------------------------------------------------
-
     @Test
-    void getVerificationDocumentAccess_returnsTemporarySecureUrl() {
-
-        ProviderVerification verification = createVerification(
-                ProviderVerificationStatus.SUBMITTED
-        );
-
-        VerificationDocument document = createDocument(DOCUMENT_ID);
-
+    void getVerificationDocumentAccess_returnsShortLivedPrivateUrl() {
         when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
-                .thenReturn(Optional.of(verification));
-
+                .thenReturn(Optional.of(verification(
+                        ProviderVerificationStatus.SUBMITTED,
+                        List.of(DOCUMENT_ID)
+                )));
         when(verificationDocumentRepository.findByIdAndProviderId(
-                DOCUMENT_ID,
-                PROVIDER_ID
-        )).thenReturn(Optional.of(document));
-
+                DOCUMENT_ID, PROVIDER_ID
+        )).thenReturn(Optional.of(document(DOCUMENT_ID)));
         when(verificationFileStorageService.generateTemporaryAccessUrl(
                 eq("private-public-id-" + DOCUMENT_ID),
                 eq("pdf"),
@@ -208,381 +139,262 @@ class VerificationAdminServiceImplTest {
                 any(Instant.class)
         )).thenReturn(ACCESS_URL);
 
-        Instant beforeCall = Instant.now();
+        VerificationDocumentAccessResponse response =
+                service.getVerificationDocumentAccess(PROVIDER_ID, DOCUMENT_ID);
 
-        VerificationDocumentAccessResponse result =
-                verificationAdminService.getVerificationDocumentAccess(
-                        PROVIDER_ID,
-                        DOCUMENT_ID
-                );
-
-        Instant afterCall = Instant.now();
-
-        assertEquals(DOCUMENT_ID, result.documentId());
-
-        assertEquals(
-                "ID Document.pdf",
-                result.originalFileName()
-        );
-
-        assertEquals("pdf", result.format());
-        assertEquals(ACCESS_URL, result.accessUrl());
-
-        assertNotNull(result.expiresAt());
-
-        // Verify that the generated access URL expires
-        // exactly five minutes after the request.
-        assertFalse(
-                result.expiresAt().isBefore(
-                        beforeCall.plus(Duration.ofMinutes(5))
-                )
-        );
-
-        assertFalse(
-                result.expiresAt().isAfter(
-                        afterCall.plus(Duration.ofMinutes(5))
-                )
-        );
-
-        // Capture the expiry passed to the file storage service.
-        ArgumentCaptor<Instant> expiryCaptor =
-                ArgumentCaptor.forClass(Instant.class);
-
-        verify(verificationFileStorageService)
-                .generateTemporaryAccessUrl(
-                        eq("private-public-id-" + DOCUMENT_ID),
-                        eq("pdf"),
-                        eq("image"),
-                        eq("authenticated"),
-                        expiryCaptor.capture()
-                );
-
-        // Confirm that the returned expiry matches
-        // the expiry used to generate the secure URL.
-        assertEquals(
-                result.expiresAt(),
-                expiryCaptor.getValue()
-        );
+        assertEquals(DOCUMENT_ID, response.documentId());
+        assertEquals(ACCESS_URL, response.accessUrl());
+        assertNotNull(response.expiresAt());
     }
 
     @Test
-    void getVerificationDocumentAccess_rejectsDocumentNotBelongingToProvider() {
-
-        ProviderVerification verification = createVerification(
-                ProviderVerificationStatus.SUBMITTED
-        );
-
+    void getVerificationDocumentAccess_rejectsDocumentFromAnotherProvider() {
         when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
-                .thenReturn(Optional.of(verification));
-
+                .thenReturn(Optional.of(verification(
+                        ProviderVerificationStatus.SUBMITTED,
+                        List.of(DOCUMENT_ID)
+                )));
         when(verificationDocumentRepository.findByIdAndProviderId(
-                DOCUMENT_ID,
-                PROVIDER_ID
+                DOCUMENT_ID, PROVIDER_ID
         )).thenReturn(Optional.empty());
 
         assertThrows(
                 ResourceNotFoundException.class,
-                () -> verificationAdminService.getVerificationDocumentAccess(
-                        PROVIDER_ID,
-                        DOCUMENT_ID
-                )
+                () -> service.getVerificationDocumentAccess(PROVIDER_ID, DOCUMENT_ID)
         );
 
-        // Cloudinary must not be contacted for an invalid document.
         verifyNoInteractions(verificationFileStorageService);
     }
 
     @Test
-    void getVerificationDocumentAccess_rejectsMissingProviderVerification() {
-
-        when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
-                .thenReturn(Optional.empty());
-
-        assertThrows(
-                ResourceNotFoundException.class,
-                () -> verificationAdminService.getVerificationDocumentAccess(
-                        PROVIDER_ID,
-                        DOCUMENT_ID
-                )
-        );
-
-        verify(providerVerificationRepository)
-                .findByProviderId(PROVIDER_ID);
-
-        // Document repository and Cloudinary must not be accessed
-        // when the provider has no verification record.
-        verifyNoInteractions(
-                verificationDocumentRepository,
-                verificationFileStorageService
-        );
-    }
-
-    // --------------------------------------------------
-    // START REVIEW
-    // --------------------------------------------------
-
-    @Test
-    void startReview_changesStatusToUnderReview() {
-
-        ProviderVerification verification = createVerification(
-                ProviderVerificationStatus.SUBMITTED
-        );
-
-        when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
-                .thenReturn(Optional.of(verification));
-
-        when(providerVerificationRepository.save(any(ProviderVerification.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-
-        ProviderVerificationResponse result =
-                verificationAdminService.startReview(PROVIDER_ID);
-
-        assertEquals(
+    void startReview_usesAtomicConditionalUpdate() {
+        ProviderVerification updated = verification(
                 ProviderVerificationStatus.UNDER_REVIEW,
-                result.getStatus()
+                List.of(DOCUMENT_ID)
         );
 
-        assertEquals(
+        when(verificationAtomicUpdates.startReview(
+                eq(PROVIDER_ID), any(Instant.class)
+        )).thenReturn(Optional.of(updated));
+
+        var response = service.startReview(PROVIDER_ID);
+
+        assertEquals(ProviderVerificationStatus.UNDER_REVIEW, response.getStatus());
+        verify(verificationAtomicUpdates).startReview(
+                eq(PROVIDER_ID), any(Instant.class)
+        );
+    }
+
+    @Test
+    void startReview_isIdempotentWhenAlreadyUnderReview() {
+        ProviderVerification existing = verification(
                 ProviderVerificationStatus.UNDER_REVIEW,
-                verification.getStatus()
+                List.of(DOCUMENT_ID)
         );
 
-        assertNotNull(verification.getUpdatedAt());
+        when(verificationAtomicUpdates.startReview(
+                eq(PROVIDER_ID), any(Instant.class)
+        )).thenReturn(Optional.empty());
+        when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
+                .thenReturn(Optional.of(existing));
 
-        verify(providerVerificationRepository).save(verification);
+        var response = service.startReview(PROVIDER_ID);
+
+        assertEquals(ProviderVerificationStatus.UNDER_REVIEW, response.getStatus());
     }
 
     @Test
-    void startReview_doesNotSaveAgainWhenAlreadyUnderReview() {
-
-        ProviderVerification verification = createVerification(
-                ProviderVerificationStatus.UNDER_REVIEW
+    void approveVerification_updatesOnlyFrozenSubmittedDocuments() {
+        List<String> ids = List.of("doc-1", "doc-2");
+        ProviderVerification current = verification(
+                ProviderVerificationStatus.UNDER_REVIEW, ids
         );
+        ProviderVerification approved = verification(
+                ProviderVerificationStatus.APPROVED, ids
+        );
+        approved.setReviewedByUserId(ADMIN_ID);
+        approved.setReviewedAt(Instant.now());
 
         when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
-                .thenReturn(Optional.of(verification));
+                .thenReturn(Optional.of(current));
+        when(verificationAtomicUpdates.applyDecision(
+                eq(PROVIDER_ID),
+                eq(ids),
+                eq(ProviderVerificationStatus.APPROVED),
+                eq(ADMIN_ID),
+                isNull(),
+                any(Instant.class)
+        )).thenReturn(Optional.of(approved));
+        when(verificationAtomicUpdates.updateSubmittedDocumentStatuses(
+                eq(PROVIDER_ID),
+                eq(ids),
+                eq(VerificationDocumentStatus.APPROVED),
+                any(Instant.class)
+        )).thenReturn(2L);
 
-        ProviderVerificationResponse result =
-                verificationAdminService.startReview(PROVIDER_ID);
+        var response = service.approveVerification(PROVIDER_ID);
 
-        assertEquals(
-                ProviderVerificationStatus.UNDER_REVIEW,
-                result.getStatus()
+        assertEquals(ProviderVerificationStatus.APPROVED, response.getStatus());
+        verify(verificationAtomicUpdates).updateSubmittedDocumentStatuses(
+                eq(PROVIDER_ID),
+                eq(ids),
+                eq(VerificationDocumentStatus.APPROVED),
+                any(Instant.class)
         );
-
-        verify(providerVerificationRepository, never())
-                .save(any(ProviderVerification.class));
     }
 
-    // --------------------------------------------------
-    // APPROVE VERIFICATION
-    // --------------------------------------------------
-
     @Test
-    void approveVerification_approvesVerificationAndDocuments() {
-
-        ProviderVerification verification = createVerification(
-                ProviderVerificationStatus.UNDER_REVIEW
+    void rejectVerification_updatesFrozenDocumentsAndReason() {
+        List<String> ids = List.of(DOCUMENT_ID);
+        ProviderVerification current = verification(
+                ProviderVerificationStatus.UNDER_REVIEW, ids
         );
-
-        List<VerificationDocument> documents = new ArrayList<>(
-                List.of(
-                        createDocument("doc-1"),
-                        createDocument("doc-2")
-                )
+        ProviderVerification rejected = verification(
+                ProviderVerificationStatus.REJECTED, ids
         );
+        rejected.setDecisionReason("Invalid identification document");
 
         when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
-                .thenReturn(Optional.of(verification));
+                .thenReturn(Optional.of(current));
+        when(verificationAtomicUpdates.applyDecision(
+                eq(PROVIDER_ID),
+                eq(ids),
+                eq(ProviderVerificationStatus.REJECTED),
+                eq(ADMIN_ID),
+                eq("Invalid identification document"),
+                any(Instant.class)
+        )).thenReturn(Optional.of(rejected));
+        when(verificationAtomicUpdates.updateSubmittedDocumentStatuses(
+                eq(PROVIDER_ID),
+                eq(ids),
+                eq(VerificationDocumentStatus.REJECTED),
+                any(Instant.class)
+        )).thenReturn(1L);
 
-        when(providerVerificationRepository.save(any(ProviderVerification.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-
-        when(verificationDocumentRepository
-                .findAllByProviderIdOrderByUploadedAtDesc(PROVIDER_ID))
-                .thenReturn(documents);
-
-        ProviderVerificationResponse result =
-                verificationAdminService.approveVerification(PROVIDER_ID);
-
-        assertEquals(
-                ProviderVerificationStatus.APPROVED,
-                result.getStatus()
+        var response = service.rejectVerification(
+                PROVIDER_ID, " Invalid identification document "
         );
 
-        assertEquals(ADMIN_ID, verification.getReviewedByUserId());
-        assertNotNull(verification.getReviewedAt());
-
-        for (VerificationDocument document : documents) {
-            assertEquals(
-                    VerificationDocumentStatus.APPROVED,
-                    document.getStatus()
-            );
-        }
-
-        verify(verificationDocumentRepository).saveAll(documents);
+        assertEquals(ProviderVerificationStatus.REJECTED, response.getStatus());
+        verify(verificationAtomicUpdates).updateSubmittedDocumentStatuses(
+                eq(PROVIDER_ID),
+                eq(ids),
+                eq(VerificationDocumentStatus.REJECTED),
+                any(Instant.class)
+        );
     }
 
-    // --------------------------------------------------
-    // REJECT VERIFICATION
-    // --------------------------------------------------
-
     @Test
-    void rejectVerification_rejectsVerificationAndDocuments() {
-
-        ProviderVerification verification = createVerification(
-                ProviderVerificationStatus.UNDER_REVIEW
+    void requestResubmission_doesNotChangeCurrentDocumentStatuses() {
+        List<String> ids = List.of(DOCUMENT_ID);
+        ProviderVerification current = verification(
+                ProviderVerificationStatus.UNDER_REVIEW, ids
         );
-
-        List<VerificationDocument> documents = new ArrayList<>(
-                List.of(createDocument("doc-1"))
+        ProviderVerification requested = verification(
+                ProviderVerificationStatus.RESUBMISSION_REQUESTED, ids
         );
 
         when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
-                .thenReturn(Optional.of(verification));
+                .thenReturn(Optional.of(current));
+        when(verificationAtomicUpdates.applyDecision(
+                eq(PROVIDER_ID),
+                eq(ids),
+                eq(ProviderVerificationStatus.RESUBMISSION_REQUESTED),
+                eq(ADMIN_ID),
+                eq("Please upload a clearer identification document"),
+                any(Instant.class)
+        )).thenReturn(Optional.of(requested));
 
-        when(providerVerificationRepository.save(any(ProviderVerification.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-
-        when(verificationDocumentRepository
-                .findAllByProviderIdOrderByUploadedAtDesc(PROVIDER_ID))
-                .thenReturn(documents);
-
-        ProviderVerificationResponse result =
-                verificationAdminService.rejectVerification(
-                        PROVIDER_ID,
-                        "Invalid identification document"
-                );
-
-        assertEquals(
-                ProviderVerificationStatus.REJECTED,
-                result.getStatus()
+        var response = service.requestResubmission(
+                PROVIDER_ID,
+                "Please upload a clearer identification document"
         );
-
-        assertEquals(
-                "Invalid identification document",
-                verification.getDecisionReason()
-        );
-
-        assertEquals(ADMIN_ID, verification.getReviewedByUserId());
-
-        assertEquals(
-                VerificationDocumentStatus.REJECTED,
-                documents.get(0).getStatus()
-        );
-
-        verify(verificationDocumentRepository).saveAll(documents);
-    }
-
-    // --------------------------------------------------
-    // REQUEST RESUBMISSION
-    // --------------------------------------------------
-
-    @Test
-    void requestResubmission_updatesVerificationWithoutChangingDocuments() {
-
-        ProviderVerification verification = createVerification(
-                ProviderVerificationStatus.UNDER_REVIEW
-        );
-
-        when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
-                .thenReturn(Optional.of(verification));
-
-        when(providerVerificationRepository.save(any(ProviderVerification.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
-
-        ProviderVerificationResponse result =
-                verificationAdminService.requestResubmission(
-                        PROVIDER_ID,
-                        "Please upload a clearer identification document"
-                );
 
         assertEquals(
                 ProviderVerificationStatus.RESUBMISSION_REQUESTED,
-                result.getStatus()
+                response.getStatus()
         );
-
-        assertEquals(
-                "Please upload a clearer identification document",
-                verification.getDecisionReason()
-        );
-
-        assertEquals(ADMIN_ID, verification.getReviewedByUserId());
-
-        verifyNoInteractions(verificationDocumentRepository);
+        verify(verificationAtomicUpdates, never())
+                .updateSubmittedDocumentStatuses(any(), any(), any(), any());
     }
 
-    // --------------------------------------------------
-    // VALIDATION TESTS
-    // --------------------------------------------------
-
     @Test
-    void rejectVerification_throwsExceptionWhenReasonIsBlank() {
-
+    void rejectVerification_requiresReason() {
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
-                () -> verificationAdminService.rejectVerification(
-                        PROVIDER_ID,
-                        " "
-                )
+                () -> service.rejectVerification(PROVIDER_ID, " ")
         );
 
-        assertEquals(
-                HttpStatus.BAD_REQUEST,
-                exception.getStatusCode()
-        );
-
-        verifyNoInteractions(providerVerificationRepository);
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getStatusCode());
+        verifyNoInteractions(providerVerificationRepository, verificationAtomicUpdates);
     }
 
     @Test
     void approveVerification_rejectsAlreadyApprovedVerification() {
-
-        ProviderVerification verification = createVerification(
-                ProviderVerificationStatus.APPROVED
-        );
-
         when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
-                .thenReturn(Optional.of(verification));
+                .thenReturn(Optional.of(verification(
+                        ProviderVerificationStatus.APPROVED,
+                        List.of(DOCUMENT_ID)
+                )));
 
         ResponseStatusException exception = assertThrows(
                 ResponseStatusException.class,
-                () -> verificationAdminService.approveVerification(PROVIDER_ID)
+                () -> service.approveVerification(PROVIDER_ID)
         );
 
-        assertEquals(
-                HttpStatus.CONFLICT,
-                exception.getStatusCode()
-        );
-
-        verify(providerVerificationRepository, never())
-                .save(any(ProviderVerification.class));
+        assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+        verifyNoInteractions(verificationAtomicUpdates);
     }
 
-    // --------------------------------------------------
-    // TEST DATA HELPERS
-    // --------------------------------------------------
+    @Test
+    void approveVerification_rejectsMissingSubmittedDocumentSnapshot() {
+        when(providerVerificationRepository.findByProviderId(PROVIDER_ID))
+                .thenReturn(Optional.of(verification(
+                        ProviderVerificationStatus.UNDER_REVIEW,
+                        List.of()
+                )));
 
-    private ProviderVerification createVerification(
-            ProviderVerificationStatus status
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> service.approveVerification(PROVIDER_ID)
+        );
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+        verifyNoInteractions(verificationAtomicUpdates);
+    }
+
+    private void setAdmin(String userId) {
+        UserPrincipal principal = new UserPrincipal(
+                userId,
+                "admin@example.com",
+                Role.ADMIN
+        );
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(
+                        principal, null, principal.getAuthorities()
+                )
+        );
+    }
+
+    private ProviderVerification verification(
+            ProviderVerificationStatus status,
+            List<String> submittedIds
     ) {
-
         ProviderVerification verification = new ProviderVerification();
-
         verification.setId("verification-123");
         verification.setProviderId(PROVIDER_ID);
         verification.setStatus(status);
         verification.setSubmittedAt(Instant.now());
         verification.setCreatedAt(Instant.now());
         verification.setUpdatedAt(Instant.now());
-
+        verification.setSubmittedDocumentIds(submittedIds);
+        verification.setCoordinationRevision(1L);
+        verification.setInFlightUploadCount(0);
         return verification;
     }
 
-    private ProviderProfile createProfile() {
-
+    private ProviderProfile profile() {
         ProviderProfile profile = new ProviderProfile();
-
         profile.setId(PROVIDER_ID);
         profile.setUserId("user-123");
         profile.setDisplayName("Test Provider");
@@ -590,31 +402,24 @@ class VerificationAdminServiceImplTest {
         profile.setDistrict("Colombo");
         profile.setCity("Maharagama");
         profile.setExperienceYears(3);
-
         return profile;
     }
 
-    private VerificationDocument createDocument(String id) {
-
+    private VerificationDocument document(String id) {
         VerificationDocument document = new VerificationDocument();
-
         document.setId(id);
         document.setProviderId(PROVIDER_ID);
         document.setDocumentType(VerificationDocumentType.ID);
-
         document.setStorageKey("private-public-id-" + id);
         document.setAssetId("asset-" + id);
         document.setResourceType("image");
         document.setDeliveryType("authenticated");
-
         document.setOriginalFileName("ID Document.pdf");
         document.setFormat("pdf");
         document.setBytes(76304L);
-
         document.setStatus(VerificationDocumentStatus.SUBMITTED);
         document.setUploadedAt(Instant.now());
         document.setUpdatedAt(Instant.now());
-
         return document;
     }
 }

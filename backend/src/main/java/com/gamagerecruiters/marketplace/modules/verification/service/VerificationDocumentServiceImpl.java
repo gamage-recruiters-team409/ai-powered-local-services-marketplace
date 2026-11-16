@@ -1,4 +1,3 @@
-
 package com.gamagerecruiters.marketplace.modules.verification.service;
 
 import java.time.Instant;
@@ -15,15 +14,12 @@ import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundExcepti
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
-import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification;
-import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerificationStatus;
 import com.gamagerecruiters.marketplace.modules.verification.domain.VerificationDocument;
 import com.gamagerecruiters.marketplace.modules.verification.domain.VerificationDocumentStatus;
 import com.gamagerecruiters.marketplace.modules.verification.domain.VerificationDocumentType;
 import com.gamagerecruiters.marketplace.modules.verification.dto.VerificationDocumentResponse;
 import com.gamagerecruiters.marketplace.modules.verification.filestorage.StoredVerificationFile;
 import com.gamagerecruiters.marketplace.modules.verification.filestorage.VerificationFileStorageService;
-import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.VerificationDocumentRepository;
 
 @Service
@@ -31,22 +27,19 @@ public class VerificationDocumentServiceImpl
         implements VerificationDocumentService {
 
     private final ProviderProfileRepository providerProfileRepository;
-
     private final VerificationDocumentRepository verificationDocumentRepository;
-
-    private final ProviderVerificationRepository providerVerificationRepository;
-
+    private final VerificationAtomicUpdates verificationAtomicUpdates;
     private final VerificationFileStorageService verificationFileStorageService;
 
     public VerificationDocumentServiceImpl(
             ProviderProfileRepository providerProfileRepository,
             VerificationDocumentRepository verificationDocumentRepository,
-            ProviderVerificationRepository providerVerificationRepository,
+            VerificationAtomicUpdates verificationAtomicUpdates,
             VerificationFileStorageService verificationFileStorageService
     ) {
         this.providerProfileRepository = providerProfileRepository;
         this.verificationDocumentRepository = verificationDocumentRepository;
-        this.providerVerificationRepository = providerVerificationRepository;
+        this.verificationAtomicUpdates = verificationAtomicUpdates;
         this.verificationFileStorageService = verificationFileStorageService;
     }
 
@@ -57,199 +50,90 @@ public class VerificationDocumentServiceImpl
             LocalDate expiryDate,
             MultipartFile file
     ) {
+        ProviderProfile providerProfile = requireCurrentProviderProfile();
+        String providerId = providerProfile.getId();
 
-        ProviderProfile providerProfile =
-                requireCurrentProviderProfile();
+        validateDocumentMetadata(documentType, issueDate, expiryDate);
 
-        validateDocumentMetadata(
-                documentType,
-                issueDate,
-                expiryDate
-        );
+        // Reserve before Cloudinary. Submission/review cannot pass this reservation.
+        verificationAtomicUpdates.reserveDocumentUpload(providerId, Instant.now());
 
-        // Check verification status before uploading to Cloudinary.
-        validateDocumentUploadPermission(
-                providerProfile.getId()
-        );
-
-        StoredVerificationFile storedFile =
-                verificationFileStorageService.upload(
-                        providerProfile.getId(),
-                        file
-                );
-
-        VerificationDocument document =
-                new VerificationDocument();
-
-        document.setProviderId(
-                providerProfile.getId()
-        );
-
-        document.setDocumentType(
-                documentType
-        );
-
-        // Store Cloudinary's private public ID internally.
-        document.setStorageKey(
-                storedFile.publicId()
-        );
-
-        document.setAssetId(
-                storedFile.assetId()
-        );
-
-        document.setResourceType(
-                storedFile.resourceType()
-        );
-
-        document.setDeliveryType(
-                storedFile.deliveryType()
-        );
-
-        document.setFormat(
-                storedFile.format()
-        );
-
-        document.setBytes(
-                storedFile.bytes() == null
-                        ? 0L
-                        : storedFile.bytes()
-        );
-
-        document.setOriginalFileName(
-                storedFile.originalFileName()
-        );
-
-        document.setIssueDate(issueDate);
-        document.setExpiryDate(expiryDate);
-
-        document.setStatus(
-                VerificationDocumentStatus.SUBMITTED
-        );
-
-        Instant now = Instant.now();
-
-        document.setUploadedAt(now);
-        document.setUpdatedAt(now);
+        StoredVerificationFile storedFile = null;
+        VerificationDocument savedDocument;
+        RuntimeException operationFailure = null;
 
         try {
+            storedFile = verificationFileStorageService.upload(providerId, file);
 
-            VerificationDocument savedDocument =
-                    verificationDocumentRepository.save(
-                            document
-                    );
+            VerificationDocument document = new VerificationDocument();
+            document.setProviderId(providerId);
+            document.setDocumentType(documentType);
+            document.setStorageKey(storedFile.publicId());
+            document.setAssetId(storedFile.assetId());
+            document.setResourceType(storedFile.resourceType());
+            document.setDeliveryType(storedFile.deliveryType());
+            document.setFormat(storedFile.format());
+            document.setBytes(storedFile.bytes() == null ? 0L : storedFile.bytes());
+            document.setOriginalFileName(storedFile.originalFileName());
+            document.setIssueDate(issueDate);
+            document.setExpiryDate(expiryDate);
+            document.setStatus(VerificationDocumentStatus.SUBMITTED);
 
-            return toResponse(savedDocument);
+            Instant now = Instant.now();
+            document.setUploadedAt(now);
+            document.setUpdatedAt(now);
 
+            savedDocument = verificationDocumentRepository.save(document);
         } catch (RuntimeException exception) {
+            operationFailure = exception;
 
-            // Remove the Cloudinary file if database saving fails.
-            try {
-
-                verificationFileStorageService.delete(
-                        storedFile.publicId()
-                );
-
-            } catch (RuntimeException cleanupException) {
-
-                exception.addSuppressed(
-                        cleanupException
-                );
+            if (storedFile != null) {
+                try {
+                    verificationFileStorageService.delete(storedFile.publicId());
+                } catch (RuntimeException cleanupException) {
+                    exception.addSuppressed(cleanupException);
+                }
             }
 
             throw exception;
-        }
-    }
-
-    /**
-     * Validate whether the provider is allowed to upload
-     * verification documents based on the current verification status.
-     */
-    private void validateDocumentUploadPermission(
-            String providerId
-    ) {
-
-        ProviderVerification verification =
-                providerVerificationRepository
-                        .findByProviderId(providerId)
-                        .orElse(null);
-
-        // First-time verification: no existing record.
-        if (verification == null) {
-            return;
-        }
-
-        ProviderVerificationStatus status =
-                verification.getStatus();
-
-        if (status == null) {
-
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Verification status is unavailable. Please contact support."
-            );
-        }
-
-        switch (status) {
-
-            // Uploading is allowed.
-            case NOT_SUBMITTED,
-                 REJECTED,
-                 RESUBMISSION_REQUESTED,
-                 EXPIRED -> {
-                return;
-            }
-
-            // Uploading is blocked.
-            case SUBMITTED,
-                 UNDER_REVIEW,
-                 APPROVED,
-                 SUSPENDED -> {
-
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT,
-                        "Verification documents cannot be uploaded while your verification status is "
-                                + status
-                                + ". Please wait for the verification decision."
-                );
+        } finally {
+            try {
+                verificationAtomicUpdates.releaseDocumentUpload(providerId);
+            } catch (RuntimeException releaseException) {
+                if (operationFailure != null) {
+                    operationFailure.addSuppressed(releaseException);
+                } else {
+                    throw releaseException;
+                }
             }
         }
+
+        return toResponse(savedDocument);
     }
 
     @Override
     public List<VerificationDocumentResponse> getMyDocuments() {
-
-        ProviderProfile providerProfile =
-                requireCurrentProviderProfile();
+        ProviderProfile providerProfile = requireCurrentProviderProfile();
 
         return verificationDocumentRepository
-                .findAllByProviderIdOrderByUploadedAtDesc(
-                        providerProfile.getId()
-                )
+                .findAllByProviderIdOrderByUploadedAtDesc(providerProfile.getId())
                 .stream()
                 .map(this::toResponse)
                 .toList();
     }
 
     private ProviderProfile requireCurrentProviderProfile() {
-
         String userId = CurrentUser.getUserId();
 
         if (userId == null) {
-
-            throw new AccessDeniedException(
-                    "Authentication required"
-            );
+            throw new AccessDeniedException("Authentication required");
         }
 
-        return providerProfileRepository
-                .findByUserId(userId)
-                .orElseThrow(
-                        () -> new ResourceNotFoundException(
-                                "PROVIDER_PROFILE_NOT_FOUND",
-                                "Provider profile not found"
-                        )
-                );
+        return providerProfileRepository.findByUserId(userId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "PROVIDER_PROFILE_NOT_FOUND",
+                        "Provider profile not found"
+                ));
     }
 
     private void validateDocumentMetadata(
@@ -257,21 +141,15 @@ public class VerificationDocumentServiceImpl
             LocalDate issueDate,
             LocalDate expiryDate
     ) {
-
         if (documentType == null) {
-
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Verification document type is required"
             );
         }
 
-        if (
-                issueDate != null
-                && expiryDate != null
-                && expiryDate.isBefore(issueDate)
-        ) {
-
+        if (issueDate != null && expiryDate != null
+                && expiryDate.isBefore(issueDate)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Expiry date cannot be before issue date"
@@ -282,7 +160,6 @@ public class VerificationDocumentServiceImpl
     private VerificationDocumentResponse toResponse(
             VerificationDocument document
     ) {
-
         return new VerificationDocumentResponse(
                 document.getId(),
                 document.getDocumentType(),

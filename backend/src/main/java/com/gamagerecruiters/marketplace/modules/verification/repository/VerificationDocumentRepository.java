@@ -1,5 +1,7 @@
+
 package com.gamagerecruiters.marketplace.modules.verification.repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -18,4 +20,14 @@ public interface VerificationDocumentRepository
             String id,
             String providerId
     );
+
+    /**
+     * Retrieves only the documents included in a specific
+     * provider verification submission.
+     */
+    List<VerificationDocument>
+            findAllByIdInAndProviderIdOrderByUploadedAtDesc(
+                    Collection<String> ids,
+                    String providerId
+            );
 }

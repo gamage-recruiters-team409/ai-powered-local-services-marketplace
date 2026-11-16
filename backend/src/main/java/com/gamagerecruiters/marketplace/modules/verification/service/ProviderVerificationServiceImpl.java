@@ -24,34 +24,38 @@ public class ProviderVerificationServiceImpl
         implements ProviderVerificationService {
 
     private final ProviderProfileRepository providerProfileRepository;
-
     private final VerificationDocumentRepository verificationDocumentRepository;
-
     private final ProviderVerificationRepository providerVerificationRepository;
+    private final VerificationAtomicUpdates verificationAtomicUpdates;
 
     public ProviderVerificationServiceImpl(
             ProviderProfileRepository providerProfileRepository,
             VerificationDocumentRepository verificationDocumentRepository,
-            ProviderVerificationRepository providerVerificationRepository
+            ProviderVerificationRepository providerVerificationRepository,
+            VerificationAtomicUpdates verificationAtomicUpdates
     ) {
         this.providerProfileRepository = providerProfileRepository;
         this.verificationDocumentRepository = verificationDocumentRepository;
         this.providerVerificationRepository = providerVerificationRepository;
+        this.verificationAtomicUpdates = verificationAtomicUpdates;
     }
 
     @Override
     public ProviderVerificationResponse submitMyVerification() {
-
-        ProviderProfile providerProfile =
-                requireCurrentProviderProfile();
-
+        ProviderProfile providerProfile = requireCurrentProviderProfile();
         String providerId = providerProfile.getId();
+        Instant now = Instant.now();
+
+        ProviderVerification current =
+                verificationAtomicUpdates.ensureVerificationRecord(providerId, now);
+
+        if (current.getStatus() == ProviderVerificationStatus.SUBMITTED) {
+            return toResponse(current);
+        }
 
         List<VerificationDocument> documents =
                 verificationDocumentRepository
-                        .findAllByProviderIdOrderByUploadedAtDesc(
-                                providerId
-                        );
+                        .findAllByProviderIdOrderByUploadedAtDesc(providerId);
 
         if (documents.isEmpty()) {
             throw new ResponseStatusException(
@@ -60,133 +64,106 @@ public class ProviderVerificationServiceImpl
             );
         }
 
-        ProviderVerification verification =
-                providerVerificationRepository
-                        .findByProviderId(providerId)
-                        .orElse(null);
+        validateSubmission(current, documents);
 
-        Instant now = Instant.now();
+        List<String> submittedDocumentIds = documents.stream()
+                .map(VerificationDocument::getId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .toList();
 
-        // First-time verification submission.
-        if (verification == null) {
-
-            verification = new ProviderVerification();
-
-            verification.setProviderId(providerId);
-
-            verification.setCreatedAt(now);
-
-        } else {
-
-            // Avoid duplicate submissions.
-            if (
-                    verification.getStatus()
-                            == ProviderVerificationStatus.SUBMITTED
-            ) {
-                return toResponse(verification);
-            }
-
-            validateSubmission(verification, documents);
+        if (submittedDocumentIds.size() != documents.size()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "One or more verification documents could not be identified. Please refresh and try again"
+            );
         }
 
-        verification.setStatus(
-                ProviderVerificationStatus.SUBMITTED
+        var saved = verificationAtomicUpdates.submitIfUnchanged(
+                providerId,
+                current.getCoordinationRevision(),
+                submittedDocumentIds,
+                now
         );
 
-        verification.setSubmittedAt(now);
+        if (saved.isPresent()) {
+            return toResponse(saved.get());
+        }
 
-        // Clear previous review information on resubmission.
-        verification.setReviewedAt(null);
+        // Another submission may have completed while this request was running.
+        ProviderVerification latest =
+                providerVerificationRepository.findByProviderId(providerId)
+                        .orElseThrow(() -> new ResponseStatusException(
+                                HttpStatus.CONFLICT,
+                                "Verification changed during submission. Please try again"
+                        ));
 
-        verification.setReviewedByUserId(null);
+        if (latest.getStatus() == ProviderVerificationStatus.SUBMITTED) {
+            return toResponse(latest);
+        }
 
-        verification.setDecisionReason(null);
-
-        verification.setUpdatedAt(now);
-
-        ProviderVerification savedVerification =
-                providerVerificationRepository.save(
-                        verification
-                );
-
-        return toResponse(savedVerification);
+        throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Verification documents changed or an upload is still in progress. Please try submitting again"
+        );
     }
 
     @Override
     public ProviderVerificationResponse getMyVerificationStatus() {
-
-        ProviderProfile providerProfile =
-                requireCurrentProviderProfile();
+        ProviderProfile providerProfile = requireCurrentProviderProfile();
 
         return providerVerificationRepository
                 .findByProviderId(providerProfile.getId())
                 .map(this::toResponse)
-                .orElseGet(
-                        () -> new ProviderVerificationResponse(
-                                null,
-                                ProviderVerificationStatus.NOT_SUBMITTED,
-                                null,
-                                null,
-                                null,
-                                null
-                        )
-                );
+                .orElseGet(() -> new ProviderVerificationResponse(
+                        null,
+                        ProviderVerificationStatus.NOT_SUBMITTED,
+                        null,
+                        null,
+                        null,
+                        null
+                ));
     }
 
     private void validateSubmission(
             ProviderVerification verification,
             List<VerificationDocument> documents
     ) {
+        ProviderVerificationStatus status = verification.getStatus();
 
-        ProviderVerificationStatus currentStatus =
-                verification.getStatus();
-
-        if (currentStatus == null) {
+        if (status == null) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Provider verification status is unavailable"
             );
         }
 
-        switch (currentStatus) {
-
+        switch (status) {
             case NOT_SUBMITTED -> {
                 // Initial submission is allowed.
             }
-
-            case REJECTED, RESUBMISSION_REQUESTED -> {
-
-                requireUpdatedDocuments(
-                        documents,
-                        verification.getReviewedAt()
-                );
-            }
-
-            case EXPIRED -> {
-
-                requireUpdatedDocuments(
-                        documents,
-                        verification.getUpdatedAt()
-                );
-            }
-
+            case REJECTED, RESUBMISSION_REQUESTED -> requireUpdatedDocuments(
+                    documents,
+                    verification.getReviewedAt()
+            );
+            case EXPIRED -> requireUpdatedDocuments(
+                    documents,
+                    verification.getUpdatedAt()
+            );
             case UNDER_REVIEW -> throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Verification is already under review"
             );
-
             case APPROVED -> throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Your verification is already approved"
             );
-
             case SUSPENDED -> throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Your verification is suspended. Contact support"
             );
-
             case SUBMITTED -> {
-                // Handled before reaching this method.
+                // Handled before reading the document set.
             }
         }
     }
@@ -195,7 +172,6 @@ public class ProviderVerificationServiceImpl
             List<VerificationDocument> documents,
             Instant previousDecisionTime
     ) {
-
         if (previousDecisionTime == null) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
@@ -203,13 +179,11 @@ public class ProviderVerificationServiceImpl
             );
         }
 
-        boolean hasUpdatedDocument =
-                documents.stream()
-                        .anyMatch(document ->
-                                document.getUploadedAt() != null
-                                        && document.getUploadedAt()
-                                                .isAfter(previousDecisionTime)
-                        );
+        boolean hasUpdatedDocument = documents.stream()
+                .anyMatch(document ->
+                        document.getUploadedAt() != null
+                                && document.getUploadedAt().isAfter(previousDecisionTime)
+                );
 
         if (!hasUpdatedDocument) {
             throw new ResponseStatusException(
@@ -220,29 +194,22 @@ public class ProviderVerificationServiceImpl
     }
 
     private ProviderProfile requireCurrentProviderProfile() {
-
         String userId = CurrentUser.getUserId();
 
         if (userId == null) {
-            throw new AccessDeniedException(
-                    "Authentication required"
-            );
+            throw new AccessDeniedException("Authentication required");
         }
 
-        return providerProfileRepository
-                .findByUserId(userId)
-                .orElseThrow(
-                        () -> new ResourceNotFoundException(
-                                "PROVIDER_PROFILE_NOT_FOUND",
-                                "Provider profile not found"
-                        )
-                );
+        return providerProfileRepository.findByUserId(userId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "PROVIDER_PROFILE_NOT_FOUND",
+                        "Provider profile not found"
+                ));
     }
 
     private ProviderVerificationResponse toResponse(
             ProviderVerification verification
     ) {
-
         return new ProviderVerificationResponse(
                 verification.getId(),
                 verification.getStatus(),
