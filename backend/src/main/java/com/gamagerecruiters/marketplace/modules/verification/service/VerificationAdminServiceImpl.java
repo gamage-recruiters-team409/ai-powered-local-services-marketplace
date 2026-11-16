@@ -1,11 +1,14 @@
+
 package com.gamagerecruiters.marketplace.modules.verification.service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
@@ -19,12 +22,17 @@ import com.gamagerecruiters.marketplace.modules.verification.domain.Verification
 import com.gamagerecruiters.marketplace.modules.verification.dto.AdminVerificationDetailResponse;
 import com.gamagerecruiters.marketplace.modules.verification.dto.AdminVerificationQueueItemResponse;
 import com.gamagerecruiters.marketplace.modules.verification.dto.ProviderVerificationResponse;
+import com.gamagerecruiters.marketplace.modules.verification.dto.VerificationDocumentAccessResponse;
 import com.gamagerecruiters.marketplace.modules.verification.dto.VerificationDocumentResponse;
+import com.gamagerecruiters.marketplace.modules.verification.filestorage.VerificationFileStorageService;
 import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.VerificationDocumentRepository;
 
 @Service
 public class VerificationAdminServiceImpl implements VerificationAdminService {
+
+    private static final Duration DOCUMENT_ACCESS_URL_TTL =
+            Duration.ofMinutes(5);
 
     private final ProviderVerificationRepository providerVerificationRepository;
 
@@ -32,14 +40,18 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
 
     private final ProviderProfileRepository providerProfileRepository;
 
+    private final VerificationFileStorageService verificationFileStorageService;
+
     public VerificationAdminServiceImpl(
             ProviderVerificationRepository providerVerificationRepository,
             VerificationDocumentRepository verificationDocumentRepository,
-            ProviderProfileRepository providerProfileRepository
+            ProviderProfileRepository providerProfileRepository,
+            VerificationFileStorageService verificationFileStorageService
     ) {
         this.providerVerificationRepository = providerVerificationRepository;
         this.verificationDocumentRepository = verificationDocumentRepository;
         this.providerProfileRepository = providerProfileRepository;
+        this.verificationFileStorageService = verificationFileStorageService;
     }
 
     @Override
@@ -90,6 +102,57 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
         );
     }
 
+    /**
+     * Generates temporary secure access to a provider verification document.
+     *
+     * The document must belong to the requested provider.
+     * The generated Cloudinary URL expires after five minutes.
+     */
+    @Override
+    public VerificationDocumentAccessResponse getVerificationDocumentAccess(
+            String providerId,
+            String documentId
+    ) {
+
+        // Verify that the provider has a verification record.
+        requireVerification(providerId);
+
+        // Retrieve the document using both its ID and provider ID.
+        // This prevents accessing another provider's documents.
+        VerificationDocument document =
+                verificationDocumentRepository
+                        .findByIdAndProviderId(documentId, providerId)
+                        .orElseThrow(
+                                () -> new ResourceNotFoundException(
+                                        "VERIFICATION_DOCUMENT_NOT_FOUND",
+                                        "Verification document not found"
+                                )
+                        );
+
+        // Generate a short-lived access URL.
+        Instant expiresAt =
+                Instant.now().plus(DOCUMENT_ACCESS_URL_TTL);
+
+        String accessUrl =
+                verificationFileStorageService.generateTemporaryAccessUrl(
+                        document.getStorageKey(),
+                        document.getFormat(),
+                        document.getResourceType(),
+                        document.getDeliveryType(),
+                        expiresAt
+                );
+
+        // Return document information without exposing internal
+        // Cloudinary storage references or API credentials.
+        return new VerificationDocumentAccessResponse(
+                document.getId(),
+                document.getOriginalFileName(),
+                document.getFormat(),
+                accessUrl,
+                expiresAt
+        );
+    }
+
     @Override
     public ProviderVerificationResponse startReview(String providerId) {
 
@@ -118,6 +181,7 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
     }
 
     @Override
+    @Transactional
     public ProviderVerificationResponse approveVerification(String providerId) {
 
         return completeDecision(
@@ -129,6 +193,7 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
     }
 
     @Override
+    @Transactional
     public ProviderVerificationResponse rejectVerification(
             String providerId,
             String reason
@@ -143,6 +208,7 @@ public class VerificationAdminServiceImpl implements VerificationAdminService {
     }
 
     @Override
+    @Transactional
     public ProviderVerificationResponse requestResubmission(
             String providerId,
             String reason

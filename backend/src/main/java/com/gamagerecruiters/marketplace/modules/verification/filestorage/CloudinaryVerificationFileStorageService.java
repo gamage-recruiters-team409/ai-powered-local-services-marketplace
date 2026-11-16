@@ -1,6 +1,8 @@
+
 package com.gamagerecruiters.marketplace.modules.verification.filestorage;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -31,6 +33,10 @@ public class CloudinaryVerificationFileStorageService
     private static final String BASE_FOLDER =
             "localserve/provider-verification";
 
+    private static final String RESOURCE_TYPE = "image";
+
+    private static final String DELIVERY_TYPE = "authenticated";
+
     private final Cloudinary cloudinary;
 
     public CloudinaryVerificationFileStorageService(
@@ -59,8 +65,8 @@ public class CloudinaryVerificationFileStorageService
 
         Map<String, Object> options =
                 ObjectUtils.asMap(
-                        "resource_type", "image",
-                        "type", "authenticated",
+                        "resource_type", RESOURCE_TYPE,
+                        "type", DELIVERY_TYPE,
                         "folder",
                         BASE_FOLDER
                                 + "/"
@@ -110,7 +116,77 @@ public class CloudinaryVerificationFileStorageService
     }
 
     @Override
+    public String generateTemporaryAccessUrl(
+            String publicId,
+            String format,
+            String resourceType,
+            String deliveryType,
+            Instant expiresAt
+    ) {
+
+        if (publicId == null || publicId.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Verification document storage reference is missing"
+            );
+        }
+
+        if (format == null || format.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Verification document format is missing"
+            );
+        }
+
+        if (!RESOURCE_TYPE.equals(resourceType)) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Verification document resource type is invalid"
+            );
+        }
+
+        if (!DELIVERY_TYPE.equals(deliveryType)) {
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Verification document delivery configuration is invalid"
+            );
+        }
+
+        if (expiresAt == null
+                || !expiresAt.isAfter(Instant.now())) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Verification document access expiry is invalid"
+            );
+        }
+
+        try {
+
+            return cloudinary.privateDownload(
+                    publicId.trim(),
+                    format.trim().toLowerCase(Locale.ROOT),
+                    ObjectUtils.asMap(
+                            "resource_type", RESOURCE_TYPE,
+                            "type", DELIVERY_TYPE,
+                            "expires_at", expiresAt.getEpochSecond(),
+                            "attachment", false
+                    )
+            );
+
+        } catch (Exception exception) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_GATEWAY,
+                    "Unable to generate secure verification document access",
+                    exception
+            );
+        }
+    }
+
+    @Override
     public void delete(String publicId) {
+
         if (publicId == null
                 || publicId.trim().isEmpty()) {
 
@@ -121,16 +197,18 @@ public class CloudinaryVerificationFileStorageService
         }
 
         try {
+
             cloudinary.uploader().destroy(
                     publicId.trim(),
                     ObjectUtils.asMap(
-                            "resource_type", "image",
-                            "type", "authenticated",
+                            "resource_type", RESOURCE_TYPE,
+                            "type", DELIVERY_TYPE,
                             "invalidate", true
                     )
             );
 
         } catch (IOException exception) {
+
             throw new ResponseStatusException(
                     HttpStatus.BAD_GATEWAY,
                     "Verification document deletion failed",
@@ -142,6 +220,7 @@ public class CloudinaryVerificationFileStorageService
     private void validateProviderId(
             String providerId
     ) {
+
         if (providerId == null
                 || providerId.trim().isEmpty()) {
 
@@ -155,7 +234,9 @@ public class CloudinaryVerificationFileStorageService
     private void validateFile(
             MultipartFile file
     ) {
+
         if (file == null || file.isEmpty()) {
+
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Verification document is required"
@@ -163,6 +244,7 @@ public class CloudinaryVerificationFileStorageService
         }
 
         if (file.getSize() > MAX_FILE_SIZE_BYTES) {
+
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Verification document must not exceed 10 MB"
@@ -173,9 +255,7 @@ public class CloudinaryVerificationFileStorageService
 
         if (contentType == null
                 || !ALLOWED_CONTENT_TYPES.contains(
-                        contentType.toLowerCase(
-                                Locale.ROOT
-                        )
+                        contentType.toLowerCase(Locale.ROOT)
                 )) {
 
             throw new ResponseStatusException(
@@ -188,6 +268,7 @@ public class CloudinaryVerificationFileStorageService
     private String sanitizePathSegment(
             String value
     ) {
+
         return value.trim()
                 .replaceAll(
                         "[^A-Za-z0-9_-]",
@@ -198,6 +279,7 @@ public class CloudinaryVerificationFileStorageService
     private String sanitizeOriginalFileName(
             String originalFileName
     ) {
+
         if (originalFileName == null
                 || originalFileName.isBlank()) {
 
@@ -216,12 +298,14 @@ public class CloudinaryVerificationFileStorageService
     }
 
     private String stringValue(Object value) {
+
         return value == null
                 ? null
                 : String.valueOf(value);
     }
 
     private Long longValue(Object value) {
+
         if (value instanceof Number number) {
             return number.longValue();
         }
@@ -231,10 +315,13 @@ public class CloudinaryVerificationFileStorageService
         }
 
         try {
+
             return Long.valueOf(
                     String.valueOf(value)
             );
+
         } catch (NumberFormatException exception) {
+
             return null;
         }
     }

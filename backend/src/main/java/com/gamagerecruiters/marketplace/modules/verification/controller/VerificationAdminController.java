@@ -18,13 +18,13 @@ import com.gamagerecruiters.marketplace.modules.verification.dto.AdminVerificati
 import com.gamagerecruiters.marketplace.modules.verification.dto.AdminVerificationQueueItemResponse;
 import com.gamagerecruiters.marketplace.modules.verification.dto.ProviderVerificationResponse;
 import com.gamagerecruiters.marketplace.modules.verification.dto.VerificationDecisionRequest;
+import com.gamagerecruiters.marketplace.modules.verification.dto.VerificationDocumentAccessResponse;
 import com.gamagerecruiters.marketplace.modules.verification.service.VerificationAdminService;
 
 import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping(ApiPaths.API_V1 + "/admin/provider-verifications")
-@PreAuthorize("hasRole('ADMIN')")
 @Validated
 public class VerificationAdminController {
 
@@ -38,9 +38,11 @@ public class VerificationAdminController {
 
     /**
      * Get all pending provider verification requests.
-     * Accessible only to ADMIN.
+     * ADMIN: read access
+     * SUPER_ADMIN: read-only access
      */
     @GetMapping
+    @PreAuthorize("@adminAccessPolicyService.canViewArea(authentication, 'ADMIN')")
     public ResponseEntity<List<AdminVerificationQueueItemResponse>>
     getPendingVerifications() {
 
@@ -51,9 +53,11 @@ public class VerificationAdminController {
 
     /**
      * Get complete verification details of a provider.
-     * Accessible only to ADMIN.
+     * ADMIN: read access
+     * SUPER_ADMIN: read-only access
      */
     @GetMapping("/{providerId}")
+    @PreAuthorize("@adminAccessPolicyService.canViewArea(authentication, 'ADMIN')")
     public ResponseEntity<AdminVerificationDetailResponse>
     getVerificationDetails(
             @PathVariable String providerId
@@ -65,10 +69,34 @@ public class VerificationAdminController {
     }
 
     /**
+     * Securely retrieve temporary access to a provider's
+     * private verification document.
+     *
+     * ADMIN: permitted access
+     * SUPER_ADMIN: read-only access
+     */
+    @GetMapping("/{providerId}/documents/{documentId}/access")
+    @PreAuthorize("@adminAccessPolicyService.canViewArea(authentication, 'ADMIN')")
+    public ResponseEntity<VerificationDocumentAccessResponse>
+    getVerificationDocumentAccess(
+            @PathVariable String providerId,
+            @PathVariable String documentId
+    ) {
+
+        return ResponseEntity.ok(
+                verificationAdminService.getVerificationDocumentAccess(
+                        providerId,
+                        documentId
+                )
+        );
+    }
+
+    /**
      * Start reviewing a provider verification request.
-     * Accessible only to ADMIN.
+     * Only ADMIN can modify the verification workflow.
      */
     @PostMapping("/{providerId}/start-review")
+    @PreAuthorize("@adminAccessPolicyService.canEditArea(authentication, 'ADMIN')")
     public ResponseEntity<ProviderVerificationResponse>
     startReview(
             @PathVariable String providerId
@@ -81,9 +109,10 @@ public class VerificationAdminController {
 
     /**
      * Approve a provider verification request.
-     * Accessible only to ADMIN.
+     * Only ADMIN can approve.
      */
     @PostMapping("/{providerId}/approve")
+    @PreAuthorize("@adminAccessPolicyService.canEditArea(authentication, 'ADMIN')")
     public ResponseEntity<ProviderVerificationResponse>
     approveVerification(
             @PathVariable String providerId
@@ -96,9 +125,10 @@ public class VerificationAdminController {
 
     /**
      * Reject a provider verification request.
-     * Accessible only to ADMIN.
+     * Only ADMIN can reject.
      */
     @PostMapping("/{providerId}/reject")
+    @PreAuthorize("@adminAccessPolicyService.canEditArea(authentication, 'ADMIN')")
     public ResponseEntity<ProviderVerificationResponse>
     rejectVerification(
             @PathVariable String providerId,
@@ -115,9 +145,10 @@ public class VerificationAdminController {
 
     /**
      * Request updated documents from a provider.
-     * Accessible only to ADMIN.
+     * Only ADMIN can request resubmission.
      */
     @PostMapping("/{providerId}/request-resubmission")
+    @PreAuthorize("@adminAccessPolicyService.canEditArea(authentication, 'ADMIN')")
     public ResponseEntity<ProviderVerificationResponse>
     requestResubmission(
             @PathVariable String providerId,
