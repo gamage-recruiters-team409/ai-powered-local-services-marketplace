@@ -35,7 +35,8 @@ public class SecurityConfig {
             "/api/health",
             ApiPaths.API_V1 + "/auth/register",
             ApiPaths.API_V1 + "/auth/login",
-            ApiPaths.API_V1 + "/auth/refresh"
+            ApiPaths.API_V1 + "/auth/refresh",
+            ApiPaths.API_V1 + "/categories/**"
     };
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;

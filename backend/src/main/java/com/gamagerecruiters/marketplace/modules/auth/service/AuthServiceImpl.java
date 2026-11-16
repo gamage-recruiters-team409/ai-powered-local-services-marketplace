@@ -121,7 +121,6 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public AuthResponse login(LoginRequest request) {
-        // TODO: Add rate limiting for login attempts
         String normalizedEmail = request.email().toLowerCase().trim();
 
         User user = userRepository.findByEmail(normalizedEmail)
