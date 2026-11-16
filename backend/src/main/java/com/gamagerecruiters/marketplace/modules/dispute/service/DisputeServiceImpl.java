@@ -14,6 +14,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
@@ -69,23 +70,39 @@ public class DisputeServiceImpl implements DisputeService {
         this.clock = clock;
     }
 
+    /**
+     * Order: look up the booking, check the caller is a party, reject a duplicate active dispute, move the
+     * booking to DISPUTED (skipped when it already is), then save the dispute with its first history entry.
+     *
+     * <p>The Booking module decides whether the booking may be disputed (status and the 72-hour window after
+     * completion, BR-008), so the booking is changed before the dispute is saved: a dispute is never stored for
+     * a booking the Booking module refused. If saving then fails, the booking change is not undone; a structured
+     * ERROR is logged with ids only and 503 DISPUTE_SAVE_FAILED is returned. Retrying is safe: the booking is
+     * then already DISPUTED, so the retry skips the booking call and only saves the dispute.</p>
+     */
     @Override
     public DisputeDetailResponse raiseDispute(String actorId, Role actorRole, RaiseDisputeRequest request) {
-        BookingSnapshot booking = bookingLookupPort.findBooking(request.bookingId())
-                .orElseThrow(() -> new ResourceNotFoundException("BOOKING_NOT_FOUND", "Booking not found"));
+        // 404 BOOKING_NOT_FOUND comes from the Booking module unchanged.
+        BookingSnapshot booking = bookingLookupPort.getBooking(request.bookingId());
 
-        if (!isCallerSideOfBooking(actorId, actorRole, booking)) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "NOT_BOOKING_PARTY",
-                    "You can only raise a dispute for your own booking");
+        // Checked here (same rule and error as the Booking module) because the booking call is skipped when the
+        // booking is already DISPUTED, and so a non-party never learns whether a dispute exists.
+        if (!booking.isParty(actorId)) {
+            throw new AccessDeniedException("Access denied: you are not a participant of this booking");
         }
-
-        Instant now = clock.instant();
-        checkRaiseWindow(booking, now);
 
         if (disputeRepository.existsByActiveBookingKey(booking.bookingId())) {
             throw duplicateDispute();
         }
 
+        // Errors from the Booking module (401, 403, 409 ...) are passed through unchanged.
+        boolean bookingMovedHere = false;
+        if (!booking.alreadyDisputed()) {
+            bookingDisputeStatusPort.markDisputed(booking.bookingId(), bookingTimelineReason(request));
+            bookingMovedHere = true;
+        }
+
+        Instant now = clock.instant();
         Dispute dispute = new Dispute();
         dispute.setBookingId(booking.bookingId());
         dispute.setCustomerId(booking.customerId());
@@ -103,13 +120,17 @@ public class DisputeServiceImpl implements DisputeService {
         try {
             saved = disputeRepository.save(dispute);
         } catch (DuplicateKeyException e) {
-            // A concurrent request created an active dispute for the same booking first (unique index).
+            // A concurrent request created the active dispute for this booking first (unique index); the
+            // booking is DISPUTED and has its dispute, so nothing needs reconciling.
             throw duplicateDispute();
+        } catch (RuntimeException e) {
+            log.error("event=DISPUTE_SAVE_FAILED bookingId={} actorId={} bookingMovedToDisputed={} cause={}",
+                    booking.bookingId(), actorId, bookingMovedHere, e.getClass().getSimpleName());
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "DISPUTE_SAVE_FAILED",
+                    "The dispute could not be saved. Please try again");
         }
 
-        // Other modules are changed only through their ports. If either call fails, the error is returned
-        // and the dispute stays recorded, so it can be reconciled (see open question on transactions).
-        bookingDisputeStatusPort.markDisputed(saved.getBookingId(), saved.getId());
+        // TODO(WP07): still a stub; the payout is not actually put on hold yet.
         payoutHoldPort.holdPayout(saved.getBookingId(), saved.getId());
 
         log.info("Dispute {} raised for booking {}", saved.getId(), saved.getBookingId());
@@ -183,31 +204,9 @@ public class DisputeServiceImpl implements DisputeService {
         return DisputeMapper.toDetail(findDispute(disputeId));
     }
 
-    /** The caller must be on the booking side that matches their role. */
-    private static boolean isCallerSideOfBooking(String actorId, Role actorRole, BookingSnapshot booking) {
-        if (actorId == null) {
-            return false;
-        }
-        if (actorRole == Role.CUSTOMER) {
-            return actorId.equals(booking.customerId());
-        }
-        if (actorRole == Role.PROVIDER) {
-            return actorId.equals(booking.providerId());
-        }
-        return false;
-    }
-
-    /** Disputes can be raised from the end of the booking slot until RAISE_WINDOW after it. */
-    private static void checkRaiseWindow(BookingSnapshot booking, Instant now) {
-        Instant slotEnd = booking.slotEndAt();
-        if (slotEnd == null || now.isBefore(slotEnd)) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "DISPUTE_WINDOW_NOT_OPEN",
-                    "A dispute can be raised only after the booking slot has ended");
-        }
-        if (now.isAfter(slotEnd.plus(DisputeRules.RAISE_WINDOW))) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "DISPUTE_WINDOW_CLOSED",
-                    "The 72-hour window to raise a dispute for this booking has closed");
-        }
+    /** Short, system-generated text for the booking timeline. The user's description is never copied there. */
+    static String bookingTimelineReason(RaiseDisputeRequest request) {
+        return "Dispute raised: " + request.category();
     }
 
     private Dispute findDispute(String disputeId) {

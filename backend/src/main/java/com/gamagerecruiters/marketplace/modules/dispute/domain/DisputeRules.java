@@ -8,8 +8,8 @@ import java.time.Duration;
  */
 public final class DisputeRules {
 
-    /** A party can raise a dispute within 72 hours after the booking slot ends. */
-    public static final Duration RAISE_WINDOW = Duration.ofHours(72);
+    // No raise window here: when a booking may be disputed (status, 72 hours after completion, BR-008) is
+    // decided by the Booking module's BookingFacade.markDisputed.
 
     /** The other party has 72 hours after the dispute is raised to respond. */
     public static final Duration RESPONSE_WINDOW = Duration.ofHours(72);

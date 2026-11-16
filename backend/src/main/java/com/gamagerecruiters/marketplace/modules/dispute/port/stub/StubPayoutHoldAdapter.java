@@ -7,8 +7,9 @@ import org.springframework.stereotype.Component;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 
 /**
- * TEMPORARY stub until the Payment/Payout module (WP07) exists. Only logs; changes nothing.
- * TODO(WP07): replace with an adapter that calls the Payment module's service, then delete this class.
+ * TEMPORARY stub until the Payment/Payout module (WP07, Aurudika) offers a payout-hold method. Only logs;
+ * changes nothing. The payment module is not touched from here.
+ * TODO(WP07): replace with an adapter that calls the Payment module's public service, then delete this class.
  */
 @Component
 public class StubPayoutHoldAdapter implements PayoutHoldPort {

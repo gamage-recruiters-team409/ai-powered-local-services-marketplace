@@ -1,15 +1,13 @@
 package com.gamagerecruiters.marketplace.modules.dispute.port;
 
-import java.util.Optional;
-
-/**
- * What the dispute module needs to read from the Booking module (WP05).
- *
- * <p>TODO(WP05): implement with the Booking module's service (never its repository) and remove
- * {@code StubBookingLookupAdapter}.</p>
- */
+/** What the dispute module reads from the Booking module (WP05), through its public BookingFacade. */
 public interface BookingLookupPort {
 
-    /** Returns the booking's parties and slot end, or empty when the booking does not exist. */
-    Optional<BookingSnapshot> findBooking(String bookingId);
+    /**
+     * Returns the booking's parties and whether it is already DISPUTED.
+     *
+     * <p>An unknown booking is reported by the Booking module itself (404 BOOKING_NOT_FOUND); that error is
+     * not caught or changed here.</p>
+     */
+    BookingSnapshot getBooking(String bookingId);
 }

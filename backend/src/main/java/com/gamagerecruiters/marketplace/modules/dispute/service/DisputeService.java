@@ -9,7 +9,8 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.SubmitDisputeRespons
 
 /**
  * Dispute use cases. Role checks happen in the controllers ({@code @PreAuthorize}); this service
- * enforces the per-dispute rules (party membership, windows, status).
+ * enforces the per-dispute rules (party membership, duplicates, response window, status). Whether a booking
+ * may be disputed at all is decided by the Booking module.
  */
 public interface DisputeService {
 

@@ -25,7 +25,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -48,7 +47,6 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.SubmitDisputeResponseRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.port.BookingDisputeStatusPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.BookingLookupPort;
-import com.gamagerecruiters.marketplace.modules.dispute.port.BookingSnapshot;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
 
@@ -80,23 +78,8 @@ class DisputeServiceImplTest {
 
     // ---------- helpers ----------
 
-    private static RaiseDisputeRequest raiseRequest() {
-        return new RaiseDisputeRequest(BOOKING_ID, DisputeCategory.POOR_QUALITY, "  Work was not finished  ",
-                List.of("evidence/photo-1.jpg"));
-    }
 
-    private void bookingEndedAgo(Duration ago) {
-        when(bookingLookupPort.findBooking(BOOKING_ID))
-                .thenReturn(Optional.of(new BookingSnapshot(BOOKING_ID, CUSTOMER_ID, PROVIDER_ID, NOW.minus(ago))));
-    }
 
-    private void saveReturnsWithId() {
-        when(disputeRepository.save(any(Dispute.class))).thenAnswer(invocation -> {
-            Dispute dispute = invocation.getArgument(0);
-            dispute.setId(DISPUTE_ID);
-            return dispute;
-        });
-    }
 
     /** A dispute raised by the customer, awaiting the provider's response. */
     private static Dispute awaitingDispute(Instant responseDueAt) {
@@ -127,163 +110,7 @@ class DisputeServiceImplTest {
         assertThat(ex.getErrorCode()).isEqualTo(code);
     }
 
-    // ---------- raise ----------
-
-    @Test
-    @DisplayName("raise: customer within the window creates an AWAITING_RESPONSE dispute with a 72h response deadline")
-    void raiseCreatesAwaitingResponseDispute() {
-        bookingEndedAgo(Duration.ofHours(10));
-        when(disputeRepository.existsByActiveBookingKey(BOOKING_ID)).thenReturn(false);
-        saveReturnsWithId();
-
-        DisputeDetailResponse result = service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, raiseRequest());
-
-        assertThat(result.id()).isEqualTo(DISPUTE_ID);
-        assertThat(result.status()).isEqualTo(DisputeStatus.AWAITING_RESPONSE);
-        assertThat(result.responseDueAt()).isEqualTo(NOW.plus(DisputeRules.RESPONSE_WINDOW));
-        assertThat(result.customerId()).isEqualTo(CUSTOMER_ID);
-        assertThat(result.providerId()).isEqualTo(PROVIDER_ID);
-        assertThat(result.raisedBy()).isEqualTo(CUSTOMER_ID);
-        assertThat(result.raisedByRole()).isEqualTo(Role.CUSTOMER);
-        assertThat(result.description()).isEqualTo("Work was not finished");
-        assertThat(result.evidence()).containsExactly("evidence/photo-1.jpg");
-        assertThat(result.createdAt()).isEqualTo(NOW);
-
-        ArgumentCaptor<Dispute> saved = ArgumentCaptor.forClass(Dispute.class);
-        verify(disputeRepository).save(saved.capture());
-        assertThat(saved.getValue().getActiveBookingKey()).isEqualTo(BOOKING_ID);
-
-        verify(bookingDisputeStatusPort).markDisputed(BOOKING_ID, DISPUTE_ID);
-        verify(payoutHoldPort).holdPayout(BOOKING_ID, DISPUTE_ID);
-    }
-
-    @Test
-    @DisplayName("raise: the provider of the booking can also raise a dispute")
-    void providerCanRaise() {
-        bookingEndedAgo(Duration.ofHours(1));
-        when(disputeRepository.existsByActiveBookingKey(BOOKING_ID)).thenReturn(false);
-        saveReturnsWithId();
-
-        DisputeDetailResponse result = service.raiseDispute(PROVIDER_ID, Role.PROVIDER, raiseRequest());
-
-        assertThat(result.raisedByRole()).isEqualTo(Role.PROVIDER);
-    }
-
-    @Test
-    @DisplayName("raise: creation adds one status-history entry (null -> AWAITING_RESPONSE) with the raiser as actor")
-    void raiseRecordsStatusHistory() {
-        bookingEndedAgo(Duration.ofHours(1));
-        when(disputeRepository.existsByActiveBookingKey(BOOKING_ID)).thenReturn(false);
-        saveReturnsWithId();
-
-        DisputeDetailResponse result = service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, raiseRequest());
-
-        assertThat(result.statusHistory()).hasSize(1);
-        DisputeDetailResponse.StatusHistoryView entry = result.statusHistory().get(0);
-        assertThat(entry.fromStatus()).isNull();
-        assertThat(entry.toStatus()).isEqualTo(DisputeStatus.AWAITING_RESPONSE);
-        assertThat(entry.actorId()).isEqualTo(CUSTOMER_ID);
-        assertThat(entry.actorRole()).isEqualTo(Role.CUSTOMER);
-        assertThat(entry.timestamp()).isEqualTo(NOW);
-    }
-
-    @Test
-    @DisplayName("raise: unknown booking -> 404 BOOKING_NOT_FOUND, nothing saved")
-    void raiseUnknownBooking() {
-        when(bookingLookupPort.findBooking(BOOKING_ID)).thenReturn(Optional.empty());
-
-        Throwable thrown = catchThrowable(
-                () -> service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, raiseRequest()));
-
-        assertApiError(thrown, HttpStatus.NOT_FOUND, "BOOKING_NOT_FOUND");
-        verify(disputeRepository, never()).save(any());
-        verifyNoInteractions(bookingDisputeStatusPort, payoutHoldPort);
-    }
-
-    @Test
-    @DisplayName("raise: a customer who is not the booking's customer -> 403 NOT_BOOKING_PARTY")
-    void raiseByWrongCustomer() {
-        bookingEndedAgo(Duration.ofHours(1));
-
-        Throwable thrown = catchThrowable(
-                () -> service.raiseDispute("someone-else", Role.CUSTOMER, raiseRequest()));
-
-        assertApiError(thrown, HttpStatus.FORBIDDEN, "NOT_BOOKING_PARTY");
-        verify(disputeRepository, never()).save(any());
-    }
-
-    @Test
-    @DisplayName("raise: the booking's provider id with the CUSTOMER role is still rejected (role must match side)")
-    void raiseRoleMustMatchSide() {
-        bookingEndedAgo(Duration.ofHours(1));
-
-        Throwable thrown = catchThrowable(
-                () -> service.raiseDispute(PROVIDER_ID, Role.CUSTOMER, raiseRequest()));
-
-        assertApiError(thrown, HttpStatus.FORBIDDEN, "NOT_BOOKING_PARTY");
-    }
-
-    @Test
-    @DisplayName("raise: after the 72h window -> 400 DISPUTE_WINDOW_CLOSED")
-    void raiseAfterWindow() {
-        bookingEndedAgo(DisputeRules.RAISE_WINDOW.plusSeconds(1));
-
-        Throwable thrown = catchThrowable(
-                () -> service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, raiseRequest()));
-
-        assertApiError(thrown, HttpStatus.BAD_REQUEST, "DISPUTE_WINDOW_CLOSED");
-        verify(disputeRepository, never()).save(any());
-    }
-
-    @Test
-    @DisplayName("raise: exactly at the end of the 72h window is still allowed")
-    void raiseAtWindowEdge() {
-        bookingEndedAgo(DisputeRules.RAISE_WINDOW);
-        when(disputeRepository.existsByActiveBookingKey(BOOKING_ID)).thenReturn(false);
-        saveReturnsWithId();
-
-        assertThat(service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, raiseRequest()).status())
-                .isEqualTo(DisputeStatus.AWAITING_RESPONSE);
-    }
-
-    @Test
-    @DisplayName("raise: before the booking slot has ended -> 400 DISPUTE_WINDOW_NOT_OPEN")
-    void raiseBeforeSlotEnd() {
-        bookingEndedAgo(Duration.ofHours(-2));
-
-        Throwable thrown = catchThrowable(
-                () -> service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, raiseRequest()));
-
-        assertApiError(thrown, HttpStatus.BAD_REQUEST, "DISPUTE_WINDOW_NOT_OPEN");
-    }
-
-    @Test
-    @DisplayName("raise: an active dispute already exists -> 409 DISPUTE_ALREADY_EXISTS")
-    void raiseDuplicate() {
-        bookingEndedAgo(Duration.ofHours(1));
-        when(disputeRepository.existsByActiveBookingKey(BOOKING_ID)).thenReturn(true);
-
-        Throwable thrown = catchThrowable(
-                () -> service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, raiseRequest()));
-
-        assertApiError(thrown, HttpStatus.CONFLICT, "DISPUTE_ALREADY_EXISTS");
-        verify(disputeRepository, never()).save(any());
-        verifyNoInteractions(bookingDisputeStatusPort, payoutHoldPort);
-    }
-
-    @Test
-    @DisplayName("raise: concurrent duplicate caught by the unique index -> 409 DISPUTE_ALREADY_EXISTS, ports not called")
-    void raiseConcurrentDuplicate() {
-        bookingEndedAgo(Duration.ofHours(1));
-        when(disputeRepository.existsByActiveBookingKey(BOOKING_ID)).thenReturn(false);
-        when(disputeRepository.save(any(Dispute.class))).thenThrow(new DuplicateKeyException("dup"));
-
-        Throwable thrown = catchThrowable(
-                () -> service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, raiseRequest()));
-
-        assertApiError(thrown, HttpStatus.CONFLICT, "DISPUTE_ALREADY_EXISTS");
-        verifyNoInteractions(bookingDisputeStatusPort, payoutHoldPort);
-    }
+    // Raise tests live in DisputeRaiseServiceTest (real booking adapters over a mocked BookingFacade).
 
     // ---------- respond ----------
 
