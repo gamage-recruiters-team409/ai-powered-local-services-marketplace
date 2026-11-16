@@ -1,3 +1,4 @@
+
 package com.gamagerecruiters.marketplace.modules.payment.domain;
 
 import java.math.BigDecimal;
@@ -6,7 +7,15 @@ import java.time.Instant;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.mapping.Field;
+import org.springframework.data.mongodb.core.mapping.FieldType;
 
+/**
+ * Represents a payment record stored in the MongoDB payments collection.
+ *
+ * Monetary values are explicitly mapped to BSON Decimal128
+ * to preserve decimal precision during database persistence.
+ */
 @Document(collection = "payments")
 public class Payment {
 
@@ -17,13 +26,29 @@ public class Payment {
     private String bookingId;
 
     private String gatewayRef;
+
+    // Store the payment amount as MongoDB Decimal128.
+    @Field(targetType = FieldType.DECIMAL128)
     private BigDecimal amount;
+
     private String currency;
+
     private PaymentStatus status;
+
+    // Store the refunded amount as MongoDB Decimal128.
+    @Field(targetType = FieldType.DECIMAL128)
     private BigDecimal refundedAmount;
+
+    // Store the commission amount as MongoDB Decimal128.
+    @Field(targetType = FieldType.DECIMAL128)
     private BigDecimal commissionAmount;
+
+    // Store the commission rate as MongoDB Decimal128.
+    @Field(targetType = FieldType.DECIMAL128)
     private BigDecimal commissionRate;
+
     private Instant createdAt;
+
     private Instant updatedAt;
 
     public Payment() {

@@ -53,7 +53,9 @@ class PaymentBookingAuthorizationServiceTest {
                 "listing-123",
                 customerId,
                 "provider-123",
-                status);
+                status,
+                 java.time.Instant.parse("2026-11-20T09:00:00Z"),
+                 java.time.Instant.parse("2026-11-20T10:00:00Z"));
     }
 
     @Test
