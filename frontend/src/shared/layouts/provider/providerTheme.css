@@ -1,0 +1,99 @@
+.providerTheme {
+  /* =========================================
+     APPROVED LOCALSERVE COLOUR FOUNDATION
+     ========================================= */
+
+  --prv-color-primary: #0f766e;
+  --prv-color-primary-hover: #115e59;
+  --prv-color-primary-dark: #115e59;
+  --prv-color-primary-light: #ccfbf1;
+  --prv-color-primary-50: #f0fdfa;
+  --prv-color-primary-soft: #f0fdfa;
+  --prv-color-primary-border: #99f6e4;
+
+  --prv-color-accent: #f59e0b;
+  --prv-color-accent-light: #fef3c7;
+
+  --prv-color-bg: #f8fafc;
+  --prv-color-surface: #ffffff;
+
+  --prv-color-heading: #0f172a;
+  --prv-color-text: #475569;
+  --prv-color-muted: #94a3b8;
+  --prv-color-section: #94a3b8;
+  --prv-color-border: #e2e8f0;
+
+  --prv-color-error: #dc2626;
+  --prv-color-success: #16a34a;
+  --prv-color-info: #2563eb;
+  --prv-color-indigo: #4f46e5;
+
+  --prv-color-focus: #0f766e;
+  --prv-color-overlay: rgba(15, 23, 42, 0.42);
+  --prv-color-content-placeholder: #f0fdfa;
+
+  /* =========================================
+     LAYOUT
+     ========================================= */
+
+  --prv-header-height: 64px;
+  --prv-sidebar-width: 260px;
+  --prv-bottom-nav-height: 66px;
+
+  /* =========================================
+     RADIUS
+     ========================================= */
+
+  --prv-radius-sm: 8px;
+  --prv-radius-md: 12px;
+  --prv-radius-lg: 12px;
+
+  /* =========================================
+     SHADOW
+     ========================================= */
+
+  --prv-shadow:
+    0 4px 12px rgba(15, 23, 42, 0.08);
+
+  /* =========================================
+     TYPOGRAPHY
+     Same font used by the provider content area
+     ========================================= */
+
+  --prv-font:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+
+  font-family: var(--prv-font);
+  color-scheme: light;
+}
+
+/*
+ * Force all interactive Provider-layout elements
+ * to use exactly the same font family.
+ *
+ * Scoped under .providerTheme so this does NOT
+ * affect Admin or other application features.
+ */
+.providerTheme *,
+.providerTheme *::before,
+.providerTheme *::after {
+  font-family: inherit;
+}
+
+.providerTheme button,
+.providerTheme input,
+.providerTheme select,
+.providerTheme textarea {
+  font: inherit;
+}
+
+.providerTheme a {
+  font-family: inherit;
+}
