@@ -97,32 +97,129 @@ class RateLimitServiceTest {
     }
 
     @Test
-    @DisplayName("Expired entries are purged and key cap holds")
-    void expiredEntriesArePurgedAndKeyCapHolds() {
-        RateLimitService cappedService = RateLimitService.createForTest(true, 5, testClock);
+    @DisplayName("Saturation does not evict active counters: 4th key fails closed with 429, blocked keys stay blocked")
+    void saturationDoesNotEvictActiveCounters() {
+        RateLimitService cappedService = RateLimitService.createForTest(true, 3, testClock);
 
-        // Fill up to cap with 5 keys
-        for (int i = 0; i < 5; i++) {
-            cappedService.check("bucket", "key-" + i, 10, Duration.ofMinutes(1));
-        }
-        assertEquals(5, cappedService.getTrackedKeyCount());
+        // Fill with 3 keys in "login-ip". Limit = 2, window = 1 minute (60s).
+        // Key 1: drive to limit (2 allowed, 3rd blocked)
+        cappedService.check("login-ip", "ip-1", 2, Duration.ofMinutes(1));
+        cappedService.check("login-ip", "ip-1", 2, Duration.ofMinutes(1));
+        assertThrows(RateLimitExceededException.class,
+                () -> cappedService.check("login-ip", "ip-1", 2, Duration.ofMinutes(1)));
 
-        // Advance clock past the window
-        testClock.advance(Duration.ofSeconds(65));
+        // Key 2: drive to limit (2 allowed, 3rd blocked)
+        cappedService.check("login-ip", "ip-2", 2, Duration.ofMinutes(1));
+        cappedService.check("login-ip", "ip-2", 2, Duration.ofMinutes(1));
+        assertThrows(RateLimitExceededException.class,
+                () -> cappedService.check("login-ip", "ip-2", 2, Duration.ofMinutes(1)));
 
-        // Adding a new key should trigger purging of expired keys
-        cappedService.check("bucket", "new-key", 10, Duration.ofMinutes(1));
-        assertTrue(cappedService.getTrackedKeyCount() <= 5, "Tracked key count must stay <= maxTrackedKeys");
+        // Key 3: 1 request used (active, not blocked yet)
+        cappedService.check("login-ip", "ip-3", 2, Duration.ofMinutes(1));
 
-        // Fill non-expired entries up to cap and beyond
-        for (int i = 0; i < 10; i++) {
-            cappedService.check("bucket", "active-key-" + i, 10, Duration.ofMinutes(1));
-        }
-        assertTrue(cappedService.getTrackedKeyCount() <= 5, "Tracked key count must never exceed maxTrackedKeys");
+        assertEquals(3, cappedService.getTrackedKeyCount("login-ip"));
+
+        // Advance 10 seconds into window (50 seconds remaining until windowEnd at T+60s)
+        testClock.advance(Duration.ofSeconds(10));
+
+        // Attempt a 4th NEW key -> must fail closed with 429 RATE_LIMITED and retryAfterSeconds ~ 50s
+        RateLimitExceededException satEx = assertThrows(
+                RateLimitExceededException.class,
+                () -> cappedService.check("login-ip", "ip-4", 2, Duration.ofMinutes(1))
+        );
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, satEx.getStatus());
+        assertEquals("RATE_LIMITED", satEx.getErrorCode());
+        assertEquals(50, satEx.getRetryAfterSeconds());
+
+        // CRITICAL CHECK: Blocked keys ip-1 and ip-2 must STILL be blocked (reproduction bypass prevented!)
+        assertThrows(RateLimitExceededException.class,
+                () -> cappedService.check("login-ip", "ip-1", 2, Duration.ofMinutes(1)));
+        assertThrows(RateLimitExceededException.class,
+                () -> cappedService.check("login-ip", "ip-2", 2, Duration.ofMinutes(1)));
+
+        // The third existing key can still make its second request normally
+        assertDoesNotThrow(() -> cappedService.check("login-ip", "ip-3", 2, Duration.ofMinutes(1)));
+        // And now ip-3 is also at its limit, so 3rd request is blocked
+        assertThrows(RateLimitExceededException.class,
+                () -> cappedService.check("login-ip", "ip-3", 2, Duration.ofMinutes(1)));
+
+        // Total tracked keys still capped at 3
+        assertEquals(3, cappedService.getTrackedKeyCount("login-ip"));
     }
 
     @Test
-    @DisplayName("Concurrent calls from many threads never allow more than the limit")
+    @DisplayName("Expired entries are purged first: after windows expire, new keys are accepted and count <= capacity")
+    void expiredEntriesPurgedFirstAndNewKeysAccepted() {
+        RateLimitService cappedService = RateLimitService.createForTest(true, 3, testClock);
+
+        // Fill capacity 3
+        cappedService.check("bucket", "k1", 10, Duration.ofMinutes(1));
+        cappedService.check("bucket", "k2", 10, Duration.ofMinutes(1));
+        cappedService.check("bucket", "k3", 10, Duration.ofMinutes(1));
+        assertEquals(3, cappedService.getTrackedKeyCount("bucket"));
+
+        // Attempting k4 while saturated throws 429
+        assertThrows(RateLimitExceededException.class,
+                () -> cappedService.check("bucket", "k4", 10, Duration.ofMinutes(1)));
+
+        // Advance past window (65 seconds)
+        testClock.advance(Duration.ofSeconds(65));
+
+        // Now new keys should be accepted because expired entries are purged
+        assertDoesNotThrow(() -> cappedService.check("bucket", "k4", 10, Duration.ofMinutes(1)));
+        assertTrue(cappedService.getTrackedKeyCount("bucket") <= 3);
+
+        assertDoesNotThrow(() -> cappedService.check("bucket", "k5", 10, Duration.ofMinutes(1)));
+        assertDoesNotThrow(() -> cappedService.check("bucket", "k6", 10, Duration.ofMinutes(1)));
+
+        // Now capacity 3 is saturated again with active keys k4, k5, k6
+        assertThrows(RateLimitExceededException.class,
+                () -> cappedService.check("bucket", "k7", 10, Duration.ofMinutes(1)));
+        assertEquals(3, cappedService.getTrackedKeyCount("bucket"));
+    }
+
+    @Test
+    @DisplayName("Distinct-key concurrency: capacity C with many threads results in exactly C successes and <= C tracked keys")
+    void distinctKeyConcurrencyNeverExceedsCapacity() throws Exception {
+        int capacity = 20;
+        int totalThreads = 200;
+        RateLimitService concurrentService = RateLimitService.createForTest(true, capacity, testClock);
+
+        ExecutorService executor = Executors.newFixedThreadPool(totalThreads);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(totalThreads);
+
+        AtomicInteger successCount = new AtomicInteger();
+        AtomicInteger rateLimitedCount = new AtomicInteger();
+
+        for (int i = 0; i < totalThreads; i++) {
+            final String key = "key-" + i;
+            executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    concurrentService.check("distinct-bucket", key, 10, Duration.ofMinutes(1));
+                    successCount.incrementAndGet();
+                } catch (RateLimitExceededException ex) {
+                    rateLimitedCount.incrementAndGet();
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    doneLatch.countDown();
+                }
+            });
+        }
+
+        startLatch.countDown();
+        assertTrue(doneLatch.await(10, TimeUnit.SECONDS), "Concurrent test must complete in time");
+        executor.shutdown();
+
+        assertEquals(capacity, successCount.get(), "Exactly capacity C requests must succeed");
+        assertEquals(totalThreads - capacity, rateLimitedCount.get(), "All excess distinct keys must receive RateLimitExceededException");
+        assertTrue(concurrentService.getTrackedKeyCount("distinct-bucket") <= capacity, "Tracked keys must never exceed capacity");
+    }
+
+    @Test
+    @DisplayName("Concurrent calls from many threads never allow more than the limit for the same key")
     void concurrentCallsNeverAllowMoreThanLimit() throws Exception {
         int limit = 10;
         int totalThreads = 50;
@@ -156,6 +253,28 @@ class RateLimitServiceTest {
 
         assertEquals(limit, successCount.get(), "Exactly the limit count must succeed");
         assertEquals(totalThreads - limit, rateLimitedCount.get(), "All excess requests must be rate limited");
+    }
+
+    @Test
+    @DisplayName("Buckets are isolated: saturating one bucket does not reject new keys in another bucket")
+    void bucketsAreIsolated() {
+        RateLimitService multiBucketService = RateLimitService.createForTest(true, 2, testClock);
+
+        // Saturate bucket-A with 2 keys
+        multiBucketService.check("bucket-A", "user-1", 10, Duration.ofMinutes(1));
+        multiBucketService.check("bucket-A", "user-2", 10, Duration.ofMinutes(1));
+
+        // 3rd key in bucket-A fails closed with 429
+        assertThrows(RateLimitExceededException.class,
+                () -> multiBucketService.check("bucket-A", "user-3", 10, Duration.ofMinutes(1)));
+
+        // bucket-B is unaffected and accepts new keys up to its own capacity
+        assertDoesNotThrow(() -> multiBucketService.check("bucket-B", "user-1", 10, Duration.ofMinutes(1)));
+        assertDoesNotThrow(() -> multiBucketService.check("bucket-B", "user-2", 10, Duration.ofMinutes(1)));
+
+        // 3rd key in bucket-B is rejected
+        assertThrows(RateLimitExceededException.class,
+                () -> multiBucketService.check("bucket-B", "user-3", 10, Duration.ofMinutes(1)));
     }
 
     @Test

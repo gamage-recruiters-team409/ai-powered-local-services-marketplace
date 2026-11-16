@@ -10,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.Optional;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -387,5 +389,156 @@ class AuthControllerTest {
                 .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
 
         verify(userInternalService, never()).changePassword(any(), any(), any());
+    }
+
+    private void wireRealRateLimiter(int loginIpLimit, int loginAccountLimit) {
+        RateLimitService realLimiter = new RateLimitService(
+                true,
+                1000,
+                loginIpLimit, 15,
+                loginAccountLimit, 15,
+                10, 60,
+                5, 15,
+                Optional.empty()
+        );
+        org.mockito.Mockito.doAnswer(inv -> {
+            realLimiter.checkLoginIp(inv.getArgument(0));
+            return null;
+        }).when(rateLimitService).checkLoginIp(org.mockito.ArgumentMatchers.anyString());
+
+        org.mockito.Mockito.doAnswer(inv -> {
+            realLimiter.checkLoginAccount(inv.getArgument(0));
+            return null;
+        }).when(rateLimitService).checkLoginAccount(org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    @DisplayName("Account limit of N blocks N+1 attempt for same email across different IPs")
+    void accountRateLimitBlocksAcrossDifferentIps() throws Exception {
+        wireRealRateLimiter(50, 3);
+        when(authService.login(any(LoginRequest.class)))
+                .thenReturn(new AuthResponse("access", "refresh", "Bearer", 900L, null, false));
+
+        LoginRequest request = new LoginRequest("targeted@example.com", "Password123!");
+
+        // Attempts 1 to 3 from different IPs should all succeed
+        for (int i = 1; i <= 3; i++) {
+            final String ip = "10.0.0." + i;
+            mockMvc.perform(post("/api/v1/auth/login")
+                            .with(r -> { r.setRemoteAddr(ip); return r; })
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isOk());
+        }
+
+        // 4th attempt from yet another IP (10.0.0.4) must return 429 RATE_LIMITED with Retry-After header
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .with(r -> { r.setRemoteAddr("10.0.0.4"); return r; })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().exists("Retry-After"))
+                .andExpect(jsonPath("$.status").value(429))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"))
+                .andExpect(jsonPath("$.message").value("Too many requests. Please try again later."));
+    }
+
+    @Test
+    @DisplayName("Email casing and surrounding whitespace share one account limit counter")
+    void accountRateLimitNormalizesEmailVariations() throws Exception {
+        wireRealRateLimiter(50, 3);
+        when(authService.login(any(LoginRequest.class)))
+                .thenReturn(new AuthResponse("access", "refresh", "Bearer", 900L, null, false));
+
+        String[] emailVariants = {
+                "Target@example.com",
+                "  target@EXAMPLE.COM  ",
+                "TARGET@example.com"
+        };
+
+        // Attempts 1 to 3 with different casings/whitespace from different IPs succeed
+        for (int i = 0; i < emailVariants.length; i++) {
+            final String ip = "10.1.0." + (i + 1);
+            LoginRequest req = new LoginRequest(emailVariants[i], "Password123!");
+            mockMvc.perform(post("/api/v1/auth/login")
+                            .with(r -> { r.setRemoteAddr(ip); return r; })
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(req)))
+                    .andExpect(status().isOk());
+        }
+
+        // 4th attempt with standard casing is blocked
+        LoginRequest req4 = new LoginRequest("target@example.com", "Password123!");
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .with(r -> { r.setRemoteAddr("10.1.0.4"); return r; })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req4)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().exists("Retry-After"))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
+    }
+
+    @Test
+    @DisplayName("Per-IP rate limit blocks single IP trying many different accounts")
+    void perIpLimitBlocksSingleIpAcrossDifferentAccounts() throws Exception {
+        wireRealRateLimiter(4, 10);
+        when(authService.login(any(LoginRequest.class)))
+                .thenReturn(new AuthResponse("access", "refresh", "Bearer", 900L, null, false));
+
+        final String clientIp = "192.168.1.150";
+
+        // Attempts 1 to 4 with distinct emails from the same IP succeed
+        for (int i = 1; i <= 4; i++) {
+            LoginRequest req = new LoginRequest("different" + i + "@example.com", "Password123!");
+            mockMvc.perform(post("/api/v1/auth/login")
+                            .with(r -> { r.setRemoteAddr(clientIp); return r; })
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(req)))
+                    .andExpect(status().isOk());
+        }
+
+        // 5th attempt from the same IP with a brand-new email is blocked by IP limit
+        LoginRequest req5 = new LoginRequest("fresh-unused@example.com", "Password123!");
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .with(r -> { r.setRemoteAddr(clientIp); return r; })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req5)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().exists("Retry-After"))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
+    }
+
+    @Test
+    @DisplayName("Unrelated email from another IP remains allowed when account limit is reached for one account")
+    void unrelatedEmailFromAnotherIpRemainsAllowed() throws Exception {
+        wireRealRateLimiter(50, 2);
+        when(authService.login(any(LoginRequest.class)))
+                .thenReturn(new AuthResponse("access", "refresh", "Bearer", 900L, null, false));
+
+        // Drive targeted account to limit
+        LoginRequest targetedReq = new LoginRequest("victim@example.com", "Password123!");
+        for (int i = 1; i <= 2; i++) {
+            mockMvc.perform(post("/api/v1/auth/login")
+                            .with(r -> { r.setRemoteAddr("10.2.0." + i); return r; })
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(targetedReq)))
+                    .andExpect(status().isOk());
+        }
+
+        // 3rd attempt for victim is blocked
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .with(r -> { r.setRemoteAddr("10.2.0.3"); return r; })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(targetedReq)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
+
+        // Unrelated email from an unrelated IP is still allowed
+        LoginRequest innocentReq = new LoginRequest("innocent@example.com", "Password123!");
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .with(r -> { r.setRemoteAddr("10.9.9.9"); return r; })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(innocentReq)))
+                .andExpect(status().isOk());
     }
 }
