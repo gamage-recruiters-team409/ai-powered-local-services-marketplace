@@ -7,15 +7,20 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 /**
  * Default development email implementation.
  *
- * This implementation sends nothing and logs only a masked recipient. It is
- * selected when {@code app.email.provider=dev} or when the property is missing.
+ * This implementation is available only in the approved development profiles,
+ * sends nothing, and logs only a masked recipient. It is selected when
+ * {@code app.email.provider=dev} or when the property is missing. In any other
+ * environment, no {@link EmailSender} bean exists on purpose, so a missing
+ * real provider fails at startup instead of faking success.
  */
 @Service
+@Profile({"local", "dev", "test", "integration-test"})
 @ConditionalOnProperty(name = "app.email.provider", havingValue = "dev", matchIfMissing = true)
 public class DevLoggingEmailSender implements EmailSender {
 
@@ -60,28 +65,34 @@ public class DevLoggingEmailSender implements EmailSender {
                 return "Missing required data: " + key;
             }
             Object value = data.get(key);
+            if ("expiresInMinutes".equals(key) && !isPositiveWholeNumber(value)) {
+                return "expiresInMinutes must be a positive whole number";
+            }
             if (value == null || (value instanceof String stringValue && stringValue.isBlank())) {
                 return "Required data is blank: " + key;
-            }
-            if ("expiresInMinutes".equals(key) && !isNumeric(value)) {
-                return "expiresInMinutes must be numeric";
             }
         }
         return null;
     }
 
-    private boolean isNumeric(Object value) {
-        if (value instanceof Number number) {
-            return Double.isFinite(number.doubleValue());
+    private boolean isPositiveWholeNumber(Object value) {
+        if (value instanceof Byte || value instanceof Short
+                || value instanceof Integer || value instanceof Long) {
+            return ((Number) value).longValue() > 0;
         }
         if (value instanceof String stringValue) {
-            try {
-                return Double.isFinite(Double.parseDouble(stringValue.trim()));
-            } catch (NumberFormatException exception) {
-                return false;
-            }
+            return stringValue.matches("\\d+")
+                    && parsesToPositiveLong(stringValue);
         }
         return false;
+    }
+
+    private boolean parsesToPositiveLong(String value) {
+        try {
+            return Long.parseLong(value) > 0;
+        } catch (NumberFormatException exception) {
+            return false;
+        }
     }
 
     private String maskRecipient(String recipientEmail) {

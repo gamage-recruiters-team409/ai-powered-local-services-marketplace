@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.notification.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -98,7 +99,86 @@ class DevLoggingEmailSenderTest {
 
         Map<String, Object> invalidExpiry = verificationData();
         invalidExpiry.put("expiresInMinutes", "not-a-number");
-        assertFailure(EmailType.ACCOUNT_VERIFICATION, EMAIL, invalidExpiry, "expiresInMinutes must be numeric");
+        assertFailure(
+                EmailType.ACCOUNT_VERIFICATION,
+                EMAIL,
+                invalidExpiry,
+                "expiresInMinutes must be a positive whole number"
+        );
+    }
+
+    @Test
+    void zeroExpiryIsRejectedWithSafeFailure() {
+        assertInvalidExpiry(0);
+    }
+
+    @Test
+    void negativeIntegerExpiryIsRejectedWithSafeFailure() {
+        assertInvalidExpiry(-5);
+    }
+
+    @Test
+    void negativeStringExpiryIsRejectedWithSafeFailure() {
+        assertInvalidExpiry("-5");
+    }
+
+    @Test
+    void decimalExpiryIsRejectedWithSafeFailure() {
+        assertInvalidExpiry(30.5);
+    }
+
+    @Test
+    void decimalStringExpiryIsRejectedWithSafeFailure() {
+        assertInvalidExpiry("30.5");
+    }
+
+    @Test
+    void wholeNumberDoubleExpiryIsRejectedWithSafeFailure() {
+        assertInvalidExpiry(30.0);
+    }
+
+    @Test
+    void nonNumericStringExpiryIsRejectedWithSafeFailure() {
+        assertInvalidExpiry("abc");
+    }
+
+    @Test
+    void overflowingStringExpiryIsRejectedWithSafeFailure() {
+        assertInvalidExpiry("9223372036854775808");
+    }
+
+    @Test
+    void blankExpiryIsRejectedWithSafeFailure() {
+        assertInvalidExpiry(" ");
+    }
+
+    @Test
+    void bigDecimalExpiryIsRejectedWithSafeFailure() {
+        assertInvalidExpiry(new BigDecimal("30"));
+    }
+
+    @Test
+    void validLongExpirySucceeds() {
+        EmailResult result = sender.sendEmail(
+                EmailType.ACCOUNT_VERIFICATION,
+                EMAIL,
+                data("verificationLink", VERIFICATION_LINK, Long.valueOf(30))
+        );
+
+        assertThat(result.success()).isTrue();
+        assertSafeOutput(result, logMessage(), VERIFICATION_LINK);
+    }
+
+    @Test
+    void validStringExpirySucceeds() {
+        EmailResult result = sender.sendEmail(
+                EmailType.ACCOUNT_VERIFICATION,
+                EMAIL,
+                data("verificationLink", VERIFICATION_LINK, "30")
+        );
+
+        assertThat(result.success()).isTrue();
+        assertSafeOutput(result, logMessage(), VERIFICATION_LINK);
     }
 
     @Test
@@ -193,6 +273,17 @@ class DevLoggingEmailSenderTest {
                 RESET_LINK,
                 "reset-secret",
                 email
+        );
+    }
+
+    private void assertInvalidExpiry(Object expiry) {
+        Map<String, Object> data = verificationData();
+        data.put("expiresInMinutes", expiry);
+        assertFailure(
+                EmailType.ACCOUNT_VERIFICATION,
+                EMAIL,
+                data,
+                "expiresInMinutes must be a positive whole number"
         );
     }
 
