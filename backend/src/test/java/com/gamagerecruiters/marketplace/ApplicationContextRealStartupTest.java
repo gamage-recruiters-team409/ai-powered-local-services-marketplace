@@ -25,6 +25,7 @@ import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddr
 import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
 import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
+import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepository;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
@@ -46,6 +47,9 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private BlockedDateRepository blockedDateRepository;
+
+    @MockitoBean
+    private CategoryRepository categoryRepository;
 
     @MockitoBean
     private BookingRepository bookingRepository;
@@ -74,6 +78,7 @@ class ApplicationContextRealStartupTest {
     @Test
     @DisplayName("Verify real Spring context loads without circular dependencies and key security beans exist")
     void contextLoadsAndKeySecurityBeansExist() {
+                
         assertNotNull(applicationContext.getBean(PasswordEncoder.class), "PasswordEncoder bean must exist");
         assertNotNull(applicationContext.getBean(JwtAuthenticationFilter.class), "JwtAuthenticationFilter bean must exist");
         assertNotNull(applicationContext.getBean(SecurityFilterChain.class), "SecurityFilterChain bean must exist");
