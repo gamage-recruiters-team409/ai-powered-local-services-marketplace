@@ -394,6 +394,24 @@ class CustomerControllerTest {
     }
 
     @Test
+    @DisplayName("PUT /api/v1/customers/me/password sets Retry-After header equal to exception retryAfterSeconds in seconds")
+    void changePasswordRetryAfterHeaderEqualsExceptionSeconds() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        long expectedRetryAfterSeconds = 890L;
+        org.mockito.Mockito.doThrow(new RateLimitExceededException(expectedRetryAfterSeconds))
+                .when(rateLimitService).checkSensitive("cust-1");
+
+        ChangePasswordRequest req = new ChangePasswordRequest("OldPass123!", "NewPass123!");
+
+        mockMvc.perform(put("/api/v1/customers/me/password")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", String.valueOf(expectedRetryAfterSeconds)));
+    }
+
+    @Test
     @DisplayName("POST /api/v1/customers/me/deactivate returns 429 RATE_LIMITED when sensitive limit exceeded")
     void deactivateReturns429WhenSensitiveRateLimited() throws Exception {
         mockAuth("cust-token", "cust-1", Role.CUSTOMER);

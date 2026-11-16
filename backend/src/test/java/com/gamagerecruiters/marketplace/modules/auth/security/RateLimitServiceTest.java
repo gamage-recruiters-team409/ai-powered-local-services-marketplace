@@ -2,14 +2,17 @@ package com.gamagerecruiters.marketplace.modules.auth.security;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.InputStream;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -300,6 +303,65 @@ class RateLimitServiceTest {
                 () -> service.checkSensitive("user-10")
         );
         assertEquals("RATE_LIMITED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("Sensitive bucket allows 5 requests and 6th call right after returns retryAfterSeconds within [window - elapsed, window] (about 900s)")
+    void sensitiveBucketAllows5AndReturnsAbout900RetryAfter() {
+        // Window is 15 minutes (900 seconds), starting at epoch-aligned instant 12:00:00Z
+        TestClock clock = new TestClock(Instant.parse("2026-01-01T12:00:00Z"));
+        RateLimitService sensitiveService = RateLimitService.createForTest(true, 100, clock);
+
+        for (int i = 0; i < 5; i++) {
+            assertDoesNotThrow(() -> sensitiveService.checkSensitive("user-100"));
+        }
+
+        // Advance 10 seconds (elapsed = 10s)
+        clock.advance(Duration.ofSeconds(10));
+        long elapsedSeconds = 10;
+        long windowSeconds = 15 * 60; // 900 seconds
+
+        RateLimitExceededException ex = assertThrows(
+                RateLimitExceededException.class,
+                () -> sensitiveService.checkSensitive("user-100")
+        );
+
+        long retryAfter = ex.getRetryAfterSeconds();
+        assertTrue(retryAfter >= (windowSeconds - elapsedSeconds) && retryAfter <= windowSeconds,
+                "retryAfterSeconds (" + retryAfter + ") must be within [window - elapsed, window]");
+        assertEquals(890, retryAfter);
+    }
+
+    @Test
+    @DisplayName("Epoch-aligned fixed window: at 14m30s into window, retryAfterSeconds is exactly 30s")
+    void fixedWindowNearBoundaryReturnsRemainingSecondsInEpochSlot() {
+        // 14 minutes and 30 seconds into the 15-minute epoch window (30 seconds remaining)
+        TestClock clockNearBoundary = new TestClock(Instant.parse("2026-01-01T12:14:30Z"));
+        RateLimitService sensitiveService = RateLimitService.createForTest(true, 100, clockNearBoundary);
+
+        for (int i = 0; i < 5; i++) {
+            assertDoesNotThrow(() -> sensitiveService.checkSensitive("user-boundary"));
+        }
+
+        RateLimitExceededException ex = assertThrows(
+                RateLimitExceededException.class,
+                () -> sensitiveService.checkSensitive("user-boundary")
+        );
+
+        // Explains the exact 30s observation when script runs at :29:30 or :14:30 wall-clock time
+        assertEquals(30, ex.getRetryAfterSeconds());
+    }
+
+    @Test
+    @DisplayName("application.properties default values configure sensitive bucket with 5 requests per 15 minutes")
+    void defaultPropertiesConfigureSensitiveBucketDefaults() throws Exception {
+        Properties props = new Properties();
+        try (InputStream in = getClass().getClassLoader().getResourceAsStream("application.properties")) {
+            assertNotNull(in, "application.properties must be on classpath");
+            props.load(in);
+        }
+        assertEquals("${RATE_LIMIT_SENSITIVE_MAX_REQUESTS:5}", props.getProperty("app.rate-limit.sensitive.max-requests"));
+        assertEquals("${RATE_LIMIT_SENSITIVE_WINDOW_MINUTES:15}", props.getProperty("app.rate-limit.sensitive.window-minutes"));
     }
 
     static class TestClock extends Clock {

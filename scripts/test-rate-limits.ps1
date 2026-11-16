@@ -193,7 +193,7 @@ for ($i = 1; $i -le $maxLoginAttempts; $i++) {
 
     $resp = Invoke-ApiRequest -Method Post -Uri "$BaseUrl/auth/login" -Body $loginBody
     $err = Get-ErrorCode $resp.Content
-    $retry = if ($resp.RetryAfter) { "$($resp.RetryAfter)s" } else { "None" }
+    $retry = if ($resp.RetryAfter) { $resp.RetryAfter } else { "None" }
 
     Write-Host "  Attempt $i : HTTP $($resp.StatusCode) | Error: $err | Retry-After: $retry"
 
@@ -235,7 +235,7 @@ for ($i = 1; $i -le $maxRegisterAttempts; $i++) {
 
     $resp = Invoke-ApiRequest -Method Post -Uri "$BaseUrl/auth/register" -Body $regBody
     $err = Get-ErrorCode $resp.Content
-    $retry = if ($resp.RetryAfter) { "$($resp.RetryAfter)s" } else { "None" }
+    $retry = if ($resp.RetryAfter) { $resp.RetryAfter } else { "None" }
 
     Write-Host "  Attempt $i : HTTP $($resp.StatusCode) | Error: $err | Retry-After: $retry"
 
@@ -252,8 +252,11 @@ if (-not $part2Hit429) {
 Write-Host ""
 
 # ==============================================================================
-# PART 3: Sensitive Endpoint Rate Limiter (Password Change: Default 10 per 10 min)
+# PART 3: Sensitive Endpoint Rate Limiter (Password Change: Default 5 per 15 min)
 # ==============================================================================
+# NOTE: In an epoch-aligned fixed-window rate limiter, Retry-After reflects the
+# remaining seconds until the current epoch-aligned window boundary (:00, :15, :30, :45).
+# If run near the end of an interval, Retry-After is naturally smaller (e.g. 30s).
 Write-Host "--- PART 3: Sensitive Endpoint Rate Limiter (Password Change) ---" -ForegroundColor Cyan
 Write-Host "Target: PUT $BaseUrl/customers/me/password"
 Write-Host "Testing user rate limit against sensitive endpoint until HTTP 429 is reached."
@@ -272,7 +275,7 @@ if (-not $customerToken) {
 
         $resp = Invoke-ApiRequest -Method Put -Uri "$BaseUrl/customers/me/password" -Body $pwBody -Token $customerToken
         $err = Get-ErrorCode $resp.Content
-        $retry = if ($resp.RetryAfter) { "$($resp.RetryAfter)s" } else { "None" }
+        $retry = if ($resp.RetryAfter) { $resp.RetryAfter } else { "None" }
 
         Write-Host "  Attempt $i : HTTP $($resp.StatusCode) | Error: $err | Retry-After: $retry"
 
