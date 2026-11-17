@@ -104,8 +104,8 @@
 }
 
 .auth-header__logo {
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   background-color: var(--auth-primary);
   border-radius: 8px;
   display: flex;
@@ -116,8 +116,8 @@
 }
 
 .auth-header__title {
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 600;
   color: var(--auth-text-title);
   letter-spacing: -0.02em;
 }
@@ -911,5 +911,21 @@
 
   .auth-register-submit-btn {
     width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .auth-header__logo {
+    width: 24px;
+    height: 24px;
+  }
+
+  .auth-header__logo svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .auth-header__title {
+    font-size: 16px;
   }
 }
