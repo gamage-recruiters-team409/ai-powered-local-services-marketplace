@@ -5,14 +5,25 @@ public record AuthResponse(
         String refreshToken,
         String tokenType,
         long expiresIn,
-        UserSummaryResponse user
+        UserSummaryResponse user,
+        boolean mustChangePassword
 ) {
+    public static AuthResponse of(
+            String accessToken,
+            String refreshToken,
+            long expiresInSeconds,
+            UserSummaryResponse user,
+            boolean mustChangePassword
+    ) {
+        return new AuthResponse(accessToken, refreshToken, "Bearer", expiresInSeconds, user, mustChangePassword);
+    }
+
     public static AuthResponse of(
             String accessToken,
             String refreshToken,
             long expiresInSeconds,
             UserSummaryResponse user
     ) {
-        return new AuthResponse(accessToken, refreshToken, "Bearer", expiresInSeconds, user);
+        return new AuthResponse(accessToken, refreshToken, "Bearer", expiresInSeconds, user, false);
     }
 }

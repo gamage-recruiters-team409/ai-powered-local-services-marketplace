@@ -25,7 +25,6 @@ import jakarta.validation.Valid;
 
 @RestController
 @RequestMapping(ApiPaths.API_V1 + "/admin/categories")
-@PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
 public class AdminCategoryController {
 
     private final CategoryService categoryService;
@@ -34,26 +33,46 @@ public class AdminCategoryController {
         this.categoryService = categoryService;
     }
 
+    /**
+     * View all categories for admin panel.
+     * Both ADMIN and SUPER_ADMIN (read-only) have view access per AdminAccessPolicyService.
+     */
     @GetMapping
+    @PreAuthorize("@adminAccessPolicyService.canViewArea(authentication, 'ADMIN')")
     public ResponseEntity<List<CategoryTreeResponse>> getAllCategories() {
         return ResponseEntity.ok(categoryService.getAllCategoriesForAdmin());
     }
 
+    /**
+     * Create a new category.
+     * Restricted strictly to ADMIN role per least-privilege admin access matrix.
+     */
     @PostMapping
+    @PreAuthorize("@adminAccessPolicyService.canEditArea(authentication, 'ADMIN')")
     public ResponseEntity<CategoryResponse> createCategory(@Valid @RequestBody CreateCategoryRequest request) {
         CategoryResponse created = categoryService.createCategory(request);
         URI location = URI.create(ApiPaths.API_V1 + "/categories/" + created.slug());
         return ResponseEntity.created(location).body(created);
     }
 
+    /**
+     * Update category details.
+     * Restricted strictly to ADMIN role per least-privilege admin access matrix.
+     */
     @PutMapping("/{id}")
+    @PreAuthorize("@adminAccessPolicyService.canEditArea(authentication, 'ADMIN')")
     public ResponseEntity<CategoryResponse> updateCategory(
             @PathVariable String id,
             @Valid @RequestBody UpdateCategoryRequest request) {
         return ResponseEntity.ok(categoryService.updateCategory(id, request));
     }
 
+    /**
+     * Soft-deactivate a category.
+     * Restricted strictly to ADMIN role per least-privilege admin access matrix.
+     */
     @DeleteMapping("/{id}")
+    @PreAuthorize("@adminAccessPolicyService.canEditArea(authentication, 'ADMIN')")
     public ResponseEntity<Void> deactivateCategory(@PathVariable String id) {
         categoryService.deactivateCategory(id);
         return ResponseEntity.noContent().build();

@@ -81,6 +81,10 @@ public class CategoryServiceImpl implements CategoryService {
             if (parent.getParentId() != null) {
                 throw new ResourceConflictException("Subcategories cannot have nested subcategories (maximum 2 tiers supported)");
             }
+            // Ensure parent category is active before allowing an active subcategory to be created under it
+            if (!parent.isActive()) {
+                throw new ResourceConflictException("Cannot create subcategory under an inactive parent category");
+            }
             parentId = parent.getId();
         }
 
@@ -119,6 +123,20 @@ public class CategoryServiceImpl implements CategoryService {
             category.setCommissionRate(request.commissionRate());
         }
         if (request.active() != null) {
+            // Safeguard: prevent deactivating a parent category if active subcategories exist (aligns PUT with DELETE)
+            if (Boolean.FALSE.equals(request.active()) && category.isActive()) {
+                validateDeactivationAllowed(id);
+            }
+
+            // Inactive Parent Validation: prevent activating a subcategory if its parent is inactive
+            if (Boolean.TRUE.equals(request.active()) && category.getParentId() != null) {
+                Category parent = categoryRepository.findById(category.getParentId())
+                        .orElseThrow(() -> new ResourceNotFoundException("Parent category not found with id: " + category.getParentId()));
+                if (!parent.isActive()) {
+                    throw new ResourceConflictException("Cannot activate subcategory while its parent category is inactive");
+                }
+            }
+
             category.setActive(request.active());
         }
         category.setUpdatedAt(Instant.now());
@@ -132,13 +150,21 @@ public class CategoryServiceImpl implements CategoryService {
         Category category = categoryRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Category not found with id: " + id));
 
-        if (categoryRepository.existsByParentIdAndActiveTrue(id)) {
-            throw new ResourceConflictException("Cannot deactivate category while it has active subcategories");
-        }
+        // Safeguard: prevent deactivating a category with active subcategories
+        validateDeactivationAllowed(id);
 
         category.setActive(false);
         category.setUpdatedAt(Instant.now());
         categoryRepository.save(category);
+    }
+
+    /**
+     * Reusable hierarchy safeguard: ensures a category cannot be deactivated while active children exist.
+     */
+    private void validateDeactivationAllowed(String categoryId) {
+        if (categoryRepository.existsByParentIdAndActiveTrue(categoryId)) {
+            throw new ResourceConflictException("Cannot deactivate category while it has active subcategories");
+        }
     }
 }
 
