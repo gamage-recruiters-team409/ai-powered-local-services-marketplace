@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -28,7 +30,6 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.MongoDBContainer;
 
@@ -240,13 +241,15 @@ class ProviderVerificationConcurrencyIntegrationTest {
         ExecutorService pool = Executors.newFixedThreadPool(2);
 
         try {
-            Future<Boolean> uploadReservation = pool.submit(() -> {
+            Future<String> uploadReservation = pool.submit(() -> {
                 start.await();
                 try {
-                    atomicUpdates.reserveDocumentUpload(PROVIDER_ID, Instant.now());
-                    return true;
+                    return atomicUpdates.reserveDocumentUpload(
+                            PROVIDER_ID,
+                            Instant.now()
+                    );
                 } catch (ResponseStatusException exception) {
-                    return false;
+                    return null;
                 }
             });
 
@@ -265,8 +268,9 @@ class ProviderVerificationConcurrencyIntegrationTest {
 
             start.countDown();
 
-            boolean uploadReserved = uploadReservation.get(20, TimeUnit.SECONDS);
+            String reservationId = uploadReservation.get(20, TimeUnit.SECONDS);
             boolean submitted = submission.get(20, TimeUnit.SECONDS);
+            boolean uploadReserved = reservationId != null;
 
             assertNotEquals(
                     uploadReserved,
@@ -275,7 +279,11 @@ class ProviderVerificationConcurrencyIntegrationTest {
             );
 
             if (uploadReserved) {
-                atomicUpdates.releaseDocumentUpload(PROVIDER_ID);
+                atomicUpdates.releaseDocumentUpload(
+                        PROVIDER_ID,
+                        reservationId
+                );
+
                 ProviderVerification stored = verificationRepository
                         .findByProviderId(PROVIDER_ID)
                         .orElseThrow();
@@ -292,13 +300,188 @@ class ProviderVerificationConcurrencyIntegrationTest {
 
                 assertThrows(
                         ResponseStatusException.class,
-                        () -> atomicUpdates.reserveDocumentUpload(PROVIDER_ID, Instant.now())
+                        () -> atomicUpdates.reserveDocumentUpload(
+                                PROVIDER_ID,
+                                Instant.now()
+                        )
                 );
             }
         } finally {
             pool.shutdownNow();
             SecurityContextHolder.clearContext();
         }
+    }
+
+    @Test
+    @DisplayName("Normal upload completion releases only its own reservation")
+    void normalUploadReleaseUsesReservationIdentity() {
+        Instant now = Instant.now();
+
+        String firstReservation =
+                atomicUpdates.reserveDocumentUpload(PROVIDER_ID, now);
+
+        String secondReservation =
+                atomicUpdates.reserveDocumentUpload(PROVIDER_ID, now.plusMillis(1));
+
+        ProviderVerification withTwoReservations = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(2, withTwoReservations.getInFlightUploadCount());
+        assertEquals(2, withTwoReservations.getUploadReservations().size());
+
+        atomicUpdates.releaseDocumentUpload(PROVIDER_ID, firstReservation);
+
+        ProviderVerification afterFirstRelease = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(1, afterFirstRelease.getInFlightUploadCount());
+        assertEquals(1, afterFirstRelease.getUploadReservations().size());
+        assertEquals(
+                secondReservation,
+                afterFirstRelease.getUploadReservations().get(0).getReservationId()
+        );
+
+        // A repeated release must not decrement another upload's reservation.
+        atomicUpdates.releaseDocumentUpload(PROVIDER_ID, firstReservation);
+
+        ProviderVerification afterRepeatedRelease = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(1, afterRepeatedRelease.getInFlightUploadCount());
+
+        atomicUpdates.releaseDocumentUpload(PROVIDER_ID, secondReservation);
+
+        ProviderVerification afterBothReleased = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(0, afterBothReleased.getInFlightUploadCount());
+        assertTrue(afterBothReleased.getUploadReservations().isEmpty());
+    }
+
+    @Test
+    @DisplayName("Expired reservations are recovered after a backend restart")
+    void expiredUploadReservationIsRecovered() {
+        Instant uploadStartedAt = Instant.now().minus(Duration.ofMinutes(10));
+
+        atomicUpdates.reserveDocumentUpload(PROVIDER_ID, uploadStartedAt);
+
+        ProviderVerification beforeRecovery = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(1, beforeRecovery.getInFlightUploadCount());
+
+        int recovered = atomicUpdates.recoverExpiredUploadReservations(
+                PROVIDER_ID,
+                Instant.now()
+        );
+
+        ProviderVerification afterRecovery = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(1, recovered);
+        assertEquals(0, afterRecovery.getInFlightUploadCount());
+        assertTrue(afterRecovery.getUploadReservations().isEmpty());
+    }
+
+    @Test
+    @DisplayName("An active upload reservation is not released by recovery")
+    void activeUploadReservationIsProtectedFromRecovery() {
+        Instant uploadStartedAt = Instant.now();
+
+        String reservationId =
+                atomicUpdates.reserveDocumentUpload(
+                        PROVIDER_ID,
+                        uploadStartedAt
+                );
+
+        Instant beforeLeaseExpiry =
+                uploadStartedAt.plus(Duration.ofMinutes(4));
+
+        int recovered = atomicUpdates.recoverExpiredUploadReservations(
+                PROVIDER_ID,
+                beforeLeaseExpiry
+        );
+
+        ProviderVerification stored = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(0, recovered);
+        assertEquals(1, stored.getInFlightUploadCount());
+        assertEquals(1, stored.getUploadReservations().size());
+        assertEquals(
+                reservationId,
+                stored.getUploadReservations().get(0).getReservationId()
+        );
+
+        // An active upload can renew its lease before it expires.
+        assertTrue(
+                atomicUpdates.renewDocumentUploadReservation(
+                        PROVIDER_ID,
+                        reservationId,
+                        beforeLeaseExpiry
+                )
+        );
+
+        // The original expiry has passed, but the renewed lease is still active.
+        int recoveredAfterRenewal =
+                atomicUpdates.recoverExpiredUploadReservations(
+                        PROVIDER_ID,
+                        uploadStartedAt.plus(Duration.ofMinutes(8))
+                );
+
+        ProviderVerification afterRenewal = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(0, recoveredAfterRenewal);
+        assertEquals(1, afterRenewal.getInFlightUploadCount());
+        assertEquals(1, afterRenewal.getUploadReservations().size());
+    }
+
+    @Test
+    @DisplayName("Provider can submit successfully after an abandoned reservation is recovered")
+    void providerCanSubmitAfterExpiredReservationRecovery() {
+        ProviderProfile profile = new ProviderProfile();
+        profile.setId(PROVIDER_ID);
+        profile.setUserId(PROVIDER_USER_ID);
+        profile.setDisplayName("Integration Provider");
+        providerProfileRepository.save(profile);
+
+        Instant abandonedUploadStartedAt =
+                Instant.now().minus(Duration.ofMinutes(10));
+
+        atomicUpdates.reserveDocumentUpload(
+                PROVIDER_ID,
+                abandonedUploadStartedAt
+        );
+
+        documentRepository.save(document("existing-document"));
+
+        authenticate(Role.PROVIDER, PROVIDER_USER_ID);
+
+        var response = providerVerificationService.submitMyVerification();
+
+        ProviderVerification stored = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(ProviderVerificationStatus.SUBMITTED, response.getStatus());
+        assertEquals(ProviderVerificationStatus.SUBMITTED, stored.getStatus());
+        assertEquals(0, stored.getInFlightUploadCount());
+        assertTrue(stored.getUploadReservations().isEmpty());
+        assertEquals(
+                List.of("existing-document"),
+                stored.getSubmittedDocumentIds()
+        );
+
+        SecurityContextHolder.clearContext();
     }
 
     private boolean attemptDecision(String adminId, boolean approve) {

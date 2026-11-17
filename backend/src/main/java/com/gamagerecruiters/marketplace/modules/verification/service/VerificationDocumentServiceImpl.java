@@ -1,9 +1,20 @@
 package com.gamagerecruiters.marketplace.modules.verification.service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.springframework.beans.factory.DisposableBean;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -24,12 +35,35 @@ import com.gamagerecruiters.marketplace.modules.verification.repository.Verifica
 
 @Service
 public class VerificationDocumentServiceImpl
-        implements VerificationDocumentService {
+        implements VerificationDocumentService, DisposableBean {
+
+    private static final Logger LOGGER =
+            LoggerFactory.getLogger(VerificationDocumentServiceImpl.class);
+
+    private static final Duration HEARTBEAT_INTERVAL =
+            Duration.ofMinutes(1);
 
     private final ProviderProfileRepository providerProfileRepository;
     private final VerificationDocumentRepository verificationDocumentRepository;
     private final VerificationAtomicUpdates verificationAtomicUpdates;
     private final VerificationFileStorageService verificationFileStorageService;
+
+    // Daemon threads renew active leases while Cloudinary is processing an upload.
+    private final ScheduledExecutorService leaseHeartbeatExecutor =
+            Executors.newScheduledThreadPool(
+                    2,
+                    new ThreadFactory() {
+                        @Override
+                        public Thread newThread(Runnable runnable) {
+                            Thread thread = new Thread(
+                                    runnable,
+                                    "verification-upload-lease-heartbeat"
+                            );
+                            thread.setDaemon(true);
+                            return thread;
+                        }
+                    }
+            );
 
     public VerificationDocumentServiceImpl(
             ProviderProfileRepository providerProfileRepository,
@@ -56,14 +90,41 @@ public class VerificationDocumentServiceImpl
         validateDocumentMetadata(documentType, issueDate, expiryDate);
 
         // Reserve before Cloudinary. Submission/review cannot pass this reservation.
-        verificationAtomicUpdates.reserveDocumentUpload(providerId, Instant.now());
+        String reservationId =
+                verificationAtomicUpdates.reserveDocumentUpload(
+                        providerId,
+                        Instant.now()
+                );
 
         StoredVerificationFile storedFile = null;
         VerificationDocument savedDocument;
         RuntimeException operationFailure = null;
 
+        AtomicBoolean reservationLost = new AtomicBoolean(false);
+        ScheduledFuture<?> heartbeatTask = null;
+
         try {
+            heartbeatTask = startLeaseHeartbeat(
+                    providerId,
+                    reservationId,
+                    reservationLost
+            );
+
             storedFile = verificationFileStorageService.upload(providerId, file);
+
+            // Validate and extend the lease immediately before MongoDB persistence.
+            // If recovery already removed the reservation, do not persist the file.
+            if (reservationLost.get()
+                    || !verificationAtomicUpdates.renewDocumentUploadReservation(
+                            providerId,
+                            reservationId,
+                            Instant.now()
+                    )) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "The document upload reservation expired. Please upload the document again"
+                );
+            }
 
             VerificationDocument document = new VerificationDocument();
             document.setProviderId(providerId);
@@ -97,8 +158,15 @@ public class VerificationDocumentServiceImpl
 
             throw exception;
         } finally {
+            if (heartbeatTask != null) {
+                heartbeatTask.cancel(false);
+            }
+
             try {
-                verificationAtomicUpdates.releaseDocumentUpload(providerId);
+                verificationAtomicUpdates.releaseDocumentUpload(
+                        providerId,
+                        reservationId
+                );
             } catch (RuntimeException releaseException) {
                 if (operationFailure != null) {
                     operationFailure.addSuppressed(releaseException);
@@ -109,6 +177,54 @@ public class VerificationDocumentServiceImpl
         }
 
         return toResponse(savedDocument);
+    }
+
+    private ScheduledFuture<?> startLeaseHeartbeat(
+            String providerId,
+            String reservationId,
+            AtomicBoolean reservationLost
+    ) {
+        return leaseHeartbeatExecutor.scheduleAtFixedRate(
+                () -> {
+                    if (reservationLost.get()) {
+                        return;
+                    }
+
+                    try {
+                        boolean renewed =
+                                verificationAtomicUpdates
+                                        .renewDocumentUploadReservation(
+                                                providerId,
+                                                reservationId,
+                                                Instant.now()
+                                        );
+
+                        if (!renewed) {
+                            reservationLost.set(true);
+                        }
+                    } catch (RuntimeException exception) {
+                        // A transient heartbeat failure is retried at the next
+                        // interval. The five-minute lease provides retry time.
+                        LOGGER.warn(
+                                "Unable to renew verification upload lease for provider {}",
+                                providerId,
+                                exception
+                        );
+                    }
+                },
+                HEARTBEAT_INTERVAL.toMillis(),
+                HEARTBEAT_INTERVAL.toMillis(),
+                TimeUnit.MILLISECONDS
+        );
+    }
+
+    @Override
+    public void destroy() {
+        shutdownLeaseHeartbeatExecutor();
+    }
+
+    public void shutdownLeaseHeartbeatExecutor() {
+        leaseHeartbeatExecutor.shutdownNow();
     }
 
     @Override

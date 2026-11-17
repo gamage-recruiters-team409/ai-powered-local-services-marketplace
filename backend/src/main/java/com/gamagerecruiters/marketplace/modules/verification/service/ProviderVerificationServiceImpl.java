@@ -46,6 +46,13 @@ public class ProviderVerificationServiceImpl
         String providerId = providerProfile.getId();
         Instant now = Instant.now();
 
+        // Recover expired reservations before reading the revision and documents.
+        // This prevents a recovered reservation from making the first retry stale.
+        verificationAtomicUpdates.recoverExpiredUploadReservations(
+                providerId,
+                now
+        );
+
         ProviderVerification current =
                 verificationAtomicUpdates.ensureVerificationRecord(providerId, now);
 

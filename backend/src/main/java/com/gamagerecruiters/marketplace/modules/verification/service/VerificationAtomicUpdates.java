@@ -1,9 +1,13 @@
 package com.gamagerecruiters.marketplace.modules.verification.service;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
+import org.bson.Document;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -17,6 +21,7 @@ import org.springframework.web.server.ResponseStatusException;
 import com.mongodb.client.result.UpdateResult;
 
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification;
+import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification.UploadReservation;
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerificationStatus;
 import com.gamagerecruiters.marketplace.modules.verification.domain.VerificationDocument;
 import com.gamagerecruiters.marketplace.modules.verification.domain.VerificationDocumentStatus;
@@ -24,6 +29,11 @@ import com.gamagerecruiters.marketplace.modules.verification.repository.Provider
 
 @Service
 public class VerificationAtomicUpdates {
+
+    // An upload must renew this lease while it is actively running.
+    // If the backend crashes, the lease expires and can safely be recovered.
+    public static final Duration UPLOAD_RESERVATION_LEASE_DURATION =
+            Duration.ofMinutes(5);
 
     private static final List<ProviderVerificationStatus> UPLOADABLE_STATUSES =
             List.of(
@@ -81,6 +91,7 @@ public class VerificationAtomicUpdates {
         verification.setUpdatedAt(now);
         verification.setCoordinationRevision(0L);
         verification.setInFlightUploadCount(0);
+        verification.setUploadReservations(new ArrayList<>());
 
         try {
             return mongoTemplate.insert(verification);
@@ -91,11 +102,24 @@ public class VerificationAtomicUpdates {
     }
 
     /**
-     * Reserves an upload before contacting Cloudinary. A submission cannot
-     * complete while this counter is greater than zero.
+     * Reserves an upload before contacting Cloudinary.
+     *
+     * A unique reservation ID is returned to the caller. The reservation is
+     * stored atomically with the in-flight counter and coordination revision.
      */
-    public void reserveDocumentUpload(String providerId, Instant now) {
+    public String reserveDocumentUpload(String providerId, Instant now) {
         ensureVerificationRecord(providerId, now);
+
+        // Clear only expired reservations before adding a new one.
+        recoverExpiredUploadReservations(providerId, now);
+
+        String reservationId = UUID.randomUUID().toString();
+
+        UploadReservation reservation = new UploadReservation(
+                reservationId,
+                now,
+                now.plus(UPLOAD_RESERVATION_LEASE_DURATION)
+        );
 
         Query query = new Query(
                 new Criteria().andOperator(
@@ -107,6 +131,7 @@ public class VerificationAtomicUpdates {
         // Do not modify updatedAt here: for EXPIRED records it is the workflow
         // timestamp used to require a newer document during re-verification.
         Update update = new Update()
+                .push("uploadReservations").value(reservation)
                 .inc("inFlightUploadCount", 1)
                 .inc("coordinationRevision", 1);
 
@@ -123,20 +148,198 @@ public class VerificationAtomicUpdates {
                     "Verification documents cannot be uploaded while the verification is being reviewed or is already approved"
             );
         }
+
+        return reservationId;
     }
 
     /**
-     * Releases the upload reservation after Cloudinary and MongoDB persistence
-     * have either succeeded or failed. Workflow updatedAt is intentionally
-     * unchanged because it records verification-state changes, not upload locks.
+     * Renews an active upload lease.
+     *
+     * The conditional query ensures an already expired/recovered reservation
+     * cannot be brought back to life.
      */
-    public void releaseDocumentUpload(String providerId) {
+    public boolean renewDocumentUploadReservation(
+            String providerId,
+            String reservationId,
+            Instant now
+    ) {
+        if (reservationId == null || reservationId.isBlank()) {
+            return false;
+        }
+
+        Criteria activeReservation = new Criteria().andOperator(
+                Criteria.where("reservationId").is(reservationId),
+                Criteria.where("leaseExpiresAt").gt(now)
+        );
+
         Query query = new Query(
-                Criteria.where("providerId").is(providerId)
-                        .and("inFlightUploadCount").gt(0)
+                new Criteria().andOperator(
+                        Criteria.where("providerId").is(providerId),
+                        Criteria.where("inFlightUploadCount").gt(0),
+                        Criteria.where("uploadReservations").elemMatch(activeReservation)
+                )
         );
 
         Update update = new Update()
+                .set(
+                        "uploadReservations.$.leaseExpiresAt",
+                        now.plus(UPLOAD_RESERVATION_LEASE_DURATION)
+                );
+
+        UpdateResult result = mongoTemplate.updateFirst(
+                query,
+                update,
+                ProviderVerification.class
+        );
+
+        return result.getMatchedCount() == 1;
+    }
+
+    /**
+     * Releases only the reservation created by the corresponding upload.
+     *
+     * This operation is intentionally idempotent. If recovery has already
+     * removed an expired reservation, the upload's finally block can safely
+     * call this method without decrementing the counter a second time.
+     */
+    public void releaseDocumentUpload(
+            String providerId,
+            String reservationId
+    ) {
+        if (reservationId == null || reservationId.isBlank()) {
+            return;
+        }
+
+        Query query = new Query(
+                new Criteria().andOperator(
+                        Criteria.where("providerId").is(providerId),
+                        Criteria.where("inFlightUploadCount").gt(0),
+                        Criteria.where("uploadReservations.reservationId").is(reservationId)
+                )
+        );
+
+        Update update = new Update()
+                .pull(
+                        "uploadReservations",
+                        new Document("reservationId", reservationId)
+                )
+                .inc("inFlightUploadCount", -1)
+                .inc("coordinationRevision", 1);
+
+        // No match means the reservation was already released or recovered.
+        mongoTemplate.updateFirst(
+                query,
+                update,
+                ProviderVerification.class
+        );
+    }
+
+    /**
+     * Recovers expired upload reservations for one provider.
+     *
+     * Each reservation is removed with a conditional atomic update that checks
+     * its identity and expiry again. If a heartbeat renewed it after the scan,
+     * the conditional update will not remove it.
+     */
+    public int recoverExpiredUploadReservations(
+            String providerId,
+            Instant now
+    ) {
+        migrateLegacyUploadReservations(providerId, now);
+
+        Query query = new Query(
+                new Criteria().andOperator(
+                        Criteria.where("providerId").is(providerId),
+                        Criteria.where("uploadReservations.leaseExpiresAt").lte(now)
+                )
+        );
+
+        return recoverExpiredReservations(query, now);
+    }
+
+    /**
+     * Recovers expired upload reservations across all providers.
+     * Used during application startup and by the periodic recovery worker.
+     */
+    public int recoverExpiredUploadReservations(Instant now) {
+        migrateLegacyUploadReservations(null, now);
+
+        Query query = Query.query(
+                Criteria.where("uploadReservations.leaseExpiresAt").lte(now)
+        );
+
+        return recoverExpiredReservations(query, now);
+    }
+
+    private int recoverExpiredReservations(
+            Query candidateQuery,
+            Instant now
+    ) {
+        List<ProviderVerification> candidates =
+                mongoTemplate.find(candidateQuery, ProviderVerification.class);
+
+        int recoveredCount = 0;
+
+        for (ProviderVerification verification : candidates) {
+            List<UploadReservation> reservations =
+                    verification.getUploadReservations();
+
+            if (reservations == null || reservations.isEmpty()) {
+                continue;
+            }
+
+            for (UploadReservation reservation : reservations) {
+                if (reservation == null
+                        || reservation.getReservationId() == null
+                        || reservation.getLeaseExpiresAt() == null) {
+                    continue;
+                }
+
+                if (!reservation.getLeaseExpiresAt().isAfter(now)) {
+                    boolean recovered = releaseExpiredReservation(
+                            verification.getProviderId(),
+                            reservation.getReservationId(),
+                            now
+                    );
+
+                    if (recovered) {
+                        recoveredCount++;
+                    }
+                }
+            }
+        }
+
+        return recoveredCount;
+    }
+
+    /**
+     * Removes one reservation only if it is still expired at update time.
+     * This compare-and-set condition protects a reservation renewed by an
+     * active upload after the recovery scan read the document.
+     */
+    private boolean releaseExpiredReservation(
+            String providerId,
+            String reservationId,
+            Instant now
+    ) {
+        Criteria expiredReservation = new Criteria().andOperator(
+                Criteria.where("reservationId").is(reservationId),
+                Criteria.where("leaseExpiresAt").lte(now)
+        );
+
+        Query query = new Query(
+                new Criteria().andOperator(
+                        Criteria.where("providerId").is(providerId),
+                        Criteria.where("inFlightUploadCount").gt(0),
+                        Criteria.where("uploadReservations").elemMatch(expiredReservation)
+                )
+        );
+
+        Update update = new Update()
+                .pull(
+                        "uploadReservations",
+                        new Document("reservationId", reservationId)
+                )
                 .inc("inFlightUploadCount", -1)
                 .inc("coordinationRevision", 1);
 
@@ -146,11 +349,83 @@ public class VerificationAtomicUpdates {
                 ProviderVerification.class
         );
 
-        if (result.getMatchedCount() != 1) {
-            throw new IllegalStateException(
-                    "Unable to release the provider verification upload reservation"
+        return result.getMatchedCount() == 1;
+    }
+
+    /**
+     * Older records created before uploadReservations existed may have a
+     * positive inFlightUploadCount but no reservation identities.
+     *
+     * Do not reset those counters immediately: an upload from the previous
+     * application instance may still be finishing during a deployment.
+     * Convert each legacy count into a temporary lease starting now. It will
+     * be recoverable after the normal lease duration if it was abandoned.
+     */
+    private void migrateLegacyUploadReservations(
+            String providerId,
+            Instant now
+    ) {
+        Query legacyQuery = new Query();
+        legacyQuery.addCriteria(Criteria.where("inFlightUploadCount").gt(0));
+        legacyQuery.addCriteria(noUploadReservationsCriteria());
+
+        if (providerId != null) {
+            legacyQuery.addCriteria(
+                    Criteria.where("providerId").is(providerId)
             );
         }
+
+        List<ProviderVerification> legacyRecords =
+                mongoTemplate.find(legacyQuery, ProviderVerification.class);
+
+        for (ProviderVerification legacyRecord : legacyRecords) {
+            int legacyCount = legacyRecord.getInFlightUploadCount();
+
+            if (legacyCount <= 0) {
+                continue;
+            }
+
+            List<UploadReservation> migratedReservations =
+                    new ArrayList<>(legacyCount);
+
+            for (int index = 0; index < legacyCount; index++) {
+                migratedReservations.add(
+                        new UploadReservation(
+                                "legacy-" + UUID.randomUUID(),
+                                now,
+                                now.plus(UPLOAD_RESERVATION_LEASE_DURATION)
+                        )
+                );
+            }
+
+            Query updateQuery = new Query(
+                    new Criteria().andOperator(
+                            Criteria.where("providerId")
+                                    .is(legacyRecord.getProviderId()),
+                            Criteria.where("inFlightUploadCount")
+                                    .is(legacyCount),
+                            noUploadReservationsCriteria()
+                    )
+            );
+
+            Update update = new Update()
+                    .set("uploadReservations", migratedReservations)
+                    .inc("coordinationRevision", 1);
+
+            mongoTemplate.updateFirst(
+                    updateQuery,
+                    update,
+                    ProviderVerification.class
+            );
+        }
+    }
+
+    private Criteria noUploadReservationsCriteria() {
+        return new Criteria().orOperator(
+                Criteria.where("uploadReservations").exists(false),
+                Criteria.where("uploadReservations").is(null),
+                Criteria.where("uploadReservations").size(0)
+        );
     }
 
     /**
@@ -164,6 +439,8 @@ public class VerificationAtomicUpdates {
             List<String> submittedDocumentIds,
             Instant now
     ) {
+        recoverExpiredUploadReservations(providerId, now);
+
         Criteria inFlightUploadsZero = new Criteria().orOperator(
                 Criteria.where("inFlightUploadCount").is(0),
                 Criteria.where("inFlightUploadCount").exists(false)
@@ -217,6 +494,8 @@ public class VerificationAtomicUpdates {
             String providerId,
             Instant now
     ) {
+        recoverExpiredUploadReservations(providerId, now);
+
         Criteria noUploadsInFlight = new Criteria().orOperator(
                 Criteria.where("inFlightUploadCount").is(0),
                 Criteria.where("inFlightUploadCount").exists(false)
@@ -258,6 +537,8 @@ public class VerificationAtomicUpdates {
             String reason,
             Instant now
     ) {
+        recoverExpiredUploadReservations(providerId, now);
+
         Criteria noUploadsInFlight = new Criteria().orOperator(
                 Criteria.where("inFlightUploadCount").is(0),
                 Criteria.where("inFlightUploadCount").exists(false)

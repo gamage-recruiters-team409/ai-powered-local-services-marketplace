@@ -44,6 +44,7 @@ class VerificationDocumentServiceImplTest {
 
     private static final String USER_ID = "provider-user-1";
     private static final String PROVIDER_ID = "provider-profile-1";
+    private static final String RESERVATION_ID = "reservation-1";
 
     @Mock
     private ProviderProfileRepository providerProfileRepository;
@@ -86,11 +87,13 @@ class VerificationDocumentServiceImplTest {
     @AfterEach
     void tearDown() {
         SecurityContextHolder.clearContext();
+        service.shutdownLeaseHeartbeatExecutor();
     }
 
     @Test
     void uploadMyDocument_reservesUploadsAndPersistsDocument() {
         stubCurrentProvider();
+        stubReservationAndRenewal();
 
         MockMultipartFile file = testFile();
         when(verificationFileStorageService.upload(PROVIDER_ID, file))
@@ -118,7 +121,13 @@ class VerificationDocumentServiceImplTest {
         verify(verificationAtomicUpdates).reserveDocumentUpload(
                 eq(PROVIDER_ID), any(Instant.class)
         );
-        verify(verificationAtomicUpdates).releaseDocumentUpload(PROVIDER_ID);
+        verify(verificationAtomicUpdates).renewDocumentUploadReservation(
+                eq(PROVIDER_ID), eq(RESERVATION_ID), any(Instant.class)
+        );
+        verify(verificationAtomicUpdates).releaseDocumentUpload(
+                PROVIDER_ID,
+                RESERVATION_ID
+        );
     }
 
     @Test
@@ -144,12 +153,13 @@ class VerificationDocumentServiceImplTest {
         verify(verificationFileStorageService, never()).upload(any(), any());
         verify(verificationDocumentRepository, never()).save(any());
         verify(verificationAtomicUpdates, never())
-                .releaseDocumentUpload(any());
+                .releaseDocumentUpload(any(), any());
     }
 
     @Test
     void uploadMyDocument_deletesCloudinaryFileWhenDatabaseSaveFails() {
         stubCurrentProvider();
+        stubReservationAndRenewal();
 
         MockMultipartFile file = testFile();
         when(verificationFileStorageService.upload(PROVIDER_ID, file))
@@ -166,12 +176,16 @@ class VerificationDocumentServiceImplTest {
         );
 
         verify(verificationFileStorageService).delete("private-public-id-1");
-        verify(verificationAtomicUpdates).releaseDocumentUpload(PROVIDER_ID);
+        verify(verificationAtomicUpdates).releaseDocumentUpload(
+                PROVIDER_ID,
+                RESERVATION_ID
+        );
     }
 
     @Test
     void uploadMyDocument_releasesReservationWhenCloudinaryUploadFails() {
         stubCurrentProvider();
+        stubReservationOnly();
 
         MockMultipartFile file = testFile();
         when(verificationFileStorageService.upload(PROVIDER_ID, file))
@@ -184,8 +198,42 @@ class VerificationDocumentServiceImplTest {
                 )
         );
 
-        verify(verificationAtomicUpdates).releaseDocumentUpload(PROVIDER_ID);
+        verify(verificationAtomicUpdates).releaseDocumentUpload(
+                PROVIDER_ID,
+                RESERVATION_ID
+        );
         verify(verificationDocumentRepository, never()).save(any());
+    }
+
+    @Test
+    void uploadMyDocument_deletesCloudinaryFileWhenReservationWasRecovered() {
+        stubCurrentProvider();
+        stubReservationOnly();
+
+        MockMultipartFile file = testFile();
+        when(verificationFileStorageService.upload(PROVIDER_ID, file))
+                .thenReturn(storedFile());
+
+        when(verificationAtomicUpdates.renewDocumentUploadReservation(
+                eq(PROVIDER_ID),
+                eq(RESERVATION_ID),
+                any(Instant.class)
+        )).thenReturn(false);
+
+        ResponseStatusException exception = assertThrows(
+                ResponseStatusException.class,
+                () -> service.uploadMyDocument(
+                        VerificationDocumentType.ID, null, null, file
+                )
+        );
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatusCode());
+        verify(verificationFileStorageService).delete("private-public-id-1");
+        verify(verificationDocumentRepository, never()).save(any());
+        verify(verificationAtomicUpdates).releaseDocumentUpload(
+                PROVIDER_ID,
+                RESERVATION_ID
+        );
     }
 
     @Test
@@ -248,6 +296,23 @@ class VerificationDocumentServiceImplTest {
         assertEquals(1, response.size());
         assertEquals("document-1", response.get(0).getId());
         assertEquals(VerificationDocumentType.BUSINESS, response.get(0).getDocumentType());
+    }
+
+    private void stubReservationAndRenewal() {
+        stubReservationOnly();
+
+        when(verificationAtomicUpdates.renewDocumentUploadReservation(
+                eq(PROVIDER_ID),
+                eq(RESERVATION_ID),
+                any(Instant.class)
+        )).thenReturn(true);
+    }
+
+    private void stubReservationOnly() {
+        when(verificationAtomicUpdates.reserveDocumentUpload(
+                eq(PROVIDER_ID),
+                any(Instant.class)
+        )).thenReturn(RESERVATION_ID);
     }
 
     private void stubCurrentProvider() {
