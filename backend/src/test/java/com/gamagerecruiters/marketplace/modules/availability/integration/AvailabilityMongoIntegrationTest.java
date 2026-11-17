@@ -114,10 +114,12 @@ class AvailabilityMongoIntegrationTest {
 
         assertThat(new ArrayList<>(rulesIndex.get("key", Document.class).keySet())).containsExactly("providerId");
         assertThat(rulesIndex.getBoolean("unique")).isTrue();
+        assertThat(rulesIndex.getBoolean("sparse", false)).isFalse();
 
         assertThat(new ArrayList<>(blockedIndex.get("key", Document.class).keySet()))
                 .containsExactly("providerId", "date");
         assertThat(blockedIndex.getBoolean("unique")).isTrue();
+        assertThat(blockedIndex.getBoolean("sparse", false)).isFalse();
     }
 
     @Test
@@ -141,9 +143,11 @@ class AvailabilityMongoIntegrationTest {
 
         assertThat(new ArrayList<>(rulesIndex.get("key", Document.class).keySet())).containsExactly("providerId");
         assertThat(rulesIndex.getBoolean("unique")).isTrue();
+        assertThat(rulesIndex.getBoolean("sparse", false)).isFalse();
         assertThat(new ArrayList<>(blockedIndex.get("key", Document.class).keySet()))
                 .containsExactly("providerId", "date");
         assertThat(blockedIndex.getBoolean("unique")).isTrue();
+        assertThat(blockedIndex.getBoolean("sparse", false)).isFalse();
     }
 
     @Test
