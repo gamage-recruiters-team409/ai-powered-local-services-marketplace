@@ -23,10 +23,10 @@ public class AuthTokenRepositoryCustomImpl implements AuthTokenRepositoryCustom 
     }
 
     @Override
-    public Optional<AuthToken> findAndConsumeValidToken(String tokenHash, Instant now) {
+    public Optional<AuthToken> consumeValidToken(String tokenHash, TokenType type, Instant now) {
         Query query = new Query(
                 Criteria.where("tokenHash").is(tokenHash)
-                        .and("type").is(TokenType.REFRESH)
+                        .and("type").is(type)
                         .and("usedAt").isNull()
                         .and("revokedAt").isNull()
                         .and("expiresAt").gt(now)
@@ -40,9 +40,37 @@ public class AuthTokenRepositoryCustomImpl implements AuthTokenRepositoryCustom 
     }
 
     @Override
+    public Optional<AuthToken> findAndConsumeValidToken(String tokenHash, Instant now) {
+        return consumeValidToken(tokenHash, TokenType.REFRESH, now);
+    }
+
+    @Override
     public void revokeAllActiveTokensByUserId(String userId) {
         Query query = new Query(
                 Criteria.where("userId").is(userId)
+                        .and("revokedAt").isNull()
+        );
+        Update update = new Update().set("revokedAt", Instant.now());
+        mongoTemplate.updateMulti(query, update, AuthToken.class);
+    }
+
+    @Override
+    public void revokeAllActiveTokensByUserIdAndType(String userId, TokenType type) {
+        Query query = new Query(
+                Criteria.where("userId").is(userId)
+                        .and("type").is(type)
+                        .and("revokedAt").isNull()
+        );
+        Update update = new Update().set("revokedAt", Instant.now());
+        mongoTemplate.updateMulti(query, update, AuthToken.class);
+    }
+
+    @Override
+    public void revokeAllUnusedTokensByUserIdAndType(String userId, TokenType type) {
+        Query query = new Query(
+                Criteria.where("userId").is(userId)
+                        .and("type").is(type)
+                        .and("usedAt").isNull()
                         .and("revokedAt").isNull()
         );
         Update update = new Update().set("revokedAt", Instant.now());
