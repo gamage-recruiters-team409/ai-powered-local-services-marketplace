@@ -28,6 +28,8 @@ import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedD
 import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepository;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
+import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
+import com.gamagerecruiters.marketplace.modules.listing.service.CatalogCategoryLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
@@ -70,6 +72,9 @@ class ApplicationContextRealStartupTest {
     private PaymentRepository paymentRepository;
 
     @MockitoBean
+    private ListingRepository listingRepository;
+
+    @MockitoBean
     private MongoTemplate mongoTemplate;
 
     @Autowired
@@ -84,6 +89,7 @@ class ApplicationContextRealStartupTest {
         assertNotNull(applicationContext.getBean(SecurityFilterChain.class), "SecurityFilterChain bean must exist");
         assertNotNull(applicationContext.getBean(RateLimitService.class), "RateLimitService bean must exist");
         assertNotNull(applicationContext.getBean(BookingOpenBookingsChecker.class), "BookingOpenBookingsChecker bean must exist");
+        assertNotNull(applicationContext.getBean(CatalogCategoryLookupAdapter.class), "CatalogCategoryLookupAdapter bean must exist");
     }
 
     @Test
