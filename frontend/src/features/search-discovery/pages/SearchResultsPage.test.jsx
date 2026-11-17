@@ -429,6 +429,60 @@ describe('SearchResultsPage provider comparison', () => {
     );
   });
 
+  it('does not attribute the search location to providers without their own location', async () => {
+    fetchSearchResults.mockResolvedValue({
+      isLive: true,
+      isFixture: false,
+      results: [
+        {
+          ...provider,
+          id: 'prv-loc-1',
+          name: 'No Location One',
+          location: undefined,
+          serviceRadiusMiles: undefined,
+          distanceText: '1.2 miles away',
+          inComparison: true,
+        },
+        {
+          ...provider,
+          id: 'prv-loc-2',
+          name: 'No Location Two',
+          location: undefined,
+          serviceRadiusMiles: undefined,
+          distanceText: undefined,
+          inComparison: true,
+        },
+      ],
+      totalCount: 2,
+    });
+
+    const user = userEvent.setup();
+    render(<SearchResultsPage />);
+
+    await user.click(await screen.findByRole('button', { name: /compare \(2\)/i }));
+    const dialog = await screen.findByRole('dialog', { name: 'Compare your shortlist' });
+
+    expect(
+      within(dialog).getByText(
+        '2 providers · Home cleaning in Austin · Choose the best fit for your home.',
+      ),
+    ).toBeTruthy();
+
+    const firstProvider = within(dialog).getByRole('article', {
+      name: 'No Location One',
+    });
+    expect(within(firstProvider).getByText('Home cleaning · Location not provided')).toBeTruthy();
+    expect(within(firstProvider).getByText('1.2 miles')).toBeTruthy();
+    expect(within(firstProvider).queryByText(/Austin/)).toBeNull();
+
+    const secondProvider = within(dialog).getByRole('article', {
+      name: 'No Location Two',
+    });
+    expect(within(secondProvider).getByText('Home cleaning · Location not provided')).toBeTruthy();
+    expect(within(secondProvider).getByText('Not provided')).toBeTruthy();
+    expect(within(secondProvider).queryByText(/Austin/)).toBeNull();
+  });
+
   it('renders Not provided instead of inventing missing comparison data', async () => {
     fetchSearchResults.mockResolvedValue({
       isLive: true,

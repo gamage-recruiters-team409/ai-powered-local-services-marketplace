@@ -7,6 +7,7 @@ import {
   formatInclusions,
   formatNextAvailable,
   formatPrice,
+  formatProviderLocation,
   formatRating,
   formatResponseTime,
   formatReviewCount,
@@ -48,14 +49,14 @@ export function ProviderComparisonModal({
   const [notice, setNotice] = useState('');
 
   const count = providers.length;
-  const locationCity = getLocationCity(locationLabel);
+  const searchLocationCity = getLocationCity(locationLabel);
   const commonCategory = getCommonCategory(providers);
   const distanceChip = getDistanceChip(filters);
   const serviceText = serviceLabel.trim() || commonCategory;
 
   const description =
     count >= 2
-      ? `${count} providers · ${serviceText}${locationCity ? ` in ${locationCity}` : ''} · Choose the best fit for your home.`
+      ? `${count} providers · ${serviceText}${searchLocationCity ? ` in ${searchLocationCity}` : ''} · Choose the best fit for your home.`
       : 'Select at least 2 providers to compare them side by side.';
 
   const railSubtitle =
@@ -214,10 +215,9 @@ export function ProviderComparisonModal({
               style={{ '--provider-count': count }}
             >
               {providers.map((provider) => {
-                const providerCity = getLocationCity(provider.location) || locationCity;
-                const providerMeta =
-                  [serviceText, providerCity].filter(Boolean).join(' · ') ||
-                  'Service provider';
+                const providerMeta = [serviceText, formatProviderLocation(provider.location)]
+                  .filter(Boolean)
+                  .join(' · ');
                 const ctaNoteId = `comparison-cta-note-${provider.id}`;
 
                 return (
@@ -291,7 +291,7 @@ export function ProviderComparisonModal({
                       </ComparisonField>
 
                       <ComparisonField label="Distance / area">
-                        {formatDistanceArea(provider, locationCity)}
+                        {formatDistanceArea(provider)}
                       </ComparisonField>
 
                       <ComparisonField label="What’s included">

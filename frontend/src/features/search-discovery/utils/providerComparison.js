@@ -7,14 +7,22 @@
  */
 
 export const NOT_PROVIDED = 'Not provided';
+export const LOCATION_NOT_PROVIDED = 'Location not provided';
 
 export function formatPrice(pricing) {
   if (!pricing || typeof pricing.hourlyRate !== 'number') {
     return NOT_PROVIDED;
   }
 
-  const currency = pricing.currency || '$';
-  const unit = pricing.unit || 'hr';
+  const currency =
+    typeof pricing.currency === 'string' ? pricing.currency.trim() : '';
+  const unit = typeof pricing.unit === 'string' ? pricing.unit.trim() : '';
+
+  // Never assume USD or hourly billing when the live payload omits either part.
+  if (!currency || !unit) {
+    return NOT_PROVIDED;
+  }
+
   const base = `From ${currency}${pricing.hourlyRate}/${unit}`;
 
   if (typeof pricing.minimumHours === 'number') {
@@ -82,9 +90,13 @@ export function getLocationCity(location) {
   return location.split(',')[0].trim();
 }
 
-export function formatDistanceArea(provider = {}, fallbackCity = '') {
+export function formatProviderLocation(location) {
+  return getLocationCity(location) || LOCATION_NOT_PROVIDED;
+}
+
+export function formatDistanceArea(provider = {}) {
   const distance = provider.distanceText?.replace(/\s+away$/i, '').trim();
-  const city = getLocationCity(provider.location) || fallbackCity;
+  const city = getLocationCity(provider.location);
   const radius = provider.serviceRadiusMiles;
 
   if (!distance && !city && radius == null) {

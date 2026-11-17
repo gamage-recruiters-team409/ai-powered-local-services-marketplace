@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  LOCATION_NOT_PROVIDED,
   NOT_PROVIDED,
   formatCancellationPolicy,
   formatDistanceArea,
   formatInclusions,
   formatNextAvailable,
   formatPrice,
+  formatProviderLocation,
   formatRating,
   formatResponseTime,
   formatReviewCount,
@@ -25,6 +27,13 @@ describe('provider comparison formatting', () => {
 
   it('formats price without a minimum duration', () => {
     expect(formatPrice({ hourlyRate: 40, currency: '$', unit: 'hr' })).toBe('From $40/hr');
+  });
+
+  it('does not assume currency or billing unit for partial pricing data', () => {
+    expect(formatPrice({ hourlyRate: 45, unit: 'hr' })).toBe(NOT_PROVIDED);
+    expect(formatPrice({ hourlyRate: 45, currency: '$' })).toBe(NOT_PROVIDED);
+    expect(formatPrice({ hourlyRate: 45, currency: '  ', unit: 'hr' })).toBe(NOT_PROVIDED);
+    expect(formatPrice({ hourlyRate: 45, currency: '$', unit: '  ' })).toBe(NOT_PROVIDED);
   });
 
   it('returns Not provided for missing price data', () => {
@@ -71,6 +80,12 @@ describe('provider comparison formatting', () => {
     expect(getLocationCity()).toBe('');
   });
 
+  it('labels a missing provider location without borrowing another city', () => {
+    expect(formatProviderLocation('Austin, TX 78701')).toBe('Austin');
+    expect(formatProviderLocation()).toBe(LOCATION_NOT_PROVIDED);
+    expect(formatProviderLocation('  ')).toBe(LOCATION_NOT_PROVIDED);
+  });
+
   it('formats distance, city and service radius', () => {
     expect(
       formatDistanceArea({
@@ -87,7 +102,8 @@ describe('provider comparison formatting', () => {
       }),
     ).toBe('2.4 miles · Austin');
 
-    expect(formatDistanceArea({}, 'Austin')).toBe('Austin');
+    expect(formatDistanceArea({ distanceText: '1.2 miles away' })).toBe('1.2 miles');
+    expect(formatDistanceArea({ serviceRadiusMiles: 5 })).toBe('5-mile radius');
     expect(formatDistanceArea()).toBe(NOT_PROVIDED);
   });
 
