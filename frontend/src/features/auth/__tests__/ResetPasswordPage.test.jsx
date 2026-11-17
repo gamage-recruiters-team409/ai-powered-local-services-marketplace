@@ -62,7 +62,7 @@ describe('ResetPasswordPage', () => {
       </MemoryRouter>
     );
 
-    const input = screen.getByPlaceholderText(/enter new password/i);
+    const input = screen.getByPlaceholderText(/^enter new password$/i);
     fireEvent.change(input, { target: { value: 'NewValidPassword123' } });
 
     expect(screen.getByText(/4\/4 criteria/i)).toBeTruthy();

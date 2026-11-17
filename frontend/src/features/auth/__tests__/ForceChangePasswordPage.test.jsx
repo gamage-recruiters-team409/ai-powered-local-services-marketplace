@@ -32,9 +32,9 @@ describe('ForceChangePasswordPage', () => {
     );
 
     expect(screen.getByRole('heading', { name: /change your password/i })).toBeTruthy();
-    expect(screen.getByPlaceholderText(/enter current password/i)).toBeTruthy();
-    expect(screen.getByPlaceholderText(/enter new password/i)).toBeTruthy();
-    expect(screen.getByPlaceholderText(/re-enter new password/i)).toBeTruthy();
+    expect(screen.getByPlaceholderText(/^enter current password$/i)).toBeTruthy();
+    expect(screen.getByPlaceholderText(/^enter new password$/i)).toBeTruthy();
+    expect(screen.getByPlaceholderText(/^re-enter new password$/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: /update password/i })).toBeTruthy();
   });
 
@@ -45,13 +45,13 @@ describe('ForceChangePasswordPage', () => {
       </MemoryRouter>
     );
 
-    fireEvent.change(screen.getByPlaceholderText(/enter current password/i), {
+    fireEvent.change(screen.getByPlaceholderText(/^enter current password$/i), {
       target: { value: 'OldPass123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText(/enter new password/i), {
+    fireEvent.change(screen.getByPlaceholderText(/^enter new password$/i), {
       target: { value: 'NewPass123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText(/re-enter new password/i), {
+    fireEvent.change(screen.getByPlaceholderText(/^re-enter new password$/i), {
       target: { value: 'MismatchPass123!' },
     });
 
@@ -72,13 +72,13 @@ describe('ForceChangePasswordPage', () => {
       </MemoryRouter>
     );
 
-    fireEvent.change(screen.getByPlaceholderText(/enter current password/i), {
+    fireEvent.change(screen.getByPlaceholderText(/^enter current password$/i), {
       target: { value: 'OldPass123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText(/enter new password/i), {
+    fireEvent.change(screen.getByPlaceholderText(/^enter new password$/i), {
       target: { value: 'NewPass123!' },
     });
-    fireEvent.change(screen.getByPlaceholderText(/re-enter new password/i), {
+    fireEvent.change(screen.getByPlaceholderText(/^re-enter new password$/i), {
       target: { value: 'NewPass123!' },
     });
 
