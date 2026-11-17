@@ -2,23 +2,24 @@ package com.gamagerecruiters.marketplace.modules.completion.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
-import java.time.Instant;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -46,6 +47,11 @@ import com.gamagerecruiters.marketplace.modules.completion.dto.ReportNoShowReque
 import com.gamagerecruiters.marketplace.modules.completion.dto.ServiceCompletionResponse;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 
+/**
+ * Unit tests for the completion rules. MongoDB transactions and conditional updates are covered
+ * against a real MongoDB in CompletionConsistencyIntegrationTest; here the transaction runner only
+ * records that every write runs inside one transaction.
+ */
 @ExtendWith(MockitoExtension.class)
 class ServiceCompletionServiceImplTest {
 
@@ -55,6 +61,7 @@ class ServiceCompletionServiceImplTest {
     private static final Instant NOW = Instant.parse("2026-11-11T08:00:00Z");
     private static final Instant SLOT_START = NOW.minusSeconds(3 * 3600);
     private static final Instant SLOT_END = NOW.minusSeconds(3600);
+    private static final Instant WINDOW_START = NOW.minus(Duration.ofHours(48));
 
     @Mock
     private ServiceCompletionRepository repository;
@@ -62,14 +69,30 @@ class ServiceCompletionServiceImplTest {
     @Mock
     private BookingFacade bookingFacade;
 
+    @Mock
+    private CompletionAtomicUpdates atomicUpdates;
+
+    private RecordingTransactions transactions;
     private ServiceCompletionServiceImpl service;
+
+    /** Runs the work directly and counts how often a transaction was opened. */
+    private static final class RecordingTransactions implements CompletionTransactions {
+        private int opened;
+
+        @Override
+        public <T> T inTransaction(Supplier<T> work) {
+            opened++;
+            return work.get();
+        }
+    }
 
     @BeforeEach
     void setUp() {
-        service = new ServiceCompletionServiceImpl(repository, bookingFacade, Clock.fixed(NOW, ZoneOffset.UTC));
+        transactions = new RecordingTransactions();
+        service = new ServiceCompletionServiceImpl(repository, bookingFacade, atomicUpdates, transactions,
+                Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
-    /** The only place the record is built: after the booking follow-up PR adds slotStart/slotEnd, add them here. */
     private static BookingParticipants booking(BookingStatus status) {
         return booking(status, SLOT_START);
     }
@@ -97,6 +120,19 @@ class ServiceCompletionServiceImplTest {
         return completion;
     }
 
+    private static ServiceCompletion confirmed(CompletionConfirmationType type) {
+        ServiceCompletion completion = markedCompleted();
+        completion.setConfirmedAt(NOW);
+        completion.setConfirmationType(type);
+        return completion;
+    }
+
+    private static ServiceCompletion issueRaised() {
+        ServiceCompletion completion = markedCompleted();
+        completion.setIssueRaisedAt(NOW);
+        return completion;
+    }
+
     private static void assertApiError(ApiException ex, HttpStatus status, String code) {
         assertEquals(status, ex.getStatus());
         assertEquals(code, ex.getErrorCode());
@@ -109,41 +145,41 @@ class ServiceCompletionServiceImplTest {
     class StartService {
 
         @Test
-        @DisplayName("Provider starts a CONFIRMED booking: record saved first, then booking moved to IN_PROGRESS")
+        @DisplayName("Provider starts a CONFIRMED booking: record inserted, then booking moved to IN_PROGRESS, in one transaction")
         void startsConfirmedBooking() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.CONFIRMED));
             when(repository.existsByBookingId(BOOKING)).thenReturn(false);
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(repository.insert(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
 
             ServiceCompletionResponse response = service.startService(BOOKING, PROVIDER);
 
             assertEquals(BOOKING, response.bookingId());
             assertEquals(NOW, response.startedAt());
+            assertEquals(1, transactions.opened);
             InOrder order = inOrder(repository, bookingFacade);
-            order.verify(repository).save(any(ServiceCompletion.class));
+            order.verify(repository).insert(any(ServiceCompletion.class));
             order.verify(bookingFacade).markInProgress(BOOKING, PROVIDER);
         }
 
         @Test
-        @DisplayName("Another provider gets 403 ACCESS_DENIED and nothing is saved")
+        @DisplayName("Another provider gets 403 ACCESS_DENIED and nothing is written")
         void rejectsOtherProvider() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.CONFIRMED));
 
             assertThrows(AccessDeniedException.class, () -> service.startService(BOOKING, "prov-2"));
 
-            verify(repository, never()).save(any());
+            verify(repository, never()).insert(any(ServiceCompletion.class));
             verify(bookingFacade, never()).markInProgress(anyString(), anyString());
         }
 
         @Test
         @DisplayName("Booking not CONFIRMED gets 409 INVALID_STATUS_TRANSITION")
         void rejectsWrongStatus() {
-            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.AWAITING_PAYMENT));
+            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.IN_PROGRESS));
 
             ApiException ex = assertThrows(ApiException.class, () -> service.startService(BOOKING, PROVIDER));
 
             assertApiError(ex, HttpStatus.CONFLICT, "INVALID_STATUS_TRANSITION");
-            verify(repository, never()).save(any());
         }
 
         @Test
@@ -163,7 +199,7 @@ class ServiceCompletionServiceImplTest {
         void concurrentStartHitsUniqueIndex() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.CONFIRMED));
             when(repository.existsByBookingId(BOOKING)).thenReturn(false);
-            when(repository.save(any(ServiceCompletion.class))).thenThrow(new DuplicateKeyException("dup"));
+            when(repository.insert(any(ServiceCompletion.class))).thenThrow(new DuplicateKeyException("dup"));
 
             ApiException ex = assertThrows(ApiException.class, () -> service.startService(BOOKING, PROVIDER));
 
@@ -172,18 +208,18 @@ class ServiceCompletionServiceImplTest {
         }
 
         @Test
-        @DisplayName("If booking rejects the transition, the new completion record is removed")
-        void removesRecordWhenBookingRejects() {
+        @DisplayName("Booking rejects the transition: the error ends the transaction (no manual delete)")
+        void bookingErrorEndsTheTransaction() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.CONFIRMED));
             when(repository.existsByBookingId(BOOKING)).thenReturn(false);
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
-            ApiException bookingError = new ApiException(HttpStatus.CONFLICT, "BOOKING_UPDATE_CONFLICT", "conflict");
+            when(repository.insert(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
+            ResourceConflictException bookingError = new ResourceConflictException("BOOKING_UPDATE_CONFLICT", "changed");
             when(bookingFacade.markInProgress(BOOKING, PROVIDER)).thenThrow(bookingError);
 
             ApiException ex = assertThrows(ApiException.class, () -> service.startService(BOOKING, PROVIDER));
 
             assertSame(bookingError, ex);
-            verify(repository).delete(any(ServiceCompletion.class));
+            verify(repository, never()).delete(any(ServiceCompletion.class));
         }
     }
 
@@ -194,21 +230,23 @@ class ServiceCompletionServiceImplTest {
     class MarkCompleted {
 
         @Test
-        @DisplayName("Provider marks an IN_PROGRESS service completed with trimmed note and photos")
+        @DisplayName("Provider marks an IN_PROGRESS service completed: conditional update with trimmed note and photos, then booking")
         void marksCompleted() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.IN_PROGRESS));
             when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(started()));
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
+            ServiceCompletion updated = markedCompleted();
+            when(atomicUpdates.markCompleted(BOOKING, "Cleaned 3 rooms", List.of("https://img/1.jpg"), NOW))
+                    .thenReturn(Optional.of(updated));
 
             ServiceCompletionResponse response = service.markCompleted(BOOKING, PROVIDER,
-                    new MarkCompletedRequest("  Fixed the leak  ", List.of(" https://img/1.jpg ", "  ")));
+                    new MarkCompletedRequest("  Cleaned 3 rooms  ", List.of(" https://img/1.jpg ", "  ")));
 
-            assertEquals("Fixed the leak", response.completionNote());
-            assertEquals(List.of("https://img/1.jpg"), response.photoUrls());
-            assertEquals(NOW, response.markedCompletedAt());
-            InOrder order = inOrder(repository, bookingFacade);
-            order.verify(repository).save(any(ServiceCompletion.class));
+            assertEquals(updated.getMarkedCompletedAt(), response.markedCompletedAt());
+            assertEquals(1, transactions.opened);
+            InOrder order = inOrder(atomicUpdates, bookingFacade);
+            order.verify(atomicUpdates).markCompleted(eq(BOOKING), any(), any(), eq(NOW));
             order.verify(bookingFacade).markCompletionPending(BOOKING, PROVIDER);
+            verify(repository, never()).save(any(ServiceCompletion.class));
         }
 
         @Test
@@ -216,12 +254,11 @@ class ServiceCompletionServiceImplTest {
         void acceptsEmptyRequest() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.IN_PROGRESS));
             when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(started()));
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(atomicUpdates.markCompleted(BOOKING, null, List.of(), NOW)).thenReturn(Optional.of(markedCompleted()));
 
-            ServiceCompletionResponse response = service.markCompleted(BOOKING, PROVIDER, new MarkCompletedRequest(null, null));
+            service.markCompleted(BOOKING, PROVIDER, null);
 
-            assertNull(response.completionNote());
-            assertTrue(response.photoUrls().isEmpty());
+            verify(atomicUpdates).markCompleted(BOOKING, null, List.of(), NOW);
         }
 
         @Test
@@ -229,8 +266,7 @@ class ServiceCompletionServiceImplTest {
         void rejectsWrongStatus() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.CONFIRMED));
 
-            ApiException ex = assertThrows(ApiException.class,
-                    () -> service.markCompleted(BOOKING, PROVIDER, new MarkCompletedRequest(null, null)));
+            ApiException ex = assertThrows(ApiException.class, () -> service.markCompleted(BOOKING, PROVIDER, null));
 
             assertApiError(ex, HttpStatus.CONFLICT, "INVALID_STATUS_TRANSITION");
         }
@@ -241,8 +277,7 @@ class ServiceCompletionServiceImplTest {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.IN_PROGRESS));
             when(repository.findByBookingId(BOOKING)).thenReturn(Optional.empty());
 
-            ApiException ex = assertThrows(ApiException.class,
-                    () -> service.markCompleted(BOOKING, PROVIDER, new MarkCompletedRequest(null, null)));
+            ApiException ex = assertThrows(ApiException.class, () -> service.markCompleted(BOOKING, PROVIDER, null));
 
             assertApiError(ex, HttpStatus.NOT_FOUND, "COMPLETION_NOT_FOUND");
         }
@@ -253,27 +288,23 @@ class ServiceCompletionServiceImplTest {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.IN_PROGRESS));
             when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(markedCompleted()));
 
-            ApiException ex = assertThrows(ApiException.class,
-                    () -> service.markCompleted(BOOKING, PROVIDER, new MarkCompletedRequest(null, null)));
+            ApiException ex = assertThrows(ApiException.class, () -> service.markCompleted(BOOKING, PROVIDER, null));
 
             assertApiError(ex, HttpStatus.CONFLICT, "SERVICE_ALREADY_MARKED_COMPLETED");
+            verify(atomicUpdates, never()).markCompleted(anyString(), any(), any(), any());
         }
 
         @Test
-        @DisplayName("If booking rejects the transition, the completion evidence is reverted")
-        void revertsWhenBookingRejects() {
-            ServiceCompletion completion = started();
+        @DisplayName("Marked by a concurrent request (conditional update matches nothing): 409, booking not touched")
+        void concurrentMarkIsRejected() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.IN_PROGRESS));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
-            when(bookingFacade.markCompletionPending(BOOKING, PROVIDER))
-                    .thenThrow(new ApiException(HttpStatus.CONFLICT, "INVALID_STATUS_TRANSITION", "no"));
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(started()));
+            when(atomicUpdates.markCompleted(eq(BOOKING), any(), any(), eq(NOW))).thenReturn(Optional.empty());
 
-            assertThrows(ApiException.class,
-                    () -> service.markCompleted(BOOKING, PROVIDER, new MarkCompletedRequest("Note", List.of("u"))));
+            ApiException ex = assertThrows(ApiException.class, () -> service.markCompleted(BOOKING, PROVIDER, null));
 
-            assertNull(completion.getMarkedCompletedAt());
-            assertNull(completion.getCompletionNote());
+            assertApiError(ex, HttpStatus.CONFLICT, "SERVICE_ALREADY_MARKED_COMPLETED");
+            verify(bookingFacade, never()).markCompletionPending(anyString(), anyString());
         }
     }
 
@@ -284,17 +315,21 @@ class ServiceCompletionServiceImplTest {
     class ConfirmCompletion {
 
         @Test
-        @DisplayName("Customer confirms a COMPLETION_PENDING service: confirmationType CUSTOMER, booking COMPLETED")
+        @DisplayName("Customer confirms a COMPLETION_PENDING service: conditional update CUSTOMER, then booking COMPLETED")
         void confirms() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
             when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(markedCompleted()));
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(atomicUpdates.confirm(BOOKING, CompletionConfirmationType.CUSTOMER, NOW, null))
+                    .thenReturn(Optional.of(confirmed(CompletionConfirmationType.CUSTOMER)));
 
             ServiceCompletionResponse response = service.confirmCompletion(BOOKING, CUSTOMER);
 
             assertEquals(NOW, response.confirmedAt());
             assertEquals(CompletionConfirmationType.CUSTOMER, response.confirmationType());
-            verify(bookingFacade).markCompleted(BOOKING, CUSTOMER);
+            assertEquals(1, transactions.opened);
+            InOrder order = inOrder(atomicUpdates, bookingFacade);
+            order.verify(atomicUpdates).confirm(BOOKING, CompletionConfirmationType.CUSTOMER, NOW, null);
+            order.verify(bookingFacade).markCompleted(BOOKING, CUSTOMER);
         }
 
         @Test
@@ -304,7 +339,7 @@ class ServiceCompletionServiceImplTest {
 
             assertThrows(AccessDeniedException.class, () -> service.confirmCompletion(BOOKING, "cust-2"));
 
-            verify(bookingFacade, never()).markCompleted(anyString(), anyString());
+            verify(atomicUpdates, never()).confirm(anyString(), any(), any(), any());
         }
 
         @Test
@@ -318,25 +353,33 @@ class ServiceCompletionServiceImplTest {
         }
 
         @Test
+        @DisplayName("Not marked completed yet gets 409 SERVICE_NOT_MARKED_COMPLETED")
+        void rejectsNotMarked() {
+            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(started()));
+
+            ApiException ex = assertThrows(ApiException.class, () -> service.confirmCompletion(BOOKING, CUSTOMER));
+
+            assertApiError(ex, HttpStatus.CONFLICT, "SERVICE_NOT_MARKED_COMPLETED");
+        }
+
+        @Test
         @DisplayName("Issue already raised gets 409 COMPLETION_ISSUE_RAISED")
         void rejectsWhenIssueRaised() {
-            ServiceCompletion completion = markedCompleted();
-            completion.setIssueRaisedAt(NOW.minusSeconds(60));
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(issueRaised()));
 
             ApiException ex = assertThrows(ApiException.class, () -> service.confirmCompletion(BOOKING, CUSTOMER));
 
             assertApiError(ex, HttpStatus.CONFLICT, "COMPLETION_ISSUE_RAISED");
+            verify(atomicUpdates, never()).confirm(anyString(), any(), any(), any());
         }
 
         @Test
         @DisplayName("Already confirmed gets 409 COMPLETION_ALREADY_CONFIRMED")
         void rejectsAlreadyConfirmed() {
-            ServiceCompletion completion = markedCompleted();
-            completion.setConfirmedAt(NOW.minusSeconds(60));
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(confirmed(CompletionConfirmationType.AUTO)));
 
             ApiException ex = assertThrows(ApiException.class, () -> service.confirmCompletion(BOOKING, CUSTOMER));
 
@@ -344,22 +387,50 @@ class ServiceCompletionServiceImplTest {
         }
 
         @Test
-        @DisplayName("If booking rejects the transition, the confirmation is reverted")
-        void revertsWhenBookingRejects() {
-            ServiceCompletion completion = markedCompleted();
+        @DisplayName("Issue raised by a concurrent request: update matches nothing, 409 COMPLETION_ISSUE_RAISED, booking not touched")
+        void concurrentIssueWins() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(repository.findByBookingId(BOOKING))
+                    .thenReturn(Optional.of(markedCompleted()), Optional.of(issueRaised()));
+            when(atomicUpdates.confirm(BOOKING, CompletionConfirmationType.CUSTOMER, NOW, null)).thenReturn(Optional.empty());
+
+            ApiException ex = assertThrows(ApiException.class, () -> service.confirmCompletion(BOOKING, CUSTOMER));
+
+            assertApiError(ex, HttpStatus.CONFLICT, "COMPLETION_ISSUE_RAISED");
+            verify(bookingFacade, never()).markCompleted(anyString(), anyString());
+            verify(repository, never()).save(any(ServiceCompletion.class));
+        }
+
+        @Test
+        @DisplayName("Auto-confirmed at the same moment: 409 COMPLETION_ALREADY_CONFIRMED, the AUTO result is kept")
+        void concurrentAutoConfirmWins() {
+            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
+            when(repository.findByBookingId(BOOKING))
+                    .thenReturn(Optional.of(markedCompleted()), Optional.of(confirmed(CompletionConfirmationType.AUTO)));
+            when(atomicUpdates.confirm(BOOKING, CompletionConfirmationType.CUSTOMER, NOW, null)).thenReturn(Optional.empty());
+
+            ApiException ex = assertThrows(ApiException.class, () -> service.confirmCompletion(BOOKING, CUSTOMER));
+
+            assertApiError(ex, HttpStatus.CONFLICT, "COMPLETION_ALREADY_CONFIRMED");
+            verify(bookingFacade, never()).markCompleted(anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("Booking rejects the transition: the error ends the transaction (no manual revert)")
+        void bookingErrorEndsTheTransaction() {
+            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(markedCompleted()));
+            when(atomicUpdates.confirm(BOOKING, CompletionConfirmationType.CUSTOMER, NOW, null))
+                    .thenReturn(Optional.of(confirmed(CompletionConfirmationType.CUSTOMER)));
             when(bookingFacade.markCompleted(BOOKING, CUSTOMER))
-                    .thenThrow(new ApiException(HttpStatus.CONFLICT, "BOOKING_UPDATE_CONFLICT", "conflict"));
+                    .thenThrow(new ResourceConflictException("INVALID_STATUS_TRANSITION", "booking moved"));
 
-            assertThrows(ApiException.class, () -> service.confirmCompletion(BOOKING, CUSTOMER));
+            ApiException ex = assertThrows(ApiException.class, () -> service.confirmCompletion(BOOKING, CUSTOMER));
 
-            assertNull(completion.getConfirmedAt());
-            assertNull(completion.getConfirmationType());
+            assertApiError(ex, HttpStatus.CONFLICT, "INVALID_STATUS_TRANSITION");
+            verify(repository, never()).save(any(ServiceCompletion.class));
         }
     }
-
 
     // ------------------------------------------------------------------ raise issue
 
@@ -368,32 +439,35 @@ class ServiceCompletionServiceImplTest {
     class RaiseIssue {
 
         @Test
-        @DisplayName("Customer raises an issue within 48h: issueRaisedAt set, booking disputed with the reason")
+        @DisplayName("Customer raises an issue within 48h: conditional update inside the window, booking disputed with the reason")
         void raisesIssue() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
             when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(markedCompleted()));
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(atomicUpdates.raiseIssue(BOOKING, NOW, WINDOW_START)).thenReturn(Optional.of(issueRaised()));
 
-            ServiceCompletionResponse response =
-                    service.raiseIssue(BOOKING, CUSTOMER, new RaiseIssueRequest("  Balcony was not cleaned.  "));
+            ServiceCompletionResponse response = service.raiseIssue(BOOKING, CUSTOMER,
+                    new RaiseIssueRequest("  The garden was not cleaned  "));
 
             assertEquals(NOW, response.issueRaisedAt());
-            verify(bookingFacade).markDisputed(BOOKING, CUSTOMER, "CUSTOMER_ISSUE: Balcony was not cleaned.");
+            assertEquals(1, transactions.opened);
+            InOrder order = inOrder(atomicUpdates, bookingFacade);
+            order.verify(atomicUpdates).raiseIssue(BOOKING, NOW, WINDOW_START);
+            order.verify(bookingFacade).markDisputed(BOOKING, CUSTOMER, "CUSTOMER_ISSUE: The garden was not cleaned");
         }
 
         @Test
         @DisplayName("After the 48h window gets 409 CONFIRMATION_WINDOW_CLOSED")
         void rejectsAfterWindow() {
             ServiceCompletion completion = markedCompleted();
-            completion.setMarkedCompletedAt(NOW.minus(Duration.ofHours(48)).minusSeconds(1));
+            completion.setMarkedCompletedAt(WINDOW_START.minusSeconds(1));
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
             when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
 
             ApiException ex = assertThrows(ApiException.class,
-                    () -> service.raiseIssue(BOOKING, CUSTOMER, new RaiseIssueRequest("Balcony was not cleaned.")));
+                    () -> service.raiseIssue(BOOKING, CUSTOMER, new RaiseIssueRequest("The garden was not cleaned")));
 
             assertApiError(ex, HttpStatus.CONFLICT, "CONFIRMATION_WINDOW_CLOSED");
-            verify(bookingFacade, never()).markDisputed(anyString(), anyString(), anyString());
+            verify(atomicUpdates, never()).raiseIssue(anyString(), any(), any());
         }
 
         @Test
@@ -402,37 +476,47 @@ class ServiceCompletionServiceImplTest {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
 
             assertThrows(AccessDeniedException.class,
-                    () -> service.raiseIssue(BOOKING, PROVIDER, new RaiseIssueRequest("Balcony was not cleaned.")));
+                    () -> service.raiseIssue(BOOKING, PROVIDER, new RaiseIssueRequest("The garden was not cleaned")));
         }
 
         @Test
         @DisplayName("Already confirmed gets 409 COMPLETION_ALREADY_CONFIRMED")
         void rejectsAlreadyConfirmed() {
-            ServiceCompletion completion = markedCompleted();
-            completion.setConfirmedAt(NOW.minusSeconds(60));
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(confirmed(CompletionConfirmationType.CUSTOMER)));
 
             ApiException ex = assertThrows(ApiException.class,
-                    () -> service.raiseIssue(BOOKING, CUSTOMER, new RaiseIssueRequest("Balcony was not cleaned.")));
+                    () -> service.raiseIssue(BOOKING, CUSTOMER, new RaiseIssueRequest("The garden was not cleaned")));
 
             assertApiError(ex, HttpStatus.CONFLICT, "COMPLETION_ALREADY_CONFIRMED");
         }
 
         @Test
-        @DisplayName("If booking rejects the dispute, issueRaisedAt is reverted")
-        void revertsWhenBookingRejects() {
-            ServiceCompletion completion = markedCompleted();
+        @DisplayName("Confirmed by a concurrent request: update matches nothing, 409 COMPLETION_ALREADY_CONFIRMED, no dispute")
+        void concurrentConfirmationWins() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
-            when(bookingFacade.markDisputed(anyString(), anyString(), anyString()))
-                    .thenThrow(new ApiException(HttpStatus.CONFLICT, "BOOKING_UPDATE_CONFLICT", "conflict"));
+            when(repository.findByBookingId(BOOKING))
+                    .thenReturn(Optional.of(markedCompleted()), Optional.of(confirmed(CompletionConfirmationType.CUSTOMER)));
+            when(atomicUpdates.raiseIssue(BOOKING, NOW, WINDOW_START)).thenReturn(Optional.empty());
 
-            assertThrows(ApiException.class,
-                    () -> service.raiseIssue(BOOKING, CUSTOMER, new RaiseIssueRequest("Balcony was not cleaned.")));
+            ApiException ex = assertThrows(ApiException.class,
+                    () -> service.raiseIssue(BOOKING, CUSTOMER, new RaiseIssueRequest("The garden was not cleaned")));
 
-            assertNull(completion.getIssueRaisedAt());
+            assertApiError(ex, HttpStatus.CONFLICT, "COMPLETION_ALREADY_CONFIRMED");
+            verify(bookingFacade, never()).markDisputed(anyString(), anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("Update matches nothing but the record shows no decision: 409 COMPLETION_UPDATE_CONFLICT")
+        void unexplainedRaceIsAConflict() {
+            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(markedCompleted()));
+            when(atomicUpdates.raiseIssue(BOOKING, NOW, WINDOW_START)).thenReturn(Optional.empty());
+
+            ApiException ex = assertThrows(ApiException.class,
+                    () -> service.raiseIssue(BOOKING, CUSTOMER, new RaiseIssueRequest("The garden was not cleaned")));
+
+            assertApiError(ex, HttpStatus.CONFLICT, "COMPLETION_UPDATE_CONFLICT");
         }
     }
 
@@ -445,16 +529,17 @@ class ServiceCompletionServiceImplTest {
         @Test
         @DisplayName("Provider reports customer no-show 120+ min after start: NO_SHOW_BY_CUSTOMER, booking disputed")
         void providerReportsCustomerNoShow() {
-            when(bookingFacade.getBookingParticipants(BOOKING))
-                    .thenReturn(booking(BookingStatus.CONFIRMED, NOW.minus(Duration.ofMinutes(120))));
+            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.CONFIRMED));
             when(repository.existsByBookingId(BOOKING)).thenReturn(false);
-            when(bookingFacade.markDisputed(anyString(), anyString(), anyString())).thenReturn(booking(BookingStatus.DISPUTED));
+            when(bookingFacade.markDisputed(BOOKING, PROVIDER, "NO_SHOW_BY_CUSTOMER: Nobody home"))
+                    .thenReturn(booking(BookingStatus.DISPUTED));
 
-            NoShowReportResponse response = service.reportNoShow(BOOKING, PROVIDER, new ReportNoShowRequest(" Waited 2 hours "));
+            NoShowReportResponse response = service.reportNoShow(BOOKING, PROVIDER, new ReportNoShowRequest(" Nobody home "));
 
             assertEquals("NO_SHOW_BY_CUSTOMER", response.type());
             assertEquals("DISPUTED", response.bookingStatus());
-            verify(bookingFacade).markDisputed(BOOKING, PROVIDER, "NO_SHOW_BY_CUSTOMER: Waited 2 hours");
+            assertEquals(NOW, response.reportedAt());
+            assertEquals(1, transactions.opened);
         }
 
         @Test
@@ -462,12 +547,12 @@ class ServiceCompletionServiceImplTest {
         void customerReportsProviderNoShow() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.CONFIRMED));
             when(repository.existsByBookingId(BOOKING)).thenReturn(false);
-            when(bookingFacade.markDisputed(anyString(), anyString(), anyString())).thenReturn(booking(BookingStatus.DISPUTED));
+            when(bookingFacade.markDisputed(BOOKING, CUSTOMER, "NO_SHOW_BY_PROVIDER"))
+                    .thenReturn(booking(BookingStatus.DISPUTED));
 
             NoShowReportResponse response = service.reportNoShow(BOOKING, CUSTOMER, null);
 
             assertEquals("NO_SHOW_BY_PROVIDER", response.type());
-            verify(bookingFacade).markDisputed(BOOKING, CUSTOMER, "NO_SHOW_BY_PROVIDER");
         }
 
         @Test
@@ -477,8 +562,7 @@ class ServiceCompletionServiceImplTest {
                     .thenReturn(booking(BookingStatus.CONFIRMED, NOW.minus(Duration.ofMinutes(119))));
             when(repository.existsByBookingId(BOOKING)).thenReturn(false);
 
-            ApiException ex = assertThrows(ApiException.class,
-                    () -> service.reportNoShow(BOOKING, PROVIDER, new ReportNoShowRequest(null)));
+            ApiException ex = assertThrows(ApiException.class, () -> service.reportNoShow(BOOKING, CUSTOMER, null));
 
             assertApiError(ex, HttpStatus.CONFLICT, "NO_SHOW_TOO_EARLY");
             verify(bookingFacade, never()).markDisputed(anyString(), anyString(), anyString());
@@ -490,8 +574,7 @@ class ServiceCompletionServiceImplTest {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.CONFIRMED));
             when(repository.existsByBookingId(BOOKING)).thenReturn(true);
 
-            ApiException ex = assertThrows(ApiException.class,
-                    () -> service.reportNoShow(BOOKING, PROVIDER, new ReportNoShowRequest(null)));
+            ApiException ex = assertThrows(ApiException.class, () -> service.reportNoShow(BOOKING, CUSTOMER, null));
 
             assertApiError(ex, HttpStatus.CONFLICT, "SERVICE_ALREADY_STARTED");
         }
@@ -501,8 +584,7 @@ class ServiceCompletionServiceImplTest {
         void rejectsWrongStatus() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.IN_PROGRESS));
 
-            ApiException ex = assertThrows(ApiException.class,
-                    () -> service.reportNoShow(BOOKING, PROVIDER, new ReportNoShowRequest(null)));
+            ApiException ex = assertThrows(ApiException.class, () -> service.reportNoShow(BOOKING, CUSTOMER, null));
 
             assertApiError(ex, HttpStatus.CONFLICT, "INVALID_STATUS_TRANSITION");
         }
@@ -512,8 +594,7 @@ class ServiceCompletionServiceImplTest {
         void strangerIsRejected() {
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.CONFIRMED));
 
-            assertThrows(AccessDeniedException.class,
-                    () -> service.reportNoShow(BOOKING, "someone-else", new ReportNoShowRequest(null)));
+            assertThrows(AccessDeniedException.class, () -> service.reportNoShow(BOOKING, "someone-else", null));
         }
     }
 
@@ -523,100 +604,108 @@ class ServiceCompletionServiceImplTest {
     @DisplayName("autoConfirm")
     class AutoConfirm {
 
+        private ServiceCompletion due() {
+            ServiceCompletion completion = markedCompleted();
+            completion.setMarkedCompletedAt(NOW.minus(Duration.ofHours(49)));
+            return completion;
+        }
+
         @Test
         @DisplayName("Candidates are completions marked more than 48h ago with no confirmation or issue")
         void findsCandidates() {
-            ServiceCompletion completion = markedCompleted();
-            when(repository.findByMarkedCompletedAtBeforeAndConfirmedAtIsNullAndIssueRaisedAtIsNull(
-                    NOW.minus(Duration.ofHours(48)))).thenReturn(List.of(completion));
+            when(repository.findByMarkedCompletedAtBeforeAndConfirmedAtIsNullAndIssueRaisedAtIsNull(WINDOW_START))
+                    .thenReturn(List.of(due()));
 
             assertEquals(List.of(BOOKING), service.findAutoConfirmCandidates(NOW));
         }
 
         @Test
-        @DisplayName("Due completion is confirmed as AUTO and booking completed through markCompletedBySystem")
+        @DisplayName("Due completion: conditional AUTO update (only if still due), then markCompletedBySystem, in one transaction")
         void confirmsAutomatically() {
-            ServiceCompletion completion = markedCompleted();
-            completion.setMarkedCompletedAt(NOW.minus(Duration.ofHours(49)));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(due()));
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(atomicUpdates.confirm(BOOKING, CompletionConfirmationType.AUTO, NOW, WINDOW_START))
+                    .thenReturn(Optional.of(confirmed(CompletionConfirmationType.AUTO)));
 
             assertTrue(service.autoConfirm(BOOKING));
 
-            assertEquals(CompletionConfirmationType.AUTO, completion.getConfirmationType());
-            assertEquals(NOW, completion.getConfirmedAt());
-            verify(bookingFacade).markCompletedBySystem(BOOKING);
+            assertEquals(1, transactions.opened);
+            InOrder order = inOrder(atomicUpdates, bookingFacade);
+            order.verify(atomicUpdates).confirm(BOOKING, CompletionConfirmationType.AUTO, NOW, WINDOW_START);
+            order.verify(bookingFacade).markCompletedBySystem(BOOKING);
             verify(bookingFacade, never()).markCompleted(anyString(), anyString());
         }
 
         @Test
         @DisplayName("Skips when an issue was raised or the window has not ended")
         void skipsWhenNotDue() {
-            ServiceCompletion withIssue = markedCompleted();
-            withIssue.setMarkedCompletedAt(NOW.minus(Duration.ofHours(49)));
-            withIssue.setIssueRaisedAt(NOW.minus(Duration.ofHours(10)));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(withIssue));
+            ServiceCompletion withIssue = due();
+            withIssue.setIssueRaisedAt(NOW.minus(Duration.ofHours(1)));
+            ServiceCompletion tooRecent = markedCompleted();
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(withIssue), Optional.of(tooRecent));
 
             assertFalse(service.autoConfirm(BOOKING));
-
-            ServiceCompletion notYet = markedCompleted();
-            notYet.setMarkedCompletedAt(NOW.minus(Duration.ofHours(47)));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(notYet));
-
             assertFalse(service.autoConfirm(BOOKING));
+
+            verify(atomicUpdates, never()).confirm(anyString(), any(), any(), any());
             verify(bookingFacade, never()).markCompletedBySystem(anyString());
         }
 
         @Test
-        @DisplayName("Booking says not due yet (409 AUTO_COMPLETION_NOT_DUE): completion reverted, retried on the next run")
-        void notDueInBookingIsRetriedLater() {
-            ServiceCompletion completion = markedCompleted();
-            completion.setMarkedCompletedAt(NOW.minus(Duration.ofHours(48)));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
+        @DisplayName("Customer decided at the same moment (update matches nothing): skipped, booking not touched")
+        void customerDecisionWins() {
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(due()));
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(atomicUpdates.confirm(BOOKING, CompletionConfirmationType.AUTO, NOW, WINDOW_START))
+                    .thenReturn(Optional.empty());
+
+            assertFalse(service.autoConfirm(BOOKING));
+
+            verify(bookingFacade, never()).markCompletedBySystem(anyString());
+        }
+
+        @Test
+        @DisplayName("Booking says not due yet (409 AUTO_COMPLETION_NOT_DUE): transaction rolled back, retried on the next run")
+        void notDueInBookingIsRetriedLater() {
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(due()));
+            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
+            when(atomicUpdates.confirm(BOOKING, CompletionConfirmationType.AUTO, NOW, WINDOW_START))
+                    .thenReturn(Optional.of(confirmed(CompletionConfirmationType.AUTO)));
             when(bookingFacade.markCompletedBySystem(BOOKING))
                     .thenThrow(new ResourceConflictException("AUTO_COMPLETION_NOT_DUE", "Not due yet"));
 
             assertFalse(service.autoConfirm(BOOKING));
-
-            assertNull(completion.getConfirmedAt());
-            assertNull(completion.getConfirmationType());
         }
 
         @Test
-        @DisplayName("Other booking errors revert the completion and are rethrown")
-        void otherErrorsRevertAndRethrow() {
-            ServiceCompletion completion = markedCompleted();
-            completion.setMarkedCompletedAt(NOW.minus(Duration.ofHours(49)));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
+        @DisplayName("Other booking errors end the transaction and are rethrown")
+        void otherErrorsAreRethrown() {
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(due()));
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
-            when(repository.save(any(ServiceCompletion.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(atomicUpdates.confirm(BOOKING, CompletionConfirmationType.AUTO, NOW, WINDOW_START))
+                    .thenReturn(Optional.of(confirmed(CompletionConfirmationType.AUTO)));
             when(bookingFacade.markCompletedBySystem(BOOKING))
                     .thenThrow(new ResourceConflictException("BOOKING_UPDATE_CONFLICT", "Changed at the same time"));
 
             ApiException ex = assertThrows(ApiException.class, () -> service.autoConfirm(BOOKING));
 
             assertEquals("BOOKING_UPDATE_CONFLICT", ex.getErrorCode());
-            assertNull(completion.getConfirmedAt());
-            assertNull(completion.getConfirmationType());
+            verify(repository, never()).save(any(ServiceCompletion.class));
         }
 
         @Test
         @DisplayName("Skips when the booking is no longer COMPLETION_PENDING")
         void skipsWhenStatusChanged() {
-            ServiceCompletion completion = markedCompleted();
-            completion.setMarkedCompletedAt(NOW.minus(Duration.ofHours(49)));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(completion));
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(due()));
             when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.DISPUTED));
 
             assertFalse(service.autoConfirm(BOOKING));
-            verify(repository, never()).save(any());
+
+            verify(atomicUpdates, never()).confirm(anyString(), any(), any(), any());
         }
     }
 
-    // ------------------------------------------------------------------ get
+    // ------------------------------------------------------------------ read
 
     @Nested
     @DisplayName("getCompletion")
@@ -625,8 +714,8 @@ class ServiceCompletionServiceImplTest {
         @Test
         @DisplayName("Booking customer and provider can both read the completion")
         void participantsCanRead() {
-            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.IN_PROGRESS));
-            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(started()));
+            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
+            when(repository.findByBookingId(BOOKING)).thenReturn(Optional.of(markedCompleted()));
 
             assertEquals(BOOKING, service.getCompletion(BOOKING, CUSTOMER).bookingId());
             assertEquals(BOOKING, service.getCompletion(BOOKING, PROVIDER).bookingId());
@@ -635,11 +724,9 @@ class ServiceCompletionServiceImplTest {
         @Test
         @DisplayName("Someone outside the booking gets 403 ACCESS_DENIED")
         void strangerIsRejected() {
-            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.IN_PROGRESS));
+            when(bookingFacade.getBookingParticipants(BOOKING)).thenReturn(booking(BookingStatus.COMPLETION_PENDING));
 
             assertThrows(AccessDeniedException.class, () -> service.getCompletion(BOOKING, "someone-else"));
-
-            verify(repository, never()).findByBookingId(anyString());
         }
 
         @Test

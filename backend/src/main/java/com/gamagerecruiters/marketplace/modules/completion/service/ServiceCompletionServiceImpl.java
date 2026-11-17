@@ -40,9 +40,14 @@ import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCom
  * The actor passed to booking is always the authenticated user (CurrentUser). The 48-hour
  * auto-confirm uses BookingFacade.markCompletedBySystem, called only from the scheduled job.
  *
- * <p>Each write saves the completion evidence first and then asks booking to change the
- * status. If booking rejects the change, the completion record is put back as it was, so
- * the two never disagree.
+ * <p>Consistency: every write runs in one MongoDB transaction ({@link CompletionTransactions})
+ * that covers both the completion record and the booking status change made by BookingFacade,
+ * so the two are committed together or not at all (also when the application stops between
+ * the two writes). There is no manual rollback.
+ *
+ * <p>Concurrency: confirmation, issue raising and auto-confirmation change the completion with
+ * conditional updates ({@link CompletionAtomicUpdates}); the rule that allows the change is part
+ * of the update itself. A request that loses a race gets 409 and changes nothing.
  */
 @Service
 public class ServiceCompletionServiceImpl implements ServiceCompletionService {
@@ -58,207 +63,157 @@ public class ServiceCompletionServiceImpl implements ServiceCompletionService {
 
     private final ServiceCompletionRepository completionRepository;
     private final BookingFacade bookingFacade;
+    private final CompletionAtomicUpdates atomicUpdates;
+    private final CompletionTransactions transactions;
     private final Clock clock;
 
     @Autowired
-    public ServiceCompletionServiceImpl(ServiceCompletionRepository completionRepository, BookingFacade bookingFacade) {
-        this(completionRepository, bookingFacade, Clock.systemUTC());
+    public ServiceCompletionServiceImpl(ServiceCompletionRepository completionRepository, BookingFacade bookingFacade,
+                                        CompletionAtomicUpdates atomicUpdates, CompletionTransactions transactions) {
+        this(completionRepository, bookingFacade, atomicUpdates, transactions, Clock.systemUTC());
     }
 
-    ServiceCompletionServiceImpl(ServiceCompletionRepository completionRepository, BookingFacade bookingFacade, Clock clock) {
+    ServiceCompletionServiceImpl(ServiceCompletionRepository completionRepository, BookingFacade bookingFacade,
+                                 CompletionAtomicUpdates atomicUpdates, CompletionTransactions transactions,
+                                 Clock clock) {
         this.completionRepository = completionRepository;
         this.bookingFacade = bookingFacade;
+        this.atomicUpdates = atomicUpdates;
+        this.transactions = transactions;
         this.clock = clock;
     }
 
     @Override
     public ServiceCompletionResponse startService(String bookingId, String providerId) {
-        BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
-        requireProvider(booking, providerId);
-        requireStatus(booking, BookingStatus.CONFIRMED, "Service can only be started for a confirmed booking");
+        return transactions.inTransaction(() -> {
+            BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
+            requireProvider(booking, providerId);
+            requireStatus(booking, BookingStatus.CONFIRMED, "Service can only be started for a confirmed booking");
 
-        if (completionRepository.existsByBookingId(bookingId)) {
-            throw serviceAlreadyStarted();
-        }
+            if (completionRepository.existsByBookingId(bookingId)) {
+                throw serviceAlreadyStarted();
+            }
 
-        Instant now = clock.instant();
-        ServiceCompletion completion = new ServiceCompletion();
-        completion.setBookingId(booking.bookingId());
-        completion.setCustomerId(booking.customerId());
-        completion.setProviderId(booking.providerId());
-        completion.setStartedAt(now);
-        completion.setCreatedAt(now);
-        completion.setUpdatedAt(now);
+            Instant now = clock.instant();
+            ServiceCompletion completion = new ServiceCompletion();
+            completion.setBookingId(booking.bookingId());
+            completion.setCustomerId(booking.customerId());
+            completion.setProviderId(booking.providerId());
+            completion.setStartedAt(now);
+            completion.setCreatedAt(now);
+            completion.setUpdatedAt(now);
 
-        ServiceCompletion saved;
-        try {
-            saved = completionRepository.save(completion);
-        } catch (DuplicateKeyException ex) {
-            // Unique bookingId index: a concurrent start already created the record
-            throw serviceAlreadyStarted();
-        }
+            ServiceCompletion saved;
+            try {
+                saved = completionRepository.insert(completion);
+            } catch (DuplicateKeyException ex) {
+                // Unique bookingId index: a concurrent start already created the record
+                throw serviceAlreadyStarted();
+            }
 
-        try {
             bookingFacade.markInProgress(bookingId, providerId);
-        } catch (RuntimeException ex) {
-            // Booking rejected the transition: remove the record we just created
-            completionRepository.delete(saved);
-            throw ex;
-        }
-
-        return ServiceCompletionMapper.toResponse(saved);
+            return ServiceCompletionMapper.toResponse(saved);
+        });
     }
 
     @Override
     public ServiceCompletionResponse markCompleted(String bookingId, String providerId, MarkCompletedRequest request) {
-        BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
-        requireProvider(booking, providerId);
-        requireStatus(booking, BookingStatus.IN_PROGRESS, "Service can only be marked completed while it is in progress");
+        return transactions.inTransaction(() -> {
+            BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
+            requireProvider(booking, providerId);
+            requireStatus(booking, BookingStatus.IN_PROGRESS, "Service can only be marked completed while it is in progress");
 
-        ServiceCompletion completion = findCompletion(bookingId);
-        if (completion.getMarkedCompletedAt() != null) {
-            throw new ResourceConflictException("SERVICE_ALREADY_MARKED_COMPLETED",
-                    "This service has already been marked as completed");
-        }
+            ServiceCompletion current = findCompletion(bookingId);
+            if (current.getMarkedCompletedAt() != null) {
+                throw alreadyMarkedCompleted();
+            }
 
-        String previousNote = completion.getCompletionNote();
-        List<String> previousPhotos = completion.getPhotoUrls();
-        Instant previousUpdatedAt = completion.getUpdatedAt();
+            Instant now = clock.instant();
+            ServiceCompletion saved = atomicUpdates.markCompleted(bookingId,
+                            trimToNull(request == null ? null : request.completionNote()),
+                            cleanPhotoUrls(request == null ? null : request.photoUrls()), now)
+                    .orElseThrow(ServiceCompletionServiceImpl::alreadyMarkedCompleted);
 
-        Instant now = clock.instant();
-        completion.setCompletionNote(trimToNull(request == null ? null : request.completionNote()));
-        completion.setPhotoUrls(cleanPhotoUrls(request == null ? null : request.photoUrls()));
-        completion.setMarkedCompletedAt(now);
-        completion.setUpdatedAt(now);
-        ServiceCompletion saved = completionRepository.save(completion);
-
-        try {
             bookingFacade.markCompletionPending(bookingId, providerId);
-        } catch (RuntimeException ex) {
-            saved.setCompletionNote(previousNote);
-            saved.setPhotoUrls(previousPhotos);
-            saved.setMarkedCompletedAt(null);
-            saved.setUpdatedAt(previousUpdatedAt);
-            completionRepository.save(saved);
-            throw ex;
-        }
-
-        return ServiceCompletionMapper.toResponse(saved);
+            return ServiceCompletionMapper.toResponse(saved);
+        });
     }
 
     @Override
     public ServiceCompletionResponse confirmCompletion(String bookingId, String customerId) {
-        BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
-        requireCustomer(booking, customerId);
-        requireStatus(booking, BookingStatus.COMPLETION_PENDING, "Completion can only be confirmed while it is pending");
+        return transactions.inTransaction(() -> {
+            BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
+            requireCustomer(booking, customerId);
+            requireStatus(booking, BookingStatus.COMPLETION_PENDING, "Completion can only be confirmed while it is pending");
 
-        ServiceCompletion completion = findCompletion(bookingId);
-        if (completion.getMarkedCompletedAt() == null) {
-            throw new ResourceConflictException("SERVICE_NOT_MARKED_COMPLETED",
-                    "The provider has not marked this service as completed yet");
-        }
-        if (completion.getConfirmedAt() != null) {
-            throw new ResourceConflictException("COMPLETION_ALREADY_CONFIRMED",
-                    "This completion has already been confirmed");
-        }
-        if (completion.getIssueRaisedAt() != null) {
-            throw new ResourceConflictException("COMPLETION_ISSUE_RAISED",
-                    "An issue has been raised for this service, so it cannot be confirmed");
-        }
+            assertAwaitingDecision(findCompletion(bookingId));
 
-        Instant previousUpdatedAt = completion.getUpdatedAt();
-        Instant now = clock.instant();
-        completion.setConfirmedAt(now);
-        completion.setConfirmationType(CompletionConfirmationType.CUSTOMER);
-        completion.setUpdatedAt(now);
-        ServiceCompletion saved = completionRepository.save(completion);
+            Instant now = clock.instant();
+            ServiceCompletion saved = atomicUpdates.confirm(bookingId, CompletionConfirmationType.CUSTOMER, now, null)
+                    .orElseThrow(() -> rejectedByLatestState(bookingId));
 
-        try {
             bookingFacade.markCompleted(bookingId, customerId);
-        } catch (RuntimeException ex) {
-            saved.setConfirmedAt(null);
-            saved.setConfirmationType(null);
-            saved.setUpdatedAt(previousUpdatedAt);
-            completionRepository.save(saved);
-            throw ex;
-        }
-
-        return ServiceCompletionMapper.toResponse(saved);
+            return ServiceCompletionMapper.toResponse(saved);
+        });
     }
 
     @Override
     public ServiceCompletionResponse raiseIssue(String bookingId, String customerId, RaiseIssueRequest request) {
-        BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
-        requireCustomer(booking, customerId);
-        requireStatus(booking, BookingStatus.COMPLETION_PENDING, "An issue can only be raised while completion is pending");
+        return transactions.inTransaction(() -> {
+            BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
+            requireCustomer(booking, customerId);
+            requireStatus(booking, BookingStatus.COMPLETION_PENDING, "An issue can only be raised while completion is pending");
 
-        ServiceCompletion completion = findCompletion(bookingId);
-        if (completion.getMarkedCompletedAt() == null) {
-            throw new ResourceConflictException("SERVICE_NOT_MARKED_COMPLETED",
-                    "The provider has not marked this service as completed yet");
-        }
-        if (completion.getConfirmedAt() != null) {
-            throw new ResourceConflictException("COMPLETION_ALREADY_CONFIRMED",
-                    "This completion has already been confirmed");
-        }
-        if (completion.getIssueRaisedAt() != null) {
-            throw new ResourceConflictException("COMPLETION_ISSUE_RAISED", "An issue has already been raised for this service");
-        }
+            ServiceCompletion current = findCompletion(bookingId);
+            assertAwaitingDecision(current);
 
-        Instant now = clock.instant();
-        if (now.isAfter(completion.getMarkedCompletedAt().plus(CONFIRMATION_WINDOW))) {
-            throw new ResourceConflictException("CONFIRMATION_WINDOW_CLOSED",
-                    "Issues can be raised within 48 hours of the service being marked as completed");
-        }
+            Instant now = clock.instant();
+            Instant windowStart = now.minus(CONFIRMATION_WINDOW);
+            if (current.getMarkedCompletedAt().isBefore(windowStart)) {
+                throw confirmationWindowClosed();
+            }
 
-        Instant previousUpdatedAt = completion.getUpdatedAt();
-        completion.setIssueRaisedAt(now);
-        completion.setUpdatedAt(now);
-        ServiceCompletion saved = completionRepository.save(completion);
+            ServiceCompletion saved = atomicUpdates.raiseIssue(bookingId, now, windowStart)
+                    .orElseThrow(() -> rejectedByLatestState(bookingId));
 
-        try {
             bookingFacade.markDisputed(bookingId, customerId, "CUSTOMER_ISSUE: " + request.reason().trim());
-        } catch (RuntimeException ex) {
-            saved.setIssueRaisedAt(null);
-            saved.setUpdatedAt(previousUpdatedAt);
-            completionRepository.save(saved);
-            throw ex;
-        }
-
-        return ServiceCompletionMapper.toResponse(saved);
+            return ServiceCompletionMapper.toResponse(saved);
+        });
     }
 
     @Override
     public NoShowReportResponse reportNoShow(String bookingId, String userId, ReportNoShowRequest request) {
-        BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
+        return transactions.inTransaction(() -> {
+            BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
 
-        String type;
-        if (userId != null && userId.equals(booking.providerId())) {
-            type = "NO_SHOW_BY_CUSTOMER";
-        } else if (userId != null && userId.equals(booking.customerId())) {
-            type = "NO_SHOW_BY_PROVIDER";
-        } else {
-            throw new AccessDeniedException("Access denied: only the booking's customer or provider can report a no-show");
-        }
+            String type;
+            if (userId != null && userId.equals(booking.providerId())) {
+                type = "NO_SHOW_BY_CUSTOMER";
+            } else if (userId != null && userId.equals(booking.customerId())) {
+                type = "NO_SHOW_BY_PROVIDER";
+            } else {
+                throw new AccessDeniedException("Access denied: only the booking's customer or provider can report a no-show");
+            }
 
-        requireStatus(booking, BookingStatus.CONFIRMED, "A no-show can only be reported for a confirmed booking");
-        if (completionRepository.existsByBookingId(bookingId)) {
-            throw serviceAlreadyStarted();
-        }
+            requireStatus(booking, BookingStatus.CONFIRMED, "A no-show can only be reported for a confirmed booking");
+            if (completionRepository.existsByBookingId(bookingId)) {
+                throw serviceAlreadyStarted();
+            }
 
-        Instant now = clock.instant();
-        if (booking.slotStart() == null || now.isBefore(booking.slotStart().plus(NO_SHOW_GRACE))) {
-            throw new ResourceConflictException("NO_SHOW_TOO_EARLY",
-                    "A no-show can be reported 120 minutes after the booking start time");
-        }
+            Instant now = clock.instant();
+            if (booking.slotStart() == null || now.isBefore(booking.slotStart().plus(NO_SHOW_GRACE))) {
+                throw new ResourceConflictException("NO_SHOW_TOO_EARLY",
+                        "A no-show can be reported 120 minutes after the booking start time");
+            }
 
-        String note = trimToNull(request == null ? null : request.note());
-        String reason = note == null ? type : type + ": " + note;
-        BookingParticipants updated = bookingFacade.markDisputed(bookingId, userId, reason);
+            String note = trimToNull(request == null ? null : request.note());
+            String reason = note == null ? type : type + ": " + note;
+            BookingParticipants updated = bookingFacade.markDisputed(bookingId, userId, reason);
 
-        return new NoShowReportResponse(bookingId, type,
-                updated != null && updated.status() != null ? updated.status().name() : BookingStatus.DISPUTED.name(),
-                now);
+            return new NoShowReportResponse(bookingId, type,
+                    updated != null && updated.status() != null ? updated.status().name() : BookingStatus.DISPUTED.name(),
+                    now);
+        });
     }
 
     @Override
@@ -272,13 +227,28 @@ public class ServiceCompletionServiceImpl implements ServiceCompletionService {
 
     @Override
     public boolean autoConfirm(String bookingId) {
-        ServiceCompletion completion = completionRepository.findByBookingId(bookingId).orElse(null);
+        try {
+            return transactions.inTransaction(() -> confirmAutomatically(bookingId));
+        } catch (ApiException ex) {
+            if (AUTO_COMPLETION_NOT_DUE.equals(ex.getErrorCode())) {
+                // Booking entered COMPLETION_PENDING slightly later than our record: retried on the next run
+                log.info("Auto-confirm not due yet in booking for {}; will retry on the next run", bookingId);
+                return false;
+            }
+            throw ex;
+        }
+    }
+
+    private boolean confirmAutomatically(String bookingId) {
         Instant now = clock.instant();
+        Instant dueIfMarkedBefore = now.minus(CONFIRMATION_WINDOW);
+
+        ServiceCompletion completion = completionRepository.findByBookingId(bookingId).orElse(null);
         boolean stillDue = completion != null
                 && completion.getMarkedCompletedAt() != null
                 && completion.getConfirmedAt() == null
                 && completion.getIssueRaisedAt() == null
-                && !now.isBefore(completion.getMarkedCompletedAt().plus(CONFIRMATION_WINDOW));
+                && !completion.getMarkedCompletedAt().isAfter(dueIfMarkedBefore);
         if (!stillDue) {
             return false;
         }
@@ -289,27 +259,13 @@ public class ServiceCompletionServiceImpl implements ServiceCompletionService {
             return false;
         }
 
-        Instant previousUpdatedAt = completion.getUpdatedAt();
-        completion.setConfirmedAt(now);
-        completion.setConfirmationType(CompletionConfirmationType.AUTO);
-        completion.setUpdatedAt(now);
-        ServiceCompletion saved = completionRepository.save(completion);
-
-        try {
-            // Trusted system path (scheduled job only); booking checks the 48 h from its own timeline
-            bookingFacade.markCompletedBySystem(bookingId);
-        } catch (RuntimeException ex) {
-            saved.setConfirmedAt(null);
-            saved.setConfirmationType(null);
-            saved.setUpdatedAt(previousUpdatedAt);
-            completionRepository.save(saved);
-            if (ex instanceof ApiException api && AUTO_COMPLETION_NOT_DUE.equals(api.getErrorCode())) {
-                // Booking entered COMPLETION_PENDING slightly later than our record: try again next run
-                log.info("Auto-confirm not due yet in booking for {}; will retry on the next run", bookingId);
-                return false;
-            }
-            throw ex;
+        if (atomicUpdates.confirm(bookingId, CompletionConfirmationType.AUTO, now, dueIfMarkedBefore).isEmpty()) {
+            // The customer confirmed or raised an issue in the meantime: nothing to do
+            return false;
         }
+
+        // Trusted system path (scheduled job only); booking checks the 48 h from its own timeline
+        bookingFacade.markCompletedBySystem(bookingId);
         return true;
     }
 
@@ -346,6 +302,54 @@ public class ServiceCompletionServiceImpl implements ServiceCompletionService {
             throw new ResourceConflictException("INVALID_STATUS_TRANSITION",
                     message + " (current status: " + booking.status() + ")");
         }
+    }
+
+    /** Marked completed, not confirmed and no issue raised yet. */
+    private static void assertAwaitingDecision(ServiceCompletion completion) {
+        if (completion.getMarkedCompletedAt() == null) {
+            throw new ResourceConflictException("SERVICE_NOT_MARKED_COMPLETED",
+                    "The provider has not marked this service as completed yet");
+        }
+        if (completion.getConfirmedAt() != null) {
+            throw alreadyConfirmed();
+        }
+        if (completion.getIssueRaisedAt() != null) {
+            throw issueRaised();
+        }
+    }
+
+    /**
+     * The conditional update matched nothing: another request changed the record after it was read.
+     * Explain why, using the latest stored record; nothing was written by this request.
+     */
+    private ResourceConflictException rejectedByLatestState(String bookingId) {
+        ServiceCompletion latest = completionRepository.findByBookingId(bookingId).orElse(null);
+        if (latest != null && latest.getConfirmedAt() != null) {
+            return alreadyConfirmed();
+        }
+        if (latest != null && latest.getIssueRaisedAt() != null) {
+            return issueRaised();
+        }
+        return MongoCompletionTransactions.updateConflict();
+    }
+
+    private static ResourceConflictException alreadyMarkedCompleted() {
+        return new ResourceConflictException("SERVICE_ALREADY_MARKED_COMPLETED",
+                "This service has already been marked as completed");
+    }
+
+    private static ResourceConflictException alreadyConfirmed() {
+        return new ResourceConflictException("COMPLETION_ALREADY_CONFIRMED", "This completion has already been confirmed");
+    }
+
+    private static ResourceConflictException issueRaised() {
+        return new ResourceConflictException("COMPLETION_ISSUE_RAISED",
+                "An issue has been raised for this service, so it can no longer be confirmed or changed");
+    }
+
+    private static ResourceConflictException confirmationWindowClosed() {
+        return new ResourceConflictException("CONFIRMATION_WINDOW_CLOSED",
+                "Issues can be raised within 48 hours of the service being marked as completed");
     }
 
     private static ResourceConflictException serviceAlreadyStarted() {
