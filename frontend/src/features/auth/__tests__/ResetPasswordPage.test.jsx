@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as authApi from '../api/authApi';
 import ResetPasswordPage from '../pages/ResetPasswordPage';
 
@@ -10,6 +10,12 @@ vi.mock('../api/authApi');
 describe('ResetPasswordPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, '', '/');
+  });
+
+  afterEach(() => {
+    cleanup();
+    window.history.replaceState({}, '', '/');
   });
 
   it('renders expired view if no token is provided', () => {
@@ -21,9 +27,12 @@ describe('ResetPasswordPage', () => {
 
     expect(screen.getByRole('heading', { name: /link expired/i })).toBeTruthy();
     expect(screen.getByRole('link', { name: /request new link/i })).toBeTruthy();
+    expect(authApi.resetPassword).not.toHaveBeenCalled();
   });
 
-  it('renders password reset form and live requirements when token is present', () => {
+  it('renders password reset form without making API calls on mount, and strips token from URL', () => {
+    window.history.replaceState({}, '', '/reset-password?token=valid-tok');
+
     render(
       <MemoryRouter initialEntries={['/reset-password?token=valid-tok']}>
         <ResetPasswordPage />
@@ -36,6 +45,12 @@ describe('ResetPasswordPage', () => {
     expect(screen.getByText(/an uppercase letter/i)).toBeTruthy();
     expect(screen.getByText(/a lowercase letter/i)).toBeTruthy();
     expect(screen.getByText(/a digit/i)).toBeTruthy();
+
+    // Verify NO API calls were made on mount
+    expect(authApi.resetPassword).not.toHaveBeenCalled();
+
+    // Verify token was stripped from URL
+    expect(window.location.search).not.toContain('token=');
   });
 
   it('submits valid password and shows success screen', async () => {

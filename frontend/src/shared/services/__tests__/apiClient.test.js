@@ -1,5 +1,6 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import axios from 'axios';
+import { cleanup } from '@testing-library/react';
 import tokenStore from '../tokenStore';
 import {
   apiClient,
@@ -7,16 +8,20 @@ import {
   normalizeError,
   notifySessionExpired,
   onSessionExpired,
+  __resetForTests,
 } from '../apiClient';
 
 describe('apiClient', () => {
   beforeEach(() => {
     tokenStore.clear();
+    __resetForTests();
     vi.restoreAllMocks();
   });
 
   afterEach(() => {
+    cleanup();
     tokenStore.clear();
+    __resetForTests();
   });
 
   describe('isPublicAuthEndpoint', () => {

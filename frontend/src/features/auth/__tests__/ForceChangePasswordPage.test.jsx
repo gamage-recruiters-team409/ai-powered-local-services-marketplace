@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as useAuthModule from '../hooks/useAuth';
 import * as authApi from '../api/authApi';
 import ForceChangePasswordPage from '../pages/ForceChangePasswordPage';
@@ -18,6 +18,10 @@ describe('ForceChangePasswordPage', () => {
       user: { role: 'CUSTOMER' },
       refreshUser: mockRefreshUser,
     });
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it('renders change password inputs', () => {

@@ -1,4 +1,6 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cleanup } from '@testing-library/react';
 import tokenStore from '../../../shared/services/tokenStore';
 import {
   endSession,
@@ -14,6 +16,7 @@ describe('authBridge delegation to tokenStore', () => {
   });
 
   afterEach(() => {
+    cleanup();
     tokenStore.clear();
     sessionStorage.clear();
   });

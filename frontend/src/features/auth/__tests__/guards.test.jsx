@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as useAuthModule from '../hooks/useAuth';
 import GuestOnly from '../guards/GuestOnly';
 import RequireAuth from '../guards/RequireAuth';
@@ -13,6 +13,10 @@ vi.mock('../hooks/useAuth');
 describe('Auth Guards', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   describe('RequireAuth', () => {

@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup } from '@testing-library/react';
 import {
   checkPasswordCriteria,
   formatPhoneDigits,
@@ -10,6 +12,10 @@ import {
 } from '../utils/validators';
 
 describe('validators', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   describe('validateEmail', () => {
     it('accepts valid email addresses', () => {
       expect(validateEmail('user@example.com')).toBeNull();

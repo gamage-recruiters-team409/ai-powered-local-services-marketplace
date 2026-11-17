@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as authApi from '../api/authApi';
 import VerifyEmailPage from '../pages/VerifyEmailPage';
 
@@ -10,6 +10,12 @@ vi.mock('../api/authApi');
 describe('VerifyEmailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState({}, '', '/');
+  });
+
+  afterEach(() => {
+    cleanup();
+    window.history.replaceState({}, '', '/');
   });
 
   it('shows error if no token is provided in URL', async () => {
@@ -23,12 +29,15 @@ describe('VerifyEmailPage', () => {
       expect(screen.getByText(/no verification token found/i)).toBeTruthy();
       expect(screen.getByRole('heading', { name: /verification failed/i })).toBeTruthy();
     });
+    expect(authApi.verifyEmail).not.toHaveBeenCalled();
   });
 
-  it('verifies token and shows success screen', async () => {
+  it('verifies token exactly once, shows success screen, and strips token from URL', async () => {
     authApi.verifyEmail.mockResolvedValueOnce({
       message: 'Email verified successfully!',
     });
+
+    window.history.replaceState({}, '', '/verify-email?token=valid-tok');
 
     render(
       <MemoryRouter initialEntries={['/verify-email?token=valid-tok']}>
@@ -37,10 +46,13 @@ describe('VerifyEmailPage', () => {
     );
 
     await waitFor(() => {
+      expect(authApi.verifyEmail).toHaveBeenCalledTimes(1);
       expect(authApi.verifyEmail).toHaveBeenCalledWith('valid-tok');
       expect(screen.getByRole('heading', { name: /email verified!/i })).toBeTruthy();
       expect(screen.getByRole('link', { name: /continue to login/i })).toBeTruthy();
     });
+
+    expect(window.location.search).not.toContain('token=');
   });
 
   it('shows failure screen when token is expired or invalid', async () => {

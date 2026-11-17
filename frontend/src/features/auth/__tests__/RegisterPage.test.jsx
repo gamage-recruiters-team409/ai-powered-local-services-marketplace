@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as useAuthModule from '../hooks/useAuth';
 import RegisterPage from '../pages/RegisterPage';
 
@@ -17,6 +17,10 @@ describe('RegisterPage', () => {
     });
   });
 
+  afterEach(() => {
+    cleanup();
+  });
+
   it('renders registration form fields and allows role selection', () => {
     render(
       <MemoryRouter>
@@ -29,7 +33,7 @@ describe('RegisterPage', () => {
     expect(screen.getByPlaceholderText(/name@example\.lk/i)).toBeTruthy();
     expect(screen.getByPlaceholderText(/77 123 4567/i)).toBeTruthy();
     expect(screen.getByPlaceholderText(/create a password/i)).toBeTruthy();
-    expect(screen.getByLabelText(/terms of service/i)).toBeTruthy();
+    expect(screen.getByRole('checkbox')).toBeTruthy();
 
     const providerCard = screen.getByRole('button', { name: /provider/i });
     fireEvent.click(providerCard);
@@ -74,7 +78,7 @@ describe('RegisterPage', () => {
     fireEvent.change(screen.getByPlaceholderText(/create a password/i), {
       target: { value: 'ValidPass123!' },
     });
-    fireEvent.click(screen.getByLabelText(/terms of service/i));
+    fireEvent.click(screen.getByRole('checkbox'));
 
     fireEvent.click(screen.getByRole('button', { name: /create account/i }));
 

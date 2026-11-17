@@ -31,13 +31,17 @@ const STATUS = {
 
 export default function VerifyEmailPage() {
   const [searchParams] = useSearchParams();
+  const tokenParam =
+    searchParams.get('token') ||
+    (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('token') : null);
+  const tokenRef = useRef(tokenParam);
   const [status, setStatus] = useState(STATUS.LOADING);
   const [message, setMessage] = useState('');
   const calledRef = useRef(false);
 
   // Strip the token from the URL immediately (security: prevent referrer leakage)
   useEffect(() => {
-    if (window.location.search.includes('token=')) {
+    if (typeof window !== 'undefined' && window.location.search.includes('token=')) {
       const cleanUrl = window.location.pathname;
       window.history.replaceState({}, '', cleanUrl);
     }
@@ -80,7 +84,7 @@ export default function VerifyEmailPage() {
     if (calledRef.current) return;
     calledRef.current = true;
 
-    const token = searchParams.get('token');
+    const token = tokenRef.current;
     if (!token) {
       setMessage('No verification token found. Please check the link in your email.');
       setStatus(STATUS.ERROR);
@@ -88,7 +92,7 @@ export default function VerifyEmailPage() {
     }
 
     verifyToken(token);
-  }, [searchParams, verifyToken]);
+  }, [verifyToken]);
 
   if (status === STATUS.LOADING) {
     return (

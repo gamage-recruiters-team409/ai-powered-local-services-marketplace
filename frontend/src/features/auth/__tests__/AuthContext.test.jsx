@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { act, renderHook } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import tokenStore from '../../../shared/services/tokenStore';
 import * as authApi from '../api/authApi';
 import { AuthProvider } from '../context/AuthContext';
@@ -12,6 +12,11 @@ describe('AuthContext', () => {
   beforeEach(() => {
     tokenStore.clear();
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+    tokenStore.clear();
   });
 
   it('restores session when refresh token is present in storage', async () => {
@@ -33,12 +38,10 @@ describe('AuthContext', () => {
 
     expect(result.current.isLoading).toBe(true);
 
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
     });
 
-    expect(result.current.isLoading).toBe(false);
     expect(result.current.isAuthenticated).toBe(true);
     expect(result.current.user?.name).toBe('Kasun');
     expect(tokenStore.getAccessToken()).toBe('new-acc');
@@ -50,11 +53,10 @@ describe('AuthContext', () => {
       wrapper: AuthProvider,
     });
 
-    await act(async () => {
-      await Promise.resolve();
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
     });
 
-    expect(result.current.isLoading).toBe(false);
     expect(result.current.isAuthenticated).toBe(false);
     expect(result.current.user).toBeNull();
   });
@@ -75,8 +77,8 @@ describe('AuthContext', () => {
       wrapper: AuthProvider,
     });
 
-    await act(async () => {
-      await Promise.resolve();
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
     });
 
     await act(async () => {
@@ -94,6 +96,10 @@ describe('AuthContext', () => {
 
     const { result } = renderHook(() => useAuth(), {
       wrapper: AuthProvider,
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
     });
 
     await act(async () => {

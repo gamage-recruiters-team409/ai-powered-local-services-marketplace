@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup } from '@testing-library/react';
 import apiClient from '../../../shared/services/apiClient';
 import * as authApi from '../api/authApi';
 
@@ -12,6 +14,10 @@ vi.mock('../../../shared/services/apiClient', () => ({
 describe('authApi', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
   });
 
   it('calls POST /auth/login with credentials', async () => {

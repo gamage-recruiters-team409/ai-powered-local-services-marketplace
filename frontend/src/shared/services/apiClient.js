@@ -47,6 +47,11 @@ export function notifySessionExpired() {
 // Single-flight refresh coordination
 let refreshPromise = null;
 
+export function __resetForTests() {
+  refreshPromise = null;
+  sessionExpiredListeners.clear();
+}
+
 async function executeTokenRefresh() {
   const currentRefreshToken = tokenStore.getRefreshToken();
   if (!currentRefreshToken) {

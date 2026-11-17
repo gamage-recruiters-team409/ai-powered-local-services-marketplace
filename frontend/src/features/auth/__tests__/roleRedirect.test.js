@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup } from '@testing-library/react';
 import {
   DEFAULT_ADMIN_HOME,
   DEFAULT_CUSTOMER_HOME,
@@ -7,6 +9,10 @@ import {
 } from '../utils/roleRedirect';
 
 describe('roleRedirect', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   it('directs ADMIN and SUPER_ADMIN to /admin', () => {
     expect(getRoleHomePath('ADMIN')).toBe(DEFAULT_ADMIN_HOME);
     expect(getRoleHomePath('SUPER_ADMIN')).toBe(DEFAULT_ADMIN_HOME);

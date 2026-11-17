@@ -1,4 +1,6 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cleanup } from '@testing-library/react';
 import tokenStore from '../tokenStore';
 
 describe('tokenStore', () => {
@@ -8,6 +10,7 @@ describe('tokenStore', () => {
   });
 
   afterEach(() => {
+    cleanup();
     tokenStore.clear();
     localStorage.clear();
   });

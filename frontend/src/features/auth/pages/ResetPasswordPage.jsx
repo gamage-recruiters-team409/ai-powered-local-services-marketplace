@@ -44,7 +44,10 @@ const STATUS = {
 
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
-  const tokenRef = useRef(searchParams.get('token'));
+  const tokenParam =
+    searchParams.get('token') ||
+    (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('token') : null);
+  const tokenRef = useRef(tokenParam);
 
   const [password, setPassword] = useState('');
   const [passwordError, setPasswordError] = useState(null);
@@ -56,7 +59,7 @@ export default function ResetPasswordPage() {
 
   // Strip token from URL immediately
   useEffect(() => {
-    if (window.location.search.includes('token=')) {
+    if (typeof window !== 'undefined' && window.location.search.includes('token=')) {
       const cleanUrl = window.location.pathname;
       window.history.replaceState({}, '', cleanUrl);
     }
