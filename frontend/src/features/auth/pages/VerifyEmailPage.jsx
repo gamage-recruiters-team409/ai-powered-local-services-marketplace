@@ -39,8 +39,10 @@ function readTokenFromUrl(searchParams) {
 export default function VerifyEmailPage() {
   const [searchParams] = useSearchParams();
   const [token] = useState(() => readTokenFromUrl(searchParams));
-  const [status, setStatus] = useState(STATUS.LOADING);
-  const [message, setMessage] = useState('');
+  const [status, setStatus] = useState(() => (token ? STATUS.LOADING : STATUS.ERROR));
+  const [message, setMessage] = useState(() =>
+    token ? '' : 'No verification token found. Please check the link in your email.'
+  );
   const calledRef = useRef(false);
 
   // Strip the token from the URL immediately (security: prevent referrer leakage)
@@ -88,11 +90,7 @@ export default function VerifyEmailPage() {
     if (calledRef.current) return;
     calledRef.current = true;
 
-    if (!token) {
-      setMessage('No verification token found. Please check the link in your email.');
-      setStatus(STATUS.ERROR);
-      return;
-    }
+    if (!token) return;
 
     verifyToken(token);
   }, [token, verifyToken]);
