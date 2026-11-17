@@ -50,8 +50,9 @@ This document details the backend design, API specification, security policies, 
        |                                       |-- checkResetPassword(clientIp) ----->|                                     |
        |                                       |-- resetPassword(token, newPass) ---->|                                     |
        |                                       |                                      |-- validate password complexity ---->|
-       |                                       |                                      |-- atomic consumeValidToken() ------>|
+       |                                       |                                      |-- lookup & validate token/user ---->|
        |                                       |                                      |-- verify not SAME_PASSWORD -------->|
+       |                                       |                                      |-- atomic consumeValidToken() ------>|
        |                                       |                                      |-- update passwordHash, status=ACTIVE|
        |                                       |                                      |-- clear failedLoginCount & lockout->|
        |                                       |                                      |-- revokeAllActiveTokens(REFRESH) -->|

@@ -216,7 +216,8 @@ public class EmailTokenServiceImpl implements EmailTokenService {
         String tokenHash = tokenService.hashToken(rawToken);
         Instant now = Instant.now();
 
-        AuthToken token = authTokenRepository.consumeValidToken(tokenHash, TokenType.PASSWORD_RESET, now)
+        AuthToken token = authTokenRepository.findByTokenHash(tokenHash)
+                .filter(t -> t.getType() == TokenType.PASSWORD_RESET && t.isValid())
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "INVALID_OR_EXPIRED_TOKEN", INVALID_TOKEN_MSG));
 
         User user = userRepository.findById(token.getUserId())
@@ -229,6 +230,9 @@ public class EmailTokenServiceImpl implements EmailTokenService {
         if (passwordEncoder.matches(newPassword, user.getPasswordHash())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "SAME_PASSWORD", "New password cannot be the same as the current password");
         }
+
+        authTokenRepository.consumeValidToken(tokenHash, TokenType.PASSWORD_RESET, now)
+                .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "INVALID_OR_EXPIRED_TOKEN", INVALID_TOKEN_MSG));
 
         user.setPasswordHash(passwordEncoder.encode(newPassword));
         user.setMustChangePassword(false);

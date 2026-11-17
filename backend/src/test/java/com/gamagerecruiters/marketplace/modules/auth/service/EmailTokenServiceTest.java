@@ -380,6 +380,7 @@ class EmailTokenServiceTest {
         when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
 
         AuthToken token = new AuthToken("u123", TokenType.PASSWORD_RESET, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
+        when(authTokenRepository.findByTokenHash(tokenHash)).thenReturn(Optional.of(token));
         when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
                 .thenReturn(Optional.of(token));
 
@@ -409,7 +410,7 @@ class EmailTokenServiceTest {
     }
 
     @Test
-    @DisplayName("resetPassword throws 400 SAME_PASSWORD when new password matches current password")
+    @DisplayName("resetPassword throws 400 SAME_PASSWORD when new password matches current password without consuming token")
     void resetPassword_samePassword_throws400() {
         String rawToken = "valid-reset-token";
         String tokenHash = "valid-reset-hash";
@@ -417,8 +418,7 @@ class EmailTokenServiceTest {
         when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
 
         AuthToken token = new AuthToken("u123", TokenType.PASSWORD_RESET, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
-        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
-                .thenReturn(Optional.of(token));
+        when(authTokenRepository.findByTokenHash(tokenHash)).thenReturn(Optional.of(token));
 
         User user = new User();
         user.setId("u123");
@@ -432,6 +432,7 @@ class EmailTokenServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertEquals("SAME_PASSWORD", ex.getErrorCode());
         verify(userRepository, never()).save(any());
+        verify(authTokenRepository, never()).consumeValidToken(anyString(), any(), any());
     }
 
     @Test
@@ -454,13 +455,28 @@ class EmailTokenServiceTest {
     }
 
     @Test
-    @DisplayName("resetPassword throws 400 INVALID_OR_EXPIRED_TOKEN on token consumption failure")
+    @DisplayName("resetPassword throws 400 INVALID_OR_EXPIRED_TOKEN on token lookup failure")
     void resetPassword_invalidToken_throws400() {
         when(tokenService.hashToken("bad-token")).thenReturn("bad-hash");
-        when(authTokenRepository.consumeValidToken(eq("bad-hash"), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
-                .thenReturn(Optional.empty());
+        when(authTokenRepository.findByTokenHash("bad-hash")).thenReturn(Optional.empty());
 
         ApiException ex = assertThrows(ApiException.class, () -> emailTokenService.resetPassword("bad-token", "ValidPassword123"));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        assertEquals("INVALID_OR_EXPIRED_TOKEN", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("resetPassword throws 400 INVALID_OR_EXPIRED_TOKEN when token is expired")
+    void resetPassword_expiredToken_throws400() {
+        String rawToken = "expired-token";
+        String tokenHash = "expired-hash";
+
+        when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
+
+        AuthToken expiredToken = new AuthToken("u123", TokenType.PASSWORD_RESET, tokenHash, Instant.now().minus(1, ChronoUnit.HOURS), Instant.now().minus(2, ChronoUnit.HOURS));
+        when(authTokenRepository.findByTokenHash(tokenHash)).thenReturn(Optional.of(expiredToken));
+
+        ApiException ex = assertThrows(ApiException.class, () -> emailTokenService.resetPassword(rawToken, "ValidPassword123!"));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertEquals("INVALID_OR_EXPIRED_TOKEN", ex.getErrorCode());
     }

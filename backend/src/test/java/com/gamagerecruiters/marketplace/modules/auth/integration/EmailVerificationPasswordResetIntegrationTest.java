@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.auth.integration;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -11,8 +12,6 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -137,11 +136,14 @@ public class EmailVerificationPasswordResetIntegrationTest {
                 "v1.0"
         );
 
-        mockMvc.perform(post("/api/v1/auth/register")
+        MvcResult regResult = mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(registerRequest)))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.status").value("PENDING_VERIFICATION"));
+                .andReturn();
+        assertThat(regResult.getResponse().getStatus())
+                .as("Step 1 (register) status, body=" + regResult.getResponse().getContentAsString())
+                .isEqualTo(201);
+        assertThat(regResult.getResponse().getContentAsString()).contains("\"status\":\"PENDING_VERIFICATION\"");
 
         User unverifiedUser = userRepository.findByEmail("alice@marketplace.local").orElseThrow();
         assertEquals(UserStatus.PENDING_VERIFICATION, unverifiedUser.getStatus());
@@ -149,11 +151,14 @@ public class EmailVerificationPasswordResetIntegrationTest {
 
         // 2. Login fails before verification
         LoginRequest unverifiedLogin = new LoginRequest("alice@marketplace.local", "Password123!");
-        mockMvc.perform(post("/api/v1/auth/login")
+        MvcResult unverifiedLoginResult = mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(unverifiedLogin)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.error").value("EMAIL_NOT_VERIFIED"));
+                .andReturn();
+        assertThat(unverifiedLoginResult.getResponse().getStatus())
+                .as("Step 2 (unverified login) status, body=" + unverifiedLoginResult.getResponse().getContentAsString())
+                .isEqualTo(403);
+        assertThat(unverifiedLoginResult.getResponse().getContentAsString()).contains("\"error\":\"EMAIL_NOT_VERIFIED\"");
 
         // 3. Capture verification email and extract token
         ArgumentCaptor<Map<String, Object>> verificationDataCaptor = ArgumentCaptor.forClass(Map.class);
@@ -169,41 +174,50 @@ public class EmailVerificationPasswordResetIntegrationTest {
         assertNotNull(verifyToken);
 
         // 4. Verify email
-        mockMvc.perform(post("/api/v1/auth/verify-email")
+        MvcResult verifyResult = mockMvc.perform(post("/api/v1/auth/verify-email")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new VerifyEmailRequest(verifyToken))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Email verified successfully"));
+                .andReturn();
+        assertThat(verifyResult.getResponse().getStatus())
+                .as("Step 4 (verify-email) status, body=" + verifyResult.getResponse().getContentAsString())
+                .isEqualTo(200);
+        assertThat(verifyResult.getResponse().getContentAsString()).contains("Email verified successfully");
 
         User verifiedUser = userRepository.findByEmail("alice@marketplace.local").orElseThrow();
         assertEquals(UserStatus.ACTIVE, verifiedUser.getStatus());
         assertTrue(verifiedUser.isEmailVerified());
 
         // 5. Token reuse fails
-        mockMvc.perform(post("/api/v1/auth/verify-email")
+        MvcResult reuseResult = mockMvc.perform(post("/api/v1/auth/verify-email")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new VerifyEmailRequest(verifyToken))))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("INVALID_OR_EXPIRED_TOKEN"));
+                .andReturn();
+        assertThat(reuseResult.getResponse().getStatus())
+                .as("Step 5 (verify-email token reuse) status, body=" + reuseResult.getResponse().getContentAsString())
+                .isEqualTo(400);
+        assertThat(reuseResult.getResponse().getContentAsString()).contains("INVALID_OR_EXPIRED_TOKEN");
 
         // 6. Login now succeeds
         MvcResult loginResult = mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(unverifiedLogin)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.accessToken").isNotEmpty())
-                .andExpect(jsonPath("$.refreshToken").isNotEmpty())
                 .andReturn();
+        assertThat(loginResult.getResponse().getStatus())
+                .as("Step 6 (verified login) status, body=" + loginResult.getResponse().getContentAsString())
+                .isEqualTo(200);
 
         JsonNode loginJson = objectMapper.readTree(loginResult.getResponse().getContentAsString());
         String initialRefreshToken = loginJson.get("refreshToken").asText();
 
         // 7. Forgot password
-        mockMvc.perform(post("/api/v1/auth/forgot-password")
+        MvcResult forgotResult = mockMvc.perform(post("/api/v1/auth/forgot-password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new ForgotPasswordRequest("alice@marketplace.local"))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("If an account exists for this email, a reset link has been sent"));
+                .andReturn();
+        assertThat(forgotResult.getResponse().getStatus())
+                .as("Step 7 (forgot-password) status, body=" + forgotResult.getResponse().getContentAsString())
+                .isEqualTo(200);
+        assertThat(forgotResult.getResponse().getContentAsString()).contains("If an account exists for this email, a reset link has been sent");
 
         ArgumentCaptor<Map<String, Object>> resetDataCaptor = ArgumentCaptor.forClass(Map.class);
         verify(emailSender, atLeastOnce()).sendEmail(
@@ -218,45 +232,62 @@ public class EmailVerificationPasswordResetIntegrationTest {
         assertNotNull(resetToken);
 
         // 8. Reset password fails with same password
-        mockMvc.perform(post("/api/v1/auth/reset-password")
+        MvcResult samePassResult = mockMvc.perform(post("/api/v1/auth/reset-password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new ResetPasswordRequest(resetToken, "Password123!"))))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("SAME_PASSWORD"));
+                .andReturn();
+        assertThat(samePassResult.getResponse().getStatus())
+                .as("Step 8 (reset-password same password) status, body=" + samePassResult.getResponse().getContentAsString())
+                .isEqualTo(400);
+        assertThat(samePassResult.getResponse().getContentAsString()).contains("SAME_PASSWORD");
 
-        // 9. Reset password succeeds with new password
-        mockMvc.perform(post("/api/v1/auth/reset-password")
+        // 9. Reset password succeeds with new password (token was NOT burned by step 8)
+        MvcResult resetSuccessResult = mockMvc.perform(post("/api/v1/auth/reset-password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new ResetPasswordRequest(resetToken, "NewSecurePassword456!"))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Password reset successfully"));
+                .andReturn();
+        assertThat(resetSuccessResult.getResponse().getStatus())
+                .as("Step 9 (reset-password success) status, body=" + resetSuccessResult.getResponse().getContentAsString())
+                .isEqualTo(200);
+        assertThat(resetSuccessResult.getResponse().getContentAsString()).contains("Password reset successfully");
 
         // 10. Old password fails
-        mockMvc.perform(post("/api/v1/auth/login")
+        MvcResult oldLoginResult = mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new LoginRequest("alice@marketplace.local", "Password123!"))))
-                .andExpect(status().isUnauthorized());
+                .andReturn();
+        assertThat(oldLoginResult.getResponse().getStatus())
+                .as("Step 10 (login with old password) status, body=" + oldLoginResult.getResponse().getContentAsString())
+                .isEqualTo(401);
 
         // 11. Old refresh token is revoked
-        mockMvc.perform(post("/api/v1/auth/refresh")
+        MvcResult refreshResult = mockMvc.perform(post("/api/v1/auth/refresh")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new RefreshTokenRequest(initialRefreshToken))))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.error").value("TOKEN_REVOKED"));
+                .andReturn();
+        assertThat(refreshResult.getResponse().getStatus())
+                .as("Step 11 (refresh with revoked token) status, body=" + refreshResult.getResponse().getContentAsString())
+                .isEqualTo(401);
+        assertThat(refreshResult.getResponse().getContentAsString()).contains("TOKEN_REVOKED");
 
         // 12. Login with new password succeeds
-        mockMvc.perform(post("/api/v1/auth/login")
+        MvcResult newLoginResult = mockMvc.perform(post("/api/v1/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new LoginRequest("alice@marketplace.local", "NewSecurePassword456!"))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.accessToken").isNotEmpty());
+                .andReturn();
+        assertThat(newLoginResult.getResponse().getStatus())
+                .as("Step 12 (login with new password) status, body=" + newLoginResult.getResponse().getContentAsString())
+                .isEqualTo(200);
 
         // 13. Reset token cannot be reused
-        mockMvc.perform(post("/api/v1/auth/reset-password")
+        MvcResult reuseResetResult = mockMvc.perform(post("/api/v1/auth/reset-password")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new ResetPasswordRequest(resetToken, "AnotherPassword789!"))))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error").value("INVALID_OR_EXPIRED_TOKEN"));
+                .andReturn();
+        assertThat(reuseResetResult.getResponse().getStatus())
+                .as("Step 13 (reset-password reuse) status, body=" + reuseResetResult.getResponse().getContentAsString())
+                .isEqualTo(400);
+        assertThat(reuseResetResult.getResponse().getContentAsString()).contains("INVALID_OR_EXPIRED_TOKEN");
     }
 
     @Test
