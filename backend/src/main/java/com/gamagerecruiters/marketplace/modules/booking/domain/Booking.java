@@ -14,8 +14,7 @@ import com.gamagerecruiters.marketplace.common.exception.ResourceConflictExcepti
  * A customer's booking of a provider's listing for one time slot.
  * All timestamps are stored in UTC (FR-SCHD-004).
  *
- * <p>This is the domain foundation only. Fields such as service address and price snapshot
- * are added with the booking request feature.
+ * <p>The price snapshot (FR-BOOK-003) is added when the listing module is available.
  */
 @Document(collection = "bookings")
 public class Booking {
@@ -35,6 +34,16 @@ public class Booking {
 
     private Instant slotStart;
     private Instant slotEnd;
+    private int durationMinutes;
+
+    /** Copy of the service address at request time; later address edits do not change the booking. */
+    private BookingAddress address;
+
+    /** Customer notes for the provider (optional). */
+    private String notes;
+
+    /** C-02: provider must respond before the earlier of 12 h after the request or 1 h before the start. */
+    private Instant responseDeadline;
 
     private BookingStatus status;
     private List<BookingStatusChange> timeline = new ArrayList<>();
@@ -123,6 +132,38 @@ public class Booking {
 
     public void setSlotEnd(Instant slotEnd) {
         this.slotEnd = slotEnd;
+    }
+
+    public int getDurationMinutes() {
+        return durationMinutes;
+    }
+
+    public void setDurationMinutes(int durationMinutes) {
+        this.durationMinutes = durationMinutes;
+    }
+
+    public BookingAddress getAddress() {
+        return address;
+    }
+
+    public void setAddress(BookingAddress address) {
+        this.address = address;
+    }
+
+    public String getNotes() {
+        return notes;
+    }
+
+    public void setNotes(String notes) {
+        this.notes = notes;
+    }
+
+    public Instant getResponseDeadline() {
+        return responseDeadline;
+    }
+
+    public void setResponseDeadline(Instant responseDeadline) {
+        this.responseDeadline = responseDeadline;
     }
 
     public BookingStatus getStatus() {
