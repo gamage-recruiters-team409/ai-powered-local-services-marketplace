@@ -22,18 +22,13 @@ import com.mongodb.client.model.Indexes;
  * entries.
  *
  * <p>
- * Each financial event must have a unique event key to prevent
- * duplicate ledger entries, including concurrent duplicate inserts.
+ * The event-key index enforces event idempotency, while the provider
+ * sequence index protects deterministic financial processing order.
  * </p>
  *
  * <p>
  * Existing incompatible indexes are never dropped automatically.
- * Manual database migration is required to protect financial records.
- * </p>
- *
- * <p>
- * Database uniqueness does not enforce append-only behavior.
- * Controlled persistence services must prevent updates and deletions.
+ * Manual migration is required to protect financial records.
  * </p>
  */
 @Component
@@ -42,6 +37,11 @@ public class EarningsLedgerIndexInitializer {
 
     static final String LEDGER_COLLECTION = "earnings_ledger";
     static final String EVENT_KEY_INDEX = "eventKey_1";
+
+    /**
+     * Unique processing sequence within each provider and currency.
+     */
+    static final String PROVIDER_SEQUENCE_INDEX = "providerId_1_currency_1_sequenceNumber_1";
 
     private static final Logger log = LoggerFactory.getLogger(EarningsLedgerIndexInitializer.class);
 
@@ -52,26 +52,23 @@ public class EarningsLedgerIndexInitializer {
     }
 
     /**
-     * Verifies the unique financial event index when the application is ready.
+     * Verifies required financial indexes during application startup.
      *
-     * @throws IllegalStateException if index creation or verification fails
+     * @throws IllegalStateException if a required index cannot be
+     *                               created or verified
      */
     @EventListener(ApplicationReadyEvent.class)
     public void initializeIndexes() {
         log.info("Initializing MongoDB indexes for earnings ledger...");
 
         ensureEventKeyIndex();
+        ensureProviderSequenceIndex();
 
         log.info("Earnings ledger indexes verified successfully.");
     }
 
     /**
-     * Creates the unique event-key index if it is missing, or validates
-     * the existing index without modifying financial records.
-     *
-     * @throws IllegalStateException if an incompatible index is found,
-     *                               duplicate event keys exist, or MongoDB
-     *                               operations fail
+     * Creates or verifies the unique event-key index.
      */
     void ensureEventKeyIndex() {
         try {
@@ -85,22 +82,18 @@ public class EarningsLedgerIndexInitializer {
 
             if (existing == null) {
 
-                // A differently named index on the same field may conflict
-                // with the expected unique-index configuration.
+                // Do not silently replace a differently configured index.
                 Document conflicting = findByField(indexes, "eventKey");
 
                 if (conflicting != null) {
-                    throw incompatible(conflicting);
+                    throw incompatible(EVENT_KEY_INDEX, conflicting);
                 }
-
-                // Enforce uniqueness for every ledger event key.
-                IndexOptions options = new IndexOptions()
-                        .name(EVENT_KEY_INDEX)
-                        .unique(true);
 
                 collection.createIndex(
                         Indexes.ascending("eventKey"),
-                        options);
+                        new IndexOptions()
+                                .name(EVENT_KEY_INDEX)
+                                .unique(true));
 
                 indexes = collection.listIndexes().into(new ArrayList<>());
                 existing = findByName(indexes, EVENT_KEY_INDEX);
@@ -112,13 +105,11 @@ public class EarningsLedgerIndexInitializer {
                 }
             }
 
-            // Reject incorrect index definitions instead of silently
-            // modifying or deleting existing financial database indexes.
-            if (!hasExpectedKey(existing)
+            if (!hasExpectedEventKey(existing)
                     || !hasExpectedUniqueness(existing)
                     || existing.containsKey("partialFilterExpression")
                     || existing.containsKey("sparse")) {
-                throw incompatible(existing);
+                throw incompatible(EVENT_KEY_INDEX, existing);
             }
 
             log.info(
@@ -126,22 +117,101 @@ public class EarningsLedgerIndexInitializer {
                     EVENT_KEY_INDEX,
                     existing.toJson());
 
-        } catch (IllegalStateException e) {
-            throw e;
-        } catch (Exception e) {
+        } catch (IllegalStateException exception) {
+            throw exception;
+        } catch (Exception exception) {
             throw new IllegalStateException(
                     "Unable to create or verify earnings ledger index '"
-                            + EVENT_KEY_INDEX
-                            + "'. Check MongoDB connectivity, existing indexes, "
-                            + "and duplicate event keys.",
-                    e);
+                            + EVENT_KEY_INDEX + "'.",
+                    exception);
         }
     }
 
     /**
-     * Creates the earnings ledger collection when it does not exist.
+     * Creates or verifies the provider-scoped unique processing index.
      *
-     * Handles concurrent collection creation without deleting data.
+     * <p>
+     * The partial filter excludes legacy ledger records that do not
+     * contain a numeric sequenceNumber. Existing financial documents
+     * are not modified or deleted.
+     * </p>
+     */
+    void ensureProviderSequenceIndex() {
+        try {
+            ensureCollectionExists();
+
+            MongoCollection<Document> collection = mongoTemplate.getCollection(LEDGER_COLLECTION);
+
+            List<Document> indexes = collection.listIndexes().into(new ArrayList<>());
+
+            Document existing = findByName(indexes, PROVIDER_SEQUENCE_INDEX);
+
+            // Apply uniqueness only to sequenced financial events.
+            Document expectedFilter = new Document(
+                    "sequenceNumber",
+                    new Document("$type", "number"));
+
+            if (existing == null) {
+
+                // Reject an existing index with the same key pattern
+                // but an incompatible name or configuration.
+                for (Document index : indexes) {
+                    if (hasExpectedProviderSequenceKey(index)) {
+                        throw incompatible(PROVIDER_SEQUENCE_INDEX, index);
+                    }
+                }
+
+                collection.createIndex(
+                        Indexes.ascending(
+                                "providerId",
+                                "currency",
+                                "sequenceNumber"),
+                        new IndexOptions()
+                                .name(PROVIDER_SEQUENCE_INDEX)
+                                .unique(true)
+                                .partialFilterExpression(expectedFilter));
+
+                indexes = collection.listIndexes().into(new ArrayList<>());
+                existing = findByName(
+                        indexes,
+                        PROVIDER_SEQUENCE_INDEX);
+
+                if (existing == null) {
+                    throw new IllegalStateException(
+                            "Provider sequence index was not found "
+                                    + "after creation.");
+                }
+            }
+
+            Document actualFilter = existing.get("partialFilterExpression", Document.class);
+
+            if (!hasExpectedProviderSequenceKey(existing)
+                    || !hasExpectedUniqueness(existing)
+                    || !expectedFilter.equals(actualFilter)
+                    || existing.containsKey("sparse")) {
+                throw incompatible(PROVIDER_SEQUENCE_INDEX, existing);
+            }
+
+            log.info(
+                    "Earnings ledger index verified: {} -> {}",
+                    PROVIDER_SEQUENCE_INDEX,
+                    existing.toJson());
+
+        } catch (IllegalStateException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new IllegalStateException(
+                    "Unable to create or verify earnings ledger index '"
+                            + PROVIDER_SEQUENCE_INDEX + "'.",
+                    exception);
+        }
+    }
+
+    /**
+     * Creates the ledger collection if it does not already exist.
+     *
+     * Concurrent collection creation is tolerated without deleting
+     * or modifying existing financial data.
      */
     private void ensureCollectionExists() {
         if (mongoTemplate.collectionExists(LEDGER_COLLECTION)) {
@@ -150,20 +220,26 @@ public class EarningsLedgerIndexInitializer {
 
         try {
             mongoTemplate.createCollection(LEDGER_COLLECTION);
+
             log.info("Collection created: {}", LEDGER_COLLECTION);
-        } catch (RuntimeException e) {
+
+        } catch (RuntimeException exception) {
             if (!mongoTemplate.collectionExists(LEDGER_COLLECTION)) {
-                throw e;
+                throw exception;
             }
 
-            log.info("Earnings ledger collection was created concurrently.");
+            log.info(
+                    "Earnings ledger collection was created concurrently.");
         }
     }
 
     /**
-     * Finds an index using its configured MongoDB index name.
+     * Finds an existing index by its MongoDB index name.
      */
-    private Document findByName(List<Document> indexes, String indexName) {
+    private Document findByName(
+            List<Document> indexes,
+            String indexName) {
+
         for (Document index : indexes) {
             if (indexName.equals(index.getString("name"))) {
                 return index;
@@ -174,9 +250,12 @@ public class EarningsLedgerIndexInitializer {
     }
 
     /**
-     * Finds an index whose key definition matches the eventKey field.
+     * Finds an index containing a specified field.
      */
-    private Document findByField(List<Document> indexes, String field) {
+    private Document findByField(
+            List<Document> indexes,
+            String field) {
+
         for (Document index : indexes) {
             Document key = index.get("key", Document.class);
 
@@ -189,23 +268,49 @@ public class EarningsLedgerIndexInitializer {
     }
 
     /**
-     * Verifies that the index contains only eventKey in ascending order.
+     * Verifies the expected single-field event-key index.
      */
-    private boolean hasExpectedKey(Document index) {
+    private boolean hasExpectedEventKey(Document index) {
         Document key = index.get("key", Document.class);
 
-        if (key == null || key.size() != 1) {
+        return key != null
+                && key.size() == 1
+                && isAscending(key, "eventKey");
+    }
+
+    /**
+     * Verifies the exact provider/currency/sequence index key order.
+     */
+    private boolean hasExpectedProviderSequenceKey(Document index) {
+        Document key = index.get("key", Document.class);
+
+        if (key == null || key.size() != 3) {
             return false;
         }
 
-        Object direction = key.get("eventKey");
+        List<String> fields = new ArrayList<>(key.keySet());
+
+        return fields.equals(List.of(
+                "providerId",
+                "currency",
+                "sequenceNumber"))
+                && isAscending(key, "providerId")
+                && isAscending(key, "currency")
+                && isAscending(key, "sequenceNumber");
+    }
+
+    /**
+     * Checks whether an indexed field uses ascending direction.
+     */
+    private boolean isAscending(Document key, String field) {
+        Object direction = key.get(field);
 
         return direction instanceof Number number
                 && number.intValue() == 1;
     }
 
     /**
-     * Verifies the database-level uniqueness constraint.
+     * Verifies that MongoDB enforces uniqueness.
      */
     private boolean hasExpectedUniqueness(Document index) {
         Object value = index.get("unique");
@@ -216,13 +321,17 @@ public class EarningsLedgerIndexInitializer {
     }
 
     /**
-     * Builds a descriptive error without dropping incompatible indexes.
+     * Reports incompatible indexes without automatically dropping them.
      */
-    private IllegalStateException incompatible(Document found) {
+    private IllegalStateException incompatible(
+            String expectedIndexName,
+            Document found) {
+
         return new IllegalStateException(
                 "Incompatible earnings ledger index '"
-                        + EVENT_KEY_INDEX
-                        + "' detected: " + found.toJson()
+                        + expectedIndexName
+                        + "' detected: "
+                        + found.toJson()
                         + ". Automatic index deletion is disabled "
                         + "to protect financial records. "
                         + "Manual database migration is required.");

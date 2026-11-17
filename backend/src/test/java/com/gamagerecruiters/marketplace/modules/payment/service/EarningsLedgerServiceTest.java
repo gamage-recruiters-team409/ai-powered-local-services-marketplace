@@ -13,203 +13,368 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.data.mongodb.core.MongoTemplate;
+
+import com.mongodb.MongoException;
 
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEntry;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEventType;
 import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
 
 /**
- * Unit tests for controlled earnings ledger persistence and retrieval.
+ * Unit tests for earnings ledger persistence and retrieval.
  *
  * <p>
- * Mockito isolates the service from MongoDB. Database-level index
- * behavior must be verified separately through integration tests.
+ * Mockito isolates the service from MongoDB and verifies that new
+ * financial events use the transactional persistence boundary.
+ * Actual transaction rollback, indexes, and concurrency behavior
+ * must be verified separately through MongoDB integration tests.
  * </p>
  */
 class EarningsLedgerServiceTest {
 
-    private EarningsLedgerRepository repository;
-    private MongoTemplate mongoTemplate;
-    private EarningsLedgerService service;
+        private EarningsLedgerRepository repository;
+        private EarningsLedgerTransactionService transactionService;
+        private EarningsLedgerService service;
 
-    @BeforeEach
-    void setUp() {
-        repository = mock(EarningsLedgerRepository.class);
-        mongoTemplate = mock(MongoTemplate.class);
-        service = new EarningsLedgerService(repository, mongoTemplate);
-    }
+        @BeforeEach
+        void setUp() {
+                repository = mock(EarningsLedgerRepository.class);
+                transactionService = mock(EarningsLedgerTransactionService.class);
 
-    @Test
-    void appendEventInsertsValidEntry() {
-        EarningsLedgerEntry entry = validEntry();
+                service = new EarningsLedgerService(
+                                repository, transactionService);
+        }
 
-        when(repository.findByEventKey("event-001"))
-                .thenReturn(Optional.empty());
-        when(mongoTemplate.insert(entry)).thenReturn(entry);
+        @Test
+        void appendEventInsertsValidEntry() {
+                EarningsLedgerEntry entry = validEntry();
 
-        EarningsLedgerEntry result = service.appendEvent(entry);
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.empty());
 
-        assertSame(entry, result);
-        verify(mongoTemplate).insert(entry);
-    }
+                when(transactionService.appendAtomically(
+                                any(EarningsLedgerEntry.class)))
+                                .thenAnswer(invocation -> invocation.getArgument(0));
 
-    @Test
-    void appendEventReturnsExistingMatchingEntry() {
-        EarningsLedgerEntry existing = validEntry();
-        existing.setId("ledger-001");
+                EarningsLedgerEntry result = service.appendEvent(entry);
 
-        EarningsLedgerEntry retry = validEntry();
-        retry.setCreatedAt(Instant.parse("2026-11-16T12:00:00Z"));
+                assertNotNull(result);
+                assertEquals(entry.getEventKey(), result.getEventKey());
+                assertEquals(entry.getAmount(), result.getAmount());
 
-        when(repository.findByEventKey("event-001"))
-                .thenReturn(Optional.of(existing));
+                // Persistence must use the transaction service.
+                verify(transactionService).appendAtomically(
+                                any(EarningsLedgerEntry.class));
 
-        EarningsLedgerEntry result = service.appendEvent(retry);
+                // The original request must not be persisted directly.
+                assertNotSame(entry, result);
+                assertNull(entry.getId());
+                assertNull(entry.getSequenceNumber());
+        }
 
-        assertSame(existing, result);
-        verify(mongoTemplate, never()).insert(any(EarningsLedgerEntry.class));
-    }
+        @Test
+        void appendEventReturnsExistingMatchingEntry() {
+                EarningsLedgerEntry existing = validEntry();
+                existing.setId("ledger-001");
+                existing.setSequenceNumber(1L);
 
-    @Test
-    void appendEventRejectsConflictingFinancialData() {
-        EarningsLedgerEntry existing = validEntry();
-        existing.setAmount(new BigDecimal("1000.00"));
+                EarningsLedgerEntry retry = validEntry();
+                retry.setCreatedAt(
+                                Instant.parse("2026-11-16T12:00:00Z"));
 
-        EarningsLedgerEntry conflicting = validEntry();
-        conflicting.setAmount(new BigDecimal("2000.00"));
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.of(existing));
 
-        when(repository.findByEventKey("event-001"))
-                .thenReturn(Optional.of(existing));
+                EarningsLedgerEntry result = service.appendEvent(retry);
 
-        assertThrows(
-                IllegalStateException.class,
-                () -> service.appendEvent(conflicting));
+                assertSame(existing, result);
+                verifyNoInteractions(transactionService);
+        }
 
-        verify(mongoTemplate, never()).insert(any(EarningsLedgerEntry.class));
-    }
+        @Test
+        void appendEventRejectsConflictingFinancialData() {
+                EarningsLedgerEntry existing = validEntry();
+                existing.setAmount(new BigDecimal("1000.00"));
 
-    @Test
-    void appendEventHandlesConcurrentDuplicateInsert() {
-        EarningsLedgerEntry entry = validEntry();
-        EarningsLedgerEntry existing = validEntry();
-        existing.setId("ledger-001");
+                EarningsLedgerEntry conflicting = validEntry();
+                conflicting.setAmount(new BigDecimal("2000.00"));
 
-        when(repository.findByEventKey("event-001"))
-                .thenReturn(Optional.empty(), Optional.of(existing));
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.of(existing));
 
-        when(mongoTemplate.insert(entry))
-                .thenThrow(new DuplicateKeyException("Duplicate event key"));
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> service.appendEvent(conflicting));
 
-        EarningsLedgerEntry result = service.appendEvent(entry);
+                verifyNoInteractions(transactionService);
+        }
 
-        assertSame(existing, result);
-        verify(mongoTemplate).insert(entry);
-    }
+        @Test
+        void appendEventHandlesConcurrentDuplicateInsert() {
+                EarningsLedgerEntry entry = validEntry();
 
-    @Test
-    void appendEventRejectsConcurrentConflictingEvent() {
-        EarningsLedgerEntry entry = validEntry();
+                EarningsLedgerEntry existing = validEntry();
+                existing.setId("ledger-001");
+                existing.setSequenceNumber(1L);
 
-        EarningsLedgerEntry conflicting = validEntry();
-        conflicting.setAmount(new BigDecimal("999.00"));
+                // First lookup finds nothing; second finds the competing insert.
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(
+                                                Optional.empty(),
+                                                Optional.of(existing));
 
-        when(repository.findByEventKey("event-001"))
-                .thenReturn(Optional.empty(), Optional.of(conflicting));
+                when(transactionService.appendAtomically(
+                                any(EarningsLedgerEntry.class)))
+                                .thenThrow(
+                                                new DuplicateKeyException("Duplicate event key"));
 
-        when(mongoTemplate.insert(entry))
-                .thenThrow(new DuplicateKeyException("Duplicate event key"));
+                EarningsLedgerEntry result = service.appendEvent(entry);
 
-        assertThrows(
-                IllegalStateException.class,
-                () -> service.appendEvent(entry));
-    }
+                assertSame(existing, result);
 
-    @Test
-    void appendEventPropagatesUnrelatedDuplicateKeyException() {
-        EarningsLedgerEntry entry = validEntry();
+                verify(transactionService).appendAtomically(
+                                any(EarningsLedgerEntry.class));
+        }
 
-        when(repository.findByEventKey("event-001"))
-                .thenReturn(Optional.empty());
+        @Test
+        void appendEventRejectsConcurrentConflictingEvent() {
+                EarningsLedgerEntry entry = validEntry();
 
-        when(mongoTemplate.insert(entry))
-                .thenThrow(new DuplicateKeyException("Duplicate document ID"));
+                EarningsLedgerEntry conflicting = validEntry();
+                conflicting.setAmount(new BigDecimal("999.00"));
 
-        assertThrows(
-                DuplicateKeyException.class,
-                () -> service.appendEvent(entry));
-    }
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(
+                                                Optional.empty(),
+                                                Optional.of(conflicting));
 
-    @Test
-    void appendEventRejectsExistingDocumentId() {
-        EarningsLedgerEntry entry = validEntry();
-        entry.setId("existing-ledger-id");
+                when(transactionService.appendAtomically(
+                                any(EarningsLedgerEntry.class)))
+                                .thenThrow(
+                                                new DuplicateKeyException("Duplicate event key"));
 
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> service.appendEvent(entry));
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> service.appendEvent(entry));
+        }
 
-        verifyNoInteractions(repository, mongoTemplate);
-    }
+        @Test
+        void appendEventPropagatesUnrelatedDuplicateKeyException() {
+                EarningsLedgerEntry entry = validEntry();
 
-    @Test
-    void appendEventRejectsInvalidEntry() {
-        EarningsLedgerEntry entry = validEntry();
-        entry.setPaymentId(null);
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.empty());
 
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> service.appendEvent(entry));
+                when(transactionService.appendAtomically(
+                                any(EarningsLedgerEntry.class)))
+                                .thenThrow(
+                                                new DuplicateKeyException("Duplicate document ID"));
 
-        verifyNoInteractions(repository, mongoTemplate);
-    }
+                assertThrows(
+                                DuplicateKeyException.class,
+                                () -> service.appendEvent(entry));
 
-    @Test
-    void appendEventRejectsNullEntry() {
-        assertThrows(
-                NullPointerException.class,
-                () -> service.appendEvent(null));
+                verify(transactionService, times(1)).appendAtomically(
+                                any(EarningsLedgerEntry.class));
+        }
 
-        verifyNoInteractions(repository, mongoTemplate);
-    }
+        @Test
+        void appendEventRejectsExistingDocumentId() {
+                EarningsLedgerEntry entry = validEntry();
+                entry.setId("existing-ledger-id");
 
-    @Test
-    void getProviderHistoryReturnsRepositoryResults() {
-        EarningsLedgerEntry entry = validEntry();
+                assertThrows(
+                                IllegalArgumentException.class,
+                                () -> service.appendEvent(entry));
 
-        when(repository.findByProviderIdOrderByCreatedAtDesc("provider-001"))
-                .thenReturn(List.of(entry));
+                verifyNoInteractions(repository, transactionService);
+        }
 
-        List<EarningsLedgerEntry> result = service.getProviderHistory("provider-001");
+        @Test
+        void appendEventRejectsClientAssignedSequence() {
+                EarningsLedgerEntry entry = validEntry();
+                entry.setSequenceNumber(5L);
 
-        assertEquals(1, result.size());
-        assertSame(entry, result.get(0));
-    }
+                assertThrows(
+                                IllegalArgumentException.class,
+                                () -> service.appendEvent(entry));
 
-    @Test
-    void getProviderHistoryRejectsBlankProviderId() {
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> service.getProviderHistory(" "));
+                verifyNoInteractions(repository, transactionService);
+        }
 
-        verifyNoInteractions(repository, mongoTemplate);
-    }
+        @Test
+        void appendEventRejectsInvalidEntry() {
+                EarningsLedgerEntry entry = validEntry();
+                entry.setPaymentId(null);
 
-    /**
-     * Creates a structurally valid financial event for each test.
-     */
-    private EarningsLedgerEntry validEntry() {
-        EarningsLedgerEntry entry = new EarningsLedgerEntry();
+                assertThrows(
+                                IllegalArgumentException.class,
+                                () -> service.appendEvent(entry));
 
-        entry.setEventKey("event-001");
-        entry.setPaymentId("payment-001");
-        entry.setBookingId("booking-001");
-        entry.setProviderId("provider-001");
-        entry.setEventType(EarningsLedgerEventType.EARNING_PENDING);
-        entry.setAmount(new BigDecimal("1500.00"));
-        entry.setCurrency("LKR");
-        entry.setCreatedAt(Instant.parse("2026-11-16T10:00:00Z"));
+                verifyNoInteractions(repository, transactionService);
+        }
 
-        return entry;
-    }
+        @Test
+        void appendEventRejectsNullEntry() {
+                assertThrows(
+                                NullPointerException.class,
+                                () -> service.appendEvent(null));
+
+                verifyNoInteractions(repository, transactionService);
+        }
+
+        @Test
+        void appendEventRejectsNegativeAmount() {
+                EarningsLedgerEntry entry = validEntry();
+                entry.setAmount(new BigDecimal("-100.00"));
+
+                assertThrows(
+                                IllegalArgumentException.class,
+                                () -> service.appendEvent(entry));
+
+                verifyNoInteractions(repository, transactionService);
+        }
+
+        @Test
+        void appendEventDoesNotRetryInvalidFinancialTransition() {
+                EarningsLedgerEntry entry = validEntry();
+
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.empty());
+
+                // The transaction boundary rejects an insufficient balance.
+                when(transactionService.appendAtomically(
+                                any(EarningsLedgerEntry.class)))
+                                .thenThrow(new IllegalStateException(
+                                                "Ledger event would create a negative earnings balance"));
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> service.appendEvent(entry));
+
+                // Financial validation failures must not be retried.
+                verify(transactionService, times(1)).appendAtomically(
+                                any(EarningsLedgerEntry.class));
+        }
+
+        @Test
+        void appendEventRetriesTransientTransactionFailure() {
+                EarningsLedgerEntry entry = validEntry();
+
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.empty());
+
+                MongoException transientFailure = new MongoException("Transient transaction write conflict");
+
+                transientFailure.addLabel(
+                                MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+
+                when(transactionService.appendAtomically(
+                                any(EarningsLedgerEntry.class)))
+                                .thenThrow(transientFailure)
+                                .thenAnswer(invocation -> invocation.getArgument(0));
+
+                EarningsLedgerEntry result = service.appendEvent(entry);
+
+                assertNotNull(result);
+
+                // The first failed attempt must not be reused.
+                verify(transactionService, times(2)).appendAtomically(
+                                any(EarningsLedgerEntry.class));
+
+                assertNull(entry.getId());
+                assertNull(entry.getSequenceNumber());
+        }
+
+        @Test
+        void appendEventStopsAfterMaximumTransientRetries() {
+                EarningsLedgerEntry entry = validEntry();
+
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.empty());
+
+                MongoException transientFailure = new MongoException("Transient transaction write conflict");
+
+                transientFailure.addLabel(
+                                MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+
+                when(transactionService.appendAtomically(
+                                any(EarningsLedgerEntry.class)))
+                                .thenThrow(transientFailure);
+
+                assertThrows(
+                                MongoException.class,
+                                () -> service.appendEvent(entry));
+
+                verify(transactionService, times(5)).appendAtomically(
+                                any(EarningsLedgerEntry.class));
+        }
+
+        @Test
+        void appendEventDoesNotRetryUnknownCommitResult() {
+                EarningsLedgerEntry entry = validEntry();
+
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.empty());
+
+                MongoException uncertainCommit = new MongoException("Unknown transaction commit result");
+
+                uncertainCommit.addLabel(
+                                MongoException.UNKNOWN_TRANSACTION_COMMIT_RESULT_LABEL);
+
+                when(transactionService.appendAtomically(
+                                any(EarningsLedgerEntry.class)))
+                                .thenThrow(uncertainCommit);
+
+                assertThrows(
+                                MongoException.class,
+                                () -> service.appendEvent(entry));
+
+                // A new append must not be attempted when commit is uncertain.
+                verify(transactionService, times(1)).appendAtomically(
+                                any(EarningsLedgerEntry.class));
+        }
+
+        @Test
+        void getProviderHistoryReturnsRepositoryResults() {
+                EarningsLedgerEntry entry = validEntry();
+
+                when(repository.findByProviderIdOrderByCreatedAtDesc("provider-001"))
+                                .thenReturn(List.of(entry));
+
+                List<EarningsLedgerEntry> result = service.getProviderHistory("provider-001");
+
+                assertEquals(1, result.size());
+                assertSame(entry, result.get(0));
+        }
+
+        @Test
+        void getProviderHistoryRejectsBlankProviderId() {
+                assertThrows(
+                                IllegalArgumentException.class,
+                                () -> service.getProviderHistory(" "));
+
+                verifyNoInteractions(repository, transactionService);
+        }
+
+        /**
+         * Creates a structurally valid financial event for each test.
+         *
+         * @return a new earnings ledger event
+         */
+        private EarningsLedgerEntry validEntry() {
+                EarningsLedgerEntry entry = new EarningsLedgerEntry();
+
+                entry.setEventKey("event-001");
+                entry.setPaymentId("payment-001");
+                entry.setBookingId("booking-001");
+                entry.setProviderId("provider-001");
+                entry.setEventType(EarningsLedgerEventType.EARNING_PENDING);
+                entry.setAmount(new BigDecimal("1500.00"));
+                entry.setCurrency("LKR");
+                entry.setCreatedAt(
+                                Instant.parse("2026-11-16T10:00:00Z"));
+
+                return entry;
+        }
 }

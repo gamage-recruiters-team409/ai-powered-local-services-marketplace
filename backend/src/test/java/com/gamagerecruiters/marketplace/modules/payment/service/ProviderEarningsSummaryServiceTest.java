@@ -139,6 +139,7 @@ class ProviderEarningsSummaryServiceTest {
         entry.setCurrency(currency);
 
         int sequence = Integer.parseInt(eventKey.substring(1));
+        entry.setSequenceNumber((long) sequence);
 
         entry.setCreatedAt(
                 Instant.parse("2026-11-16T10:00:00Z")

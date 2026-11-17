@@ -2,11 +2,9 @@
 package com.gamagerecruiters.marketplace.modules.payment.service;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
-import java.time.Instant;
 
 import org.springframework.stereotype.Component;
 
@@ -49,27 +47,35 @@ public class EarningsBalanceCalculator {
     public EarningsBalance calculate(List<EarningsLedgerEntry> entries) {
         Objects.requireNonNull(entries, "Ledger entries are required");
 
-        // Validate entries before ordering financial events.
-List<EarningsLedgerEntry> ordered = entries.stream()
-        .map(entry -> Objects.requireNonNull(
-                entry, "Ledger entry must not be null"))
-        .peek(EarningsLedgerEntry::validate)
-        .sorted(Comparator.comparing(EarningsLedgerEntry::getCreatedAt))
-        .toList();
+        // Validate all entries before calculating financial balances.
+        // Persisted events must have an assigned processing sequence.
+        List<EarningsLedgerEntry> ordered = entries.stream()
+                .map(entry -> Objects.requireNonNull(
+                        entry, "Ledger entry must not be null"))
+                .peek(EarningsLedgerEntry::validate)
+                .peek(entry -> {
+                    if (entry.getSequenceNumber() == null) {
+                        throw new IllegalStateException(
+                                "Ledger event is missing its processing sequence: "
+                                        + entry.getEventKey());
+                    }
+                })
+                .sorted(Comparator.comparingLong(
+                        EarningsLedgerEntry::getSequenceNumber))
+                .toList();
 
-// Reject timestamp collisions rather than guessing financial event order.
-// A trusted sequence mechanism is required for a complete solution.
-for (int i = 1; i < ordered.size(); i++) {
-    Instant previousTimestamp = ordered.get(i - 1).getCreatedAt();
-    Instant currentTimestamp = ordered.get(i).getCreatedAt();
+        // A sequence must uniquely identify an event's position within
+        // the provider/currency ledger. Never guess the processing order.
+        for (int i = 1; i < ordered.size(); i++) {
+            long previousSequence = ordered.get(i - 1).getSequenceNumber();
+            long currentSequence = ordered.get(i).getSequenceNumber();
 
-    if (previousTimestamp.equals(currentTimestamp)) {
-        throw new IllegalStateException(
-                "Ambiguous earnings ledger event order: "
-                        + "multiple events share timestamp "
-                        + currentTimestamp);
-    }
-}
+            if (previousSequence == currentSequence) {
+                throw new IllegalStateException(
+                        "Duplicate earnings ledger processing sequence: "
+                                + currentSequence);
+            }
+        }
 
         BigDecimal pending = BigDecimal.ZERO;
         BigDecimal available = BigDecimal.ZERO;

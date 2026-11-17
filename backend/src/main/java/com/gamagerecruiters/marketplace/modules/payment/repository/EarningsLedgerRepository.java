@@ -28,54 +28,70 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEnt
  * </p>
  */
 public interface EarningsLedgerRepository
-        extends MongoRepository<EarningsLedgerEntry, String> {
+                extends MongoRepository<EarningsLedgerEntry, String> {
 
-    /**
-     * Finds a financial event using its idempotency key.
-     *
-     * @param eventKey the unique identifier of the financial event
-     * @return the matching ledger entry, if present
-     */
-    Optional<EarningsLedgerEntry> findByEventKey(String eventKey);
+        /**
+         * Finds a financial event using its idempotency key.
+         *
+         * @param eventKey the unique identifier of the financial event
+         * @return the matching ledger entry, if present
+         */
+        Optional<EarningsLedgerEntry> findByEventKey(String eventKey);
 
-    /**
-     * Checks whether a financial event key already exists.
-     *
-     * <p>
-     * This method is a preliminary duplicate check and must not
-     * replace a unique database index.
-     * </p>
-     *
-     * @param eventKey the financial event identifier
-     * @return true if an entry with the given key exists
-     */
-    boolean existsByEventKey(String eventKey);
+        /**
+         * Checks whether a provider/currency ledger already contains events.
+         *
+         * <p>
+         * Used to prevent initializing a zero-balance state when existing
+         * financial history has not been migrated into the state model.
+         * </p>
+         *
+         * @param providerId the provider account identifier
+         * @param currency   the ledger currency
+         * @return true if financial history exists for this provider/currency
+         */
+        boolean existsByProviderIdAndCurrency(
+                        String providerId,
+                        String currency);
 
-    /**
-     * Retrieves a provider's financial event history,
-     * ordered from newest to oldest.
-     *
-     * @param providerId the provider account identifier
-     * @return ledger entries belonging to the provider
-     */
-    List<EarningsLedgerEntry> findByProviderIdOrderByCreatedAtDesc(
-            String providerId);
+        /**
+         * Checks whether a financial event key already exists.
+         *
+         * <p>
+         * This method is a preliminary duplicate check and must not
+         * replace a unique database index.
+         * </p>
+         *
+         * @param eventKey the financial event identifier
+         * @return true if an entry with the given key exists
+         */
+        boolean existsByEventKey(String eventKey);
 
-    /**
-     * Retrieves financial events associated with a booking.
-     *
-     * @param bookingId the booking identifier
-     * @return ledger entries associated with the booking
-     */
-    List<EarningsLedgerEntry> findByBookingIdOrderByCreatedAtDesc(
-            String bookingId);
+        /**
+         * Retrieves a provider's financial event history,
+         * ordered from newest to oldest.
+         *
+         * @param providerId the provider account identifier
+         * @return ledger entries belonging to the provider
+         */
+        List<EarningsLedgerEntry> findByProviderIdOrderByCreatedAtDesc(
+                        String providerId);
 
-    /**
-     * Retrieves financial events associated with a payment.
-     *
-     * @param paymentId the payment identifier
-     * @return ledger entries associated with the payment
-     */
-    List<EarningsLedgerEntry> findByPaymentIdOrderByCreatedAtDesc(
-            String paymentId);
+        /**
+         * Retrieves financial events associated with a booking.
+         *
+         * @param bookingId the booking identifier
+         * @return ledger entries associated with the booking
+         */
+        List<EarningsLedgerEntry> findByBookingIdOrderByCreatedAtDesc(
+                        String bookingId);
+
+        /**
+         * Retrieves financial events associated with a payment.
+         *
+         * @param paymentId the payment identifier
+         * @return ledger entries associated with the payment
+         */
+        List<EarningsLedgerEntry> findByPaymentIdOrderByCreatedAtDesc(
+                        String paymentId);
 }

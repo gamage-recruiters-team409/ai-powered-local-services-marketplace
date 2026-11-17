@@ -186,11 +186,11 @@ class EarningsBalanceCalculatorTest {
     }
 
     /**
-     * Rejects ledger events with identical timestamps because their
-     * financial processing order cannot be established reliably.
+     * Events with identical timestamps must still be processed
+     * according to their persisted financial sequence.
      */
     @Test
-    void rejectsEventsWithAmbiguousTimestampOrdering() {
+    void processesEventsWithIdenticalTimestampsUsingSequence() {
         EarningsLedgerEntry pending = event(
                 "e1",
                 EarningsLedgerEventType.EARNING_PENDING,
@@ -201,15 +201,57 @@ class EarningsBalanceCalculatorTest {
                 EarningsLedgerEventType.EARNING_AVAILABLE,
                 "5000");
 
-        // Both events share the same timestamp.
         Instant sameTimestamp = Instant.parse("2026-11-16T10:00:00Z");
 
         pending.setCreatedAt(sameTimestamp);
         available.setCreatedAt(sameTimestamp);
 
+        // Reverse input order to verify sequence-based sorting.
+        EarningsBalance balance = calculator.calculate(
+                List.of(available, pending));
+
+        assertBalance(balance, "0", "5000", "0", "0");
+    }
+
+    /**
+     * Persisted financial events must have a processing sequence.
+     * Missing sequences must never fall back to timestamp ordering.
+     */
+    @Test
+    void rejectsMissingProcessingSequence() {
+        EarningsLedgerEntry entry = event(
+                "e1",
+                EarningsLedgerEventType.EARNING_PENDING,
+                "1000");
+
+        entry.setSequenceNumber(null);
+
         assertThrows(
                 IllegalStateException.class,
-                () -> calculator.calculate(List.of(pending, available)));
+                () -> calculator.calculate(List.of(entry)));
+    }
+
+    /**
+     * Duplicate sequences within the same provider/currency ledger
+     * must be rejected rather than arbitrarily ordered.
+     */
+    @Test
+    void rejectsDuplicateProcessingSequences() {
+        EarningsLedgerEntry first = event(
+                "e1",
+                EarningsLedgerEventType.EARNING_PENDING,
+                "1000");
+
+        EarningsLedgerEntry second = event(
+                "e2",
+                EarningsLedgerEventType.EARNING_AVAILABLE,
+                "1000");
+
+        second.setSequenceNumber(first.getSequenceNumber());
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> calculator.calculate(List.of(first, second)));
     }
 
     /**
@@ -230,8 +272,11 @@ class EarningsBalanceCalculatorTest {
         entry.setAmount(new BigDecimal(amount));
         entry.setCurrency("LKR");
 
-        // Different timestamps preserve the intended event order.
-        int sequence = Integer.parseInt(eventKey.substring(1));
+        // Assign deterministic processing order for financial events.
+        long sequence = Long.parseLong(eventKey.substring(1));
+        entry.setSequenceNumber(sequence);
+
+        // Timestamps remain available for audit and traceability.
         entry.setCreatedAt(
                 Instant.parse("2026-11-16T10:00:00Z")
                         .plusSeconds(sequence));
