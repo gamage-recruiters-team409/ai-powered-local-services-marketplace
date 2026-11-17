@@ -29,12 +29,16 @@ const STATUS = {
   ERROR: 'error',
 };
 
+function readTokenFromUrl(searchParams) {
+  return (
+    searchParams.get('token') ||
+    (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('token') : null)
+  );
+}
+
 export default function VerifyEmailPage() {
   const [searchParams] = useSearchParams();
-  const tokenParam =
-    searchParams.get('token') ||
-    (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('token') : null);
-  const tokenRef = useRef(tokenParam);
+  const [token] = useState(() => readTokenFromUrl(searchParams));
   const [status, setStatus] = useState(STATUS.LOADING);
   const [message, setMessage] = useState('');
   const calledRef = useRef(false);
@@ -68,9 +72,9 @@ export default function VerifyEmailPage() {
     };
   }, []);
 
-  const verifyToken = useCallback(async (token) => {
+  const verifyToken = useCallback(async (tokenToVerify) => {
     try {
-      const response = await authApi.verifyEmail(token);
+      const response = await authApi.verifyEmail(tokenToVerify);
       setMessage(response.message || 'Your email has been verified successfully!');
       setStatus(STATUS.SUCCESS);
     } catch (err) {
@@ -84,7 +88,6 @@ export default function VerifyEmailPage() {
     if (calledRef.current) return;
     calledRef.current = true;
 
-    const token = tokenRef.current;
     if (!token) {
       setMessage('No verification token found. Please check the link in your email.');
       setStatus(STATUS.ERROR);
@@ -92,7 +95,7 @@ export default function VerifyEmailPage() {
     }
 
     verifyToken(token);
-  }, [verifyToken]);
+  }, [token, verifyToken]);
 
   if (status === STATUS.LOADING) {
     return (

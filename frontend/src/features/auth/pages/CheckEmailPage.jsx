@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
 import Input from '../../../shared/components/forms/Input';
@@ -8,6 +8,25 @@ import { validateEmail } from '../utils/validators';
 
 const COOLDOWN_SECONDS = 60;
 const COOLDOWN_STORAGE_KEY = 'auth_resend_cooldown_end';
+
+function getInitialCooldown() {
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      const stored = window.sessionStorage.getItem(COOLDOWN_STORAGE_KEY);
+      if (stored) {
+        const endTime = parseInt(stored, 10);
+        const diff = Math.ceil((endTime - Date.now()) / 1000);
+        if (diff > 0) {
+          return diff;
+        }
+        window.sessionStorage.removeItem(COOLDOWN_STORAGE_KEY);
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return 0;
+}
 
 function EnvelopeIcon() {
   return (
@@ -33,47 +52,24 @@ export default function CheckEmailPage() {
 
   const [email, setEmail] = useState(stateEmail);
   const [showEmailInput, setShowEmailInput] = useState(!stateEmail);
-  const [remaining, setRemaining] = useState(0);
+  const [remaining, setRemaining] = useState(getInitialCooldown);
   const [resending, setResending] = useState(false);
   const [alert, setAlert] = useState(null);
-  const intervalRef = useRef(null);
 
-  // Restore cooldown from sessionStorage
-  useEffect(() => {
-    try {
-      const stored = sessionStorage.getItem(COOLDOWN_STORAGE_KEY);
-      if (stored) {
-        const endTime = parseInt(stored, 10);
-        const diff = Math.ceil((endTime - Date.now()) / 1000);
-        if (diff > 0) {
-          setRemaining(diff);
-        } else {
-          sessionStorage.removeItem(COOLDOWN_STORAGE_KEY);
-        }
-      }
-    } catch (err) {
-      // Ignore storage error
-    }
-  }, []);
+  const isCountingDown = remaining > 0;
 
   // Countdown timer
   useEffect(() => {
-    if (remaining <= 0) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      return;
-    }
+    if (!isCountingDown) return;
 
-    intervalRef.current = setInterval(() => {
+    const intervalId = setInterval(() => {
       setRemaining((prev) => {
         if (prev <= 1) {
-          clearInterval(intervalRef.current);
-          intervalRef.current = null;
           try {
-            sessionStorage.removeItem(COOLDOWN_STORAGE_KEY);
-          } catch (err) {
+            if (typeof window !== 'undefined' && window.sessionStorage) {
+              window.sessionStorage.removeItem(COOLDOWN_STORAGE_KEY);
+            }
+          } catch {
             // Ignore
           }
           return 0;
@@ -82,20 +78,17 @@ export default function CheckEmailPage() {
       });
     }, 1000);
 
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
-  }, [remaining > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => clearInterval(intervalId);
+  }, [isCountingDown]);
 
   const startCooldown = useCallback(() => {
     const endTime = Date.now() + COOLDOWN_SECONDS * 1000;
     setRemaining(COOLDOWN_SECONDS);
     try {
-      sessionStorage.setItem(COOLDOWN_STORAGE_KEY, String(endTime));
-    } catch (err) {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.setItem(COOLDOWN_STORAGE_KEY, String(endTime));
+      }
+    } catch {
       // Ignore
     }
   }, []);

@@ -38,7 +38,7 @@ export default function ForgotPasswordPage() {
       try {
         await authApi.forgotPassword(email.trim());
         setSubmitted(true);
-      } catch (apiErr) {
+      } catch {
         // Always show success (backend sends 200 regardless for security)
         setSubmitted(true);
       } finally {

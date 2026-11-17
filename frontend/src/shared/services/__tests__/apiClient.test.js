@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import tokenStore from '../tokenStore';
 import {
-  apiClient,
   isPublicAuthEndpoint,
   normalizeError,
   notifySessionExpired,

@@ -1,10 +1,9 @@
-import { createContext, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import tokenStore from '../../../shared/services/tokenStore';
 import { onSessionExpired } from '../../../shared/services/apiClient';
 import * as authApi from '../api/authApi';
-
-export const AuthContext = createContext(null);
+import { AuthContext } from './authContextValue';
 
 const AUTH_STATUS = {
   LOADING: 'loading',
@@ -50,7 +49,7 @@ export function AuthProvider({ children }) {
           setUser(userData);
           setStatus(AUTH_STATUS.AUTHENTICATED);
         }
-      } catch (err) {
+      } catch {
         tokenStore.clear();
         if (!cancelled) {
           setStatus(AUTH_STATUS.UNAUTHENTICATED);
@@ -82,7 +81,7 @@ export function AuthProvider({ children }) {
     try {
       channel = new BroadcastChannel('auth');
       channelRef.current = channel;
-    } catch (err) {
+    } catch {
       return;
     }
 
@@ -114,7 +113,7 @@ export function AuthProvider({ children }) {
     return () => {
       try {
         channel.close();
-      } catch (err) {
+      } catch {
         // Ignore close error
       }
       channelRef.current = null;
@@ -126,7 +125,7 @@ export function AuthProvider({ children }) {
       if (channelRef.current) {
         channelRef.current.postMessage({ type, payload });
       }
-    } catch (err) {
+    } catch {
       // Ignore broadcast error
     }
   }, []);
@@ -175,7 +174,7 @@ export function AuthProvider({ children }) {
       if (refreshTokenVal) {
         await authApi.logout(refreshTokenVal);
       }
-    } catch (err) {
+    } catch {
       // Logout failure should not block the client-side cleanup
     }
 
@@ -192,7 +191,7 @@ export function AuthProvider({ children }) {
       setUser(userData);
       setMustChangePassword(false);
       return userData;
-    } catch (err) {
+    } catch {
       return null;
     }
   }, []);
@@ -225,4 +224,4 @@ export function AuthProvider({ children }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export default AuthContext;
+export default AuthProvider;

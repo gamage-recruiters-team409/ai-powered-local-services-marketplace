@@ -38,7 +38,7 @@ export function notifySessionExpired() {
   sessionExpiredListeners.forEach((listener) => {
     try {
       listener();
-    } catch (err) {
+    } catch {
       // Ignore listener error
     }
   });
@@ -77,11 +77,9 @@ async function performTokenRefreshWithLock() {
   if (typeof navigator !== 'undefined' && navigator.locks && navigator.locks.request) {
     try {
       return await navigator.locks.request('auth_token_refresh', async () => {
-        // Double check if another tab has already refreshed while we waited for the lock
-        const currentAccessToken = tokenStore.getAccessToken();
         return await executeTokenRefresh();
       });
-    } catch (lockError) {
+    } catch {
       // If Web Locks fails, fall through to direct execution
     }
   }

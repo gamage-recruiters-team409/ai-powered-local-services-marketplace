@@ -7,7 +7,7 @@ function safeGetItem(key) {
     if (typeof window !== 'undefined' && window.localStorage) {
       return window.localStorage.getItem(key);
     }
-  } catch (err) {
+  } catch {
     // Ignore localStorage access failures (e.g. private mode / security restrictions)
   }
   return null;
@@ -22,7 +22,7 @@ function safeSetItem(key, value) {
         window.localStorage.removeItem(key);
       }
     }
-  } catch (err) {
+  } catch {
     // Ignore localStorage access failures
   }
 }
@@ -32,7 +32,7 @@ function safeRemoveItem(key) {
     if (typeof window !== 'undefined' && window.localStorage) {
       window.localStorage.removeItem(key);
     }
-  } catch (err) {
+  } catch {
     // Ignore localStorage access failures
   }
 }

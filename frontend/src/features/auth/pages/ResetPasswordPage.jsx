@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import Button from '../../../shared/components/forms/Button';
@@ -42,18 +42,22 @@ const STATUS = {
   EXPIRED: 'expired',
 };
 
+function readTokenFromUrl(searchParams) {
+  return (
+    searchParams.get('token') ||
+    (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('token') : null)
+  );
+}
+
 export default function ResetPasswordPage() {
   const [searchParams] = useSearchParams();
-  const tokenParam =
-    searchParams.get('token') ||
-    (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('token') : null);
-  const tokenRef = useRef(tokenParam);
+  const [token] = useState(() => readTokenFromUrl(searchParams));
 
   const [password, setPassword] = useState('');
   const [passwordError, setPasswordError] = useState(null);
   const [serverError, setServerError] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [pageStatus, setPageStatus] = useState(tokenRef.current ? STATUS.FORM : STATUS.EXPIRED);
+  const [pageStatus, setPageStatus] = useState(() => (token ? STATUS.FORM : STATUS.EXPIRED));
 
   const criteria = checkPasswordCriteria(password);
 
@@ -100,7 +104,7 @@ export default function ResetPasswordPage() {
 
       setLoading(true);
       try {
-        await authApi.resetPassword(tokenRef.current, password);
+        await authApi.resetPassword(token, password);
         setPageStatus(STATUS.SUCCESS);
       } catch (apiErr) {
         const code = apiErr.code || '';
@@ -115,7 +119,7 @@ export default function ResetPasswordPage() {
         setLoading(false);
       }
     },
-    [password]
+    [password, token]
   );
 
   if (pageStatus === STATUS.SUCCESS) {
