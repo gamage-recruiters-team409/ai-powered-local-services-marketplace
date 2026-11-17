@@ -2,12 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import Spinner from '../../../shared/components/feedback/Spinner';
-import Alert from '../../../shared/components/feedback/Alert';
 import * as authApi from '../api/authApi';
 
 function SuccessIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M20 6L9 17l-5-5" />
     </svg>
   );
@@ -15,10 +14,10 @@ function SuccessIcon() {
 
 function WarningIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="12" y1="8" x2="12" y2="12" />
-      <line x1="12" y1="16" x2="12.01" y2="16" />
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
     </svg>
   );
 }
@@ -36,22 +35,32 @@ function readTokenFromUrl(searchParams) {
   );
 }
 
-export default function VerifyEmailPage() {
+export default function VerifyEmailPage({ previewState } = {}) {
   const [searchParams] = useSearchParams();
-  const [token] = useState(() => readTokenFromUrl(searchParams));
-  const [status, setStatus] = useState(() => (token ? STATUS.LOADING : STATUS.ERROR));
-  const [message, setMessage] = useState(() =>
-    token ? '' : 'No verification token found. Please check the link in your email.'
-  );
+  const [token] = useState(() => {
+    if (previewState) return null;
+    return readTokenFromUrl(searchParams);
+  });
+  const [status, setStatus] = useState(() => {
+    if (previewState === 'success') return STATUS.SUCCESS;
+    if (previewState === 'invalid' || previewState === 'expired') return STATUS.ERROR;
+    return token ? STATUS.LOADING : STATUS.ERROR;
+  });
+  const [message, setMessage] = useState(() => {
+    if (previewState === 'success') return 'Your account is now active.';
+    if (previewState === 'invalid' || previewState === 'expired') return 'Request a new verification link.';
+    return token ? '' : 'No verification token found. Please check the link in your email.';
+  });
   const calledRef = useRef(false);
 
   // Strip the token from the URL immediately (security: prevent referrer leakage)
   useEffect(() => {
+    if (previewState) return;
     if (typeof window !== 'undefined' && window.location.search.includes('token=')) {
       const cleanUrl = window.location.pathname;
       window.history.replaceState({}, '', cleanUrl);
     }
-  }, []);
+  }, [previewState]);
 
   // Set referrer meta tag while this page is mounted
   useEffect(() => {
@@ -75,6 +84,7 @@ export default function VerifyEmailPage() {
   }, []);
 
   useEffect(() => {
+    if (previewState) return;
     // StrictMode guard: only call once
     if (calledRef.current) return;
     calledRef.current = true;
@@ -84,14 +94,14 @@ export default function VerifyEmailPage() {
     authApi
       .verifyEmail(token)
       .then((response) => {
-        setMessage(response.message || 'Your email has been verified successfully!');
+        setMessage(response.message || 'Your account is now active.');
         setStatus(STATUS.SUCCESS);
       })
       .catch((err) => {
-        setMessage(err.message || 'This link is invalid or has expired.');
+        setMessage(err.message || 'This link has expired or is not valid');
         setStatus(STATUS.ERROR);
       });
-  }, [token]);
+  }, [token, previewState]);
 
   if (status === STATUS.LOADING) {
     return (
@@ -107,13 +117,15 @@ export default function VerifyEmailPage() {
   if (status === STATUS.SUCCESS) {
     return (
       <div className="auth-card auth-card--narrow">
-        <div className="auth-card__icon auth-card__icon--green">
+        <div className="auth-card__icon auth-card__icon--teal" style={{ borderRadius: '50%' }}>
           <SuccessIcon />
         </div>
-        <h1 className="auth-card__title">Email verified!</h1>
-        <p className="auth-card__description">{message}</p>
-        <Link to="/login" className="auth-link auth-link--center">
-          Continue to Login →
+        <h1 className="auth-card__title">Email verified</h1>
+        <p className="auth-card__description">
+          {message || 'Your account is now active.'}
+        </p>
+        <Link to="/login" className="shared-btn shared-btn--primary" style={{ width: '100%', textDecoration: 'none' }}>
+          Log in
         </Link>
       </div>
     );
@@ -121,19 +133,27 @@ export default function VerifyEmailPage() {
 
   return (
     <div className="auth-card auth-card--narrow">
-      <div className="auth-card__icon" style={{ backgroundColor: '#fef2f2', color: '#dc2626' }}>
+      <div className="auth-card__icon auth-card__icon--squircle auth-card__icon--amber">
         <WarningIcon />
       </div>
-      <h1 className="auth-card__title">Verification failed</h1>
-      <Alert variant="error" title={message} />
-      <div style={{ marginTop: '16px' }}>
-        <p style={{ color: '#6b7280', fontSize: '14px', marginBottom: '12px' }}>
-          The link may have expired or already been used.
-        </p>
-        <Link to="/login" className="auth-link auth-link--center">
-          ← Back to Login
-        </Link>
-      </div>
+      <h1 className="auth-card__title">This link has expired or is not valid</h1>
+      <p className="auth-card__description">
+        {message || 'Request a new verification link.'}
+      </p>
+      <Link
+        to="/login"
+        className="shared-btn shared-btn--primary"
+        style={{ width: '100%', marginBottom: '8px', textDecoration: 'none' }}
+      >
+        Resend verification email
+      </Link>
+      <p className="auth-countdown-text" style={{ margin: '8px 0 16px' }}>
+        You can now request a new email.
+      </p>
+      <hr className="auth-card__divider" style={{ margin: '16px 0' }} />
+      <Link to="/login" className="auth-link auth-link--center">
+        ← Back to Login
+      </Link>
     </div>
   );
 }

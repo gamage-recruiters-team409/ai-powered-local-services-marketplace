@@ -30,9 +30,9 @@ function getInitialCooldown() {
 
 function EnvelopeIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="2" y="4" width="20" height="16" rx="2" />
-      <path d="M22 4L12 13 2 4" />
+      <path d="M22 7L12 13 2 7" />
     </svg>
   );
 }
@@ -46,13 +46,13 @@ function ResendIcon() {
   );
 }
 
-export default function CheckEmailPage() {
+export default function CheckEmailPage({ previewState } = {}) {
   const location = useLocation();
-  const stateEmail = location.state?.email || '';
+  const stateEmail = previewState ? 'kasun@example.lk' : location.state?.email || '';
 
   const [email, setEmail] = useState(stateEmail);
   const [showEmailInput, setShowEmailInput] = useState(!stateEmail);
-  const [remaining, setRemaining] = useState(getInitialCooldown);
+  const [remaining, setRemaining] = useState(() => (previewState ? 60 : getInitialCooldown()));
   const [resending, setResending] = useState(false);
   const [alert, setAlert] = useState(null);
 
@@ -123,17 +123,19 @@ export default function CheckEmailPage() {
     }
   }, [email, startCooldown]);
 
+  const displayEmail = stateEmail || email;
+
   return (
     <div className="auth-card auth-card--narrow">
-      <div className="auth-card__icon auth-card__icon--teal">
+      <div className="auth-card__icon auth-card__icon--squircle auth-card__icon--teal">
         <EnvelopeIcon />
       </div>
 
       <h1 className="auth-card__title">Check your email</h1>
       <p className="auth-card__description">
-        {stateEmail ? (
+        {displayEmail ? (
           <>
-            We sent a verification link to <strong>{stateEmail}</strong>. The link is valid for 24 hours.
+            We sent a verification link to <strong>{displayEmail}</strong>. The link is valid for 24 hours.
           </>
         ) : (
           'We sent a verification link to your email. The link is valid for 24 hours.'
@@ -141,11 +143,13 @@ export default function CheckEmailPage() {
       </p>
 
       {alert && (
-        <Alert
-          variant={alert.variant}
-          title={alert.message}
-          onClose={() => setAlert(null)}
-        />
+        <div style={{ marginBottom: '16px' }}>
+          <Alert
+            variant={alert.variant}
+            title={alert.message}
+            onClose={() => setAlert(null)}
+          />
+        </div>
       )}
 
       {showEmailInput && !stateEmail && (
@@ -171,9 +175,13 @@ export default function CheckEmailPage() {
         {resending ? 'Sending...' : 'Resend email'}
       </button>
 
-      {remaining > 0 && (
+      {remaining > 0 ? (
         <p className="auth-countdown-text">
           You can request a new email in {remaining} seconds
+        </p>
+      ) : (
+        <p className="auth-countdown-text">
+          You can now request a new email.
         </p>
       )}
 

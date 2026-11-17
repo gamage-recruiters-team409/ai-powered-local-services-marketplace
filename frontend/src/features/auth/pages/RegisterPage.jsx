@@ -19,18 +19,27 @@ import {
 
 const POLICY_VERSION = '1.0';
 
-export default function RegisterPage() {
+export default function RegisterPage({ previewState } = {}) {
   const navigate = useNavigate();
   const { register } = useAuth();
 
   const [role, setRole] = useState('CUSTOMER');
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState(() => (previewState === 'error' ? 'name@example.lk' : ''));
+  const [phone, setPhone] = useState(() => (previewState === 'error' ? '77 123 4567' : ''));
   const [password, setPassword] = useState('');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
-  const [errors, setErrors] = useState({});
+  const [errors, setErrors] = useState(() =>
+    previewState === 'error'
+      ? {
+          email: 'Please enter a valid email address.',
+          phone: 'Please enter a valid 9-digit phone number.',
+          password:
+            'Password must have at least 8 characters, an uppercase letter, a lowercase letter and a digit.',
+        }
+      : {}
+  );
   const [serverError, setServerError] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -112,7 +121,7 @@ export default function RegisterPage() {
   return (
     <div className="auth-card auth-card--wide">
       <h1 className="auth-card__title">Create your account</h1>
-      <p className="auth-card__description" style={{ marginBottom: '16px' }}>
+      <p className="auth-card__description" style={{ marginBottom: '20px' }}>
         Local Services Marketplace (Sri Lanka)
       </p>
 
@@ -177,20 +186,32 @@ export default function RegisterPage() {
 
         {/* Phone + Password row */}
         <div className="auth-form__row">
-          <div>
-            <label className="shared-field__label">Phone number</label>
-            <div className="auth-phone-group">
-              <span className="auth-phone-prefix">+94</span>
-              <Input
+          <div className="shared-field">
+            <label className="shared-field__label" htmlFor="register-phone">
+              Phone number
+            </label>
+            <div className={`auth-phone-control${errors.phone ? ' auth-phone-control--error' : ''}`}>
+              <span className="auth-phone-control__prefix">+94</span>
+              <input
+                id="register-phone"
+                type="tel"
                 placeholder="77 123 4567"
                 value={phone}
                 onChange={handlePhoneChange}
-                error={errors.phone}
                 autoComplete="tel-national"
                 disabled={loading}
+                className="auth-phone-control__input"
+                aria-invalid={errors.phone ? 'true' : undefined}
+                aria-describedby={errors.phone ? 'register-phone-error' : undefined}
               />
             </div>
+            {errors.phone && (
+              <p className="shared-field__error" id="register-phone-error">
+                {errors.phone}
+              </p>
+            )}
           </div>
+
           <div>
             <PasswordInput
               label="Password"
@@ -205,32 +226,43 @@ export default function RegisterPage() {
           </div>
         </div>
 
-        {/* Terms */}
-        <Checkbox
-          label={
-            <>
-              I agree to the{' '}
-              <a href="/terms" target="_blank" rel="noopener noreferrer" style={{ color: '#0f766e' }}>
-                Terms of Service
-              </a>{' '}
-              and{' '}
-              <a href="/privacy" target="_blank" rel="noopener noreferrer" style={{ color: '#0f766e' }}>
-                Privacy Policy
-              </a>
-            </>
-          }
-          checked={acceptedTerms}
-          onChange={(e) => setAcceptedTerms(e.target.checked)}
-          error={errors.acceptedTerms}
-          disabled={loading}
-        />
+        {/* Default hint when no errors and no password entered */}
+        {!errors.phone && !errors.password && password.length === 0 && (
+          <p className="auth-field-hint">
+            Password: at least 8 characters with an uppercase letter, a lowercase letter and a digit.
+          </p>
+        )}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        {/* Divider line before terms and actions */}
+        <hr className="auth-card__divider" style={{ margin: '20px 0 16px' }} />
+
+        {/* Terms checkbox & Submit Button aligned horizontally */}
+        <div className="auth-register-footer-row">
+          <Checkbox
+            label={
+              <>
+                I agree to the{' '}
+                <a href="/terms" target="_blank" rel="noopener noreferrer">
+                  Terms of Service
+                </a>{' '}
+                and{' '}
+                <a href="/privacy" target="_blank" rel="noopener noreferrer">
+                  Privacy Policy
+                </a>
+              </>
+            }
+            checked={acceptedTerms}
+            onChange={(e) => setAcceptedTerms(e.target.checked)}
+            error={errors.acceptedTerms}
+            disabled={loading}
+          />
+
           <Button
             type="submit"
             variant="primary"
             loading={loading}
             disabled={loading}
+            className="auth-register-submit-btn"
           >
             Create account →
           </Button>

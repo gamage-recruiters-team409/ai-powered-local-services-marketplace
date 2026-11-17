@@ -11,7 +11,7 @@ import * as authApi from '../api/authApi';
 
 function SuccessIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M20 6L9 17l-5-5" />
     </svg>
   );
@@ -19,17 +19,17 @@ function SuccessIcon() {
 
 function WarningIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="10" />
-      <line x1="12" y1="8" x2="12" y2="12" />
-      <line x1="12" y1="16" x2="12.01" y2="16" />
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
     </svg>
   );
 }
 
 function ClockIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <circle cx="12" cy="12" r="10" />
       <path d="M12 6v6l4 2" />
     </svg>
@@ -49,25 +49,35 @@ function readTokenFromUrl(searchParams) {
   );
 }
 
-export default function ResetPasswordPage() {
+export default function ResetPasswordPage({ previewState } = {}) {
   const [searchParams] = useSearchParams();
-  const [token] = useState(() => readTokenFromUrl(searchParams));
+  const [token] = useState(() => {
+    if (previewState === 'default') return 'preview-token';
+    return readTokenFromUrl(searchParams);
+  });
 
   const [password, setPassword] = useState('');
   const [passwordError, setPasswordError] = useState(null);
   const [serverError, setServerError] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [pageStatus, setPageStatus] = useState(() => (token ? STATUS.FORM : STATUS.EXPIRED));
+  const [pageStatus, setPageStatus] = useState(() => {
+    if (previewState === 'expired') return STATUS.EXPIRED;
+    if (previewState === 'success') return STATUS.SUCCESS;
+    if (previewState === 'default') return STATUS.FORM;
+    return token ? STATUS.FORM : STATUS.EXPIRED;
+  });
 
   const criteria = checkPasswordCriteria(password);
+  const metCount = Object.values(criteria).filter(Boolean).length;
 
-  // Strip token from URL immediately
+  // Strip token from URL immediately (skip in preview mode)
   useEffect(() => {
+    if (previewState) return;
     if (typeof window !== 'undefined' && window.location.search.includes('token=')) {
       const cleanUrl = window.location.pathname;
       window.history.replaceState({}, '', cleanUrl);
     }
-  }, []);
+  }, [previewState]);
 
   // Set referrer meta tag
   useEffect(() => {
@@ -128,12 +138,12 @@ export default function ResetPasswordPage() {
         <div className="auth-card__icon auth-card__icon--green">
           <SuccessIcon />
         </div>
-        <h1 className="auth-card__title">Password reset successful</h1>
+        <h1 className="auth-card__title">Password updated</h1>
         <p className="auth-card__description">
-          Your password has been updated. You can now log in with your new password.
+          You can now log in with your new password.
         </p>
-        <Link to="/login" className="auth-link auth-link--center" style={{ fontWeight: 600 }}>
-          Continue to Login →
+        <Link to="/login" className="shared-btn shared-btn--primary" style={{ width: '100%', textDecoration: 'none' }}>
+          Log in
         </Link>
       </div>
     );
@@ -142,15 +152,19 @@ export default function ResetPasswordPage() {
   if (pageStatus === STATUS.EXPIRED) {
     return (
       <div className="auth-card auth-card--narrow">
-        <div className="auth-card__icon" style={{ backgroundColor: '#fef2f2', color: '#dc2626' }}>
+        <div className="auth-card__icon auth-card__icon--amber">
           <WarningIcon />
         </div>
-        <h1 className="auth-card__title">Link expired</h1>
+        <h1 className="auth-card__title">This link has expired or was already used</h1>
         <p className="auth-card__description">
-          This password reset link is invalid or has expired. Please request a new one.
+          Password reset links can be used once and expire after 30 minutes.
         </p>
-        <Link to="/forgot-password" className="auth-link auth-link--center" style={{ marginBottom: '12px' }}>
-          Request new link
+        <Link
+          to="/forgot-password"
+          className="shared-btn shared-btn--primary"
+          style={{ width: '100%', marginBottom: '16px', textDecoration: 'none' }}
+        >
+          Request a new link
         </Link>
         <Link to="/login" className="auth-link auth-link--center">
           ← Back to Login
@@ -172,14 +186,14 @@ export default function ResetPasswordPage() {
 
       <form className="auth-form" onSubmit={handleSubmit} noValidate>
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <label className="shared-field__label" htmlFor="reset-password">New password</label>
-            <span style={{ fontSize: '12px', color: '#6b7280' }}>
-              {criteria.validCount}/4 criteria
-            </span>
+          <div className="auth-criteria-header">
+            <label className="shared-field__label" htmlFor="reset-new-password">
+              New password
+            </label>
+            <span className="auth-criteria-counter">{metCount}/4 CRITERIA</span>
           </div>
           <PasswordInput
-            id="reset-password"
+            id="reset-new-password"
             placeholder="Enter new password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -191,17 +205,17 @@ export default function ResetPasswordPage() {
 
         <PasswordRules password={password} />
 
-        <p className="auth-link-validity">
+        <div className="auth-link-validity">
           <ClockIcon />
-          This link is valid for 30 minutes and can be used once.
-        </p>
+          <span>This link is valid for 30 minutes and can be used once.</span>
+        </div>
 
         <Button
           type="submit"
           variant="primary"
           loading={loading}
-          disabled={loading || !criteria.isValid}
-          style={{ width: '100%' }}
+          disabled={loading}
+          style={{ width: '100%', marginTop: '6px' }}
         >
           Reset password →
         </Button>

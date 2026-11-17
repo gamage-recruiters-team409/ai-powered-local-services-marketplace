@@ -8,6 +8,16 @@ import VerifyEmailPage from '../pages/VerifyEmailPage';
 import ForgotPasswordPage from '../pages/ForgotPasswordPage';
 import ResetPasswordPage from '../pages/ResetPasswordPage';
 import ForceChangePasswordPage from '../pages/ForceChangePasswordPage';
+import AuthPreviewPage from '../pages/AuthPreviewPage';
+
+const devRoutes = import.meta.env.DEV
+  ? [
+      {
+        path: '/dev/auth-preview',
+        element: <AuthPreviewPage />,
+      },
+    ]
+  : [];
 
 export const authRoutes = {
   element: <AuthLayout />,
@@ -60,6 +70,7 @@ export const authRoutes = {
         </RequireAuth>
       ),
     },
+    ...devRoutes,
   ],
 };
 

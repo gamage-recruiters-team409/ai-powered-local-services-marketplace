@@ -9,17 +9,19 @@ import { validateEmail } from '../utils/validators';
 
 function SuccessIcon() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M20 6L9 17l-5-5" />
     </svg>
   );
 }
 
-export default function ForgotPasswordPage() {
-  const [email, setEmail] = useState('');
-  const [emailError, setEmailError] = useState(null);
+export default function ForgotPasswordPage({ previewState } = {}) {
+  const [email, setEmail] = useState(() => (previewState === 'invalid-email' ? 'kasun@example' : ''));
+  const [emailError, setEmailError] = useState(() =>
+    previewState === 'invalid-email' ? 'Please enter a valid email address.' : null
+  );
   const [loading, setLoading] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [submitted, setSubmitted] = useState(() => previewState === 'success');
   const [serverError, setServerError] = useState(null);
 
   const handleSubmit = useCallback(
@@ -99,7 +101,7 @@ export default function ForgotPasswordPage() {
         </Button>
       </form>
 
-      <div style={{ textAlign: 'center', marginTop: '16px' }}>
+      <div style={{ textAlign: 'center', marginTop: '20px' }}>
         <Link to="/login" className="auth-link auth-link--center">
           ← Back to Login
         </Link>

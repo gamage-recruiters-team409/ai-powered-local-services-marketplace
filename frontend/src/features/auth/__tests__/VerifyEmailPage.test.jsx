@@ -27,7 +27,7 @@ describe('VerifyEmailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/no verification token found/i)).toBeTruthy();
-      expect(screen.getByRole('heading', { name: /verification failed/i })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: /this link has expired|verification failed/i })).toBeTruthy();
     });
     expect(authApi.verifyEmail).not.toHaveBeenCalled();
   });
@@ -48,8 +48,8 @@ describe('VerifyEmailPage', () => {
     await waitFor(() => {
       expect(authApi.verifyEmail).toHaveBeenCalledTimes(1);
       expect(authApi.verifyEmail).toHaveBeenCalledWith('valid-tok');
-      expect(screen.getByRole('heading', { name: /email verified!/i })).toBeTruthy();
-      expect(screen.getByRole('link', { name: /continue to login/i })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: /email verified/i })).toBeTruthy();
+      expect(screen.getByRole('link', { name: /log in|continue to login/i })).toBeTruthy();
     });
 
     expect(window.location.search).not.toContain('token=');
@@ -68,8 +68,8 @@ describe('VerifyEmailPage', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /verification failed/i })).toBeTruthy();
-      expect(screen.getByText(/this link is invalid or has expired/i)).toBeTruthy();
+      expect(screen.getByRole('heading', { name: /this link has expired|verification failed/i })).toBeTruthy();
+      expect(screen.getByText(/this link is invalid or has expired|this link has expired or is not valid/i)).toBeTruthy();
       expect(screen.getByRole('link', { name: /back to login/i })).toBeTruthy();
     });
   });

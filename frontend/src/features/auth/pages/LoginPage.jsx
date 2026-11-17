@@ -11,14 +11,33 @@ import { validateEmail } from '../utils/validators';
 import { resolvePostLoginRedirect } from '../utils/roleRedirect';
 import * as authApi from '../api/authApi';
 
-export default function LoginPage() {
+export default function LoginPage({ previewState } = {}) {
   const navigate = useNavigate();
   const location = useLocation();
   const { login } = useAuth();
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState(null);
+  const [email, setEmail] = useState(() => {
+    if (previewState === 'error') return 'kasun.fernando@example.lk';
+    if (previewState === 'email-not-verified') return 'kasun@example.lk';
+    if (previewState === 'account-locked') return 'kasun.perera@colombo.lk';
+    return '';
+  });
+  const [password, setPassword] = useState(() => {
+    if (previewState === 'error') return 'SecurePass123!#';
+    return '';
+  });
+  const [error, setError] = useState(() => {
+    if (previewState === 'error') {
+      return { code: 'BAD_CREDENTIALS', message: 'Incorrect email or password.' };
+    }
+    if (previewState === 'email-not-verified') {
+      return { code: 'EMAIL_NOT_VERIFIED', message: 'Email not verified' };
+    }
+    if (previewState === 'account-locked') {
+      return { code: 'ACCOUNT_LOCKED', message: 'Account locked' };
+    }
+    return null;
+  });
   const [emailError, setEmailError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
@@ -103,7 +122,7 @@ export default function LoginPage() {
           className="fb-link-btn"
           onClick={handleResendVerification}
           disabled={resending}
-          style={{ fontWeight: 500 }}
+          style={{ fontWeight: 600 }}
         >
           Resend verification email
         </button>
@@ -130,13 +149,15 @@ export default function LoginPage() {
       <h1 className="auth-card__title">Log in</h1>
 
       {error && (
-        <Alert
-          variant={alertVariant}
-          title={alertTitle}
-          onClose={() => setError(null)}
-        >
-          {alertChildren}
-        </Alert>
+        <div style={{ marginBottom: '16px' }}>
+          <Alert
+            variant={alertVariant}
+            title={alertTitle}
+            onClose={() => setError(null)}
+          >
+            {alertChildren}
+          </Alert>
+        </div>
       )}
 
       <form className="auth-form" onSubmit={handleSubmit} noValidate>
