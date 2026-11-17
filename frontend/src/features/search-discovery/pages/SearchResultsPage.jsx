@@ -7,6 +7,7 @@ import SearchResultCard from '../components/SearchResultCard';
 import SearchComparisonBanner from '../components/SearchComparisonBanner';
 import LocalServeFooter from '../components/LocalServeFooter';
 import FeaturePendingModal from '../components/FeaturePendingModal';
+import ProviderComparisonModal from '../components/ProviderComparisonModal';
 import {
   SearchResultSkeleton,
   SearchEmptyState,
@@ -75,6 +76,27 @@ export function SearchResultsPage() {
   });
   // Ref to the element that last opened the modal; focus is restored on close.
   const modalTriggerRef = useRef(null);
+
+  // Comparison dialog state. The trigger and a stable fallback are kept so
+  // focus can return somewhere sensible if the shortlist becomes empty.
+  const [isComparisonOpen, setIsComparisonOpen] = useState(false);
+  const comparisonTriggerRef = useRef(null);
+  const resultsSectionRef = useRef(null);
+  const wasComparisonOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (wasComparisonOpenRef.current && !isComparisonOpen) {
+      const trigger = comparisonTriggerRef.current;
+
+      if (trigger?.isConnected && !trigger.disabled) {
+        trigger.focus();
+      } else {
+        resultsSectionRef.current?.focus();
+      }
+    }
+
+    wasComparisonOpenRef.current = isComparisonOpen;
+  }, [isComparisonOpen]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -193,15 +215,20 @@ export function SearchResultsPage() {
   };
 
   const handleCompareClick = (triggerEl) => {
-    modalTriggerRef.current = triggerEl ?? null;
-    setModalState({
-      isOpen: true,
-      badgeText: 'SCHEDULED FOR MILESTONE 2',
-      title: 'Side-by-Side Comparison',
-      message: `The full side-by-side comparison screen for your ${selectedProviders.length} selected providers (${selectedProviders
-        .map((p) => p.name)
-        .join(', ')}) is scheduled for Milestone 2.`,
-    });
+    if (selectedProviders.length < 2) {
+      return;
+    }
+
+    comparisonTriggerRef.current = triggerEl ?? null;
+    setIsComparisonOpen(true);
+  };
+
+  const handleCloseComparison = () => {
+    setIsComparisonOpen(false);
+  };
+
+  const handleRemoveComparisonProvider = (providerId) => {
+    setSelectedProviders((prev) => prev.filter((provider) => provider.id !== providerId));
   };
 
   const formatPaginationText = () => {
@@ -243,7 +270,12 @@ export function SearchResultsPage() {
             />
 
             {/* Right Column: Cards, States, Comparison & Pagination */}
-            <section className="search-results-column" aria-label="Search results list">
+            <section
+              className="search-results-column"
+              aria-label="Search results list"
+              ref={resultsSectionRef}
+              tabIndex={-1}
+            >
               {isFixture && (
                 <p className="search-demo-notice" role="status">
                   Demo mode: showing sample providers while live search is not connected.
@@ -327,6 +359,18 @@ export function SearchResultsPage() {
 
       {/* Footer */}
       <LocalServeFooter />
+
+      {/* Full side-by-side provider comparison */}
+      {isComparisonOpen && (
+        <ProviderComparisonModal
+          providers={selectedProviders}
+          serviceLabel={activeQuery}
+          locationLabel={activeLocation}
+          filters={filters}
+          onClose={handleCloseComparison}
+          onRemove={handleRemoveComparisonProvider}
+        />
+      )}
 
       {/* Explicit Milestone Limitation Modal */}
       <FeaturePendingModal
