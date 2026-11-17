@@ -32,6 +32,8 @@ import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCom
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
+import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
+import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -72,6 +74,12 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private PaymentRepository paymentRepository;
+
+    @MockitoBean
+    private ConversationRepository conversationRepository;
+
+    @MockitoBean
+    private MessageRepository messageRepository;
 
     @MockitoBean
     private MongoTemplate mongoTemplate;
