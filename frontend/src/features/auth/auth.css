@@ -769,21 +769,42 @@
 }
 
 /* Shared Button Overrides inside Auth */
-.auth-layout .shared-btn {
+.auth-layout .shared-btn,
+.auth-card .shared-btn,
+.auth-card a.shared-btn {
+  box-sizing: border-box;
   font-family: inherit;
   border-radius: 8px;
   font-weight: 600;
+  text-decoration: none;
 }
 
-.auth-layout .shared-btn--primary {
+.auth-card a.shared-btn,
+.auth-card .shared-btn--full-width {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.auth-layout .shared-btn--primary,
+.auth-layout a.shared-btn--primary:visited {
   background-color: var(--auth-primary);
   color: #ffffff;
   min-height: 42px;
   height: 42px;
+  box-sizing: border-box;
 }
 
 .auth-layout .shared-btn--primary:hover:not(:disabled) {
   background-color: var(--auth-primary-hover);
+  color: #ffffff;
+  text-decoration: none;
 }
 
 .auth-layout .shared-btn--primary:active:not(:disabled) {

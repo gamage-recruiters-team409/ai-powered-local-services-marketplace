@@ -142,7 +142,7 @@ export default function ResetPasswordPage({ previewState } = {}) {
         <p className="auth-card__description">
           You can now log in with your new password.
         </p>
-        <Link to="/login" className="shared-btn shared-btn--primary" style={{ width: '100%', textDecoration: 'none' }}>
+        <Link to="/login" className="shared-btn shared-btn--primary">
           Log in
         </Link>
       </div>
@@ -162,7 +162,7 @@ export default function ResetPasswordPage({ previewState } = {}) {
         <Link
           to="/forgot-password"
           className="shared-btn shared-btn--primary"
-          style={{ width: '100%', marginBottom: '16px', textDecoration: 'none' }}
+          style={{ marginBottom: '16px' }}
         >
           Request a new link
         </Link>

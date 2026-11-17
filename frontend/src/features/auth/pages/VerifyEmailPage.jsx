@@ -129,7 +129,7 @@ export default function VerifyEmailPage({ previewState } = {}) {
         <p className="auth-card__description">
           {message || 'Your account is now active.'}
         </p>
-        <Link to="/login" className="shared-btn shared-btn--primary" style={{ width: '100%', textDecoration: 'none' }}>
+        <Link to="/login" className="shared-btn shared-btn--primary">
           Log in
         </Link>
       </div>
@@ -148,7 +148,7 @@ export default function VerifyEmailPage({ previewState } = {}) {
       <Link
         to="/check-email"
         className="shared-btn shared-btn--primary"
-        style={{ width: '100%', marginBottom: '8px', textDecoration: 'none' }}
+        style={{ marginBottom: '8px' }}
       >
         Resend verification email
       </Link>
