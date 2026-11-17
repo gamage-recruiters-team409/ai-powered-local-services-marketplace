@@ -13,10 +13,12 @@ import {
   StatusBadge,
   WhatHappensNext,
 } from '../components/DisputeParts'
+import { DisputeIcon } from '../components/DisputeIcon'
 import { DisputeAccessDenied, DisputeErrorState, DisputeNotFound, DisputeSkeleton } from '../components/DisputeStates'
 import { responderRoleOf } from '../config/disputeStatus'
 import { useDispute } from '../hooks/useDispute'
 import { useNow } from '../hooks/useNow'
+import { isResponseOverdue } from '../utils/countdown'
 import { disputeTitle } from '../utils/format'
 import styles from '../disputes.module.css'
 
@@ -57,6 +59,7 @@ function CustomerDisputeView({ dispute, now }) {
   const responderRole = responderRoleOf(dispute)
   const customerResponds = responderRole === 'CUSTOMER'
   const title = disputeTitle(dispute)
+  const overdue = isResponseOverdue(dispute, now)
 
   return (
     <div className={styles.page}>
@@ -70,9 +73,19 @@ function CustomerDisputeView({ dispute, now }) {
       <div className={styles.titleRow}>
         <div className={styles.titleGroup}>
           <h1 className={styles.title}>{title}</h1>
-          <StatusBadge status={dispute.status} viewerIsResponder={customerResponds} responderRole={responderRole} />
+          <StatusBadge
+            status={dispute.status}
+            viewerIsResponder={customerResponds}
+            responderRole={responderRole}
+            overdue={overdue}
+          />
         </div>
-        <Button variant="secondary" className={styles.noPrint} onClick={() => window.print()}>
+        <Button
+          variant="secondary"
+          className={styles.noPrint}
+          icon={<DisputeIcon name="print" size={16} />}
+          onClick={() => window.print()}
+        >
           Print case summary
         </Button>
       </div>
@@ -101,6 +114,7 @@ function CustomerDisputeView({ dispute, now }) {
           <DisputeTimeline
             dispute={dispute}
             waitingTitle={customerResponds ? 'Waiting for your response' : "Waiting for the provider's response"}
+            overdue={overdue}
           />
         </div>
         <div className={styles.column}>

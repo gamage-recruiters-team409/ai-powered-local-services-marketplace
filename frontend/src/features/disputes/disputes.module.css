@@ -102,8 +102,10 @@
 
 .title {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1.625rem;
+  font-weight: 700;
   line-height: 1.2;
+  letter-spacing: -0.01em;
   color: var(--dsp-heading);
 }
 
@@ -174,6 +176,22 @@
   color: #991b1b;
 }
 
+.bannerText {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.bannerText > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.bannerDue {
+  opacity: 0.8;
+}
+
 .stage {
   padding: 2px 8px;
   border-radius: var(--dsp-radius-sm);
@@ -201,10 +219,11 @@
 }
 
 .card {
-  padding: 20px;
+  padding: 22px;
   border: 1px solid var(--dsp-border);
   border-radius: var(--dsp-radius);
   background: var(--dsp-surface);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 1px 8px rgb(15 23 42 / 0.03);
   min-width: 0;
 }
 
@@ -214,13 +233,31 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 14px;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--dsp-border);
 }
 
 .cardTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0;
   font-size: 1rem;
+  font-weight: 700;
   color: var(--dsp-heading);
+}
+
+.cardIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 8px;
+  background: var(--dsp-primary-soft);
+  color: var(--dsp-primary);
 }
 
 .fields {
@@ -289,24 +326,36 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 84px;
-  padding: 10px;
+  gap: 8px;
+  min-height: 96px;
+  padding: 12px 10px;
   border: 1px solid var(--dsp-border);
-  border-radius: var(--dsp-radius-sm);
+  border-radius: 10px;
   background: var(--dsp-section);
-  font-size: 0.75rem;
   text-align: center;
-  overflow-wrap: anywhere;
-}
-
-.evidenceItem a {
-  color: var(--dsp-primary-dark);
 }
 
 .evidenceIcon {
-  font-size: 1.25rem;
-  color: var(--dsp-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--dsp-surface);
+  border: 1px solid var(--dsp-border);
+  color: var(--dsp-primary);
+}
+
+.evidenceName {
+  font-size: 0.75rem;
+  color: var(--dsp-text);
+  overflow-wrap: anywhere;
+}
+
+a.evidenceName {
+  color: var(--dsp-primary-dark);
+  font-weight: 600;
 }
 
 /* ---------- timeline ---------- */
@@ -350,6 +399,12 @@
 
 .dotPending {
   border-color: #d97706;
+  box-shadow: 0 0 0 4px #fef3c7;
+}
+
+.dotOverdue {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 4px #fee2e2;
 }
 
 .timelineTitle {
@@ -361,6 +416,10 @@
 
 .timelinePending {
   color: #b45309;
+}
+
+.timelineOverdue {
+  color: #b91c1c;
 }
 
 /* ---------- steps (what happens next) ---------- */
@@ -396,6 +455,16 @@
 .stepActive .stepNumber {
   background: var(--dsp-primary);
   color: #ffffff;
+  box-shadow: 0 0 0 4px var(--dsp-primary-soft);
+}
+
+.stepDone .stepNumber {
+  background: var(--dsp-primary-dark);
+  color: #ffffff;
+}
+
+.stepDone .stepTitle {
+  color: var(--dsp-muted);
 }
 
 .stepTitle {
@@ -406,12 +475,21 @@
 }
 
 .note {
-  margin-top: 16px;
-  padding: 12px 14px;
-  border-radius: var(--dsp-radius-sm);
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--prv-color-primary-light, #ccfbf1);
+  border-radius: 10px;
   background: var(--dsp-primary-soft);
   color: var(--dsp-primary-dark);
   font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.noteIcon {
+  flex: none;
+  color: var(--dsp-primary);
 }
 
 .note strong {
@@ -451,6 +529,23 @@
   color: var(--dsp-muted);
   font-size: 0.8125rem;
   text-align: center;
+}
+
+.dropzoneIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  background: var(--dsp-surface);
+  border: 1px solid var(--dsp-border);
+  color: var(--dsp-muted);
+}
+
+.dropzone strong {
+  color: var(--dsp-text);
 }
 
 .fieldLabel {
@@ -548,5 +643,10 @@
   .banner {
     break-inside: avoid;
     box-shadow: none;
+  }
+
+  .cardIcon,
+  .evidenceIcon {
+    border: 1px solid #cbd5e1;
   }
 }

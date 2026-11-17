@@ -96,6 +96,8 @@ describe('ProviderDisputePage', () => {
 
     expect(await screen.findByText(/the 72-hour deadline has passed/i)).toBeTruthy()
     expect(screen.queryByLabelText(/tell your side/i)).toBeNull()
+    expect(screen.getByText('Response overdue')).toBeTruthy()
+    expect(screen.queryByText('Awaiting your response')).toBeNull()
   })
 
   it('submits the response, then shows it read-only with a success message', async () => {

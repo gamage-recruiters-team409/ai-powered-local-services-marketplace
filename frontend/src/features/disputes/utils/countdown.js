@@ -47,3 +47,8 @@ export function formatTimeLeft(timeLeft) {
   }
   return 'less than a minute left'
 }
+
+/** True when a response is still awaited but its deadline has passed. */
+export function isResponseOverdue(dispute, now = Date.now()) {
+  return dispute?.status === 'AWAITING_RESPONSE' && getTimeLeft(dispute.responseDueAt, now)?.overdue === true
+}

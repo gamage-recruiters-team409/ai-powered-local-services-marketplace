@@ -7,6 +7,8 @@ import { LOGIN_PATH } from '../../disputes-admin/services/authBridge'
 import { submitDisputeResponse } from '../services/disputesApi'
 import { parseApiError } from '../utils/disputeErrors'
 import { MAX_RESPONSE_LENGTH, validateResponseText } from '../utils/responseValidation'
+import { CardHeading } from './DisputeParts'
+import { DisputeIcon } from './DisputeIcon'
 import styles from '../disputes.module.css'
 
 /**
@@ -26,7 +28,7 @@ export function ProviderResponseForm({ disputeId, canRespond, closedMessage, onS
   if (!canRespond) {
     return (
       <section className={styles.card} aria-labelledby={titleId}>
-        <h2 id={titleId} className={`${styles.cardTitle} ${styles.cardHeader}`}>Your response</h2>
+        <CardHeading id={titleId} icon="response" title="Your response" />
         <InlineMessage variant="info">{closedMessage}</InlineMessage>
       </section>
     )
@@ -73,7 +75,7 @@ export function ProviderResponseForm({ disputeId, canRespond, closedMessage, onS
 
   return (
     <section className={styles.card} aria-labelledby={titleId}>
-      <h2 id={titleId} className={`${styles.cardTitle} ${styles.cardHeader}`}>Your response</h2>
+      <CardHeading id={titleId} icon="response" title="Your response" />
       <form className={styles.form} onSubmit={handleSubmit} noValidate aria-busy={submitting}>
         <Textarea
           label="Tell your side"
@@ -98,8 +100,8 @@ export function ProviderResponseForm({ disputeId, canRespond, closedMessage, onS
         <div>
           <p className={styles.fieldLabel}>Add evidence (optional)</p>
           <div className={styles.dropzone} aria-disabled="true">
-            <span aria-hidden="true">⇪</span>
-            <span>Evidence upload coming soon</span>
+            <span className={styles.dropzoneIcon}><DisputeIcon name="upload" size={22} /></span>
+            <strong>Evidence upload coming soon</strong>
             <span>For now, describe any photos or documents in your response.</span>
           </div>
         </div>

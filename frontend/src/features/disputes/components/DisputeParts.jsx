@@ -10,6 +10,7 @@ import {
 import { formatTimeLeft, getTimeLeft } from '../utils/countdown'
 import { evidenceName, formatDateTime, shortReference } from '../utils/format'
 import { safeEvidenceHref } from '../utils/safeLink'
+import { DisputeIcon } from './DisputeIcon'
 import styles from '../disputes.module.css'
 
 /** All user-provided text is rendered as React text (escaped); nothing here uses raw HTML. */
@@ -30,13 +31,30 @@ export function Breadcrumb({ items }) {
   )
 }
 
-export function StatusBadge({ status, viewerIsResponder, responderRole }) {
+/** Card title with its icon, and optional content on the right (badge or chip). */
+export function CardHeading({ id, icon, title, aside }) {
+  return (
+    <div className={styles.cardHeader}>
+      <h2 id={id} className={styles.cardTitle}>
+        {icon && <span className={styles.cardIcon}><DisputeIcon name={icon} /></span>}
+        {title}
+      </h2>
+      {aside}
+    </div>
+  )
+}
+
+/** `overdue` shows "Response overdue" instead of "Awaiting ... response" once the deadline has passed. */
+export function StatusBadge({ status, viewerIsResponder, responderRole, overdue = false }) {
+  if (overdue && status === DISPUTE_STATUS.AWAITING_RESPONSE) {
+    return <span className={`${styles.badge} ${styles['tone-danger']}`}>Response overdue</span>
+  }
   const badge = getStatusBadge(status, { viewerIsResponder, responderRole })
   return <span className={`${styles.badge} ${styles[`tone-${badge.tone}`]}`}>{badge.label}</span>
 }
 
 /**
- * Yellow deadline banner while the dispute waits for a response; a closed banner when the deadline passed.
+ * Yellow deadline banner while the dispute waits for a response; a red one when the deadline has passed.
  * `waitingText` is the lead sentence for this viewer, e.g. "Please respond within 72 hours."
  */
 export function DeadlineBanner({ dispute, now, waitingText, showStage = false }) {
@@ -52,7 +70,7 @@ export function DeadlineBanner({ dispute, now, waitingText, showStage = false })
       : 'This dispute has been decided or closed.'
     return (
       <div className={`${styles.banner} ${styles.bannerInfo}`}>
-        <span>{text}</span>
+        <span className={styles.bannerText}><DisputeIcon name="steps" />{text}</span>
         {stageLabel}
       </div>
     )
@@ -62,13 +80,16 @@ export function DeadlineBanner({ dispute, now, waitingText, showStage = false })
   const closed = timeLeft?.overdue
   return (
     <div className={`${styles.banner} ${closed ? styles.bannerClosed : ''}`}>
-      <span aria-live="polite">
-        {closed
-          ? 'The response window has closed (overdue).'
-          : <>{waitingText} <strong>{formatTimeLeft(timeLeft)}.</strong></>}
-        {dispute.responseDueAt && (
-          <span className={styles.muted}> Due {formatDateTime(dispute.responseDueAt)}.</span>
-        )}
+      <span className={styles.bannerText} aria-live="polite">
+        <DisputeIcon name="clock" />
+        <span>
+          {closed
+            ? 'The response window has closed.'
+            : <>{waitingText} <strong>{formatTimeLeft(timeLeft)}.</strong></>}
+          {dispute.responseDueAt && (
+            <span className={styles.bannerDue}> Due {formatDateTime(dispute.responseDueAt)}.</span>
+          )}
+        </span>
       </span>
       {stageLabel}
     </div>
@@ -79,23 +100,31 @@ export function DeadlineBanner({ dispute, now, waitingText, showStage = false })
 export function BookingCard({ dispute, title = 'Booking details' }) {
   return (
     <section className={styles.card} aria-labelledby="dispute-booking-title">
-      <div className={styles.cardHeader}>
-        <h2 id="dispute-booking-title" className={styles.cardTitle}>{title}</h2>
-        <span className={styles.chip}>{shortReference('BK', dispute.bookingId)}</span>
-      </div>
+      <CardHeading
+        id="dispute-booking-title"
+        icon="booking"
+        title={title}
+        aside={<span className={styles.chip}>{shortReference('BK', dispute.bookingId)}</span>}
+      />
       <dl className={styles.fields}>
-        <div>
-          <dt>Booking reference</dt>
-          <dd>{dispute.bookingId}</dd>
-        </div>
         <div>
           <dt>Raised by</dt>
           <dd>{roleLabel(dispute.raisedByRole)}</dd>
+        </div>
+        <div>
+          <dt>Raised on</dt>
+          <dd>{formatDateTime(dispute.createdAt)}</dd>
+        </div>
+        <div>
+          <dt>Response due</dt>
+          <dd>{formatDateTime(dispute.responseDueAt) || '—'}</dd>
         </div>
       </dl>
     </section>
   )
 }
+
+const IMAGE_EXTENSION = /\.(jpe?g|png|gif|webp|heic)$/i
 
 export function EvidenceList({ evidence }) {
   if (!Array.isArray(evidence) || evidence.length === 0) {
@@ -108,10 +137,12 @@ export function EvidenceList({ evidence }) {
         const name = evidenceName(reference)
         return (
           <li key={`${index}-${name}`} className={styles.evidenceItem}>
-            <span className={styles.evidenceIcon} aria-hidden="true">🗎</span>
+            <span className={styles.evidenceIcon}>
+              <DisputeIcon name={IMAGE_EXTENSION.test(name) ? 'image' : 'file'} size={22} />
+            </span>
             {href
-              ? <a href={href} target="_blank" rel="noopener noreferrer">{name}</a>
-              : <span>{name}</span>}
+              ? <a href={href} target="_blank" rel="noopener noreferrer" className={styles.evidenceName}>{name}</a>
+              : <span className={styles.evidenceName}>{name}</span>}
           </li>
         )
       })}
@@ -120,19 +151,20 @@ export function EvidenceList({ evidence }) {
 }
 
 export function IssueCard({ dispute, title }) {
+  const count = Array.isArray(dispute.evidence) ? dispute.evidence.length : 0
   return (
     <section className={styles.card} aria-labelledby="dispute-issue-title">
-      <div className={styles.cardHeader}>
-        <h2 id="dispute-issue-title" className={styles.cardTitle}>{title}</h2>
-        <span className={`${styles.badge} ${styles['tone-danger']}`}>{categoryLabel(dispute.category)}</span>
-      </div>
+      <CardHeading
+        id="dispute-issue-title"
+        icon="issue"
+        title={title}
+        aside={<span className={`${styles.badge} ${styles['tone-danger']}`}>{categoryLabel(dispute.category)}</span>}
+      />
       <p className={styles.meta}>Raised on {formatDateTime(dispute.createdAt)}</p>
       <div className={styles.quote}>
         <p className={styles.text}>{dispute.description}</p>
       </div>
-      <h3 className={styles.subTitle}>
-        Attached evidence {Array.isArray(dispute.evidence) && dispute.evidence.length > 0 && `(${dispute.evidence.length})`}
-      </h3>
+      <h3 className={styles.subTitle}>Attached evidence{count > 0 && ` (${count})`}</h3>
       <EvidenceList evidence={dispute.evidence} />
     </section>
   )
@@ -148,11 +180,11 @@ const TIMELINE_TITLES = Object.freeze({
 })
 
 /** Built from the embedded status history, plus a "waiting" step while a response is due. */
-export function DisputeTimeline({ dispute, waitingTitle }) {
+export function DisputeTimeline({ dispute, waitingTitle, overdue = false }) {
   const history = Array.isArray(dispute.statusHistory) ? dispute.statusHistory : []
   return (
     <section className={styles.card} aria-labelledby="dispute-timeline-title">
-      <h2 id="dispute-timeline-title" className={`${styles.cardTitle} ${styles.cardHeader}`}>Dispute timeline</h2>
+      <CardHeading id="dispute-timeline-title" icon="timeline" title="Dispute timeline" />
       <ol className={styles.timeline}>
         {history.map((entry, index) => (
           <li key={`${index}-${entry.timestamp}`} className={styles.timelineItem}>
@@ -166,9 +198,13 @@ export function DisputeTimeline({ dispute, waitingTitle }) {
         ))}
         {dispute.status === DISPUTE_STATUS.AWAITING_RESPONSE && waitingTitle && (
           <li className={styles.timelineItem}>
-            <span className={`${styles.dot} ${styles.dotPending}`} aria-hidden="true" />
-            <p className={`${styles.timelineTitle} ${styles.timelinePending}`}>{waitingTitle}</p>
-            <p className={styles.muted}>Current status · response window active</p>
+            <span className={`${styles.dot} ${overdue ? styles.dotOverdue : styles.dotPending}`} aria-hidden="true" />
+            <p className={`${styles.timelineTitle} ${overdue ? styles.timelineOverdue : styles.timelinePending}`}>
+              {overdue ? 'No response before the deadline' : waitingTitle}
+            </p>
+            <p className={styles.muted}>
+              {overdue ? 'Response window closed' : 'Current status · response window active'}
+            </p>
           </li>
         )}
       </ol>
@@ -187,25 +223,28 @@ export function WhatHappensNext({ status }) {
   const stage = getStatusBadge(status).stage
   return (
     <section className={styles.card} aria-labelledby="dispute-next-title">
-      <h2 id="dispute-next-title" className={`${styles.cardTitle} ${styles.cardHeader}`}>What happens next</h2>
+      <CardHeading id="dispute-next-title" icon="steps" title="What happens next" />
       <ol className={styles.steps}>
-        {NEXT_STEPS.map((step, index) => (
-          <li
-            key={step.title}
-            className={`${styles.step} ${stage === index + 1 ? styles.stepActive : ''}`}
-            aria-current={stage === index + 1 ? 'step' : undefined}
-          >
-            <span className={styles.stepNumber} aria-hidden="true">{index + 1}</span>
-            <div>
-              <p className={styles.stepTitle}>{step.title}</p>
-              <p className={styles.muted}>{step.text}</p>
-            </div>
-          </li>
-        ))}
+        {NEXT_STEPS.map((step, index) => {
+          const number = index + 1
+          const state = stage > number ? styles.stepDone : stage === number ? styles.stepActive : ''
+          return (
+            <li key={step.title} className={`${styles.step} ${state}`} aria-current={stage === number ? 'step' : undefined}>
+              <span className={styles.stepNumber} aria-hidden="true">{number}</span>
+              <div>
+                <p className={styles.stepTitle}>{step.title}</p>
+                <p className={styles.muted}>{step.text}</p>
+              </div>
+            </li>
+          )
+        })}
       </ol>
       <div className={styles.note}>
-        <strong>Funds protected</strong>
-        The provider payout for this booking is held until the dispute is resolved.
+        <span className={styles.noteIcon}><DisputeIcon name="shield" /></span>
+        <div>
+          <strong>Funds protected</strong>
+          The provider payout for this booking is held until the dispute is resolved.
+        </div>
       </div>
     </section>
   )
@@ -218,7 +257,7 @@ export function ResponseView({ response, title = 'Response' }) {
   }
   return (
     <section className={styles.card} aria-labelledby="dispute-response-title">
-      <h2 id="dispute-response-title" className={`${styles.cardTitle} ${styles.cardHeader}`}>{title}</h2>
+      <CardHeading id="dispute-response-title" icon="response" title={title} />
       <p className={styles.meta}>Submitted on {formatDateTime(response.respondedAt)}</p>
       <div className={styles.quote}>
         <p className={styles.text}>{response.text}</p>

@@ -5,6 +5,7 @@
  * Open:  /customer/disputes/sample-awaiting   /provider/disputes/sample-awaiting
  *        /provider/disputes/sample-review     /provider/disputes/sample-overdue
  *        /customer/disputes/sample-denied (403)   any other id (404)
+ * Each sample also has a realistic hex id (like a MongoDB id), so references read "D-001042", "BK-048192".
  */
 
 const HOUR_MS = 60 * 60 * 1000
@@ -14,11 +15,11 @@ function iso(offsetMs) {
   return new Date(Date.now() + offsetMs).toISOString()
 }
 
-function baseDispute(id, createdOffsetMs) {
+function baseDispute(id, bookingId, createdOffsetMs) {
   const createdAt = iso(createdOffsetMs)
   return {
     id,
-    bookingId: `sample-booking-${id}`,
+    bookingId,
     customerId: 'sample-customer-id',
     providerId: 'sample-provider-id',
     raisedBy: 'sample-customer-id',
@@ -45,9 +46,9 @@ function baseDispute(id, createdOffsetMs) {
 
 function buildFixtures() {
   // Raised ~20h ago: "2 days 4 hours left".
-  const awaiting = baseDispute('sample-awaiting', -(19 * HOUR_MS + 50 * 60 * 1000))
+  const awaiting = baseDispute('6a0f00c0ffee00a000001042', '6a0f00c0ffee00b000048192', -(19 * HOUR_MS + 50 * 60 * 1000))
 
-  const review = baseDispute('sample-review', -30 * HOUR_MS)
+  const review = baseDispute('6a0f00c0ffee00a000001043', '6a0f00c0ffee00b000048193', -30 * HOUR_MS)
   const respondedAt = iso(-6 * HOUR_MS)
   review.status = 'UNDER_REVIEW'
   review.response = {
@@ -67,9 +68,10 @@ function buildFixtures() {
   }]
 
   // Raised 80h ago: the 72h window has passed.
-  const overdue = baseDispute('sample-overdue', -80 * HOUR_MS)
+  const overdue = baseDispute('6a0f00c0ffee00a000001044', '6a0f00c0ffee00b000048194', -80 * HOUR_MS)
 
-  return { [awaiting.id]: awaiting, [review.id]: review, [overdue.id]: overdue }
+  // Keyed by the short URL slug; findFixture also accepts the hex id (used by the response form).
+  return { 'sample-awaiting': awaiting, 'sample-review': review, 'sample-overdue': overdue }
 }
 
 let fixtures = buildFixtures()
@@ -85,6 +87,10 @@ function apiError(status, error, fieldErrors = []) {
   return err
 }
 
+function findFixture(disputeId) {
+  return fixtures[disputeId] ?? Object.values(fixtures).find((dispute) => dispute.id === disputeId)
+}
+
 const delay = (ms) => new Promise((resolve) => {
   setTimeout(resolve, ms)
 })
@@ -94,7 +100,7 @@ export async function getMockDispute(disputeId) {
   if (disputeId === 'sample-denied') {
     throw apiError(403, 'NOT_DISPUTE_PARTY')
   }
-  const dispute = fixtures[disputeId]
+  const dispute = findFixture(disputeId)
   if (!dispute) {
     throw apiError(404, 'DISPUTE_NOT_FOUND')
   }
@@ -104,7 +110,7 @@ export async function getMockDispute(disputeId) {
 /** Applies the same rules as the backend's submitResponse. */
 export async function submitMockResponse(disputeId, text) {
   await delay(500)
-  const dispute = fixtures[disputeId]
+  const dispute = findFixture(disputeId)
   if (!dispute) {
     throw apiError(404, 'DISPUTE_NOT_FOUND')
   }

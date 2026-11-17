@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatTimeLeft, getTimeLeft } from './countdown'
+import { formatTimeLeft, getTimeLeft, isResponseOverdue } from './countdown'
 
 const NOW = Date.parse('2026-11-16T10:00:00Z')
 const MINUTE = 60 * 1000
@@ -45,5 +45,14 @@ describe('formatTimeLeft', () => {
 
   it('is empty when there is no deadline', () => {
     expect(formatTimeLeft(null)).toBe('')
+  })
+})
+
+describe('isResponseOverdue', () => {
+  it('is true only while a response is awaited and the deadline has passed', () => {
+    expect(isResponseOverdue({ status: 'AWAITING_RESPONSE', responseDueAt: dueIn(-MINUTE) }, NOW)).toBe(true)
+    expect(isResponseOverdue({ status: 'AWAITING_RESPONSE', responseDueAt: dueIn(HOUR) }, NOW)).toBe(false)
+    expect(isResponseOverdue({ status: 'UNDER_REVIEW', responseDueAt: dueIn(-MINUTE) }, NOW)).toBe(false)
+    expect(isResponseOverdue(null, NOW)).toBe(false)
   })
 })

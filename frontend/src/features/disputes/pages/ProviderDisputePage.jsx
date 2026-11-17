@@ -13,11 +13,12 @@ import {
   StatusBadge,
 } from '../components/DisputeParts'
 import { DisputeAccessDenied, DisputeErrorState, DisputeNotFound, DisputeSkeleton } from '../components/DisputeStates'
+import { DisputeIcon } from '../components/DisputeIcon'
 import { ProviderResponseForm } from '../components/ProviderResponseForm'
 import { DISPUTE_STATUS, responderRoleOf } from '../config/disputeStatus'
 import { useDispute } from '../hooks/useDispute'
 import { useNow } from '../hooks/useNow'
-import { getTimeLeft } from '../utils/countdown'
+import { getTimeLeft, isResponseOverdue } from '../utils/countdown'
 import { disputeTitle } from '../utils/format'
 import styles from '../disputes.module.css'
 
@@ -69,6 +70,7 @@ function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
   const providerResponds = responderRole === 'PROVIDER'
   const title = disputeTitle(dispute)
   const reason = closedReason(dispute, now)
+  const overdue = isResponseOverdue(dispute, now)
 
   return (
     <div className={styles.page}>
@@ -81,7 +83,12 @@ function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
 
       <div className={styles.titleGroup}>
         <h1 className={styles.title}>{title}</h1>
-        <StatusBadge status={dispute.status} viewerIsResponder={providerResponds} responderRole={responderRole} />
+        <StatusBadge
+          status={dispute.status}
+          viewerIsResponder={providerResponds}
+          responderRole={responderRole}
+          overdue={overdue}
+        />
       </div>
 
       <DeadlineBanner
@@ -92,7 +99,10 @@ function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
 
       {ACTIVE_STATUSES.has(dispute.status) && (
         <div className={`${styles.banner} ${styles.bannerInfo}`}>
-          <span>The payout for this booking is on hold until the dispute is resolved.</span>
+          <span className={styles.bannerText}>
+            <DisputeIcon name="lock" />
+            The payout for this booking is on hold until the dispute is resolved.
+          </span>
         </div>
       )}
 
@@ -114,6 +124,7 @@ function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
           <DisputeTimeline
             dispute={dispute}
             waitingTitle={providerResponds ? 'Waiting for your response' : "Waiting for the customer's response"}
+            overdue={overdue}
           />
         </div>
         <div className={styles.column}>
