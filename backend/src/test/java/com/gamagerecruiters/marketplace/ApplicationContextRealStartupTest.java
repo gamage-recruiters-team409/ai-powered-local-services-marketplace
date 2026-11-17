@@ -1,3 +1,4 @@
+
 package com.gamagerecruiters.marketplace;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -22,18 +23,20 @@ import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
 import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitExceededException;
 import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitService;
-import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
-import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
 import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
-import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepository;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
+import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
+import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
+import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
+import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
+import com.gamagerecruiters.marketplace.modules.verification.repository.VerificationDocumentRepository;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -73,6 +76,12 @@ class ApplicationContextRealStartupTest {
     private ReviewRepository reviewRepository;
 
     @MockitoBean
+    private VerificationDocumentRepository verificationDocumentRepository;
+
+    @MockitoBean
+    private ProviderVerificationRepository providerVerificationRepository;
+
+    @MockitoBean
     private PaymentRepository paymentRepository;
 
     @MockitoBean
@@ -88,31 +97,64 @@ class ApplicationContextRealStartupTest {
     private ApplicationContext applicationContext;
 
     @Test
-    @DisplayName("Verify real Spring context loads without circular dependencies and key security beans exist")
+    @DisplayName(
+            "Verify real Spring context loads without circular dependencies and key security beans exist"
+    )
     void contextLoadsAndKeySecurityBeansExist() {
-                
-        assertNotNull(applicationContext.getBean(PasswordEncoder.class), "PasswordEncoder bean must exist");
-        assertNotNull(applicationContext.getBean(JwtAuthenticationFilter.class), "JwtAuthenticationFilter bean must exist");
-        assertNotNull(applicationContext.getBean(SecurityFilterChain.class), "SecurityFilterChain bean must exist");
-        assertNotNull(applicationContext.getBean(RateLimitService.class), "RateLimitService bean must exist");
-        assertNotNull(applicationContext.getBean(BookingOpenBookingsChecker.class), "BookingOpenBookingsChecker bean must exist");
+
+        assertNotNull(
+                applicationContext.getBean(PasswordEncoder.class),
+                "PasswordEncoder bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(JwtAuthenticationFilter.class),
+                "JwtAuthenticationFilter bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(SecurityFilterChain.class),
+                "SecurityFilterChain bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(RateLimitService.class),
+                "RateLimitService bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(BookingOpenBookingsChecker.class),
+                "BookingOpenBookingsChecker bean must exist"
+        );
     }
 
     @Test
-    @DisplayName("RateLimitService bean uses real default properties (5 requests per 15 minutes for sensitive)")
+    @DisplayName(
+            "RateLimitService bean uses real default properties (5 requests per 15 minutes for sensitive)"
+    )
     void rateLimitServiceUsesDefaultSensitiveProperties() {
-        RateLimitService rateLimiter = applicationContext.getBean(RateLimitService.class);
-        assertNotNull(rateLimiter, "RateLimitService bean must exist");
+
+        RateLimitService rateLimiter =
+                applicationContext.getBean(RateLimitService.class);
+
+        assertNotNull(
+                rateLimiter,
+                "RateLimitService bean must exist"
+        );
 
         String testUserId = "real-props-sensitive-user";
+
         for (int i = 0; i < 5; i++) {
-            assertDoesNotThrow(() -> rateLimiter.checkSensitive(testUserId));
+            assertDoesNotThrow(
+                    () -> rateLimiter.checkSensitive(testUserId)
+            );
         }
 
         RateLimitExceededException ex = assertThrows(
                 RateLimitExceededException.class,
                 () -> rateLimiter.checkSensitive(testUserId)
         );
+
         assertEquals("RATE_LIMITED", ex.getErrorCode());
     }
 }
