@@ -34,6 +34,14 @@ export function useDispute(disputeId) {
     (dispute) => setResult({ key: requestKey, dispute, error: null }),
     [requestKey],
   )
+  /** Refetch in the background, keeping the current screen (and any message on it) until fresh data arrives. */
+  const refresh = useCallback(() => {
+    fetchDispute(disputeId)
+      .then((dispute) => setResult((current) => (current.key === requestKey ? { key: requestKey, dispute, error: null } : current)))
+      .catch(() => {
+        // Keep showing what we have; the user can reload the page.
+      })
+  }, [disputeId, requestKey])
 
   let status = 'ready'
   if (result.key !== requestKey) {
@@ -41,5 +49,5 @@ export function useDispute(disputeId) {
   } else if (result.error) {
     status = 'error'
   }
-  return { status, dispute: result.dispute, error: result.error, reload, replace }
+  return { status, dispute: result.dispute, error: result.error, reload, replace, refresh }
 }

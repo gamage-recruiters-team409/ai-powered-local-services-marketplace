@@ -15,6 +15,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterEach;
@@ -29,6 +30,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DuplicateKeyException;
@@ -36,24 +39,25 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
-import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
-import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.BookingSyncState;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeRules;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
+import com.gamagerecruiters.marketplace.modules.dispute.port.BookingSnapshot;
+import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeEligibilityPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.adapter.BookingFacadeDisputeStatusAdapter;
-import com.gamagerecruiters.marketplace.modules.dispute.port.adapter.BookingFacadeLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
 
 import ch.qos.logback.classic.Level;
@@ -62,10 +66,12 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
 /**
- * POST /disputes service flow with the REAL booking adapters over a mocked BookingFacade, so the facade calls
- * (arguments, order, error pass-through) are exactly what production does.
+ * POST /disputes service flow. The eligibility port is mocked: it stands in for the Booking module's
+ * BookingFacade.assertDisputeEligible (being merged by the booking owner), so the whole flow is tested against the
+ * agreed contract. markDisputed goes through the REAL adapter over a mocked BookingFacade.
  */
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class DisputeRaiseServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-11-16T10:00:00Z");
@@ -79,23 +85,35 @@ class DisputeRaiseServiceTest {
     @Mock
     private BookingFacade bookingFacade;
     @Mock
+    private DisputeEligibilityPort eligibilityPort;
+    @Mock
     private DisputeRepository disputeRepository;
+    @Mock
+    private DisputeBookingSyncStore syncStore;
     @Mock
     private PayoutHoldPort payoutHoldPort;
 
     private DisputeServiceImpl service;
-
     private ListAppender<ILoggingEvent> logs;
     private Logger serviceLogger;
 
     @BeforeEach
     void setUp() {
-        service = new DisputeServiceImpl(disputeRepository, new BookingFacadeLookupAdapter(bookingFacade),
-                new BookingFacadeDisputeStatusAdapter(bookingFacade), payoutHoldPort, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new DisputeServiceImpl(disputeRepository, syncStore, new BookingFacadeDisputeStatusAdapter(bookingFacade),
+                eligibilityPort, payoutHoldPort, Clock.fixed(NOW, ZoneOffset.UTC));
         serviceLogger = (Logger) LoggerFactory.getLogger(DisputeServiceImpl.class);
         logs = new ListAppender<>();
         logs.start();
         serviceLogger.addAppender(logs);
+        // Defaults: eligible, not yet DISPUTED; no active dispute; insert assigns an id; markSynced succeeds.
+        eligible(false);
+        when(disputeRepository.findByActiveBookingKey(BOOKING_ID)).thenReturn(Optional.empty());
+        when(disputeRepository.insert(any(Dispute.class))).thenAnswer(invocation -> {
+            Dispute dispute = invocation.getArgument(0);
+            dispute.setId(DISPUTE_ID);
+            return dispute;
+        });
+        when(syncStore.markSynced(DISPUTE_ID)).thenAnswer(invocation -> Optional.of(dispute(CUSTOMER_ID, BookingSyncState.SYNCED)));
     }
 
     @AfterEach
@@ -112,22 +130,10 @@ class DisputeRaiseServiceTest {
                 new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
     }
 
-    private void bookingIs(BookingStatus status) {
-        when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenReturn(new BookingParticipants(
-                BOOKING_ID, "series-1", "listing-1", CUSTOMER_ID, PROVIDER_ID, status,
-                NOW.minusSeconds(7200), NOW.minusSeconds(3600)));
-    }
-
-    private void noActiveDispute() {
-        when(disputeRepository.existsByActiveBookingKey(BOOKING_ID)).thenReturn(false);
-    }
-
-    private void saveReturnsWithId() {
-        when(disputeRepository.save(any(Dispute.class))).thenAnswer(invocation -> {
-            Dispute dispute = invocation.getArgument(0);
-            dispute.setId(DISPUTE_ID);
-            return dispute;
-        });
+    /** What BookingFacade.assertDisputeEligible returns for an eligible booking. */
+    private void eligible(boolean alreadyDisputed) {
+        when(eligibilityPort.assertEligible(BOOKING_ID))
+                .thenReturn(new BookingSnapshot(BOOKING_ID, CUSTOMER_ID, PROVIDER_ID, alreadyDisputed));
     }
 
     private static RaiseDisputeRequest request() {
@@ -135,9 +141,32 @@ class DisputeRaiseServiceTest {
                 List.of("evidence/photo-1.jpg"));
     }
 
+    private static Dispute dispute(String raisedBy, BookingSyncState state) {
+        Dispute dispute = new Dispute();
+        dispute.setId(DISPUTE_ID);
+        dispute.setBookingId(BOOKING_ID);
+        dispute.setCustomerId(CUSTOMER_ID);
+        dispute.setProviderId(PROVIDER_ID);
+        dispute.setRaisedBy(raisedBy);
+        dispute.setRaisedByRole(Role.CUSTOMER);
+        dispute.setCategory(DisputeCategory.POOR_QUALITY);
+        dispute.setDescription(DESCRIPTION);
+        dispute.setCreatedAt(NOW);
+        dispute.setResponseDueAt(NOW.plus(DisputeRules.RESPONSE_WINDOW));
+        dispute.setBookingSyncState(state);
+        dispute.changeStatus(DisputeStatus.AWAITING_RESPONSE, raisedBy, Role.CUSTOMER, null, NOW);
+        return dispute;
+    }
+
     private DisputeDetailResponse raiseAs(String userId, Role role) {
         loggedInAs(userId, role);
         return service.raiseDispute(userId, role, request());
+    }
+
+    private Dispute insertedDispute() {
+        ArgumentCaptor<Dispute> captor = ArgumentCaptor.forClass(Dispute.class);
+        verify(disputeRepository).insert(captor.capture());
+        return captor.getValue();
     }
 
     private static void assertApiError(Throwable thrown, HttpStatus status, String code) {
@@ -146,154 +175,51 @@ class DisputeRaiseServiceTest {
         assertThat(((ApiException) thrown).getErrorCode()).isEqualTo(code);
     }
 
-    private void assertNothingSaved() {
-        verify(disputeRepository, never()).save(any());
+    private void assertNoBookingChangeAndNothingSaved() {
+        verify(bookingFacade, never()).markDisputed(anyString(), any(), anyString());
+        verify(disputeRepository, never()).insert(any(Dispute.class));
         verifyNoInteractions(payoutHoldPort);
     }
 
-    // ---------- success ----------
+    private List<String> errorLogs() {
+        return logs.list.stream().filter(e -> e.getLevel() == Level.ERROR).map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    // ---------- booking not yet DISPUTED ----------
 
     @Test
-    @DisplayName("raise: booking moved to DISPUTED first (as the logged-in user), then the dispute is saved with history")
-    void raiseSuccess() {
-        bookingIs(BookingStatus.COMPLETION_PENDING);
-        noActiveDispute();
-        saveReturnsWithId();
-
+    @DisplayName("raise: eligibility -> duplicate check -> PENDING insert -> markDisputed as the logged-in user -> SYNCED")
+    void raiseNotYetDisputed() {
         DisputeDetailResponse result = raiseAs(CUSTOMER_ID, Role.CUSTOMER);
 
-        InOrder order = inOrder(bookingFacade, disputeRepository, payoutHoldPort);
-        order.verify(bookingFacade).getBookingParticipants(BOOKING_ID);
-        order.verify(disputeRepository).existsByActiveBookingKey(BOOKING_ID);
+        InOrder order = inOrder(eligibilityPort, disputeRepository, bookingFacade, syncStore, payoutHoldPort);
+        order.verify(eligibilityPort).assertEligible(BOOKING_ID);
+        order.verify(disputeRepository).findByActiveBookingKey(BOOKING_ID);
+        order.verify(disputeRepository).insert(any(Dispute.class));
         order.verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON);
-        order.verify(disputeRepository).save(any(Dispute.class));
+        order.verify(syncStore).markSynced(DISPUTE_ID);
         order.verify(payoutHoldPort).holdPayout(BOOKING_ID, DISPUTE_ID);
 
+        Dispute intent = insertedDispute();
+        assertThat(intent.getBookingSyncState()).isEqualTo(BookingSyncState.PENDING);
+        assertThat(intent.getActiveBookingKey()).as("holds the unique active-booking key").isEqualTo(BOOKING_ID);
+        assertThat(intent.getRaisedBy()).isEqualTo(CUSTOMER_ID);
+        assertThat(intent.getCustomerId()).isEqualTo(CUSTOMER_ID);
+        assertThat(intent.getProviderId()).isEqualTo(PROVIDER_ID);
+        assertThat(intent.getDescription()).isEqualTo(DESCRIPTION);
         assertThat(result.id()).isEqualTo(DISPUTE_ID);
         assertThat(result.status()).isEqualTo(DisputeStatus.AWAITING_RESPONSE);
-        assertThat(result.customerId()).isEqualTo(CUSTOMER_ID);
-        assertThat(result.providerId()).isEqualTo(PROVIDER_ID);
-        assertThat(result.raisedBy()).isEqualTo(CUSTOMER_ID);
-        assertThat(result.raisedByRole()).isEqualTo(Role.CUSTOMER);
-        assertThat(result.description()).isEqualTo(DESCRIPTION);
-        assertThat(result.responseDueAt()).isEqualTo(NOW.plus(DisputeRules.RESPONSE_WINDOW));
-        assertThat(result.statusHistory()).singleElement().satisfies(entry -> {
-            assertThat(entry.fromStatus()).isNull();
-            assertThat(entry.toStatus()).isEqualTo(DisputeStatus.AWAITING_RESPONSE);
-            assertThat(entry.actorId()).isEqualTo(CUSTOMER_ID);
-            assertThat(entry.timestamp()).isEqualTo(NOW);
-        });
-        ArgumentCaptor<Dispute> saved = ArgumentCaptor.forClass(Dispute.class);
-        verify(disputeRepository).save(saved.capture());
-        assertThat(saved.getValue().getActiveBookingKey()).isEqualTo(BOOKING_ID);
+        verify(syncStore, never()).deleteIfPending(anyString());
     }
 
     @Test
-    @DisplayName("raise: the booking's provider can raise too; the actor sent to the facade is the provider")
+    @DisplayName("raise: the provider can raise too; the user's description is never sent to the booking timeline")
     void providerCanRaise() {
-        bookingIs(BookingStatus.IN_PROGRESS);
-        noActiveDispute();
-        saveReturnsWithId();
-
-        assertThat(raiseAs(PROVIDER_ID, Role.PROVIDER).raisedByRole()).isEqualTo(Role.PROVIDER);
-        verify(bookingFacade).markDisputed(BOOKING_ID, PROVIDER_ID, TIMELINE_REASON);
-    }
-
-    @Test
-    @DisplayName("raise: the user's description is never copied into the booking timeline reason")
-    void descriptionNotSentToBooking() {
-        bookingIs(BookingStatus.CONFIRMED);
-        noActiveDispute();
-        saveReturnsWithId();
-
-        raiseAs(CUSTOMER_ID, Role.CUSTOMER);
+        raiseAs(PROVIDER_ID, Role.PROVIDER);
 
         ArgumentCaptor<String> reason = ArgumentCaptor.forClass(String.class);
-        verify(bookingFacade).markDisputed(eq(BOOKING_ID), eq(CUSTOMER_ID), reason.capture());
+        verify(bookingFacade).markDisputed(eq(BOOKING_ID), eq(PROVIDER_ID), reason.capture());
         assertThat(reason.getValue()).isEqualTo(TIMELINE_REASON).doesNotContain("private");
-    }
-
-    // ---------- already DISPUTED (idempotent) ----------
-
-    @Test
-    @DisplayName("raise: booking already DISPUTED (e.g. by 'Raise issue') -> no second markDisputed, dispute is saved")
-    void alreadyDisputedSkipsBookingCall() {
-        bookingIs(BookingStatus.DISPUTED);
-        noActiveDispute();
-        saveReturnsWithId();
-
-        DisputeDetailResponse result = raiseAs(CUSTOMER_ID, Role.CUSTOMER);
-
-        assertThat(result.status()).isEqualTo(DisputeStatus.AWAITING_RESPONSE);
-        verify(bookingFacade, never()).markDisputed(anyString(), anyString(), anyString());
-        verify(disputeRepository).save(any(Dispute.class));
-    }
-
-    @Test
-    @DisplayName("raise: booking already DISPUTED but caller is not a party -> 403, nothing saved, no duplicate lookup")
-    void alreadyDisputedStillChecksParty() {
-        bookingIs(BookingStatus.DISPUTED);
-        loggedInAs("someone-else", Role.CUSTOMER);
-
-        Throwable thrown = catchThrowable(() -> service.raiseDispute("someone-else", Role.CUSTOMER, request()));
-
-        assertThat(thrown).isInstanceOf(AccessDeniedException.class);
-        verify(disputeRepository, never()).existsByActiveBookingKey(anyString());
-        assertNothingSaved();
-    }
-
-    // ---------- the dispute module's own checks ----------
-
-    @Test
-    @DisplayName("raise: caller is not the booking's customer or provider -> 403 (same as the facade), booking untouched")
-    void nonPartyRejected() {
-        bookingIs(BookingStatus.COMPLETION_PENDING);
-        loggedInAs("someone-else", Role.CUSTOMER);
-
-        Throwable thrown = catchThrowable(() -> service.raiseDispute("someone-else", Role.CUSTOMER, request()));
-
-        assertThat(thrown).isInstanceOf(AccessDeniedException.class);
-        verify(bookingFacade, never()).markDisputed(anyString(), anyString(), anyString());
-        verify(disputeRepository, never()).existsByActiveBookingKey(anyString());
-        assertNothingSaved();
-    }
-
-    @Test
-    @DisplayName("raise: an active dispute already exists -> 409 DISPUTE_ALREADY_EXISTS, booking untouched")
-    void duplicateActiveDispute() {
-        bookingIs(BookingStatus.DISPUTED);
-        when(disputeRepository.existsByActiveBookingKey(BOOKING_ID)).thenReturn(true);
-
-        Throwable thrown = catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER));
-
-        assertApiError(thrown, HttpStatus.CONFLICT, "DISPUTE_ALREADY_EXISTS");
-        verify(bookingFacade, never()).markDisputed(anyString(), anyString(), anyString());
-        assertNothingSaved();
-    }
-
-    @Test
-    @DisplayName("raise: concurrent duplicate caught by the unique index on save -> 409 DISPUTE_ALREADY_EXISTS")
-    void concurrentDuplicateOnSave() {
-        bookingIs(BookingStatus.CONFIRMED);
-        noActiveDispute();
-        when(disputeRepository.save(any(Dispute.class))).thenThrow(new DuplicateKeyException("dup"));
-
-        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.CONFLICT,
-                "DISPUTE_ALREADY_EXISTS");
-        verifyNoInteractions(payoutHoldPort);
-    }
-
-    // ---------- facade errors pass through unchanged ----------
-
-    @Test
-    @DisplayName("raise: unknown booking -> the facade's 404 BOOKING_NOT_FOUND, same exception, nothing else called")
-    void unknownBookingPropagates() {
-        ResourceNotFoundException notFound = new ResourceNotFoundException("BOOKING_NOT_FOUND", "Booking not found");
-        when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenThrow(notFound);
-
-        assertThat(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER))).isSameAs(notFound);
-        verify(disputeRepository, never()).existsByActiveBookingKey(anyString());
-        assertNothingSaved();
     }
 
     static Stream<Arguments> facadeErrors() {
@@ -307,27 +233,185 @@ class DisputeRaiseServiceTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("facadeErrors")
-    @DisplayName("raise: markDisputed errors (401, 403, 409 ...) reach the caller unchanged; no dispute is saved")
-    void markDisputedErrorsPropagate(RuntimeException facadeError) {
-        bookingIs(BookingStatus.COMPLETED);
-        noActiveDispute();
+    @DisplayName("raise: markDisputed rejected -> the PENDING record is deleted and the facade error returned unchanged")
+    void markDisputedRejectedDeletesIntent(RuntimeException facadeError) {
         when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON)).thenThrow(facadeError);
+        when(syncStore.deleteIfPending(DISPUTE_ID)).thenReturn(true);
 
         assertThat(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER))).isSameAs(facadeError);
-        assertNothingSaved();
+
+        verify(syncStore).deleteIfPending(DISPUTE_ID);
+        verify(syncStore, never()).markSynced(anyString());
+        verifyNoInteractions(payoutHoldPort);
     }
 
-    // ---------- actor ----------
+    @Test
+    @DisplayName("raise: if even the compensation delete fails, the facade error is still returned and logged by ids")
+    void compensationFailureStillReturnsFacadeError() {
+        ResourceConflictException rejected = new ResourceConflictException("INVALID_STATUS_TRANSITION", "no");
+        when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON)).thenThrow(rejected);
+        when(syncStore.deleteIfPending(DISPUTE_ID)).thenThrow(new DataAccessResourceFailureException("db-host:27017"));
+
+        assertThat(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER))).isSameAs(rejected);
+
+        assertThat(errorLogs()).singleElement().asString()
+                .contains("event=DISPUTE_INTENT_COMPENSATION_FAILED").contains("disputeId=" + DISPUTE_ID)
+                .contains("bookingId=" + BOOKING_ID).doesNotContain("db-host");
+    }
+
+    @Test
+    @DisplayName("raise: the SYNCED update fails after the booking moved -> 503 DISPUTE_SYNC_PENDING, record kept PENDING")
+    void syncFailureKeepsIntentForReconciler() {
+        when(syncStore.markSynced(DISPUTE_ID)).thenThrow(new DataAccessResourceFailureException("db-host:27017"));
+
+        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.SERVICE_UNAVAILABLE,
+                "DISPUTE_SYNC_PENDING");
+
+        verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON);
+        verify(syncStore, never()).deleteIfPending(anyString());
+        verifyNoInteractions(payoutHoldPort);
+        assertThat(errorLogs()).singleElement().asString()
+                .contains("event=DISPUTE_SYNC_PENDING").contains("disputeId=" + DISPUTE_ID)
+                .contains("actorId=" + CUSTOMER_ID).doesNotContain("db-host").doesNotContain("private");
+    }
+
+    @Test
+    @DisplayName("raise: the reconciler completed the record first -> the visible dispute is returned")
+    void syncAlreadyCompletedByReconciler() {
+        when(syncStore.markSynced(DISPUTE_ID)).thenReturn(Optional.empty());
+        when(disputeRepository.findById(DISPUTE_ID)).thenReturn(Optional.of(dispute(CUSTOMER_ID, BookingSyncState.SYNCED)));
+
+        assertThat(raiseAs(CUSTOMER_ID, Role.CUSTOMER).id()).isEqualTo(DISPUTE_ID);
+    }
+
+    @Test
+    @DisplayName("raise: the PENDING insert itself fails -> 503 DISPUTE_SAVE_FAILED and the booking is never touched")
+    void insertFailureLeavesBookingUnchanged() {
+        when(disputeRepository.insert(any(Dispute.class))).thenThrow(new DataAccessResourceFailureException("down"));
+
+        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.SERVICE_UNAVAILABLE,
+                "DISPUTE_SAVE_FAILED");
+        verify(bookingFacade, never()).markDisputed(anyString(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("raise: a concurrent raise holds the unique key -> 409 DISPUTE_ALREADY_EXISTS, booking untouched")
+    void concurrentDuplicateOnInsert() {
+        when(disputeRepository.insert(any(Dispute.class))).thenThrow(new DuplicateKeyException("dup"));
+
+        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.CONFLICT,
+                "DISPUTE_ALREADY_EXISTS");
+        verify(bookingFacade, never()).markDisputed(anyString(), any(), anyString());
+    }
+
+    // ---------- booking already DISPUTED (eligibility checked by the Booking module) ----------
+
+    @Test
+    @DisplayName("raise: legitimate already-DISPUTED booking -> PENDING insert, NO markDisputed, then SYNCED")
+    void alreadyDisputedEligibleCreatesDispute() {
+        eligible(true);
+
+        DisputeDetailResponse result = raiseAs(CUSTOMER_ID, Role.CUSTOMER);
+
+        verify(eligibilityPort).assertEligible(BOOKING_ID);
+        assertThat(insertedDispute().getBookingSyncState()).isEqualTo(BookingSyncState.PENDING);
+        verify(bookingFacade, never()).markDisputed(anyString(), any(), anyString());
+        verify(syncStore).markSynced(DISPUTE_ID);
+        assertThat(result.id()).isEqualTo(DISPUTE_ID);
+    }
+
+    static Stream<Arguments> eligibilityErrors() {
+        return Stream.of(
+                Arguments.of("expired window (incl. already DISPUTED > 72h)",
+                        new ResourceConflictException("DISPUTE_WINDOW_CLOSED", "closed")),
+                Arguments.of("ineligible party", new AccessDeniedException("Access denied: not a participant")),
+                Arguments.of("other actor id", new AccessDeniedException("Access denied: actor does not match")),
+                Arguments.of("not logged in", new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "auth")),
+                Arguments.of("unknown booking", new ResourceNotFoundException("BOOKING_NOT_FOUND", "Booking not found")),
+                Arguments.of("not disputable status", new ResourceConflictException("INVALID_STATUS_TRANSITION", "no")));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("eligibilityErrors")
+    @DisplayName("raise: not eligible -> the Booking module's error unchanged, nothing saved, no duplicate lookup")
+    void ineligibleRejected(String name, RuntimeException facadeError) {
+        when(eligibilityPort.assertEligible(BOOKING_ID)).thenThrow(facadeError);
+
+        assertThat(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER))).isSameAs(facadeError);
+        verify(disputeRepository, never()).findByActiveBookingKey(anyString());
+        assertNoBookingChangeAndNothingSaved();
+    }
+
+    // ---------- duplicates and retries ----------
+
+    @Test
+    @DisplayName("raise: a visible active dispute exists -> 409 DISPUTE_ALREADY_EXISTS, nothing changed")
+    void visibleDuplicateRejected() {
+        eligible(true);
+        when(disputeRepository.findByActiveBookingKey(BOOKING_ID))
+                .thenReturn(Optional.of(dispute(PROVIDER_ID, BookingSyncState.SYNCED)));
+
+        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.CONFLICT,
+                "DISPUTE_ALREADY_EXISTS");
+        assertNoBookingChangeAndNothingSaved();
+    }
+
+    @Test
+    @DisplayName("raise: another user's PENDING intent holds the booking -> 409 DISPUTE_ALREADY_EXISTS")
+    void otherUsersPendingIntentRejected() {
+        when(disputeRepository.findByActiveBookingKey(BOOKING_ID))
+                .thenReturn(Optional.of(dispute(PROVIDER_ID, BookingSyncState.PENDING)));
+
+        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.CONFLICT,
+                "DISPUTE_ALREADY_EXISTS");
+        assertNoBookingChangeAndNothingSaved();
+    }
+
+    @Test
+    @DisplayName("raise: retry with own PENDING intent, booking already DISPUTED -> only marked SYNCED, no new record")
+    void retryCompletesOwnIntent() {
+        eligible(true);
+        when(disputeRepository.findByActiveBookingKey(BOOKING_ID))
+                .thenReturn(Optional.of(dispute(CUSTOMER_ID, BookingSyncState.PENDING)));
+
+        assertThat(raiseAs(CUSTOMER_ID, Role.CUSTOMER).id()).isEqualTo(DISPUTE_ID);
+
+        verify(syncStore).markSynced(DISPUTE_ID);
+        verify(disputeRepository, never()).insert(any(Dispute.class));
+        verify(bookingFacade, never()).markDisputed(anyString(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("raise: retry with own PENDING intent, booking not DISPUTED -> markDisputed then SYNCED, no new record")
+    void retryMovesBookingThenCompletes() {
+        when(disputeRepository.findByActiveBookingKey(BOOKING_ID))
+                .thenReturn(Optional.of(dispute(CUSTOMER_ID, BookingSyncState.PENDING)));
+
+        raiseAs(CUSTOMER_ID, Role.CUSTOMER);
+
+        verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON);
+        verify(syncStore).markSynced(DISPUTE_ID);
+        verify(disputeRepository, never()).insert(any(Dispute.class));
+    }
+
+    // ---------- the dispute module's own checks ----------
+
+    @Test
+    @DisplayName("raise: caller is not a party of the booking -> 403, booking untouched, no duplicate lookup")
+    void nonPartyRejected() {
+        loggedInAs("someone-else", Role.CUSTOMER);
+
+        assertThat(catchThrowable(() -> service.raiseDispute("someone-else", Role.CUSTOMER, request())))
+                .isInstanceOf(AccessDeniedException.class);
+        verify(disputeRepository, never()).findByActiveBookingKey(anyString());
+        assertNoBookingChangeAndNothingSaved();
+    }
 
     @Test
     @DisplayName("raise: the actor passed to markDisputed is always CurrentUser, even if the service got another id")
     void actorIsAlwaysTheLoggedInUser() {
-        bookingIs(BookingStatus.CONFIRMED);
-        noActiveDispute();
-        saveReturnsWithId();
         loggedInAs(CUSTOMER_ID, Role.CUSTOMER);
 
-        // The service is called with the provider's id, but the logged-in user is the customer.
         service.raiseDispute(PROVIDER_ID, Role.PROVIDER, request());
 
         verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON);
@@ -335,81 +419,23 @@ class DisputeRaiseServiceTest {
     }
 
     @Test
-    @DisplayName("raise: nobody logged in -> the adapter passes no actor, so the facade's own 401 applies")
+    @DisplayName("raise: nobody logged in -> no actor is passed, so the facade's own 401 applies and the intent is removed")
     void noLoggedInUserPassesNullActor() {
-        bookingIs(BookingStatus.CONFIRMED);
-        noActiveDispute();
         ApiException unauthorized = new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required");
         when(bookingFacade.markDisputed(BOOKING_ID, null, TIMELINE_REASON)).thenThrow(unauthorized);
 
         assertThat(catchThrowable(() -> service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, request())))
                 .isSameAs(unauthorized);
-        assertNothingSaved();
-    }
-
-    // ---------- save failure after the booking change ----------
-
-    @Test
-    @DisplayName("raise: save fails after the booking was moved -> structured ERROR (ids only), 503, booking not undone")
-    void saveFailureAfterBookingChange() {
-        bookingIs(BookingStatus.COMPLETION_PENDING);
-        noActiveDispute();
-        when(disputeRepository.save(any(Dispute.class)))
-                .thenThrow(new DataAccessResourceFailureException("Timed out connecting to db-host.example:27017"));
-
-        Throwable thrown = catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER));
-
-        assertApiError(thrown, HttpStatus.SERVICE_UNAVAILABLE, "DISPUTE_SAVE_FAILED");
-        verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON);
-        verifyNoInteractions(payoutHoldPort);
-        assertThat(logs.list).filteredOn(e -> e.getLevel() == Level.ERROR).singleElement().satisfies(event -> {
-            assertThat(event.getFormattedMessage())
-                    .contains("event=DISPUTE_SAVE_FAILED")
-                    .contains("bookingId=" + BOOKING_ID)
-                    .contains("actorId=" + CUSTOMER_ID)
-                    .contains("bookingMovedToDisputed=true")
-                    .contains("cause=DataAccessResourceFailureException")
-                    .doesNotContain("db-host").doesNotContain("private");
-            assertThat(event.getThrowableProxy()).as("no stack trace with the database message").isNull();
-        });
+        verify(syncStore).deleteIfPending(DISPUTE_ID);
     }
 
     @Test
-    @DisplayName("raise: save fails when the booking was already DISPUTED -> same 503, log says this request did not move it")
-    void saveFailureWhenAlreadyDisputed() {
-        bookingIs(BookingStatus.DISPUTED);
-        noActiveDispute();
-        when(disputeRepository.save(any(Dispute.class))).thenThrow(new DataAccessResourceFailureException("down"));
-
-        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.SERVICE_UNAVAILABLE,
-                "DISPUTE_SAVE_FAILED");
-        assertThat(logs.list).anyMatch(e -> e.getLevel() == Level.ERROR
-                && e.getFormattedMessage().contains("bookingMovedToDisputed=false"));
-    }
-
-    @Test
-    @DisplayName("raise: a retry after a failed save succeeds without a second markDisputed (booking is now DISPUTED)")
-    void retryAfterFailedSaveIsSafe() {
-        noActiveDispute();
-        // First call: booking not yet disputed; second call: the booking module now reports DISPUTED.
-        BookingParticipants pending = new BookingParticipants(BOOKING_ID, "series-1", "listing-1", CUSTOMER_ID,
-                PROVIDER_ID, BookingStatus.COMPLETION_PENDING, NOW.minusSeconds(7200), NOW.minusSeconds(3600));
-        BookingParticipants disputed = new BookingParticipants(BOOKING_ID, "series-1", "listing-1", CUSTOMER_ID,
-                PROVIDER_ID, BookingStatus.DISPUTED, NOW.minusSeconds(7200), NOW.minusSeconds(3600));
-        when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenReturn(pending, disputed);
-        // First save fails, the retry's save works.
-        when(disputeRepository.save(any(Dispute.class)))
-                .thenThrow(new DataAccessResourceFailureException("down"))
-                .thenAnswer(invocation -> {
-                    Dispute dispute = invocation.getArgument(0);
-                    dispute.setId(DISPUTE_ID);
-                    return dispute;
-                });
-
-        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.SERVICE_UNAVAILABLE,
-                "DISPUTE_SAVE_FAILED");
-
-        assertThat(service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, request()).id()).isEqualTo(DISPUTE_ID);
-        verify(bookingFacade, org.mockito.Mockito.times(1)).markDisputed(anyString(), anyString(), anyString());
+    @DisplayName("visibility: PENDING is invisible; SYNCED and legacy records without the field are visible")
+    void intentIsInvisible() {
+        Dispute intent = dispute(CUSTOMER_ID, BookingSyncState.PENDING);
+        assertThat(intent.isVisible()).isFalse();
+        assertThat(dispute(CUSTOMER_ID, BookingSyncState.SYNCED).isVisible()).isTrue();
+        ReflectionTestUtils.setField(intent, "bookingSyncState", null);
+        assertThat(intent.isVisible()).isTrue();
     }
 }

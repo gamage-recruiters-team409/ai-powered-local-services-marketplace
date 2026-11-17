@@ -35,6 +35,7 @@ import org.springframework.http.HttpStatus;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.BookingSyncState;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeRules;
@@ -46,7 +47,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryRespon
 import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.SubmitDisputeResponseRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.port.BookingDisputeStatusPort;
-import com.gamagerecruiters.marketplace.modules.dispute.port.BookingLookupPort;
+import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeEligibilityPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
 
@@ -62,18 +63,20 @@ class DisputeServiceImplTest {
     @Mock
     private DisputeRepository disputeRepository;
     @Mock
-    private BookingLookupPort bookingLookupPort;
-    @Mock
     private BookingDisputeStatusPort bookingDisputeStatusPort;
     @Mock
     private PayoutHoldPort payoutHoldPort;
+    @Mock
+    private DisputeEligibilityPort disputeEligibilityPort;
+    @Mock
+    private DisputeBookingSyncStore syncStore;
 
     private DisputeServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new DisputeServiceImpl(disputeRepository, bookingLookupPort, bookingDisputeStatusPort,
-                payoutHoldPort, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new DisputeServiceImpl(disputeRepository, syncStore, bookingDisputeStatusPort,
+                disputeEligibilityPort, payoutHoldPort, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     // ---------- helpers ----------
@@ -205,6 +208,22 @@ class DisputeServiceImplTest {
     }
 
     @Test
+    @DisplayName("detail and respond: a PENDING intent record is reported as 404 DISPUTE_NOT_FOUND")
+    void pendingIntentIsNotFound() {
+        Dispute pending = awaitingDispute(NOW.plus(Duration.ofHours(5)));
+        pending.setBookingSyncState(BookingSyncState.PENDING);
+        when(disputeRepository.findById(DISPUTE_ID)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> service.getDisputeForParty(CUSTOMER_ID, DISPUTE_ID))
+                .extracting("errorCode").isEqualTo("DISPUTE_NOT_FOUND");
+        assertThatThrownBy(() -> service.getDisputeForAdmin(DISPUTE_ID))
+                .extracting("errorCode").isEqualTo("DISPUTE_NOT_FOUND");
+        assertThatThrownBy(() -> service.submitResponse(PROVIDER_ID, Role.PROVIDER, DISPUTE_ID, responseRequest()))
+                .extracting("errorCode").isEqualTo("DISPUTE_NOT_FOUND");
+        verify(disputeRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("respond: unknown dispute -> 404 DISPUTE_NOT_FOUND")
     void respondUnknownDispute() {
         when(disputeRepository.findById(DISPUTE_ID)).thenReturn(Optional.empty());
@@ -235,7 +254,7 @@ class DisputeServiceImplTest {
     void myDisputes() {
         Pageable expected = PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<Dispute> page = new PageImpl<>(List.of(awaitingDispute(NOW)), expected, 1);
-        when(disputeRepository.findByParty(CUSTOMER_ID, expected)).thenReturn(page);
+        when(disputeRepository.findVisibleByParty(CUSTOMER_ID, expected)).thenReturn(page);
 
         DisputePageResponse<DisputeSummaryResponse> result = service.getMyDisputes(CUSTOMER_ID, 0, 20);
 
@@ -259,15 +278,15 @@ class DisputeServiceImplTest {
     @Test
     @DisplayName("admin list: filters by status (case-insensitive); no status lists all")
     void adminList() {
-        when(disputeRepository.findByStatus(eq(DisputeStatus.UNDER_REVIEW), any(Pageable.class)))
+        when(disputeRepository.findVisibleByStatus(eq(DisputeStatus.UNDER_REVIEW), any(Pageable.class)))
                 .thenReturn(Page.empty());
-        when(disputeRepository.findAll(any(Pageable.class))).thenReturn(Page.empty());
+        when(disputeRepository.findAllVisible(any(Pageable.class))).thenReturn(Page.empty());
 
         service.getDisputesForAdmin("under_review", 0, 20);
         service.getDisputesForAdmin(null, 0, 20);
 
-        verify(disputeRepository).findByStatus(eq(DisputeStatus.UNDER_REVIEW), any(Pageable.class));
-        verify(disputeRepository).findAll(any(Pageable.class));
+        verify(disputeRepository).findVisibleByStatus(eq(DisputeStatus.UNDER_REVIEW), any(Pageable.class));
+        verify(disputeRepository).findAllVisible(any(Pageable.class));
     }
 
     @Test
@@ -275,7 +294,7 @@ class DisputeServiceImplTest {
     void adminListUnknownStatus() {
         assertApiError(catchThrowable(() -> service.getDisputesForAdmin("BANANA", 0, 20)),
                 HttpStatus.BAD_REQUEST, "INVALID_STATUS_FILTER");
-        verify(disputeRepository, never()).findByStatus(any(), any());
+        verify(disputeRepository, never()).findVisibleByStatus(any(), any());
     }
 
     @Test

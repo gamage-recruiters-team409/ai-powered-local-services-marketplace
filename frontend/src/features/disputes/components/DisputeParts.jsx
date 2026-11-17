@@ -212,20 +212,28 @@ export function DisputeTimeline({ dispute, waitingTitle, overdue = false }) {
   )
 }
 
-const NEXT_STEPS = Object.freeze([
-  { title: 'The provider responds', text: 'The provider reviews the issue and submits their side within 72 hours.' },
+const RESPOND_STEP = Object.freeze({
+  other: { title: 'The provider responds', text: 'The provider reviews the issue and submits their side within 72 hours.' },
+  you: { title: 'You respond', text: 'Tell your side of what happened within 72 hours.' },
+})
+
+const LATER_STEPS = Object.freeze([
   { title: 'An admin reviews both sides', text: 'A resolution specialist reviews the issue, the response and the evidence.' },
   { title: 'You are told the decision', text: 'You are notified of the outcome, any refund, or next steps.' },
 ])
 
-/** Right-column guide for the customer, highlighting the current stage. */
-export function WhatHappensNext({ status }) {
+/**
+ * Right-column guide for the customer, highlighting the current stage.
+ * The payment note makes no promise about a payout hold: that is not integrated yet (WP07).
+ */
+export function WhatHappensNext({ status, viewerResponds = false }) {
   const stage = getStatusBadge(status).stage
+  const steps = [viewerResponds ? RESPOND_STEP.you : RESPOND_STEP.other, ...LATER_STEPS]
   return (
     <section className={styles.card} aria-labelledby="dispute-next-title">
       <CardHeading id="dispute-next-title" icon="steps" title="What happens next" />
       <ol className={styles.steps}>
-        {NEXT_STEPS.map((step, index) => {
+        {steps.map((step, index) => {
           const number = index + 1
           const state = stage > number ? styles.stepDone : stage === number ? styles.stepActive : ''
           return (
@@ -240,10 +248,10 @@ export function WhatHappensNext({ status }) {
         })}
       </ol>
       <div className={styles.note}>
-        <span className={styles.noteIcon}><DisputeIcon name="shield" /></span>
+        <span className={styles.noteIcon}><DisputeIcon name="info" /></span>
         <div>
-          <strong>Funds protected</strong>
-          The provider payout for this booking is held until the dispute is resolved.
+          <strong>Payment for this booking</strong>
+          Payment handling for this booking will follow the dispute outcome.
         </div>
       </div>
     </section>

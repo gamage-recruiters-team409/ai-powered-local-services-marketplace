@@ -7,8 +7,10 @@ import org.springframework.stereotype.Component;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 
 /**
- * TEMPORARY stub until the Payment/Payout module (WP07, Aurudika) offers a payout-hold method. Only logs;
- * changes nothing. The payment module is not touched from here.
+ * STUB. NO REAL PAYOUT HOLD IS APPLIED. This class only writes a log line; the provider payout is not changed.
+ *
+ * <p>Deferred until the Payment/Payout module (WP07, Aurudika) offers a payout-hold method. The payment module is
+ * not touched from here. The UI must not claim that a payout is on hold while this stub is in use.</p>
  * TODO(WP07): replace with an adapter that calls the Payment module's public service, then delete this class.
  */
 @Component
@@ -18,7 +20,7 @@ public class StubPayoutHoldAdapter implements PayoutHoldPort {
 
     @Override
     public void holdPayout(String bookingId, String disputeId) {
-        log.warn("PayoutHoldPort is a stub (WP07 not integrated); payout for booking {} NOT put ON_HOLD for dispute {}",
+        log.warn("event=PAYOUT_HOLD_NOT_APPLIED reason=WP07_NOT_INTEGRATED bookingId={} disputeId={}",
                 bookingId, disputeId);
     }
 }

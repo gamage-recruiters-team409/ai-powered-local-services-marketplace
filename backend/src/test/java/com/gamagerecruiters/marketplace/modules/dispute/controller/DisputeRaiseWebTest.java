@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.dispute.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -10,7 +11,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.time.Instant;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -46,13 +47,16 @@ import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationF
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
-import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.BookingSyncState;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
+import com.gamagerecruiters.marketplace.modules.dispute.port.BookingSnapshot;
+import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeEligibilityPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.adapter.BookingFacadeDisputeStatusAdapter;
 import com.gamagerecruiters.marketplace.modules.dispute.port.adapter.BookingFacadeLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
+import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeBookingSyncStore;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeServiceImpl;
 
 /**
@@ -100,6 +104,10 @@ class DisputeRaiseWebTest {
     private DisputeRepository disputeRepository;
     @MockitoBean
     private PayoutHoldPort payoutHoldPort;
+    @MockitoBean
+    private DisputeBookingSyncStore syncStore;
+    @MockitoBean
+    private DisputeEligibilityPort eligibilityPort;
 
     @BeforeEach
     void setUp() {
@@ -119,17 +127,24 @@ class DisputeRaiseWebTest {
                 .contentType(MediaType.APPLICATION_JSON).content(BODY);
     }
 
+    /** What BookingFacade.assertDisputeEligible returns (through the eligibility port) for an eligible booking. */
     private void bookingIs(BookingStatus status, String customerId) {
-        Instant now = Instant.parse("2026-11-16T10:00:00Z");
-        when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenReturn(new BookingParticipants(
-                BOOKING_ID, "series-1", "listing-1", customerId, PROVIDER_ID, status, now, now.plusSeconds(3600)));
+        when(eligibilityPort.assertEligible(BOOKING_ID)).thenReturn(
+                new BookingSnapshot(BOOKING_ID, customerId, PROVIDER_ID, status == BookingStatus.DISPUTED));
     }
 
+    /** Insert assigns an id; marking SYNCED returns the same record as SYNCED. */
     private void saveWorks() {
-        when(disputeRepository.save(any(Dispute.class))).thenAnswer(invocation -> {
+        Dispute[] inserted = new Dispute[1];
+        when(disputeRepository.insert(any(Dispute.class))).thenAnswer(invocation -> {
             Dispute dispute = invocation.getArgument(0);
             dispute.setId("dispute-1");
+            inserted[0] = dispute;
             return dispute;
+        });
+        when(syncStore.markSynced("dispute-1")).thenAnswer(invocation -> {
+            inserted[0].setBookingSyncState(BookingSyncState.SYNCED);
+            return Optional.of(inserted[0]);
         });
     }
 
@@ -151,26 +166,39 @@ class DisputeRaiseWebTest {
     }
 
     @Test
-    @DisplayName("201: booking already DISPUTED -> no second markDisputed")
+    @DisplayName("201: booking already DISPUTED and eligible -> no second markDisputed")
     void raiseOnAlreadyDisputedBooking() throws Exception {
         bookingIs(BookingStatus.DISPUTED, CUSTOMER_ID);
         saveWorks();
 
         mockMvc.perform(raise()).andExpect(status().isCreated());
 
+        verify(eligibilityPort).assertEligible(BOOKING_ID);
         verify(bookingFacade, never()).markDisputed(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("409 DISPUTE_WINDOW_CLOSED when the booking is already DISPUTED but the window has passed; nothing saved")
+    void alreadyDisputedExpired() throws Exception {
+        when(eligibilityPort.assertEligible(BOOKING_ID))
+                .thenThrow(new ResourceConflictException("DISPUTE_WINDOW_CLOSED", "The dispute window closes"));
+
+        mockMvc.perform(raise())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("DISPUTE_WINDOW_CLOSED"));
+        verify(disputeRepository, never()).insert(any(Dispute.class));
     }
 
     @Test
     @DisplayName("404 BOOKING_NOT_FOUND from the facade reaches the client unchanged")
     void unknownBooking() throws Exception {
-        when(bookingFacade.getBookingParticipants(BOOKING_ID))
+        when(eligibilityPort.assertEligible(BOOKING_ID))
                 .thenThrow(new ResourceNotFoundException("BOOKING_NOT_FOUND", "Booking not found"));
 
         mockMvc.perform(raise())
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("BOOKING_NOT_FOUND"));
-        verify(disputeRepository, never()).save(any());
+        verify(disputeRepository, never()).insert(any(Dispute.class));
     }
 
     @Test
@@ -182,14 +210,18 @@ class DisputeRaiseWebTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
         verify(bookingFacade, never()).markDisputed(anyString(), anyString(), anyString());
-        verify(disputeRepository, never()).save(any());
+        verify(disputeRepository, never()).insert(any(Dispute.class));
     }
 
     @Test
     @DisplayName("409 DISPUTE_ALREADY_EXISTS when an active dispute exists (booking untouched)")
     void duplicate() throws Exception {
         bookingIs(BookingStatus.DISPUTED, CUSTOMER_ID);
-        when(disputeRepository.existsByActiveBookingKey(BOOKING_ID)).thenReturn(true);
+        Dispute active = new Dispute();
+        active.setId("other-dispute");
+        active.setRaisedBy("prov-1");
+        active.setBookingSyncState(BookingSyncState.SYNCED);
+        when(disputeRepository.findByActiveBookingKey(BOOKING_ID)).thenReturn(Optional.of(active));
 
         mockMvc.perform(raise())
                 .andExpect(status().isConflict())
@@ -212,26 +244,42 @@ class DisputeRaiseWebTest {
 
     @ParameterizedTest(name = "{2}")
     @MethodSource("facadeErrors")
-    @DisplayName("markDisputed errors keep their status and code over HTTP; no dispute is saved")
+    @DisplayName("markDisputed errors keep their status and code over HTTP; the intent record is removed")
     void facadeErrorsOverHttp(RuntimeException error, HttpStatus status, String code) throws Exception {
         bookingIs(BookingStatus.COMPLETED, CUSTOMER_ID);
+        saveWorks();
         when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, REASON)).thenThrow(error);
 
         mockMvc.perform(raise())
                 .andExpect(status().is(status.value()))
                 .andExpect(jsonPath("$.error").value(code));
-        verify(disputeRepository, never()).save(any());
+        verify(syncStore).deleteIfPending("dispute-1");
+        verify(syncStore, never()).markSynced(anyString());
     }
 
     @Test
-    @DisplayName("503 DISPUTE_SAVE_FAILED when the dispute cannot be saved after the booking was moved")
+    @DisplayName("503 DISPUTE_SAVE_FAILED when the intent record cannot be inserted; the booking is never touched")
     void saveFailure() throws Exception {
         bookingIs(BookingStatus.COMPLETION_PENDING, CUSTOMER_ID);
-        when(disputeRepository.save(any(Dispute.class))).thenThrow(new DataAccessResourceFailureException("down"));
+        when(disputeRepository.insert(any(Dispute.class))).thenThrow(new DataAccessResourceFailureException("down"));
 
         mockMvc.perform(raise())
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error").value("DISPUTE_SAVE_FAILED"));
+        verify(bookingFacade, never()).markDisputed(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("503 DISPUTE_SYNC_PENDING when the booking moved but the dispute could not be marked SYNCED yet")
+    void syncPending() throws Exception {
+        bookingIs(BookingStatus.COMPLETION_PENDING, CUSTOMER_ID);
+        saveWorks();
+        doThrow(new DataAccessResourceFailureException("down")).when(syncStore).markSynced("dispute-1");
+
+        mockMvc.perform(raise())
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("DISPUTE_SYNC_PENDING"));
         verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, REASON);
+        verify(syncStore, never()).deleteIfPending(anyString());
     }
 }

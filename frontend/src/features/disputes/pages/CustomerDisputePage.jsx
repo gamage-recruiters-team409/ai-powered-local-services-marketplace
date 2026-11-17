@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Navigate, useLocation, useParams } from 'react-router-dom'
 
 import { InlineMessage } from '../../../shared/components/feedback'
@@ -14,12 +15,14 @@ import {
   WhatHappensNext,
 } from '../components/DisputeParts'
 import { DisputeIcon } from '../components/DisputeIcon'
+import { DisputeResponseForm } from '../components/DisputeResponseForm'
 import { DisputeAccessDenied, DisputeErrorState, DisputeNotFound, DisputeSkeleton } from '../components/DisputeStates'
 import { responderRoleOf } from '../config/disputeStatus'
 import { useDispute } from '../hooks/useDispute'
 import { useNow } from '../hooks/useNow'
 import { isResponseOverdue } from '../utils/countdown'
 import { disputeTitle } from '../utils/format'
+import { responseClosedReason } from '../utils/responseState'
 import styles from '../disputes.module.css'
 
 const MY_BOOKINGS_PATH = '/customer/bookings'
@@ -31,7 +34,7 @@ const MY_BOOKINGS_PATH = '/customer/bookings'
 export function CustomerDisputePage() {
   const { disputeId } = useParams()
   const location = useLocation()
-  const { status, dispute, error, reload } = useDispute(disputeId)
+  const { status, dispute, error, reload, replace, refresh } = useDispute(disputeId)
   const now = useNow()
 
   let content
@@ -49,17 +52,25 @@ export function CustomerDisputePage() {
       content = <DisputeErrorState message={error.message} onRetry={reload} />
     }
   } else {
-    content = <CustomerDisputeView dispute={dispute} now={now} />
+    content = (
+      <CustomerDisputeView key={dispute.id} dispute={dispute} now={now} onUpdated={replace} onReload={refresh} />
+    )
   }
 
   return content
 }
 
-function CustomerDisputeView({ dispute, now }) {
+/**
+ * Read-only when the customer raised the dispute. When the provider raised it, the customer is the responding party
+ * and gets the shared response form (same rules, validation and error handling as the provider screen).
+ */
+function CustomerDisputeView({ dispute, now, onUpdated, onReload }) {
+  const [justSubmitted, setJustSubmitted] = useState(false)
   const responderRole = responderRoleOf(dispute)
   const customerResponds = responderRole === 'CUSTOMER'
   const title = disputeTitle(dispute)
   const overdue = isResponseOverdue(dispute, now)
+  const reason = responseClosedReason(dispute, now)
 
   return (
     <div className={styles.page}>
@@ -97,11 +108,13 @@ function CustomerDisputeView({ dispute, now }) {
         waitingText={customerResponds ? 'Please respond within 72 hours.' : 'The provider has 72 hours to respond.'}
       />
 
-      {customerResponds && dispute.status === 'AWAITING_RESPONSE' && (
-        <InlineMessage variant="info">
-          The provider raised this dispute. Responding as a customer will be available soon.
-        </InlineMessage>
-      )}
+      <div aria-live="polite">
+        {justSubmitted && (
+          <InlineMessage variant="success">
+            Your response was submitted. An admin will now review both sides.
+          </InlineMessage>
+        )}
+      </div>
 
       <div className={styles.grid}>
         <div className={styles.column}>
@@ -118,7 +131,19 @@ function CustomerDisputeView({ dispute, now }) {
           />
         </div>
         <div className={styles.column}>
-          <WhatHappensNext status={dispute.status} />
+          {customerResponds && !dispute.response && (
+            <DisputeResponseForm
+              disputeId={dispute.id}
+              canRespond={reason === null}
+              closedMessage={reason}
+              onSubmitted={(updated) => {
+                setJustSubmitted(true)
+                onUpdated(updated)
+              }}
+              onWindowClosed={onReload}
+            />
+          )}
+          <WhatHappensNext status={dispute.status} viewerResponds={customerResponds} />
         </div>
       </div>
     </div>

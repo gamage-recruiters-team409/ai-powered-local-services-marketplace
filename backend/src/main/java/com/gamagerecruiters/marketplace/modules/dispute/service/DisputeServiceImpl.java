@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.dispute.service;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,7 +22,9 @@ import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.BookingSyncState;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeRules;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.PartyResponse;
@@ -32,8 +35,8 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.SubmitDisputeResponseRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.mapper.DisputeMapper;
 import com.gamagerecruiters.marketplace.modules.dispute.port.BookingDisputeStatusPort;
-import com.gamagerecruiters.marketplace.modules.dispute.port.BookingLookupPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.BookingSnapshot;
+import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeEligibilityPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
 
@@ -45,63 +48,84 @@ public class DisputeServiceImpl implements DisputeService {
     private static final Sort NEWEST_FIRST = Sort.by(Sort.Direction.DESC, "createdAt");
 
     private final DisputeRepository disputeRepository;
-    private final BookingLookupPort bookingLookupPort;
+    private final DisputeBookingSyncStore syncStore;
     private final BookingDisputeStatusPort bookingDisputeStatusPort;
+    private final DisputeEligibilityPort disputeEligibilityPort;
     private final PayoutHoldPort payoutHoldPort;
     private final Clock clock;
 
     @Autowired
     public DisputeServiceImpl(DisputeRepository disputeRepository,
-                              BookingLookupPort bookingLookupPort,
+                              DisputeBookingSyncStore syncStore,
                               BookingDisputeStatusPort bookingDisputeStatusPort,
+                              DisputeEligibilityPort disputeEligibilityPort,
                               PayoutHoldPort payoutHoldPort) {
-        this(disputeRepository, bookingLookupPort, bookingDisputeStatusPort, payoutHoldPort, Clock.systemUTC());
+        this(disputeRepository, syncStore, bookingDisputeStatusPort, disputeEligibilityPort, payoutHoldPort,
+                Clock.systemUTC());
     }
 
     DisputeServiceImpl(DisputeRepository disputeRepository,
-                       BookingLookupPort bookingLookupPort,
+                       DisputeBookingSyncStore syncStore,
                        BookingDisputeStatusPort bookingDisputeStatusPort,
+                       DisputeEligibilityPort disputeEligibilityPort,
                        PayoutHoldPort payoutHoldPort,
                        Clock clock) {
         this.disputeRepository = disputeRepository;
-        this.bookingLookupPort = bookingLookupPort;
+        this.syncStore = syncStore;
         this.bookingDisputeStatusPort = bookingDisputeStatusPort;
+        this.disputeEligibilityPort = disputeEligibilityPort;
         this.payoutHoldPort = payoutHoldPort;
         this.clock = clock;
     }
 
     /**
-     * Order: look up the booking, check the caller is a party, reject a duplicate active dispute, move the
-     * booking to DISPUTED (skipped when it already is), then save the dispute with its first history entry.
-     *
-     * <p>The Booking module decides whether the booking may be disputed (status and the 72-hour window after
-     * completion, BR-008), so the booking is changed before the dispute is saved: a dispute is never stored for
-     * a booking the Booking module refused. If saving then fails, the booking change is not undone; a structured
-     * ERROR is logged with ids only and 503 DISPUTE_SAVE_FAILED is returned. Retrying is safe: the booking is
-     * then already DISPUTED, so the retry skips the booking call and only saves the dispute.</p>
+     * Raise flow (the Booking module decides eligibility; the dispute module never stays out of step with it):
+     * <ol>
+     *   <li>BookingFacade.assertDisputeEligible (via {@link DisputeEligibilityPort}): read-only; its errors (401, 403,
+     *       404, 409 INVALID_STATUS_TRANSITION / DISPUTE_WINDOW_CLOSED) are returned unchanged. The caller must also
+     *       be a party (checked here too, so the reporter and counterparty are always right).</li>
+     *   <li>Reject a second dispute for the booking. A PENDING intent record of the same caller is a retry: it is
+     *       completed instead of creating another one.</li>
+     *   <li>Insert the dispute as PENDING (invisible; the unique active-booking index still blocks duplicates).</li>
+     *   <li>Booking not yet DISPUTED: BookingFacade.markDisputed. If it fails, the PENDING record is deleted and the
+     *       facade error is returned unchanged. Booking already DISPUTED (and eligible): no booking change needed.</li>
+     *   <li>Mark the dispute SYNCED.</li>
+     * </ol>
+     * If the SYNCED update fails or the process stops in between, the PENDING record stays; a retry of the same
+     * request or {@link DisputeBookingSyncReconciler} completes it (booking DISPUTED) or removes it (booking not
+     * DISPUTED after a threshold).
      */
     @Override
     public DisputeDetailResponse raiseDispute(String actorId, Role actorRole, RaiseDisputeRequest request) {
-        // 404 BOOKING_NOT_FOUND comes from the Booking module unchanged.
-        BookingSnapshot booking = bookingLookupPort.getBooking(request.bookingId());
+        BookingSnapshot booking = disputeEligibilityPort.assertEligible(request.bookingId());
 
-        // Checked here (same rule and error as the Booking module) because the booking call is skipped when the
-        // booking is already DISPUTED, and so a non-party never learns whether a dispute exists.
+        // Same rule as the Booking module. Kept so the reporter/counterparty are always the booking's own parties.
         if (!booking.isParty(actorId)) {
             throw new AccessDeniedException("Access denied: you are not a participant of this booking");
         }
 
-        if (disputeRepository.existsByActiveBookingKey(booking.bookingId())) {
+        Optional<Dispute> existing = disputeRepository.findByActiveBookingKey(booking.bookingId());
+        if (existing.isPresent()) {
+            Dispute current = existing.get();
+            if (!current.isVisible() && actorId.equals(current.getRaisedBy())) {
+                return finish(completeIntent(current, booking));
+            }
             throw duplicateDispute();
         }
 
-        // Errors from the Booking module (401, 403, 409 ...) are passed through unchanged.
-        boolean bookingMovedHere = false;
-        if (!booking.alreadyDisputed()) {
-            bookingDisputeStatusPort.markDisputed(booking.bookingId(), bookingTimelineReason(request));
-            bookingMovedHere = true;
-        }
+        Dispute intent = insert(newDispute(booking, actorId, actorRole, request));
+        return finish(completeIntent(intent, booking));
+    }
 
+    /** Moves the booking to DISPUTED unless it already is, then marks the intent record SYNCED. */
+    private Dispute completeIntent(Dispute intent, BookingSnapshot booking) {
+        if (!booking.alreadyDisputed()) {
+            moveBookingOrCompensate(intent);
+        }
+        return completeSync(intent);
+    }
+
+    private Dispute newDispute(BookingSnapshot booking, String actorId, Role actorRole, RaiseDisputeRequest request) {
         Instant now = clock.instant();
         Dispute dispute = new Dispute();
         dispute.setBookingId(booking.bookingId());
@@ -114,32 +138,78 @@ public class DisputeServiceImpl implements DisputeService {
         dispute.setEvidence(request.evidence());
         dispute.setCreatedAt(now);
         dispute.setResponseDueAt(now.plus(DisputeRules.RESPONSE_WINDOW));
+        dispute.setBookingSyncState(BookingSyncState.PENDING);
         dispute.changeStatus(DisputeStatus.AWAITING_RESPONSE, actorId, actorRole, null, now);
+        return dispute;
+    }
 
-        Dispute saved;
+    /** Insert only. The booking has not been changed yet, so a failure here leaves nothing to undo. */
+    private Dispute insert(Dispute dispute) {
         try {
-            saved = disputeRepository.save(dispute);
+            return disputeRepository.insert(dispute);
         } catch (DuplicateKeyException e) {
-            // A concurrent request created the active dispute for this booking first (unique index); the
-            // booking is DISPUTED and has its dispute, so nothing needs reconciling.
+            // A concurrent request holds the booking's active-dispute key (unique index).
             throw duplicateDispute();
         } catch (RuntimeException e) {
-            log.error("event=DISPUTE_SAVE_FAILED bookingId={} actorId={} bookingMovedToDisputed={} cause={}",
-                    booking.bookingId(), actorId, bookingMovedHere, e.getClass().getSimpleName());
+            log.error("event=DISPUTE_SAVE_FAILED bookingId={} actorId={} cause={}",
+                    dispute.getBookingId(), dispute.getRaisedBy(), e.getClass().getSimpleName());
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "DISPUTE_SAVE_FAILED",
                     "The dispute could not be saved. Please try again");
         }
+    }
 
-        // TODO(WP07): still a stub; the payout is not actually put on hold yet.
-        payoutHoldPort.holdPayout(saved.getBookingId(), saved.getId());
+    /** markDisputed as the logged-in user. On any failure the intent record is removed and the error re-thrown as is. */
+    private void moveBookingOrCompensate(Dispute intent) {
+        try {
+            bookingDisputeStatusPort.markDisputed(intent.getBookingId(), bookingTimelineReason(intent.getCategory()));
+        } catch (RuntimeException e) {
+            compensate(intent);
+            throw e;
+        }
+    }
 
-        log.info("Dispute {} raised for booking {}", saved.getId(), saved.getBookingId());
-        return DisputeMapper.toDetail(saved);
+    private void compensate(Dispute intent) {
+        try {
+            if (!syncStore.deleteIfPending(intent.getId())) {
+                log.warn("event=DISPUTE_INTENT_ALREADY_GONE disputeId={} bookingId={}",
+                        intent.getId(), intent.getBookingId());
+            }
+        } catch (RuntimeException e) {
+            // The reconciler removes it later: the booking is not DISPUTED.
+            log.error("event=DISPUTE_INTENT_COMPENSATION_FAILED disputeId={} bookingId={} cause={}",
+                    intent.getId(), intent.getBookingId(), e.getClass().getSimpleName());
+        }
+    }
+
+    /** PENDING -> SYNCED. If that cannot be confirmed now, the record stays PENDING for a retry or the reconciler. */
+    private Dispute completeSync(Dispute intent) {
+        Optional<Dispute> synced;
+        try {
+            synced = syncStore.markSynced(intent.getId())
+                    // Completed meanwhile by another thread or the reconciler.
+                    .or(() -> disputeRepository.findById(intent.getId()).filter(Dispute::isVisible));
+        } catch (RuntimeException e) {
+            log.error("event=DISPUTE_SYNC_PENDING disputeId={} bookingId={} actorId={} cause={}",
+                    intent.getId(), intent.getBookingId(), intent.getRaisedBy(), e.getClass().getSimpleName());
+            throw syncPending();
+        }
+        return synced.orElseThrow(() -> {
+            log.error("event=DISPUTE_SYNC_PENDING disputeId={} bookingId={} actorId={} cause=NOT_PENDING",
+                    intent.getId(), intent.getBookingId(), intent.getRaisedBy());
+            return syncPending();
+        });
+    }
+
+    private DisputeDetailResponse finish(Dispute dispute) {
+        // STUB (WP07): records the request in the log only; no payout is actually put on hold.
+        payoutHoldPort.holdPayout(dispute.getBookingId(), dispute.getId());
+        log.info("Dispute {} raised for booking {}", dispute.getId(), dispute.getBookingId());
+        return DisputeMapper.toDetail(dispute);
     }
 
     @Override
     public DisputePageResponse<DisputeSummaryResponse> getMyDisputes(String userId, int page, int size) {
-        Page<Dispute> disputes = disputeRepository.findByParty(userId, pageRequest(page, size));
+        Page<Dispute> disputes = disputeRepository.findVisibleByParty(userId, pageRequest(page, size));
         return DisputePageResponse.from(disputes.map(DisputeMapper::toSummary));
     }
 
@@ -194,8 +264,8 @@ public class DisputeServiceImpl implements DisputeService {
     public DisputePageResponse<DisputeSummaryResponse> getDisputesForAdmin(String status, int page, int size) {
         Pageable pageable = pageRequest(page, size);
         Page<Dispute> disputes = status == null || status.isBlank()
-                ? disputeRepository.findAll(pageable)
-                : disputeRepository.findByStatus(parseStatus(status), pageable);
+                ? disputeRepository.findAllVisible(pageable)
+                : disputeRepository.findVisibleByStatus(parseStatus(status), pageable);
         return DisputePageResponse.from(disputes.map(DisputeMapper::toSummary));
     }
 
@@ -205,12 +275,14 @@ public class DisputeServiceImpl implements DisputeService {
     }
 
     /** Short, system-generated text for the booking timeline. The user's description is never copied there. */
-    static String bookingTimelineReason(RaiseDisputeRequest request) {
-        return "Dispute raised: " + request.category();
+    static String bookingTimelineReason(DisputeCategory category) {
+        return "Dispute raised: " + category;
     }
 
+    /** Only visible disputes: a PENDING intent record is reported as not found to everyone. */
     private Dispute findDispute(String disputeId) {
         return disputeRepository.findById(disputeId)
+                .filter(Dispute::isVisible)
                 .orElseThrow(() -> new ResourceNotFoundException("DISPUTE_NOT_FOUND", "Dispute not found"));
     }
 
@@ -224,6 +296,11 @@ public class DisputeServiceImpl implements DisputeService {
     private static ResourceConflictException duplicateDispute() {
         return new ResourceConflictException("DISPUTE_ALREADY_EXISTS",
                 "An active dispute already exists for this booking");
+    }
+
+    private static ApiException syncPending() {
+        return new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "DISPUTE_SYNC_PENDING",
+                "Your dispute was received but is not ready yet. Please try again in a moment");
     }
 
     private static DisputeStatus parseStatus(String status) {

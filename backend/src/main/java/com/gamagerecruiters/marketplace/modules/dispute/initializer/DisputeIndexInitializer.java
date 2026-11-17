@@ -23,6 +23,8 @@ import com.mongodb.client.model.Indexes;
  *       concurrent requests. Only documents where activeBookingKey is a string are indexed.</li>
  *   <li>{@code customerId_1_createdAt_-1}, {@code providerId_1_createdAt_-1}: "my disputes".</li>
  *   <li>{@code status_1_createdAt_-1}: admin list filtered by status.</li>
+ *   <li>{@code bookingSyncState_1_createdAt_1} (partial, PENDING only): lets the booking-sync reconciler find
+ *       unfinished intent records without scanning the collection. Holds only the few PENDING records.</li>
  * </ul>
  */
 @Component
@@ -54,6 +56,9 @@ public class DisputeIndexInitializer {
                     new IndexOptions().name("providerId_1_createdAt_-1"));
             disputes.createIndex(Indexes.compoundIndex(Indexes.ascending("status"), Indexes.descending("createdAt")),
                     new IndexOptions().name("status_1_createdAt_-1"));
+            disputes.createIndex(Indexes.compoundIndex(Indexes.ascending("bookingSyncState"), Indexes.ascending("createdAt")),
+                    new IndexOptions().name("bookingSyncState_1_createdAt_1")
+                            .partialFilterExpression(new Document("bookingSyncState", "PENDING")));
 
             log.info("Dispute indexes verified on collection {}", DISPUTES);
         } catch (RuntimeException e) {

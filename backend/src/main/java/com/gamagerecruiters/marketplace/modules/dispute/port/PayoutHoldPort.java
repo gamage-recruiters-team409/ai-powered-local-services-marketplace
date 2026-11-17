@@ -3,8 +3,8 @@ package com.gamagerecruiters.marketplace.modules.dispute.port;
 /**
  * What the dispute module needs from the Payment/Payout module (WP07).
  *
- * <p>TODO(WP07, Aurudika): implement with a Payment module service method and remove
- * {@code StubPayoutHoldAdapter}. Still a stub: payouts are NOT put on hold yet.</p>
+ * <p>The integration point for WP07 (Aurudika). Currently implemented only by {@code StubPayoutHoldAdapter}, which
+ * applies NO hold. TODO(WP07): implement with a Payment module service method and remove the stub.</p>
  */
 public interface PayoutHoldPort {
 

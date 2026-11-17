@@ -46,6 +46,10 @@ public class Dispute {
     private Instant createdAt;
     private Instant updatedAt;
     private List<StatusHistoryEntry> statusHistory = new ArrayList<>();
+    /** Internal booking-sync state (see BookingSyncState). Null on records created before it existed: SYNCED. */
+    private BookingSyncState bookingSyncState;
+    /** Internal: until when a reconciler instance holds this PENDING record. Never exposed. */
+    private Instant syncLeaseUntil;
 
     /**
      * Moves the dispute to {@code toStatus} and records the change in the status history.
@@ -58,6 +62,11 @@ public class Dispute {
         updatedAt = at;
     }
 
+    /** False only for an intent record whose booking change is not confirmed yet (PENDING). */
+    public boolean isVisible() {
+        return bookingSyncState != BookingSyncState.PENDING;
+    }
+
     /** True if the user is the customer or the provider of the disputed booking. */
     public boolean isParty(String userId) {
         return userId != null && (userId.equals(customerId) || userId.equals(providerId));
@@ -65,6 +74,22 @@ public class Dispute {
 
     public String getId() {
         return id;
+    }
+
+    public BookingSyncState getBookingSyncState() {
+        return bookingSyncState;
+    }
+
+    public void setBookingSyncState(BookingSyncState bookingSyncState) {
+        this.bookingSyncState = bookingSyncState;
+    }
+
+    public Instant getSyncLeaseUntil() {
+        return syncLeaseUntil;
+    }
+
+    public void setSyncLeaseUntil(Instant syncLeaseUntil) {
+        this.syncLeaseUntil = syncLeaseUntil;
     }
 
     public void setId(String id) {

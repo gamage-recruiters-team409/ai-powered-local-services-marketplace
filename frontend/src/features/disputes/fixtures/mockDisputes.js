@@ -4,6 +4,7 @@
  *
  * Open:  /customer/disputes/sample-awaiting   /provider/disputes/sample-awaiting
  *        /provider/disputes/sample-review     /provider/disputes/sample-overdue
+ *        /customer/disputes/sample-provider-raised (the customer must respond: shows the customer form)
  *        /customer/disputes/sample-denied (403)   any other id (404)
  * Each sample also has a realistic hex id (like a MongoDB id), so references read "D-001042", "BK-048192".
  */
@@ -70,8 +71,23 @@ function buildFixtures() {
   // Raised 80h ago: the 72h window has passed.
   const overdue = baseDispute('6a0f00c0ffee00a000001044', '6a0f00c0ffee00b000048194', -80 * HOUR_MS)
 
+  // Raised by the provider ~10h ago: the customer is the responding party.
+  const providerRaised = baseDispute('6a0f00c0ffee00a000001045', '6a0f00c0ffee00b000048195', -10 * HOUR_MS)
+  providerRaised.raisedBy = 'sample-provider-id'
+  providerRaised.raisedByRole = 'PROVIDER'
+  providerRaised.category = 'CONDUCT'
+  providerRaised.description = 'Sample provider report for the demo. Access to the property was not available at the '
+    + 'booked time. This is placeholder content, not a real case.'
+  providerRaised.evidence = ['evidence/sample-arrival-photo.jpg']
+  providerRaised.statusHistory = [{ ...providerRaised.statusHistory[0], actorId: 'sample-provider-id', actorRole: 'PROVIDER' }]
+
   // Keyed by the short URL slug; findFixture also accepts the hex id (used by the response form).
-  return { 'sample-awaiting': awaiting, 'sample-review': review, 'sample-overdue': overdue }
+  return {
+    'sample-awaiting': awaiting,
+    'sample-review': review,
+    'sample-overdue': overdue,
+    'sample-provider-raised': providerRaised,
+  }
 }
 
 let fixtures = buildFixtures()
@@ -128,14 +144,17 @@ export async function submitMockResponse(disputeId, text) {
     throw apiError(400, 'RESPONSE_WINDOW_CLOSED')
   }
   const now = new Date().toISOString()
-  dispute.response = { responderId: 'sample-provider-id', text: clean, evidence: [], respondedAt: now }
+  // The responding party is the one who did not raise the dispute.
+  const responderRole = dispute.raisedByRole === 'PROVIDER' ? 'CUSTOMER' : 'PROVIDER'
+  const responderId = responderRole === 'CUSTOMER' ? dispute.customerId : dispute.providerId
+  dispute.response = { responderId, text: clean, evidence: [], respondedAt: now }
   dispute.status = 'UNDER_REVIEW'
   dispute.updatedAt = now
   dispute.statusHistory = [...dispute.statusHistory, {
     fromStatus: 'AWAITING_RESPONSE',
     toStatus: 'UNDER_REVIEW',
-    actorId: 'sample-provider-id',
-    actorRole: 'PROVIDER',
+    actorId: responderId,
+    actorRole: responderRole,
     reason: null,
     timestamp: now,
   }]

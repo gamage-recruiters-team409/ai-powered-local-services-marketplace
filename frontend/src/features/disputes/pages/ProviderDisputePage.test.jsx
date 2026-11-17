@@ -71,7 +71,8 @@ describe('ProviderDisputePage', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Dispute D-DEF456' })).toBeTruthy()
     expect(screen.getByText('Awaiting your response')).toBeTruthy()
     expect(screen.getByText(/2 days 4 hours left/)).toBeTruthy()
-    expect(screen.getByText(/payout for this booking is on hold/i)).toBeTruthy()
+    expect(screen.getByText(/payment handling for this booking will follow the dispute outcome/i)).toBeTruthy()
+    expect(screen.queryByText(/on hold/i)).toBeNull()
     expect(screen.getByLabelText(/tell your side/i)).toBeTruthy()
   })
 

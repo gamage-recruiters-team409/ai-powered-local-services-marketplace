@@ -14,12 +14,13 @@ import {
 } from '../components/DisputeParts'
 import { DisputeAccessDenied, DisputeErrorState, DisputeNotFound, DisputeSkeleton } from '../components/DisputeStates'
 import { DisputeIcon } from '../components/DisputeIcon'
-import { ProviderResponseForm } from '../components/ProviderResponseForm'
+import { DisputeResponseForm } from '../components/DisputeResponseForm'
 import { DISPUTE_STATUS, responderRoleOf } from '../config/disputeStatus'
 import { useDispute } from '../hooks/useDispute'
 import { useNow } from '../hooks/useNow'
-import { getTimeLeft, isResponseOverdue } from '../utils/countdown'
+import { isResponseOverdue } from '../utils/countdown'
 import { disputeTitle } from '../utils/format'
+import { responseClosedReason } from '../utils/responseState'
 import styles from '../disputes.module.css'
 
 const MY_BOOKINGS_PATH = '/provider/bookings'
@@ -29,7 +30,7 @@ const ACTIVE_STATUSES = new Set([DISPUTE_STATUS.OPEN, DISPUTE_STATUS.AWAITING_RE
 export function ProviderDisputePage() {
   const { disputeId } = useParams()
   const location = useLocation()
-  const { status, dispute, error, reload, replace } = useDispute(disputeId)
+  const { status, dispute, error, reload, replace, refresh } = useDispute(disputeId)
   const now = useNow()
 
   if (status === 'loading') {
@@ -47,21 +48,7 @@ export function ProviderDisputePage() {
     }
     return <DisputeErrorState message={error.message} onRetry={reload} />
   }
-  return <ProviderDisputeView key={dispute.id} dispute={dispute} now={now} onUpdated={replace} onReload={reload} />
-}
-
-/** Why the form is not available, or null when the provider can respond now. */
-function closedReason(dispute, now) {
-  if (dispute.response) {
-    return 'You have already responded. An admin is reviewing both sides.'
-  }
-  if (dispute.status !== DISPUTE_STATUS.AWAITING_RESPONSE) {
-    return 'Response window closed. This dispute is no longer waiting for a response.'
-  }
-  if (getTimeLeft(dispute.responseDueAt, now)?.overdue !== false) {
-    return 'Response window closed. The 72-hour deadline has passed.'
-  }
-  return null
+  return <ProviderDisputeView key={dispute.id} dispute={dispute} now={now} onUpdated={replace} onReload={refresh} />
 }
 
 function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
@@ -69,7 +56,7 @@ function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
   const responderRole = responderRoleOf(dispute)
   const providerResponds = responderRole === 'PROVIDER'
   const title = disputeTitle(dispute)
-  const reason = closedReason(dispute, now)
+  const reason = responseClosedReason(dispute, now)
   const overdue = isResponseOverdue(dispute, now)
 
   return (
@@ -100,8 +87,8 @@ function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
       {ACTIVE_STATUSES.has(dispute.status) && (
         <div className={`${styles.banner} ${styles.bannerInfo}`}>
           <span className={styles.bannerText}>
-            <DisputeIcon name="lock" />
-            The payout for this booking is on hold until the dispute is resolved.
+            <DisputeIcon name="info" />
+            Payment handling for this booking will follow the dispute outcome.
           </span>
         </div>
       )}
@@ -130,7 +117,7 @@ function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
         <div className={styles.column}>
           {providerResponds && dispute.response && <ResponseView response={dispute.response} title="Your response" />}
           {providerResponds && !dispute.response && (
-            <ProviderResponseForm
+            <DisputeResponseForm
               disputeId={dispute.id}
               canRespond={reason === null}
               closedMessage={reason}

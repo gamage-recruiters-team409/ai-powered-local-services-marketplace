@@ -12,10 +12,11 @@ import { DisputeIcon } from './DisputeIcon'
 import styles from '../disputes.module.css'
 
 /**
- * "Your response" form. Disabled with a "Response window closed" message when `canRespond` is false.
- * Sends only the text: there is no evidence upload endpoint yet.
+ * "Your response" form for whichever party must respond (the provider, or the customer when the provider raised
+ * the dispute). Shared by both dispute screens. Disabled with a "Response window closed" message when `canRespond`
+ * is false. Sends only the text: there is no evidence upload endpoint yet.
  */
-export function ProviderResponseForm({ disputeId, canRespond, closedMessage, onSubmitted, onWindowClosed }) {
+export function DisputeResponseForm({ disputeId, canRespond, closedMessage, onSubmitted, onWindowClosed }) {
   const navigate = useNavigate()
   const location = useLocation()
   const titleId = useId()

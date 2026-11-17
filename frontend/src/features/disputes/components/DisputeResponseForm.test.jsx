@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { submitDisputeResponse } from '../services/disputesApi'
 import { MAX_RESPONSE_LENGTH, validateResponseText } from '../utils/responseValidation'
-import { ProviderResponseForm } from './ProviderResponseForm'
+import { DisputeResponseForm } from './DisputeResponseForm'
 
 vi.mock('../services/disputesApi', () => ({
   submitDisputeResponse: vi.fn(),
@@ -17,7 +17,7 @@ function renderForm(props = {}) {
   const onWindowClosed = vi.fn()
   render(
     <MemoryRouter>
-      <ProviderResponseForm
+      <DisputeResponseForm
         disputeId="d-1"
         canRespond
         closedMessage="Response window closed. The 72-hour deadline has passed."
@@ -58,7 +58,7 @@ describe('validateResponseText', () => {
   })
 })
 
-describe('ProviderResponseForm', () => {
+describe('DisputeResponseForm', () => {
   it('shows a validation error for an empty response and does not call the API', () => {
     renderForm()
 
