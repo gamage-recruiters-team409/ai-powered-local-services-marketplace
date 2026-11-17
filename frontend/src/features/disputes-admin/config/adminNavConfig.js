@@ -1,4 +1,7 @@
+import { lazy } from 'react'
 import { ADMIN_ROLES } from './adminAreas'
+
+const AdminCategoriesPage = lazy(() => import('../../listings/pages/AdminCategoriesPage'))
 
 /**
  * THE single source for admin sidebar links AND admin routes.
@@ -40,7 +43,7 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
   { id: 'admin.overdue-bookings', area: ADMIN, section: 'Operations', label: 'Overdue bookings', path: 'overdue-bookings', icon: 'clock', description: 'Bookings still open 72 hours after the slot ended' },
   { id: 'admin.late-cases', area: ADMIN, section: 'Operations', label: 'Late cases', path: 'late-cases', icon: 'calendar', description: 'Problems reported after the 72-hour window' },
   { id: 'admin.repeat-cancellations', area: ADMIN, section: 'Operations', label: 'Repeat cancellations', path: 'repeat-cancellations', icon: 'xCircle', description: 'Warnings and suspensions for repeat cancellations' },
-  { id: 'admin.categories', area: ADMIN, section: 'Management', label: 'Categories', path: 'categories', icon: 'grid', description: 'Service categories and commission' },
+  { id: 'admin.categories', area: ADMIN, section: 'Management', label: 'Categories', path: 'categories', icon: 'grid', description: 'Service categories and commission', page: AdminCategoriesPage },
   { id: 'admin.announcements', area: ADMIN, section: 'Management', label: 'Announcements', path: 'announcements', icon: 'message', description: 'Platform announcements' },
   { id: 'admin.audit-log', area: ADMIN, section: 'Management', label: 'Audit log', path: 'audit-log', icon: 'fileText', description: 'Record of administrative actions' },
   { id: 'admin.provider-analytics', area: ADMIN, section: 'Insights', label: 'Provider analytics', path: 'provider-analytics', icon: 'barChart', description: 'Provider performance' },
