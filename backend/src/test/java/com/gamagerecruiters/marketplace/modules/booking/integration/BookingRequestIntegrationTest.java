@@ -2,6 +2,10 @@ package com.gamagerecruiters.marketplace.modules.booking.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 
 import java.time.DayOfWeek;
 import java.time.Instant;
@@ -14,6 +18,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -36,6 +41,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.MongoDBContainer;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
@@ -50,14 +56,16 @@ import com.gamagerecruiters.marketplace.modules.booking.dto.BookingAddressReques
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingResponse;
 import com.gamagerecruiters.marketplace.modules.booking.dto.CreateBookingRequest;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingRequestService;
+import com.gamagerecruiters.marketplace.modules.booking.service.SlotService;
 import com.gamagerecruiters.marketplace.modules.booking.service.SlotServiceImpl;
 
 /**
  * Booking request against a real MongoDB (Testcontainers): stored booking, slot re-check and
- * double-booking protection under simultaneous requests.
+ * double-booking protection under simultaneous requests (MongoDB transaction + provider guard).
+ * Booking creation is gated off by default; these tests switch it on for the test context only.
  * Requires Docker. Skip explicitly with -DSKIP_DOCKER_TESTS=true.
  */
-@SpringBootTest
+@SpringBootTest(properties = "booking.creation.enabled=true")
 @ActiveProfiles("integration-test")
 @Tag("integration")
 @DisabledIfSystemProperty(named = "SKIP_DOCKER_TESTS", matches = "(?i)true")
@@ -102,6 +110,10 @@ class BookingRequestIntegrationTest {
 
     @Autowired
     private MongoTemplate mongoTemplate;
+
+    /** Real SlotService; only the regression test below slows one call down. */
+    @MockitoSpyBean
+    private SlotService slotService;
 
     @BeforeEach
     void setUp() {
@@ -219,6 +231,59 @@ class BookingRequestIntegrationTest {
             assertThat(storedOpenBookings()).isEqualTo(1);
         } finally {
             executor.shutdownNow();
+        }
+    }
+    @Test
+    @DisplayName("Real MongoDB: first request held 12 s (longer than the old 10 s lease) – overlapping request still cannot double book")
+    void slowRequestBeyondOldLeaseStillProtected() throws Exception {
+        Instant first = nextWeekAt("16:00");
+        Instant overlapping = nextWeekAt("16:30");
+        long holdMillis = 12_000;
+
+        CountDownLatch firstInsideTransaction = new CountDownLatch(1);
+        AtomicBoolean delayed = new AtomicBoolean(false);
+        doAnswer(invocation -> {
+            // Only the first request's slot check is slowed down; it has already claimed the guard.
+            if (delayed.compareAndSet(false, true)) {
+                firstInsideTransaction.countDown();
+                Thread.sleep(holdMillis);
+            }
+            return invocation.callRealMethod();
+        }).when(slotService).isSlotAvailable(anyString(), any(Instant.class), anyInt());
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<String> slow = executor.submit(() -> attempt("customer-slow", first));
+            assertThat(firstInsideTransaction.await(10, TimeUnit.SECONDS)).isTrue();
+
+            // Wait past the old 10 s lease while the first request is still inside its transaction.
+            Thread.sleep(10_500);
+            Future<String> second = executor.submit(() -> attempt("customer-second", overlapping));
+
+            String slowOutcome = slow.get(60, TimeUnit.SECONDS);
+            String secondOutcome = second.get(60, TimeUnit.SECONDS);
+
+            log.info("Beyond-lease regression: hold={}ms, slowRequest={}, overlappingRequest={}, stored open bookings={}",
+                    holdMillis, slowOutcome, secondOutcome, storedOpenBookings());
+
+            assertThat(List.of(slowOutcome, secondOutcome)).filteredOn("CREATED"::equals).hasSize(1);
+            assertThat(List.of(slowOutcome, secondOutcome))
+                    .allMatch(o -> o.equals("CREATED") || o.equals("SLOT_UNAVAILABLE") || o.equals("BOOKING_BUSY"));
+            assertThat(storedOpenBookings()).isEqualTo(1);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private String attempt(String customer, Instant slot) {
+        loginAs(customer);
+        try {
+            bookingRequestService.createBookingRequest(request(slot));
+            return "CREATED";
+        } catch (ApiException e) {
+            return e.getErrorCode();
+        } finally {
+            SecurityContextHolder.clearContext();
         }
     }
 }

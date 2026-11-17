@@ -15,11 +15,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.GlobalExceptionHandler;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.config.SecurityConfig;
@@ -152,5 +154,18 @@ class BookingControllerTest {
                         .contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value("SLOT_UNAVAILABLE"));
+    }
+
+    @Test
+    @DisplayName("Booking creation gated (dependencies not integrated) returns 503 BOOKING_CREATION_UNAVAILABLE")
+    void creationGated() throws Exception {
+        mockUser("cust-token", "cust-1", Role.CUSTOMER);
+        when(bookingRequestService.createBookingRequest(any())).thenThrow(new ApiException(
+                HttpStatus.SERVICE_UNAVAILABLE, "BOOKING_CREATION_UNAVAILABLE", "not available"));
+
+        mockMvc.perform(post(URL).header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("BOOKING_CREATION_UNAVAILABLE"));
     }
 }
