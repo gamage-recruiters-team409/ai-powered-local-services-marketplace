@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 
 import Spinner from '../../../shared/components/feedback/Spinner';
@@ -74,17 +74,6 @@ export default function VerifyEmailPage() {
     };
   }, []);
 
-  const verifyToken = useCallback(async (tokenToVerify) => {
-    try {
-      const response = await authApi.verifyEmail(tokenToVerify);
-      setMessage(response.message || 'Your email has been verified successfully!');
-      setStatus(STATUS.SUCCESS);
-    } catch (err) {
-      setMessage(err.message || 'This link is invalid or has expired.');
-      setStatus(STATUS.ERROR);
-    }
-  }, []);
-
   useEffect(() => {
     // StrictMode guard: only call once
     if (calledRef.current) return;
@@ -92,8 +81,17 @@ export default function VerifyEmailPage() {
 
     if (!token) return;
 
-    verifyToken(token);
-  }, [token, verifyToken]);
+    authApi
+      .verifyEmail(token)
+      .then((response) => {
+        setMessage(response.message || 'Your email has been verified successfully!');
+        setStatus(STATUS.SUCCESS);
+      })
+      .catch((err) => {
+        setMessage(err.message || 'This link is invalid or has expired.');
+        setStatus(STATUS.ERROR);
+      });
+  }, [token]);
 
   if (status === STATUS.LOADING) {
     return (
