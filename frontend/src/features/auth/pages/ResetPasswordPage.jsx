@@ -68,7 +68,7 @@ export default function ResetPasswordPage({ previewState } = {}) {
   });
 
   const criteria = checkPasswordCriteria(password);
-  const metCount = Object.values(criteria).filter(Boolean).length;
+  const metCount = criteria.validCount;
 
   // Strip token from URL immediately (skip in preview mode)
   useEffect(() => {
@@ -190,7 +190,7 @@ export default function ResetPasswordPage({ previewState } = {}) {
             <label className="shared-field__label" htmlFor="reset-new-password">
               New password
             </label>
-            <span className="auth-criteria-counter">{metCount}/4 CRITERIA</span>
+            <span className="auth-criteria-counter">{`${metCount}/4 criteria`}</span>
           </div>
           <PasswordInput
             id="reset-new-password"

@@ -98,7 +98,12 @@ export default function VerifyEmailPage({ previewState } = {}) {
         setStatus(STATUS.SUCCESS);
       })
       .catch((err) => {
-        setMessage(err.message || 'This link has expired or is not valid');
+        const code = err?.code;
+        if (code === 'NETWORK_ERROR' || (err?.status && err.status >= 500)) {
+          setMessage('Something went wrong, please try again.');
+        } else {
+          setMessage('Request a new verification link.');
+        }
         setStatus(STATUS.ERROR);
       });
   }, [token, previewState]);
@@ -141,7 +146,7 @@ export default function VerifyEmailPage({ previewState } = {}) {
         {message || 'Request a new verification link.'}
       </p>
       <Link
-        to="/login"
+        to="/check-email"
         className="shared-btn shared-btn--primary"
         style={{ width: '100%', marginBottom: '8px', textDecoration: 'none' }}
       >

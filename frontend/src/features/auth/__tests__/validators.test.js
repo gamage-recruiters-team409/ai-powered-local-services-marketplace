@@ -43,6 +43,25 @@ describe('validators', () => {
 
   describe('checkPasswordCriteria', () => {
     it('accurately counts criteria', () => {
+      const empty = checkPasswordCriteria('');
+      expect(empty.validCount).toBe(0);
+      expect(empty.isValid).toBe(false);
+
+      const lowerOnly = checkPasswordCriteria('abc');
+      expect(lowerOnly.validCount).toBe(1);
+      expect(lowerOnly.hasLowercase).toBe(true);
+      expect(lowerOnly.isValid).toBe(false);
+
+      const lengthAndLower = checkPasswordCriteria('abcdefgh');
+      expect(lengthAndLower.validCount).toBe(2);
+      expect(lengthAndLower.hasMinLength).toBe(true);
+      expect(lengthAndLower.hasLowercase).toBe(true);
+      expect(lengthAndLower.isValid).toBe(false);
+
+      const threeRules = checkPasswordCriteria('Abcdefgh');
+      expect(threeRules.validCount).toBe(3);
+      expect(threeRules.isValid).toBe(false);
+
       const res = checkPasswordCriteria('Weak1');
       expect(res.hasMinLength).toBe(false);
       expect(res.hasUppercase).toBe(true);
@@ -51,9 +70,13 @@ describe('validators', () => {
       expect(res.validCount).toBe(3);
       expect(res.isValid).toBe(false);
 
-      const strong = checkPasswordCriteria('StrongPass1');
+      const strong = checkPasswordCriteria('Abcdefg1');
       expect(strong.validCount).toBe(4);
       expect(strong.isValid).toBe(true);
+
+      const strongPass = checkPasswordCriteria('StrongPass1');
+      expect(strongPass.validCount).toBe(4);
+      expect(strongPass.isValid).toBe(true);
     });
   });
 

@@ -25,8 +25,8 @@ describe('ResetPasswordPage', () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByRole('heading', { name: /this link has expired|link expired/i })).toBeTruthy();
-    expect(screen.getByRole('link', { name: /request a new link|request new link/i })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /this link has expired or was already used/i })).toBeTruthy();
+    expect(screen.getByRole('link', { name: /request a new link/i })).toBeTruthy();
     expect(authApi.resetPassword).not.toHaveBeenCalled();
   });
 
@@ -72,8 +72,8 @@ describe('ResetPasswordPage', () => {
 
     await waitFor(() => {
       expect(authApi.resetPassword).toHaveBeenCalledWith('valid-tok', 'NewValidPassword123');
-      expect(screen.getByRole('heading', { name: /password updated|password reset successful/i })).toBeTruthy();
-      expect(screen.getByRole('link', { name: /log in|continue to login/i })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: /password updated/i })).toBeTruthy();
+      expect(screen.getByRole('link', { name: /^log in$/i })).toBeTruthy();
     });
   });
 });
