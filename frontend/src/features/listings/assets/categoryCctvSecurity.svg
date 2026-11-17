@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="cctvTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#EBF0FF" />
+      <stop offset="100%" stop-color="#CBD9FE" />
+    </linearGradient>
+    <linearGradient id="cctvBodyGrad" x1="66" y1="74" x2="178" y2="146" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#9BB4FA" />
+      <stop offset="55%" stop-color="#6080E4" />
+      <stop offset="100%" stop-color="#3E58BC" />
+    </linearGradient>
+    <linearGradient id="cctvHoodGrad" x1="62" y1="68" x2="180" y2="106" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#BDD0FE" />
+      <stop offset="100%" stop-color="#5B7CE0" />
+    </linearGradient>
+    <linearGradient id="cctvBracketGrad" x1="126" y1="126" x2="196" y2="186" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7694EC" />
+      <stop offset="100%" stop-color="#3B56B8" />
+    </linearGradient>
+    <filter id="cctvDrop" x="-18%" y="-15%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#273D8C" flood-opacity="0.34" />
+    </filter>
+    <filter id="cctvTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#5F7BD2" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#cctvTileBg)" stroke="#B0C4F8" stroke-width="2.5" filter="url(#cctvTileShadow)" />
+
+  <g filter="url(#cctvDrop)">
+    <rect x="180" y="138" width="16" height="48" rx="8" fill="url(#cctvBracketGrad)" />
+    <path d="M138 128 L138 148 C138 158 146 164 156 164 L182 164" stroke="url(#cctvBracketGrad)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" />
+    <circle cx="138" cy="130" r="9" fill="#597AE0" />
+
+    <g transform="rotate(-11 124 108)">
+      <rect x="74" y="82" width="102" height="52" rx="18" fill="url(#cctvBodyGrad)" />
+      <path d="M56 84 C60 72 72 68 88 68 L172 68 C182 68 186 75 184 84 L82 84 C69 84 61 88 56 84 Z" fill="url(#cctvHoodGrad)" />
+      <path d="M76 76 L168 76" stroke="#EEF3FF" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+      <ellipse cx="78" cy="112" rx="22" ry="24" fill="#6F8EEB" stroke="#E0EAFF" stroke-width="3.5" />
+      <ellipse cx="76" cy="112" rx="15" ry="17" fill="#25356B" />
+      <ellipse cx="74" cy="112" rx="8" ry="9.5" fill="#101A3B" />
+      <circle cx="71" cy="107" r="3.5" fill="#CAE3FF" />
+    </g>
+  </g>
+</svg>

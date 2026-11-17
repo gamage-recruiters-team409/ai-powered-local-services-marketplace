@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="plumbTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#EAF5FF" />
+      <stop offset="100%" stop-color="#C2E2FF" />
+    </linearGradient>
+    <linearGradient id="plumbDropGrad" x1="92" y1="62" x2="162" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#87C6FC" />
+      <stop offset="55%" stop-color="#4097EF" />
+      <stop offset="100%" stop-color="#1C6BC7" />
+    </linearGradient>
+    <filter id="plumbDrop" x="-18%" y="-15%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#124B8F" flood-opacity="0.34" />
+    </filter>
+    <filter id="plumbTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#4B92D1" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#plumbTileBg)" stroke="#9DD0FB" stroke-width="2.5" filter="url(#plumbTileShadow)" />
+
+  <g filter="url(#plumbDrop)">
+    <path d="M128 52 C133 52 178 113 178 148 C178 178 156 202 128 202 C100 202 78 178 78 148 C78 113 123 52 128 52 Z" fill="url(#plumbDropGrad)" />
+    <path d="M98 134 C94 148 96 164 105 174" stroke="#EEF7FF" stroke-width="7.5" stroke-linecap="round" opacity="0.88" />
+    <circle cx="105" cy="118" r="4" fill="#EEF7FF" opacity="0.85" />
+  </g>
+</svg>
