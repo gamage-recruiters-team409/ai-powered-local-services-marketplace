@@ -201,6 +201,67 @@ class AvailabilityIndexInitializerTest {
     }
 
     @Test
+    @DisplayName("Fails when the existing unique index is sparse (never drops it)")
+    void failsWhenIndexIsUniqueSparse() {
+        Document uniqueSparse = new Document("v", 2)
+                .append("key", new Document("providerId", 1))
+                .append("name", "providerId_1")
+                .append("unique", true)
+                .append("sparse", true);
+        when(mongoTemplate.collectionExists("availability_rules")).thenReturn(true);
+        when(mongoTemplate.getCollection("availability_rules")).thenReturn(rulesCollection);
+        ListIndexesIterable<Document> existing = indexes(ID_INDEX, uniqueSparse);
+        when(rulesCollection.listIndexes()).thenReturn(existing);
+
+        assertThatThrownBy(() -> initializer.ensureUniqueIndex("availability_rules", List.of("providerId"),
+                "providerId_1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Incompatible index")
+                .hasMessageContaining("not sparse")
+                .hasMessageContaining("Manual migration required");
+
+        verify(rulesCollection, never()).createIndex(any(Bson.class), any(IndexOptions.class));
+        verify(rulesCollection, never()).dropIndex(anyString());
+        verify(rulesCollection, never()).dropIndex(any(Bson.class));
+    }
+
+    @Test
+    @DisplayName("Fails when sparse is stored as the number 1 instead of true")
+    void failsWhenSparseIsNumeric() {
+        Document uniqueSparseNumeric = new Document("v", 2)
+                .append("key", new Document("providerId", 1).append("date", 1))
+                .append("name", "providerId_1_date_1")
+                .append("unique", true)
+                .append("sparse", 1);
+        when(mongoTemplate.collectionExists("blocked_dates")).thenReturn(true);
+        when(mongoTemplate.getCollection("blocked_dates")).thenReturn(blockedDatesCollection);
+        ListIndexesIterable<Document> existing = indexes(ID_INDEX, uniqueSparseNumeric);
+        when(blockedDatesCollection.listIndexes()).thenReturn(existing);
+
+        assertThatThrownBy(() -> initializer.ensureUniqueIndex("blocked_dates", List.of("providerId", "date"),
+                "providerId_1_date_1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Incompatible index");
+    }
+
+    @Test
+    @DisplayName("Accepts a unique index that explicitly has sparse: false")
+    void acceptsSparseFalse() {
+        Document uniqueNotSparse = new Document("v", 2)
+                .append("key", new Document("providerId", 1))
+                .append("name", "providerId_1")
+                .append("unique", true)
+                .append("sparse", false);
+        when(mongoTemplate.collectionExists("availability_rules")).thenReturn(true);
+        when(mongoTemplate.getCollection("availability_rules")).thenReturn(rulesCollection);
+        ListIndexesIterable<Document> existing = indexes(ID_INDEX, uniqueNotSparse);
+        when(rulesCollection.listIndexes()).thenReturn(existing);
+
+        assertThatCode(() -> initializer.ensureUniqueIndex("availability_rules", List.of("providerId"),
+                "providerId_1")).doesNotThrowAnyException();
+    }
+
+    @Test
     @DisplayName("Fails when the index is still missing after creation")
     void failsWhenIndexMissingAfterCreation() {
         when(mongoTemplate.getCollection("availability_rules")).thenReturn(rulesCollection);

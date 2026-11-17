@@ -5,6 +5,10 @@ import { PROVIDER_IMAGES } from './providerImages.js';
  * Source of truth: Reference Design (LocalServe Home Cleaning in Austin, TX).
  * Provider photos are hosted on Cloudinary (see providerImages.js) and are not
  * stored in this repository.
+ *
+ * Comparison fields (inclusions, cancellationPolicy, serviceRadiusMiles) support
+ * FR-CMP-003. They are optional in live responses; the comparison view renders
+ * "Not provided" when a provider omits them.
  */
 export const MOCK_SEARCH_RESULTS = [
   {
@@ -29,6 +33,9 @@ export const MOCK_SEARCH_RESULTS = [
       currency: '$',
       unit: 'hr',
     },
+    inclusions: ['Supplies & equipment'],
+    cancellationPolicy: 'Free up to 24 hours before; then 50% of booking',
+    serviceRadiusMiles: 5,
     inComparison: true,
     location: 'Austin, TX 78701',
   },
@@ -54,6 +61,9 @@ export const MOCK_SEARCH_RESULTS = [
       currency: '$',
       unit: 'hr',
     },
+    inclusions: ['Supplies & equipment'],
+    cancellationPolicy: 'Free up to 12 hours before; then 50% of booking',
+    serviceRadiusMiles: 8,
     inComparison: true,
     location: 'Austin, TX 78704',
   },
@@ -79,6 +89,9 @@ export const MOCK_SEARCH_RESULTS = [
       currency: '$',
       unit: 'hr',
     },
+    inclusions: ['Supplies & equipment'],
+    cancellationPolicy: 'Free up to 48 hours before; then 50% of booking',
+    serviceRadiusMiles: 5,
     inComparison: false,
     location: 'Austin, TX 78702',
   },
@@ -104,6 +117,9 @@ export const MOCK_SEARCH_RESULTS = [
       currency: '$',
       unit: 'hr',
     },
+    inclusions: ['Heavy-duty equipment', 'Supplies & equipment'],
+    cancellationPolicy: 'Free up to 48 hours before; then 50% of booking',
+    serviceRadiusMiles: 10,
     inComparison: false,
     location: 'Austin, TX 78759',
   },
