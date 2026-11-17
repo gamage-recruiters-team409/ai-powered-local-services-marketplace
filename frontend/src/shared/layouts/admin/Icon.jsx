@@ -106,6 +106,9 @@ const ICONS = {
       <path d="M10.3 21a1.9 1.9 0 0 0 3.4 0" />
     </>
   ),
+  wrench: (
+    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+  ),
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,
   close: <path d="M18 6 6 18M6 6l12 12" />,
   chevronDown: <path d="m6 9 6 6 6-6" />,
@@ -114,6 +117,17 @@ const ICONS = {
     <>
       <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
       <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  arrowRight: <path d="M5 12h14M13 6l6 6-6 6" />,
+  check: <path d="m5 12 5 5 9-10" />,
+  flag: <path d="M5 21V4M5 4h11l-2 4 2 4H5" />,
+  landmark: <path d="M3 21h18M4 10h16M12 3l8 5H4zM6 10v8M10 10v8M14 10v8M18 10v8" />,
+  userCircle: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="10" r="3" />
+      <path d="M6.2 18.2a7 7 0 0 1 11.6 0" />
     </>
   ),
   lock: (

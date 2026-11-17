@@ -1,11 +1,11 @@
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 
 import { cx, Icon } from '../../../shared/layouts/admin'
 import styles from '../adminFeature.module.css'
-import { ADMIN_AREAS, areaFromPathname, areaPath } from '../config/adminAreas'
+import { ADMIN_AREAS, areaFromPathname } from '../config/adminAreas'
 import { AREA_MODE, CARD_LOCKED, CARD_SIGN_IN, getRoleCards } from '../access/accessRules'
 import { useAdminAccess } from '../access/useAdminAccess'
-import { endSession, LOGIN_PATH } from '../services/authBridge'
+import { useOpenRoleCard } from './useOpenRoleCard'
 
 const CHIPS = {
   [AREA_MODE.EDIT]: { label: 'Full access', className: styles.chipEdit },
@@ -27,26 +27,12 @@ function actionLabel(mode, isCurrent) {
   return mode === AREA_MODE.VIEW ? 'View area' : 'Open area'
 }
 
-/** Role-area cards used by the role selection page and the switch-role modal. */
+/** Compact role-area cards used by the switch-role modal. */
 export function RoleAreaCards({ compact = false, onSelect }) {
   const { access } = useAdminAccess()
-  const navigate = useNavigate()
   const { pathname } = useLocation()
   const currentArea = areaFromPathname(pathname)
-
-  const openCard = (card) => {
-    if (card.mode === CARD_LOCKED) {
-      return
-    }
-    onSelect?.()
-    if (card.mode === CARD_SIGN_IN) {
-      // Super Admin needs its own account: end this session and go through login.
-      endSession()
-      navigate(LOGIN_PATH, { replace: true, state: { from: areaPath(card.area) } })
-      return
-    }
-    navigate(areaPath(card.area))
-  }
+  const openCard = useOpenRoleCard(onSelect)
 
   return (
     <ul className={cx(styles.cards, compact && styles.cardsCompact)} aria-label="Admin role areas">

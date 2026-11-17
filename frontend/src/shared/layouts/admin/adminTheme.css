@@ -1,28 +1,33 @@
 /*
- * Admin design tokens (from the Admin Common Layout Figma).
+ * Admin design tokens (LocalServe colour styles).
  * Change colours, fonts and sizes here only; every admin component reads these variables.
+ *
+ *   Primary #0F766E · Primary dark #115E59 · Accent #F59E0B
+ *   Text #0F172A · Border #E2E8F0 · Background #FFFFFF
  */
 :root {
   --adm-font: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 
-  --adm-color-primary: #1f7a4d;
-  --adm-color-primary-hover: #17643f;
-  --adm-color-primary-soft: #e8f3ec;
-  --adm-color-primary-border: #d3e7da;
+  --adm-color-primary: #0f766e;
+  --adm-color-primary-hover: #115e59;
+  --adm-color-primary-soft: #e6f4f2;
+  --adm-color-primary-border: #c7e5e1;
 
-  --adm-color-heading: #0f3b2c;
-  --adm-color-text: #24332c;
-  --adm-color-text-muted: #5f6f67;
-  --adm-color-section: #74827b;
+  --adm-color-accent: #f59e0b;
 
-  --adm-color-bg: #f6f8f7;
+  --adm-color-heading: #0f172a;
+  --adm-color-text: #1e293b;
+  --adm-color-text-muted: #64748b;
+  --adm-color-section: #64748b;
+
+  --adm-color-bg: #f8fafc;
   --adm-color-surface: #ffffff;
-  --adm-color-border: #e3e8e5;
-  --adm-color-focus: #1f7a4d;
+  --adm-color-border: #e2e8f0;
+  --adm-color-focus: #0f766e;
 
-  --adm-color-warning-bg: #fff8e6;
-  --adm-color-warning-border: #f1d49a;
-  --adm-color-warning-text: #7a4d00;
+  --adm-color-warning-bg: #fffbeb;
+  --adm-color-warning-border: #fcd34d;
+  --adm-color-warning-text: #92400e;
   --adm-color-danger: #b42318;
   --adm-color-danger-soft: #fdecea;
 
@@ -32,5 +37,5 @@
 
   --adm-header-height: 70px;
   --adm-sidebar-width: 280px;
-  --adm-shadow-lg: 0 20px 40px -12px rgba(16, 40, 30, 0.25);
+  --adm-shadow-lg: 0 20px 40px -12px rgba(15, 23, 42, 0.25);
 }
