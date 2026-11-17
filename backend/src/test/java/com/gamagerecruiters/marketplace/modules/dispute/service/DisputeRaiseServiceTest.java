@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -35,6 +36,7 @@ import org.mockito.quality.Strictness;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -46,6 +48,8 @@ import com.gamagerecruiters.marketplace.common.exception.ResourceConflictExcepti
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
+import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.BookingSyncState;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
@@ -58,6 +62,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.port.BookingSnapshot;
 import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeEligibilityPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.adapter.BookingFacadeDisputeStatusAdapter;
+import com.gamagerecruiters.marketplace.modules.dispute.port.adapter.BookingFacadeLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
 
 import ch.qos.logback.classic.Level;
@@ -81,6 +86,7 @@ class DisputeRaiseServiceTest {
     private static final String DISPUTE_ID = "dispute-1";
     private static final String DESCRIPTION = "Work was not finished, private details here";
     private static final String TIMELINE_REASON = "Dispute raised: POOR_QUALITY";
+    private static final String RETRY_OWNER = "retry-lease-token";
 
     @Mock
     private BookingFacade bookingFacade;
@@ -100,20 +106,27 @@ class DisputeRaiseServiceTest {
     @BeforeEach
     void setUp() {
         service = new DisputeServiceImpl(disputeRepository, syncStore, new BookingFacadeDisputeStatusAdapter(bookingFacade),
-                eligibilityPort, payoutHoldPort, Clock.fixed(NOW, ZoneOffset.UTC));
+                new BookingFacadeLookupAdapter(bookingFacade), eligibilityPort, payoutHoldPort,
+                Clock.fixed(NOW, ZoneOffset.UTC));
         serviceLogger = (Logger) LoggerFactory.getLogger(DisputeServiceImpl.class);
         logs = new ListAppender<>();
         logs.start();
         serviceLogger.addAppender(logs);
         // Defaults: eligible, not yet DISPUTED; no active dispute; insert assigns an id; markSynced succeeds.
         eligible(false);
+        bookingReReadAs(BookingStatus.CONFIRMED);
         when(disputeRepository.findByActiveBookingKey(BOOKING_ID)).thenReturn(Optional.empty());
         when(disputeRepository.insert(any(Dispute.class))).thenAnswer(invocation -> {
             Dispute dispute = invocation.getArgument(0);
             dispute.setId(DISPUTE_ID);
             return dispute;
         });
-        when(syncStore.markSynced(DISPUTE_ID)).thenAnswer(invocation -> Optional.of(dispute(CUSTOMER_ID, BookingSyncState.SYNCED)));
+        when(syncStore.markSynced(eq(DISPUTE_ID), anyString())).thenAnswer(invocation -> Optional.of(dispute(CUSTOMER_ID, BookingSyncState.SYNCED)));
+        when(syncStore.claimById(eq(DISPUTE_ID), eq(NOW), any(Duration.class))).thenAnswer(invocation -> {
+            Dispute claimed = dispute(CUSTOMER_ID, BookingSyncState.PENDING);
+            claimed.setSyncLeaseOwner(RETRY_OWNER);
+            return Optional.of(claimed);
+        });
     }
 
     @AfterEach
@@ -128,6 +141,12 @@ class DisputeRaiseServiceTest {
         UserPrincipal principal = new UserPrincipal(userId, userId + "@test.local", role);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
+    }
+
+    /** What a re-read of the booking (BookingFacade.getBookingParticipants) returns. */
+    private void bookingReReadAs(BookingStatus status) {
+        when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenReturn(new BookingParticipants(
+                BOOKING_ID, "series-1", "listing-1", CUSTOMER_ID, PROVIDER_ID, status, NOW, NOW.plusSeconds(3600)));
     }
 
     /** What BookingFacade.assertDisputeEligible returns for an eligible booking. */
@@ -197,7 +216,7 @@ class DisputeRaiseServiceTest {
         order.verify(disputeRepository).findByActiveBookingKey(BOOKING_ID);
         order.verify(disputeRepository).insert(any(Dispute.class));
         order.verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON);
-        order.verify(syncStore).markSynced(DISPUTE_ID);
+        order.verify(syncStore).markSynced(eq(DISPUTE_ID), anyString());
         order.verify(payoutHoldPort).holdPayout(BOOKING_ID, DISPUTE_ID);
 
         Dispute intent = insertedDispute();
@@ -207,9 +226,12 @@ class DisputeRaiseServiceTest {
         assertThat(intent.getCustomerId()).isEqualTo(CUSTOMER_ID);
         assertThat(intent.getProviderId()).isEqualTo(PROVIDER_ID);
         assertThat(intent.getDescription()).isEqualTo(DESCRIPTION);
+        assertThat(intent.getSyncLeaseOwner()).as("inserted already leased to this request").isNotBlank();
+        assertThat(intent.getSyncLeaseUntil()).isEqualTo(NOW.plus(Duration.ofMinutes(5)));
         assertThat(result.id()).isEqualTo(DISPUTE_ID);
         assertThat(result.status()).isEqualTo(DisputeStatus.AWAITING_RESPONSE);
-        verify(syncStore, never()).deleteIfPending(anyString());
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
+        verify(syncStore, never()).claimById(anyString(), any(), any());
     }
 
     @Test
@@ -225,24 +247,123 @@ class DisputeRaiseServiceTest {
     static Stream<Arguments> facadeErrors() {
         return Stream.of(
                 Arguments.of(new AccessDeniedException("Access denied: actor does not match the authenticated user")),
-                Arguments.of(new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required")),
+                Arguments.of(new ResourceNotFoundException("BOOKING_NOT_FOUND", "Booking not found")),
                 Arguments.of(new ResourceConflictException("INVALID_STATUS_TRANSITION", "Booking cannot move")),
-                Arguments.of(new ResourceConflictException("DISPUTE_WINDOW_CLOSED", "The dispute window closes")),
-                Arguments.of(new ResourceConflictException("BOOKING_UPDATE_CONFLICT", "Updated at the same time")));
+                Arguments.of(new ResourceConflictException("DISPUTE_WINDOW_CLOSED", "The dispute window closes")));
     }
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("facadeErrors")
-    @DisplayName("raise: markDisputed rejected -> the PENDING record is deleted and the facade error returned unchanged")
+    @DisplayName("raise: CONFIRMED rejection and the re-read booking is not DISPUTED -> the PENDING record is deleted "
+            + "with this request's lease token and the facade error returned unchanged")
     void markDisputedRejectedDeletesIntent(RuntimeException facadeError) {
         when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON)).thenThrow(facadeError);
-        when(syncStore.deleteIfPending(DISPUTE_ID)).thenReturn(true);
+        when(syncStore.deleteIfPending(eq(DISPUTE_ID), anyString())).thenReturn(true);
 
         assertThat(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER))).isSameAs(facadeError);
 
-        verify(syncStore).deleteIfPending(DISPUTE_ID);
-        verify(syncStore, never()).markSynced(anyString());
+        InOrder order = inOrder(bookingFacade, syncStore);
+        order.verify(bookingFacade).getBookingParticipants(BOOKING_ID);
+        String owner = insertedDispute().getSyncLeaseOwner();
+        order.verify(syncStore).deleteIfPending(DISPUTE_ID, owner);
+        verify(syncStore, never()).markSynced(anyString(), anyString());
+        verify(syncStore, never()).releaseLease(anyString(), anyString());
         verifyNoInteractions(payoutHoldPort);
+    }
+
+    static Stream<Arguments> uncertainErrors() {
+        return Stream.of(
+                Arguments.of(new QueryTimeoutException("socket timeout to db-host:27017")),
+                Arguments.of(new DataAccessResourceFailureException("db-host:27017 unreachable")),
+                Arguments.of(new IllegalStateException("unexpected")));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("uncertainErrors")
+    @DisplayName("raise: markDisputed fails with an UNCERTAIN outcome -> record KEPT (never deleted), lease released, "
+            + "503 DISPUTE_SYNC_PENDING; the reconciler settles it from the booking's real state")
+    void uncertainBookingUpdateKeepsIntent(RuntimeException facadeError) {
+        when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON)).thenThrow(facadeError);
+
+        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.SERVICE_UNAVAILABLE,
+                "DISPUTE_SYNC_PENDING");
+
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
+        verify(syncStore, never()).markSynced(anyString(), anyString());
+        String owner = insertedDispute().getSyncLeaseOwner();
+        verify(syncStore).releaseLease(DISPUTE_ID, owner);
+        verifyNoInteractions(payoutHoldPort);
+        assertThat(errorLogs()).singleElement().asString()
+                .contains("event=DISPUTE_BOOKING_UPDATE_UNCERTAIN").contains("disputeId=" + DISPUTE_ID)
+                .doesNotContain("db-host").doesNotContain("private");
+    }
+
+    static Stream<Arguments> keptBookingAnswers() {
+        return Stream.of(
+                Arguments.of(new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required")),
+                Arguments.of(new ResourceConflictException("BOOKING_UPDATE_CONFLICT", "Updated at the same time")),
+                Arguments.of(new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "UPSTREAM", "unavailable")));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("keptBookingAnswers")
+    @DisplayName("raise: a Booking-module error that is NOT a confirmed rejection -> record KEPT (never deleted), lease "
+            + "released, the error returned unchanged")
+    void unconfirmedBookingAnswerKeepsIntent(RuntimeException facadeError) {
+        when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON)).thenThrow(facadeError);
+
+        assertThat(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER))).isSameAs(facadeError);
+
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
+        verify(syncStore, never()).markSynced(anyString(), anyString());
+        String owner = insertedDispute().getSyncLeaseOwner();
+        verify(syncStore).releaseLease(DISPUTE_ID, owner);
+        verifyNoInteractions(payoutHoldPort);
+    }
+
+    @Test
+    @DisplayName("raise: confirmed rejection but the re-read booking IS DISPUTED -> NOT deleted; the dispute is completed")
+    void rejectedButBookingDisputedCompletesDispute() {
+        when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON))
+                .thenThrow(new ResourceConflictException("INVALID_STATUS_TRANSITION", "Booking cannot move from DISPUTED"));
+        bookingReReadAs(BookingStatus.DISPUTED);
+
+        assertThat(raiseAs(CUSTOMER_ID, Role.CUSTOMER).id()).isEqualTo(DISPUTE_ID);
+
+        String owner = insertedDispute().getSyncLeaseOwner();
+        verify(syncStore).markSynced(DISPUTE_ID, owner);
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
+        verify(payoutHoldPort).holdPayout(BOOKING_ID, DISPUTE_ID);
+    }
+
+    @Test
+    @DisplayName("raise: confirmed rejection but the booking cannot be re-read -> record KEPT, facade error unchanged")
+    void rejectedButReReadFailsKeepsIntent() {
+        ResourceConflictException closed = new ResourceConflictException("DISPUTE_WINDOW_CLOSED", "closed");
+        when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON)).thenThrow(closed);
+        when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenThrow(new DataAccessResourceFailureException("db-host"));
+
+        assertThat(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER))).isSameAs(closed);
+
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
+        String owner = insertedDispute().getSyncLeaseOwner();
+        verify(syncStore).releaseLease(DISPUTE_ID, owner);
+    }
+
+    @Test
+    @DisplayName("classification: only 404, 403, 409 INVALID_STATUS_TRANSITION and 409 DISPUTE_WINDOW_CLOSED are confirmed")
+    void confirmedRejectionClassification() {
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new ResourceConflictException("INVALID_STATUS_TRANSITION", "x"))).isTrue();
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new ResourceConflictException("DISPUTE_WINDOW_CLOSED", "x"))).isTrue();
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new ResourceNotFoundException("BOOKING_NOT_FOUND", "x"))).isTrue();
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new AccessDeniedException("x"))).isTrue();
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new ApiException(HttpStatus.FORBIDDEN, "ACCESS_DENIED", "x"))).isTrue();
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new ResourceConflictException("BOOKING_UPDATE_CONFLICT", "x"))).isFalse();
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "x"))).isFalse();
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "X", "x"))).isFalse();
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new QueryTimeoutException("x"))).isFalse();
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new DataAccessResourceFailureException("x"))).isFalse();
+        assertThat(DisputeServiceImpl.isConfirmedRejection(new RuntimeException("x"))).isFalse();
     }
 
     @Test
@@ -250,7 +371,7 @@ class DisputeRaiseServiceTest {
     void compensationFailureStillReturnsFacadeError() {
         ResourceConflictException rejected = new ResourceConflictException("INVALID_STATUS_TRANSITION", "no");
         when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON)).thenThrow(rejected);
-        when(syncStore.deleteIfPending(DISPUTE_ID)).thenThrow(new DataAccessResourceFailureException("db-host:27017"));
+        when(syncStore.deleteIfPending(eq(DISPUTE_ID), anyString())).thenThrow(new DataAccessResourceFailureException("db-host:27017"));
 
         assertThat(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER))).isSameAs(rejected);
 
@@ -262,13 +383,15 @@ class DisputeRaiseServiceTest {
     @Test
     @DisplayName("raise: the SYNCED update fails after the booking moved -> 503 DISPUTE_SYNC_PENDING, record kept PENDING")
     void syncFailureKeepsIntentForReconciler() {
-        when(syncStore.markSynced(DISPUTE_ID)).thenThrow(new DataAccessResourceFailureException("db-host:27017"));
+        when(syncStore.markSynced(eq(DISPUTE_ID), anyString())).thenThrow(new DataAccessResourceFailureException("db-host:27017"));
 
         assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.SERVICE_UNAVAILABLE,
                 "DISPUTE_SYNC_PENDING");
 
         verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON);
-        verify(syncStore, never()).deleteIfPending(anyString());
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
+        String owner = insertedDispute().getSyncLeaseOwner();
+        verify(syncStore).releaseLease(DISPUTE_ID, owner);
         verifyNoInteractions(payoutHoldPort);
         assertThat(errorLogs()).singleElement().asString()
                 .contains("event=DISPUTE_SYNC_PENDING").contains("disputeId=" + DISPUTE_ID)
@@ -278,7 +401,7 @@ class DisputeRaiseServiceTest {
     @Test
     @DisplayName("raise: the reconciler completed the record first -> the visible dispute is returned")
     void syncAlreadyCompletedByReconciler() {
-        when(syncStore.markSynced(DISPUTE_ID)).thenReturn(Optional.empty());
+        when(syncStore.markSynced(eq(DISPUTE_ID), anyString())).thenReturn(Optional.empty());
         when(disputeRepository.findById(DISPUTE_ID)).thenReturn(Optional.of(dispute(CUSTOMER_ID, BookingSyncState.SYNCED)));
 
         assertThat(raiseAs(CUSTOMER_ID, Role.CUSTOMER).id()).isEqualTo(DISPUTE_ID);
@@ -316,7 +439,7 @@ class DisputeRaiseServiceTest {
         verify(eligibilityPort).assertEligible(BOOKING_ID);
         assertThat(insertedDispute().getBookingSyncState()).isEqualTo(BookingSyncState.PENDING);
         verify(bookingFacade, never()).markDisputed(anyString(), any(), anyString());
-        verify(syncStore).markSynced(DISPUTE_ID);
+        verify(syncStore).markSynced(eq(DISPUTE_ID), anyString());
         assertThat(result.id()).isEqualTo(DISPUTE_ID);
     }
 
@@ -376,7 +499,9 @@ class DisputeRaiseServiceTest {
 
         assertThat(raiseAs(CUSTOMER_ID, Role.CUSTOMER).id()).isEqualTo(DISPUTE_ID);
 
-        verify(syncStore).markSynced(DISPUTE_ID);
+        InOrder order = inOrder(syncStore);
+        order.verify(syncStore).claimById(DISPUTE_ID, NOW, Duration.ofMinutes(5));
+        order.verify(syncStore).markSynced(eq(DISPUTE_ID), anyString());
         verify(disputeRepository, never()).insert(any(Dispute.class));
         verify(bookingFacade, never()).markDisputed(anyString(), any(), anyString());
     }
@@ -389,9 +514,42 @@ class DisputeRaiseServiceTest {
 
         raiseAs(CUSTOMER_ID, Role.CUSTOMER);
 
-        verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON);
-        verify(syncStore).markSynced(DISPUTE_ID);
+        InOrder order = inOrder(syncStore, bookingFacade);
+        order.verify(syncStore).claimById(DISPUTE_ID, NOW, Duration.ofMinutes(5));
+        order.verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON);
+        order.verify(syncStore).markSynced(eq(DISPUTE_ID), anyString());
         verify(disputeRepository, never()).insert(any(Dispute.class));
+    }
+
+    @Test
+    @DisplayName("raise: retry while another request/the reconciler holds the record -> 503 DISPUTE_SYNC_PENDING, "
+            + "booking NOT touched, record NOT removed")
+    void retryWhileBusyChangesNothing() {
+        when(disputeRepository.findByActiveBookingKey(BOOKING_ID))
+                .thenReturn(Optional.of(dispute(CUSTOMER_ID, BookingSyncState.PENDING)));
+        when(syncStore.claimById(eq(DISPUTE_ID), eq(NOW), any(Duration.class))).thenReturn(Optional.empty());
+
+        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.SERVICE_UNAVAILABLE,
+                "DISPUTE_SYNC_PENDING");
+
+        verify(bookingFacade, never()).markDisputed(anyString(), any(), anyString());
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
+        verify(syncStore, never()).markSynced(anyString(), anyString());
+        verify(disputeRepository, never()).insert(any(Dispute.class));
+        verifyNoInteractions(payoutHoldPort);
+    }
+
+    @Test
+    @DisplayName("raise: a retry that is rejected deletes only with ITS OWN lease token")
+    void retryRejectedDeletesWithOwnToken() {
+        when(disputeRepository.findByActiveBookingKey(BOOKING_ID))
+                .thenReturn(Optional.of(dispute(CUSTOMER_ID, BookingSyncState.PENDING)));
+        ResourceConflictException closed = new ResourceConflictException("DISPUTE_WINDOW_CLOSED", "closed");
+        when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, TIMELINE_REASON)).thenThrow(closed);
+
+        assertThat(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER))).isSameAs(closed);
+
+        verify(syncStore).deleteIfPending(DISPUTE_ID, RETRY_OWNER);
     }
 
     // ---------- the dispute module's own checks ----------
@@ -419,14 +577,17 @@ class DisputeRaiseServiceTest {
     }
 
     @Test
-    @DisplayName("raise: nobody logged in -> no actor is passed, so the facade's own 401 applies and the intent is removed")
+    @DisplayName("raise: nobody logged in -> no actor is passed, so the facade's own 401 applies; the intent is kept "
+            + "for the reconciler (401 is not a confirmed rejection)")
     void noLoggedInUserPassesNullActor() {
         ApiException unauthorized = new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required");
         when(bookingFacade.markDisputed(BOOKING_ID, null, TIMELINE_REASON)).thenThrow(unauthorized);
 
         assertThat(catchThrowable(() -> service.raiseDispute(CUSTOMER_ID, Role.CUSTOMER, request())))
                 .isSameAs(unauthorized);
-        verify(syncStore).deleteIfPending(DISPUTE_ID);
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
+        String owner = insertedDispute().getSyncLeaseOwner();
+        verify(syncStore).releaseLease(DISPUTE_ID, owner);
     }
 
     @Test

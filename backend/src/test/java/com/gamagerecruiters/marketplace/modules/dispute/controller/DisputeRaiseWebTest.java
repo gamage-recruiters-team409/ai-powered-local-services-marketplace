@@ -47,6 +47,7 @@ import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationF
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
+import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.BookingSyncState;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
@@ -129,6 +130,9 @@ class DisputeRaiseWebTest {
 
     /** What BookingFacade.assertDisputeEligible returns (through the eligibility port) for an eligible booking. */
     private void bookingIs(BookingStatus status, String customerId) {
+        java.time.Instant now = java.time.Instant.now();
+        when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenReturn(new BookingParticipants(
+                BOOKING_ID, "series-1", "listing-1", customerId, PROVIDER_ID, status, now, now.plusSeconds(3600)));
         when(eligibilityPort.assertEligible(BOOKING_ID)).thenReturn(
                 new BookingSnapshot(BOOKING_ID, customerId, PROVIDER_ID, status == BookingStatus.DISPUTED));
     }
@@ -142,7 +146,7 @@ class DisputeRaiseWebTest {
             inserted[0] = dispute;
             return dispute;
         });
-        when(syncStore.markSynced("dispute-1")).thenAnswer(invocation -> {
+        when(syncStore.markSynced(eq("dispute-1"), anyString())).thenAnswer(invocation -> {
             inserted[0].setBookingSyncState(BookingSyncState.SYNCED);
             return Optional.of(inserted[0]);
         });
@@ -231,21 +235,22 @@ class DisputeRaiseWebTest {
 
     static Stream<Arguments> facadeErrors() {
         return Stream.of(
-                Arguments.of(new AccessDeniedException("denied"), HttpStatus.FORBIDDEN, "ACCESS_DENIED"),
+                Arguments.of(new AccessDeniedException("denied"), HttpStatus.FORBIDDEN, "ACCESS_DENIED", true),
                 Arguments.of(new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required"),
-                        HttpStatus.UNAUTHORIZED, "UNAUTHORIZED"),
+                        HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", false),
                 Arguments.of(new ResourceConflictException("INVALID_STATUS_TRANSITION", "Booking cannot move"),
-                        HttpStatus.CONFLICT, "INVALID_STATUS_TRANSITION"),
+                        HttpStatus.CONFLICT, "INVALID_STATUS_TRANSITION", true),
                 Arguments.of(new ResourceConflictException("DISPUTE_WINDOW_CLOSED", "The dispute window closes"),
-                        HttpStatus.CONFLICT, "DISPUTE_WINDOW_CLOSED"),
+                        HttpStatus.CONFLICT, "DISPUTE_WINDOW_CLOSED", true),
                 Arguments.of(new ResourceConflictException("BOOKING_UPDATE_CONFLICT", "Updated at the same time"),
-                        HttpStatus.CONFLICT, "BOOKING_UPDATE_CONFLICT"));
+                        HttpStatus.CONFLICT, "BOOKING_UPDATE_CONFLICT", false));
     }
 
     @ParameterizedTest(name = "{2}")
     @MethodSource("facadeErrors")
-    @DisplayName("markDisputed errors keep their status and code over HTTP; the intent record is removed")
-    void facadeErrorsOverHttp(RuntimeException error, HttpStatus status, String code) throws Exception {
+    @DisplayName("markDisputed errors keep their status and code over HTTP; the intent is removed only for a confirmed "
+            + "rejection (booking re-read as not DISPUTED), otherwise kept for the reconciler")
+    void facadeErrorsOverHttp(RuntimeException error, HttpStatus status, String code, boolean removed) throws Exception {
         bookingIs(BookingStatus.COMPLETED, CUSTOMER_ID);
         saveWorks();
         when(bookingFacade.markDisputed(BOOKING_ID, CUSTOMER_ID, REASON)).thenThrow(error);
@@ -253,8 +258,12 @@ class DisputeRaiseWebTest {
         mockMvc.perform(raise())
                 .andExpect(status().is(status.value()))
                 .andExpect(jsonPath("$.error").value(code));
-        verify(syncStore).deleteIfPending("dispute-1");
-        verify(syncStore, never()).markSynced(anyString());
+        if (removed) {
+            verify(syncStore).deleteIfPending(eq("dispute-1"), anyString());
+        } else {
+            verify(syncStore, never()).deleteIfPending(anyString(), anyString());
+        }
+        verify(syncStore, never()).markSynced(anyString(), anyString());
     }
 
     @Test
@@ -274,12 +283,12 @@ class DisputeRaiseWebTest {
     void syncPending() throws Exception {
         bookingIs(BookingStatus.COMPLETION_PENDING, CUSTOMER_ID);
         saveWorks();
-        doThrow(new DataAccessResourceFailureException("down")).when(syncStore).markSynced("dispute-1");
+        doThrow(new DataAccessResourceFailureException("down")).when(syncStore).markSynced(eq("dispute-1"), anyString());
 
         mockMvc.perform(raise())
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error").value("DISPUTE_SYNC_PENDING"));
         verify(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, REASON);
-        verify(syncStore, never()).deleteIfPending(anyString());
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
     }
 }

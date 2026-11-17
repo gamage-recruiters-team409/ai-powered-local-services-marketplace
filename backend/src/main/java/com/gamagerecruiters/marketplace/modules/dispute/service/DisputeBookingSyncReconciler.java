@@ -25,8 +25,11 @@ import com.gamagerecruiters.marketplace.modules.dispute.port.BookingSnapshot;
  *   <li>booking is not DISPUTED (or no longer exists) and the record is older than {@code delete-after}: removed;</li>
  *   <li>otherwise left alone for a later run.</li>
  * </ul>
- * Safe on several instances: each record is claimed with an atomic findAndModify lease, and every completion or
- * removal is conditional on the record still being PENDING. Only ids are logged.
+ * Safe on several instances and alongside raise requests: each record is claimed with an atomic findAndModify lease
+ * (a raise request holds the same lease while it works on its record, so the two never overlap), every completion or
+ * removal is conditional on the record still being PENDING and on still holding the lease. This is
+ * also where a record whose booking update had an UNCERTAIN outcome (e.g. a timeout) is settled: the booking's real
+ * state decides, never the error. Only ids are logged.
  *
  * <p>Settings (defaults in brackets): {@code app.dispute.booking-sync.enabled} [true], {@code .interval} [PT5M],
  * {@code .initial-delay} [PT1M], {@code .min-age} [PT2M] (younger records may still be in flight),
@@ -137,7 +140,7 @@ public class DisputeBookingSyncReconciler {
         }
 
         if (bookingDisputed) {
-            if (syncStore.markSynced(disputeId).isPresent()) {
+            if (syncStore.markSynced(disputeId, intent.getSyncLeaseOwner()).isPresent()) {
                 log.info("event=DISPUTE_SYNC_COMPLETED disputeId={} bookingId={}", disputeId, bookingId);
                 return Outcome.SYNCED;
             }
@@ -146,7 +149,7 @@ public class DisputeBookingSyncReconciler {
 
         Instant createdAt = intent.getCreatedAt();
         if (createdAt != null && !createdAt.isAfter(now.minus(deleteAfter))) {
-            if (syncStore.deleteIfPending(disputeId)) {
+            if (syncStore.deleteIfPending(disputeId, intent.getSyncLeaseOwner())) {
                 log.info("event=DISPUTE_INTENT_REMOVED disputeId={} bookingId={}", disputeId, bookingId);
                 return Outcome.DELETED;
             }

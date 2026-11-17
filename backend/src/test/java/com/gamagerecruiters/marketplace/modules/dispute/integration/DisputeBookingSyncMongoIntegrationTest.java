@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -23,6 +24,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -37,9 +40,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
@@ -77,8 +82,11 @@ import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
  *
  * <p>Covers: (a) failure after the booking transition, then completion by the reconciler and by a retry;
  * (b) markDisputed rejected, so the intent record is deleted; (c) two concurrent raises, only one dispute exists;
- * (d) a PENDING record is invisible in lists and detail but still blocks a second dispute; plus the reconciler's
- * delete path and its atomic lease. Refuses to run against a database named "marketplace".</p>
+ * (d) a PENDING record is invisible in lists and detail but still blocks a second dispute; (e) two simultaneous
+ * requests of the SAME user, with controlled interleaving inside markDisputed: only one works on the record, it is
+ * never removed, exactly one visible dispute remains; (f) markDisputed fails with an UNCERTAIN outcome (the booking
+ * was saved before the error): the record is kept and the reconciler recovers a valid dispute; plus the reconciler's
+ * delete path and its atomic, owner-tagged lease. Refuses to run against a database named "marketplace".</p>
  */
 @SpringBootTest
 @ActiveProfiles("integration-test")
@@ -142,6 +150,9 @@ class DisputeBookingSyncMongoIntegrationTest {
     @Autowired
     private MongoTemplate mongoTemplate;
 
+    /** The booking's status as the (mocked) Booking module currently holds it. */
+    private final AtomicReference<BookingStatus> bookingStatus = new AtomicReference<>(BookingStatus.CONFIRMED);
+
     @BeforeEach
     void refuseSharedDatabaseAndClean() {
         String dbName = mongoTemplate.getDb().getName();
@@ -170,11 +181,13 @@ class DisputeBookingSyncMongoIntegrationTest {
 
     /** The booking as the reconciler reads it (facade) and as the eligibility check returns it (eligible). */
     private void bookingIs(BookingStatus status) {
+        bookingStatus.set(status);
         Instant now = Instant.now();
-        when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenReturn(new BookingParticipants(
-                BOOKING_ID, "series-it", "listing-it", CUSTOMER_ID, PROVIDER_ID, status, now, now.plusSeconds(3600)));
-        when(eligibilityPort.assertEligible(BOOKING_ID)).thenReturn(
-                new BookingSnapshot(BOOKING_ID, CUSTOMER_ID, PROVIDER_ID, status == BookingStatus.DISPUTED));
+        when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenAnswer(invocation -> new BookingParticipants(
+                BOOKING_ID, "series-it", "listing-it", CUSTOMER_ID, PROVIDER_ID, bookingStatus.get(), now,
+                now.plusSeconds(3600)));
+        when(eligibilityPort.assertEligible(BOOKING_ID)).thenAnswer(invocation -> new BookingSnapshot(
+                BOOKING_ID, CUSTOMER_ID, PROVIDER_ID, bookingStatus.get() == BookingStatus.DISPUTED));
     }
 
     private static RaiseDisputeRequest request() {
@@ -219,7 +232,7 @@ class DisputeBookingSyncMongoIntegrationTest {
     @DisplayName("(a) SYNCED update fails after the booking moved -> PENDING stays invisible; the reconciler completes it")
     void failureAfterBookingTransitionIsReconciled() {
         doThrow(new DataAccessResourceFailureException("simulated outage"))
-                .doCallRealMethod().when(syncStore).markSynced(anyString());
+                .doCallRealMethod().when(syncStore).markSynced(anyString(), anyString());
 
         assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), "DISPUTE_SYNC_PENDING");
 
@@ -246,7 +259,7 @@ class DisputeBookingSyncMongoIntegrationTest {
     @DisplayName("(a) same failure, then the same user retries -> the same record is completed, booking moved only once")
     void failureAfterBookingTransitionIsCompletedByRetry() {
         doThrow(new DataAccessResourceFailureException("simulated outage"))
-                .doCallRealMethod().when(syncStore).markSynced(anyString());
+                .doCallRealMethod().when(syncStore).markSynced(anyString(), anyString());
         assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), "DISPUTE_SYNC_PENDING");
         String disputeId = stored().get(0).getId();
 
@@ -359,6 +372,157 @@ class DisputeBookingSyncMongoIntegrationTest {
         verify(bookingFacade, never()).markDisputed(anyString(), anyString(), anyString());
     }
 
+    // ---------- (e) two simultaneous requests of the SAME user ----------
+
+    /**
+     * The first markDisputed call blocks INSIDE the Booking module until released, then moves the booking to DISPUTED.
+     * Any further call gets what the real facade answers once the booking is DISPUTED (409 INVALID_STATUS_TRANSITION),
+     * which is exactly the error that, before the fix, made a second request delete the shared record.
+     */
+    private CountDownLatch[] blockFirstMarkDisputed(AtomicInteger calls) {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            if (calls.incrementAndGet() == 1) {
+                entered.countDown();
+                if (!release.await(30, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("test gate not released");
+                }
+                bookingStatus.set(BookingStatus.DISPUTED);
+                return null;
+            }
+            throw new ResourceConflictException("INVALID_STATUS_TRANSITION", "Booking cannot move from DISPUTED");
+        }).when(bookingFacade).markDisputed(eq(BOOKING_ID), eq(CUSTOMER_ID), anyString());
+        return new CountDownLatch[] {entered, release};
+    }
+
+    /**
+     * Request A is held inside markDisputed; request B (same user) runs completely meanwhile; then A is released.
+     * Returns B's outcome; asserts A succeeded.
+     */
+    private Object interleaveSameUser(AtomicInteger calls) throws Exception {
+        CountDownLatch[] gate = blockFirstMarkDisputed(calls);
+        CountDownLatch go = new CountDownLatch(0);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Object> first = pool.submit(raiseTask(go, CUSTOMER_ID, Role.CUSTOMER));
+            assertThat(gate[0].await(30, TimeUnit.SECONDS)).as("request A is inside markDisputed").isTrue();
+
+            Object second = pool.submit(raiseTask(go, CUSTOMER_ID, Role.CUSTOMER)).get(30, TimeUnit.SECONDS);
+            // While A is still working, B changed nothing: the record is still there and still PENDING.
+            assertThat(stored()).singleElement()
+                    .satisfies(d -> assertThat(d.getBookingSyncState()).isEqualTo(BookingSyncState.PENDING));
+
+            gate[1].countDown();
+            assertThat(first.get(30, TimeUnit.SECONDS)).isInstanceOf(DisputeDetailResponse.class);
+            return second;
+        } finally {
+            gate[1].countDown();
+            pool.shutdownNow();
+        }
+    }
+
+    private void assertExactlyOneVisibleDispute() {
+        assertThat(stored()).singleElement()
+                .satisfies(d -> assertThat(d.getBookingSyncState()).isEqualTo(BookingSyncState.SYNCED));
+        assertThat(disputeService.getMyDisputes(CUSTOMER_ID, 0, 20).content()).hasSize(1);
+        assertThat(disputeService.getMyDisputes(PROVIDER_ID, 0, 20).content()).hasSize(1);
+        assertThat(disputeService.getDisputesForAdmin(null, 0, 20).content()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("(e) same user double-submits while the first request is inside markDisputed -> the second gets 503 "
+            + "DISPUTE_SYNC_PENDING without touching the booking or the record; exactly one visible dispute")
+    void sameUserDoubleSubmitIsSerialized() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+
+        Object second = interleaveSameUser(calls);
+
+        assertApiError((Throwable) second, "DISPUTE_SYNC_PENDING");
+        assertThat(calls.get()).as("only one request moved the booking").isEqualTo(1);
+        assertExactlyOneVisibleDispute();
+    }
+
+    @Test
+    @DisplayName("(e) same user sends two simultaneous RETRIES of an existing PENDING intent -> only one takes it, the "
+            + "other gets 503 and cannot remove it; the same record ends SYNCED, exactly one visible dispute")
+    void sameUserConcurrentRetriesAreSerialized() throws Exception {
+        String pendingId = insertPending(CUSTOMER_ID, Duration.ofMinutes(1)).getId();
+        AtomicInteger calls = new AtomicInteger();
+
+        Object second = interleaveSameUser(calls);
+
+        assertApiError((Throwable) second, "DISPUTE_SYNC_PENDING");
+        assertThat(calls.get()).as("only one request moved the booking").isEqualTo(1);
+        assertExactlyOneVisibleDispute();
+        assertThat(stored().get(0).getId()).isEqualTo(pendingId);
+    }
+
+    // ---------- (f) uncertain outcome of the booking update ----------
+
+    @Test
+    @DisplayName("(f) confirmed rejection (409 INVALID_STATUS_TRANSITION) but the re-read booking IS DISPUTED -> the "
+            + "intent is NOT deleted; the dispute is completed and returned")
+    void rejectedButBookingDisputedIsCompleted() {
+        doAnswer(invocation -> {
+            bookingStatus.set(BookingStatus.DISPUTED);
+            throw new ResourceConflictException("INVALID_STATUS_TRANSITION", "Booking cannot move from DISPUTED");
+        }).when(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, REASON);
+
+        DisputeDetailResponse result = raiseAs(CUSTOMER_ID, Role.CUSTOMER);
+
+        assertThat(result.bookingId()).isEqualTo(BOOKING_ID);
+        assertExactlyOneVisibleDispute();
+    }
+
+    @Test
+    @DisplayName("(f) booking SAVED as DISPUTED, then the facade reports a timeout -> record KEPT (not deleted), 503 "
+            + "DISPUTE_SYNC_PENDING; the reconciler sees the booking is DISPUTED and recovers a valid dispute")
+    void uncertainFailureAfterBookingSavedIsRecovered() {
+        doAnswer(invocation -> {
+            bookingStatus.set(BookingStatus.DISPUTED);
+            throw new QueryTimeoutException("timed out waiting for the write acknowledgement");
+        }).when(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, REASON);
+
+        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), "DISPUTE_SYNC_PENDING");
+
+        Dispute kept = stored().get(0);
+        assertThat(stored()).hasSize(1);
+        assertThat(kept.getBookingSyncState()).isEqualTo(BookingSyncState.PENDING);
+        assertThat(kept.getSyncLeaseOwner()).as("lease released for the reconciler").isNull();
+        assertThat(disputeService.getMyDisputes(CUSTOMER_ID, 0, 20).content()).isEmpty();
+
+        DisputeBookingSyncReconciler.Result result = reconciler.reconcile();
+
+        assertThat(result.synced()).isEqualTo(1);
+        assertThat(result.deleted()).isZero();
+        assertExactlyOneVisibleDispute();
+        assertThat(disputeService.getDisputeForParty(PROVIDER_ID, kept.getId()).id())
+                .as("the counterparty can see and answer it").isEqualTo(kept.getId());
+        verify(bookingFacade, times(1)).markDisputed(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("(f) booking NOT saved and the facade reports a timeout -> record kept while young; removed by the "
+            + "reconciler only after it confirms the booking is not DISPUTED and delete-after has passed")
+    void uncertainFailureNotAppliedIsRemovedOnlyAfterVerification() {
+        doThrow(new QueryTimeoutException("timed out")).when(bookingFacade).markDisputed(BOOKING_ID, CUSTOMER_ID, REASON);
+
+        assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), "DISPUTE_SYNC_PENDING");
+        String id = stored().get(0).getId();
+
+        assertThat(reconciler.reconcile().deleted()).as("too young to judge").isZero();
+        assertThat(stored()).hasSize(1);
+
+        mongoTemplate.updateFirst(Query.query(Criteria.where("_id").is(id)),
+                // Older than delete-after, and the earlier run's lease has expired.
+                new Update().set("createdAt", Instant.now().minus(Duration.ofMinutes(30)))
+                        .unset("syncLeaseUntil").unset("syncLeaseOwner"), Dispute.class);
+        assertThat(reconciler.reconcile().deleted()).isEqualTo(1);
+        assertThat(stored()).isEmpty();
+        assertThat(bookingStatus.get()).isEqualTo(BookingStatus.CONFIRMED);
+    }
+
     // ---------- reconciler: delete path and multi-instance safety ----------
 
     @Test
@@ -380,20 +544,28 @@ class DisputeBookingSyncMongoIntegrationTest {
         insertPending(CUSTOMER_ID, Duration.ofMinutes(30));
         Instant now = Instant.now();
 
-        assertThat(syncStore.claimPending(now, now, Duration.ofMinutes(5))).isPresent();
+        Dispute first = syncStore.claimPending(now, now, Duration.ofMinutes(5)).orElseThrow();
         assertThat(syncStore.claimPending(now, now, Duration.ofMinutes(5))).as("second instance").isEmpty();
-        // After the lease expires it can be claimed again.
-        assertThat(syncStore.claimPending(now, now.plus(Duration.ofMinutes(6)), Duration.ofMinutes(5))).isPresent();
+        assertThat(syncStore.claimById(first.getId(), now, Duration.ofMinutes(5))).as("a raise request").isEmpty();
+        // After the lease expires it can be claimed again, with a new token.
+        Dispute second = syncStore.claimPending(now, now.plus(Duration.ofMinutes(6)), Duration.ofMinutes(5)).orElseThrow();
+        assertThat(second.getSyncLeaseOwner()).isNotEqualTo(first.getSyncLeaseOwner());
+        // The worker whose lease expired can no longer remove the record; the current holder can.
+        assertThat(syncStore.deleteIfPending(first.getId(), first.getSyncLeaseOwner())).isFalse();
+        assertThat(stored()).hasSize(1);
+        assertThat(syncStore.deleteIfPending(second.getId(), second.getSyncLeaseOwner())).isTrue();
     }
 
     @Test
-    @DisplayName("completion is applied once: markSynced on an already SYNCED record changes nothing")
+    @DisplayName("completion is applied once and only by the lease holder; a SYNCED record is never removed")
     void markSyncedIsConditional() {
         String id = insertPending(CUSTOMER_ID, Duration.ofMinutes(1)).getId();
+        String owner = syncStore.claimById(id, Instant.now(), Duration.ofMinutes(5)).orElseThrow().getSyncLeaseOwner();
 
-        assertThat(syncStore.markSynced(id)).isPresent();
-        assertThat(syncStore.markSynced(id)).isEmpty();
-        assertThat(syncStore.deleteIfPending(id)).as("a SYNCED dispute is never removed").isFalse();
+        assertThat(syncStore.markSynced(id, "not-the-holder")).as("another worker's token").isEmpty();
+        assertThat(syncStore.markSynced(id, owner)).isPresent();
+        assertThat(syncStore.markSynced(id, owner)).isEmpty();
+        assertThat(syncStore.deleteIfPending(id, owner)).as("a SYNCED dispute is never removed").isFalse();
         assertThatThrownBy(() -> disputeService.getDisputeForAdmin("missing-id")).isInstanceOf(ApiException.class);
         verify(bookingFacade, never()).markDisputed(eq(BOOKING_ID), any(), anyString());
     }

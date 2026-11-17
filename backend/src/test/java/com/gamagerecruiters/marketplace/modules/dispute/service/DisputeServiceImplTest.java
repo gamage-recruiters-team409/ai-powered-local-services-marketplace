@@ -47,6 +47,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryRespon
 import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.SubmitDisputeResponseRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.port.BookingDisputeStatusPort;
+import com.gamagerecruiters.marketplace.modules.dispute.port.BookingLookupPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeEligibilityPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
@@ -70,12 +71,14 @@ class DisputeServiceImplTest {
     private DisputeEligibilityPort disputeEligibilityPort;
     @Mock
     private DisputeBookingSyncStore syncStore;
+    @Mock
+    private BookingLookupPort bookingLookupPort;
 
     private DisputeServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new DisputeServiceImpl(disputeRepository, syncStore, bookingDisputeStatusPort,
+        service = new DisputeServiceImpl(disputeRepository, syncStore, bookingDisputeStatusPort, bookingLookupPort,
                 disputeEligibilityPort, payoutHoldPort, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 

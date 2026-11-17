@@ -48,8 +48,10 @@ public class Dispute {
     private List<StatusHistoryEntry> statusHistory = new ArrayList<>();
     /** Internal booking-sync state (see BookingSyncState). Null on records created before it existed: SYNCED. */
     private BookingSyncState bookingSyncState;
-    /** Internal: until when a reconciler instance holds this PENDING record. Never exposed. */
+    /** Internal: until when one worker (a raise request or a reconciler run) holds this PENDING record. Never exposed. */
     private Instant syncLeaseUntil;
+    /** Internal: random token of the worker holding the lease; removal is only allowed for that worker. Never exposed. */
+    private String syncLeaseOwner;
 
     /**
      * Moves the dispute to {@code toStatus} and records the change in the status history.
@@ -90,6 +92,14 @@ public class Dispute {
 
     public void setSyncLeaseUntil(Instant syncLeaseUntil) {
         this.syncLeaseUntil = syncLeaseUntil;
+    }
+
+    public String getSyncLeaseOwner() {
+        return syncLeaseOwner;
+    }
+
+    public void setSyncLeaseOwner(String syncLeaseOwner) {
+        this.syncLeaseOwner = syncLeaseOwner;
     }
 
     public void setId(String id) {

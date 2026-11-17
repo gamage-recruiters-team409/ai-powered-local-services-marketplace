@@ -58,6 +58,7 @@ class DisputeBookingSyncReconcilerTest {
         dispute.setId(id);
         dispute.setBookingId("booking-" + id);
         dispute.setBookingSyncState(BookingSyncState.PENDING);
+        dispute.setSyncLeaseOwner("lease-" + id);
         dispute.setCreatedAt(NOW.minus(age));
         return dispute;
     }
@@ -80,10 +81,10 @@ class DisputeBookingSyncReconcilerTest {
     void completesWhenBookingDisputed() {
         claims(pending("d1", Duration.ofMinutes(3)));
         booking("booking-d1", true);
-        when(syncStore.markSynced("d1")).thenReturn(Optional.of(pending("d1", Duration.ZERO)));
+        when(syncStore.markSynced("d1", "lease-d1")).thenReturn(Optional.of(pending("d1", Duration.ZERO)));
 
         assertThat(reconciler.reconcile()).isEqualTo(new DisputeBookingSyncReconciler.Result(1, 0, 0));
-        verify(syncStore, never()).deleteIfPending(anyString());
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
     }
 
     @Test
@@ -91,10 +92,10 @@ class DisputeBookingSyncReconcilerTest {
     void removesOldIntentWhenBookingNotDisputed() {
         claims(pending("d1", Duration.ofMinutes(20)));
         booking("booking-d1", false);
-        when(syncStore.deleteIfPending("d1")).thenReturn(true);
+        when(syncStore.deleteIfPending("d1", "lease-d1")).thenReturn(true);
 
         assertThat(reconciler.reconcile()).isEqualTo(new DisputeBookingSyncReconciler.Result(0, 1, 0));
-        verify(syncStore, never()).markSynced(anyString());
+        verify(syncStore, never()).markSynced(anyString(), anyString());
     }
 
     @Test
@@ -104,8 +105,8 @@ class DisputeBookingSyncReconcilerTest {
         booking("booking-d1", false);
 
         assertThat(reconciler.reconcile()).isEqualTo(new DisputeBookingSyncReconciler.Result(0, 0, 1));
-        verify(syncStore, never()).deleteIfPending(anyString());
-        verify(syncStore, never()).markSynced(anyString());
+        verify(syncStore, never()).deleteIfPending(anyString(), anyString());
+        verify(syncStore, never()).markSynced(anyString(), anyString());
     }
 
     @Test
@@ -114,7 +115,7 @@ class DisputeBookingSyncReconcilerTest {
         claims(pending("d1", Duration.ofMinutes(30)));
         when(bookingLookupPort.getBooking("booking-d1"))
                 .thenThrow(new ResourceNotFoundException("BOOKING_NOT_FOUND", "Booking not found"));
-        when(syncStore.deleteIfPending("d1")).thenReturn(true);
+        when(syncStore.deleteIfPending("d1", "lease-d1")).thenReturn(true);
 
         assertThat(reconciler.reconcile().deleted()).isEqualTo(1);
     }
@@ -125,10 +126,10 @@ class DisputeBookingSyncReconcilerTest {
         claims(pending("d1", Duration.ofMinutes(30)), pending("d2", Duration.ofMinutes(3)));
         when(bookingLookupPort.getBooking("booking-d1")).thenThrow(new DataAccessResourceFailureException("down"));
         booking("booking-d2", true);
-        when(syncStore.markSynced("d2")).thenReturn(Optional.of(pending("d2", Duration.ZERO)));
+        when(syncStore.markSynced("d2", "lease-d2")).thenReturn(Optional.of(pending("d2", Duration.ZERO)));
 
         assertThat(reconciler.reconcile()).isEqualTo(new DisputeBookingSyncReconciler.Result(1, 0, 1));
-        verify(syncStore, never()).deleteIfPending("d1");
+        verify(syncStore, never()).deleteIfPending("d1", "lease-d1");
     }
 
     @Test
@@ -136,7 +137,7 @@ class DisputeBookingSyncReconcilerTest {
     void raceWithAnotherInstance() {
         claims(pending("d1", Duration.ofMinutes(3)));
         booking("booking-d1", true);
-        when(syncStore.markSynced("d1")).thenReturn(Optional.empty());
+        when(syncStore.markSynced("d1", "lease-d1")).thenReturn(Optional.empty());
 
         assertThat(reconciler.reconcile()).isEqualTo(new DisputeBookingSyncReconciler.Result(0, 0, 1));
     }
