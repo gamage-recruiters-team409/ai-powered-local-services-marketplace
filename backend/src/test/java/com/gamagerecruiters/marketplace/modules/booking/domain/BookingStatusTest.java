@@ -101,4 +101,17 @@ class BookingStatusTest {
         assertThat(COMPLETED.isFinal()).isFalse();
         assertThat(COMPLETED.allowedNextStatuses()).isEqualTo(EnumSet.of(DISPUTED));
     }
+
+    @Test
+    @DisplayName("Contact details are visible only from CONFIRMED onwards (BR-011), agreed with WP06")
+    void contactVisibleStatuses() {
+        assertThat(BookingStatus.CONTACT_VISIBLE_STATUSES).containsExactlyInAnyOrder(
+                CONFIRMED, IN_PROGRESS, COMPLETION_PENDING, COMPLETED, DISPUTED);
+        for (BookingStatus status : BookingStatus.values()) {
+            assertThat(status.isContactVisible()).as("status %s", status)
+                    .isEqualTo(BookingStatus.CONTACT_VISIBLE_STATUSES.contains(status));
+        }
+        assertThat(PENDING_PROVIDER.isContactVisible()).isFalse();
+        assertThat(AWAITING_PAYMENT.isContactVisible()).isFalse();
+    }
 }

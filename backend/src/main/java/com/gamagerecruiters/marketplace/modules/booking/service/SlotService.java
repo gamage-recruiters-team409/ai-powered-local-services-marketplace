@@ -1,5 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.booking.service;
 
+import java.time.Instant;
+
 import com.gamagerecruiters.marketplace.modules.booking.dto.AvailableSlotsResponse;
 
 public interface SlotService {
@@ -9,4 +11,10 @@ public interface SlotService {
      * Parameters come as raw strings so invalid values return a clear 400 instead of a binding error.
      */
     AvailableSlotsResponse getAvailableSlots(String providerId, String date, String durationMinutes);
+
+    /**
+     * Re-checks one chosen slot with the same rules as {@link #getAvailableSlots}: working hours,
+     * blocked date, 3 h notice, 30-minute start grid and existing bookings plus buffer.
+     */
+    boolean isSlotAvailable(String providerId, Instant slotStart, int durationMinutes);
 }
