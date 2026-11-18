@@ -226,6 +226,67 @@ public class EmailVerificationFailureRecoveryIntegrationTest {
     }
 
     @Test
+    @DisplayName("Verification: consume throws after activation -> succeeds, retry with real repo consumes the token")
+    void testVerifyEmail_consumeThrows_retryConsumesToken() {
+        User user = new User();
+        user.setEmail("consume-fail-retry@marketplace.local");
+        user.setName("Consume Fail Retry");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.PENDING_VERIFICATION);
+        user.setEmailVerified(false);
+        user.setPasswordHash("encodedPass123");
+        user.setCreatedAt(Instant.now());
+        User savedUser = userRepository.save(user);
+
+        String rawToken = tokenService.generateOpaqueToken();
+        String tokenHash = tokenService.hashToken(rawToken);
+        Instant now = Instant.now();
+        Instant expiresAt = now.plus(Duration.ofHours(24));
+        AuthToken token = new AuthToken(savedUser.getId(), TokenType.EMAIL_VERIFICATION, tokenHash, expiresAt, now);
+        authTokenRepository.save(token);
+
+        // Delegating wrapper whose consumeValidToken throws
+        AuthTokenRepository failingTokenRepo = Mockito.mock(AuthTokenRepository.class, AdditionalAnswers.delegatesTo(authTokenRepository));
+        Mockito.doThrow(new RuntimeException("Simulated DB failure on consume"))
+                .when(failingTokenRepo)
+                .consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class));
+
+        EmailTokenServiceImpl serviceWithConsumeFailure = createService(userRepository, failingTokenRepo);
+
+        // Phase 1: Call with failing wrapper -> must still succeed (consume failure is swallowed)
+        assertDoesNotThrow(() -> serviceWithConsumeFailure.verifyEmail(rawToken));
+
+        // User is now ACTIVE and verified
+        User activeUser = userRepository.findById(savedUser.getId()).orElseThrow();
+        assertEquals(UserStatus.ACTIVE, activeUser.getStatus());
+        assertTrue(activeUser.isEmailVerified());
+
+        // Token is still unconsumed (usedAt null) because consume threw
+        AuthToken unconsumedToken = authTokenRepository.findByTokenHash(tokenHash).orElseThrow();
+        assertNull(unconsumedToken.getUsedAt(), "Token must still be unconsumed after consume failure");
+
+        // Phase 2 (retry): Fresh service with real repo -> succeeds and consumes the token
+        EmailTokenServiceImpl realService = createService(userRepository, authTokenRepository);
+        assertDoesNotThrow(() -> realService.verifyEmail(rawToken));
+
+        // User is still ACTIVE (idempotent)
+        User stillActiveUser = userRepository.findById(savedUser.getId()).orElseThrow();
+        assertEquals(UserStatus.ACTIVE, stillActiveUser.getStatus());
+        assertTrue(stillActiveUser.isEmailVerified());
+
+        // Token is now consumed
+        AuthToken consumedToken = authTokenRepository.findByTokenHash(tokenHash).orElseThrow();
+        assertNotNull(consumedToken.getUsedAt(), "Token must be consumed on retry");
+
+        // Phase 3: Third attempt with same token -> fails (token now consumed, findValidToken returns empty)
+        com.gamagerecruiters.marketplace.common.exception.ApiException ex = assertThrows(
+                com.gamagerecruiters.marketplace.common.exception.ApiException.class,
+                () -> realService.verifyEmail(rawToken)
+        );
+        assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, ex.getStatus());
+    }
+
+    @Test
     @DisplayName("Repository: findValidToken ignores expired, used, or revoked tokens")
     void testFindValidToken_ignoresInvalidTokens() {
         String userId = "u-repo-test";

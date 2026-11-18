@@ -301,6 +301,43 @@ class EmailTokenServiceTest {
     }
 
     @Test
+    @DisplayName("verifyEmail: consume throws then retry succeeds and consumes token")
+    void verifyEmail_consumeThrows_retrySucceedsAndConsumes() {
+        String rawToken = "raw-token-abc";
+        String tokenHash = "hash-abc";
+
+        when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
+
+        AuthToken token = new AuthToken("u123", TokenType.EMAIL_VERIFICATION, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
+        // findValidToken returns the token on both calls (token is still unconsumed after first failure)
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+
+        User user = new User();
+        user.setId("u123");
+        user.setStatus(UserStatus.PENDING_VERIFICATION);
+        user.setEmailVerified(false);
+        when(userRepository.findById("u123")).thenReturn(Optional.of(user));
+
+        // consumeValidToken throws on first call, succeeds on second
+        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+                .thenThrow(new RuntimeException("Transient consume failure"))
+                .thenReturn(Optional.of(token));
+
+        // First call: succeeds (consume failure swallowed), user is activated
+        assertDoesNotThrow(() -> emailTokenService.verifyEmail(rawToken));
+        assertTrue(user.isEmailVerified());
+        assertEquals(UserStatus.ACTIVE, user.getStatus());
+
+        // Second call (retry): succeeds and consume works this time
+        assertDoesNotThrow(() -> emailTokenService.verifyEmail(rawToken));
+
+        // consume was attempted twice
+        org.mockito.Mockito.verify(authTokenRepository, org.mockito.Mockito.times(2))
+                .consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class));
+    }
+
+    @Test
     @DisplayName("verifyEmail throws 400 INVALID_OR_EXPIRED_TOKEN when token is null or blank")
     void verifyEmail_blankToken_throws400() {
         ApiException ex1 = assertThrows(ApiException.class, () -> emailTokenService.verifyEmail(null));
