@@ -48,7 +48,7 @@ describe('CustomerHeader profile menu', () => {
     expect(within(menu).getByText('nimal@example.com')).toBeTruthy()
 
     const items = within(menu).getAllByRole('menuitem').map((item) => item.textContent)
-    expect(items).toEqual(['My Bookings', 'Help & Support', 'Log out'])
+    expect(items).toEqual(['My Bookings', 'Settings', 'Help & Support', 'Log out'])
   })
 
   it('calls onLogout and closes the menu', () => {
