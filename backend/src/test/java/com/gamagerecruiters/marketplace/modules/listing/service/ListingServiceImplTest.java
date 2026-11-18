@@ -745,4 +745,56 @@ class ListingServiceImplTest {
                 validCreateRequest("Complete home breaker panel fault diagnosis and earthing safety maintenance.", false)
         )).isInstanceOf(RateLimitExceededException.class);
     }
+
+    @Test
+    @DisplayName("Missing category, missing parent category, and unavailable lookup fail closed on both full and summary DTOs")
+    void missingOrUnavailableCategoryFailsClosedAcrossFullAndSummaryDtos() {
+        ServiceListing active = persistedListing("l-active", ListingStatus.ACTIVE);
+
+        // 1. Unavailable CategoryLookupPort bean
+        when(categoryLookupPortProvider.getIfAvailable()).thenReturn(null);
+        when(listingRepository.findById("l-active")).thenReturn(Optional.of(active));
+        when(listingRepository.findByProviderIdOrderByUpdatedAtDesc(PROVIDER_ID, PageRequest.of(0, 20)))
+                .thenReturn(new PageImpl<>(List.of(active)));
+        when(listingRepository.findByProviderIdOrderByUpdatedAtDesc(PROVIDER_ID))
+                .thenReturn(List.of(active));
+
+        ListingResponse unavailableFull = listingService.getListingForViewer("l-active", PROVIDER_ID, Role.PROVIDER);
+        assertThat(unavailableFull.categoryActive()).isFalse();
+        assertThat(unavailableFull.availableForBooking()).isFalse();
+
+        Page<ListingSummaryResponse> unavailablePage = listingService.getMyListings(
+                PROVIDER_ID, null, null, PageRequest.of(0, 20));
+        assertThat(unavailablePage.getContent().get(0).categoryActive()).isFalse();
+        assertThat(unavailablePage.getContent().get(0).availableForBooking()).isFalse();
+        assertThat(listingService.getMyListingsSummary(PROVIDER_ID).categoryInactiveCount()).isEqualTo(1);
+
+        // 2. Category ID cannot be resolved (missing category)
+        when(categoryLookupPortProvider.getIfAvailable()).thenReturn(categoryLookupPort);
+        when(categoryLookupPort.findById(SUB_CAT_ID)).thenReturn(Optional.empty());
+
+        ListingResponse missingCatFull = listingService.getListingForViewer("l-active", null, null);
+        assertThat(missingCatFull.categoryActive()).isFalse();
+        assertThat(missingCatFull.availableForBooking()).isFalse();
+
+        Page<ListingSummaryResponse> missingCatPage = listingService.getMyListings(
+                PROVIDER_ID, null, null, PageRequest.of(0, 20));
+        assertThat(missingCatPage.getContent().get(0).categoryActive()).isFalse();
+        assertThat(missingCatPage.getContent().get(0).availableForBooking()).isFalse();
+
+        // 3. Active child category whose parent category cannot be resolved (missing parent)
+        when(categoryLookupPort.findById(SUB_CAT_ID)).thenReturn(Optional.of(
+                new CategorySnapshot(SUB_CAT_ID, "Wiring Repair", ROOT_CAT_ID, true, new BigDecimal("0.12"))));
+        when(categoryLookupPort.findById(ROOT_CAT_ID)).thenReturn(Optional.empty());
+
+        ListingResponse missingParentFull = listingService.getListingForViewer("l-active", null, null);
+        assertThat(missingParentFull.categoryActive()).isFalse();
+        assertThat(missingParentFull.availableForBooking()).isFalse();
+
+        Page<ListingSummaryResponse> missingParentPage = listingService.getMyListings(
+                PROVIDER_ID, null, null, PageRequest.of(0, 20));
+        assertThat(missingParentPage.getContent().get(0).categoryActive()).isFalse();
+        assertThat(missingParentPage.getContent().get(0).availableForBooking()).isFalse();
+        assertThat(listingService.getMyListingsSummary(PROVIDER_ID).categoryInactiveCount()).isEqualTo(1);
+    }
 }

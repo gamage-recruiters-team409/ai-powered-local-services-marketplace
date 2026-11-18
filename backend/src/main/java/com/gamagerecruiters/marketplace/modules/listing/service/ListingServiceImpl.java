@@ -217,7 +217,7 @@ public class ListingServiceImpl implements ListingService {
                 case REJECTED -> rejected++;
             }
             CategorySnapshot cat = categories.get(item.getCategoryId());
-            if (cat != null && !cat.active()) {
+            if (cat == null || !cat.active()) {
                 categoryInactive++;
             }
         }
@@ -617,7 +617,9 @@ public class ListingServiceImpl implements ListingService {
     }
 
     private CategorySnapshot resolveEffectiveCategory(String categoryId) {
-        CategoryLookupPort port = categoryLookupPortProvider.getIfAvailable();
+        CategoryLookupPort port = categoryLookupPortProvider != null
+                ? categoryLookupPortProvider.getIfAvailable()
+                : null;
         if (port == null || categoryId == null) {
             return null;
         }
@@ -626,7 +628,9 @@ public class ListingServiceImpl implements ListingService {
     }
 
     private Map<String, CategorySnapshot> resolveEffectiveCategoriesForPage(List<ServiceListing> listings) {
-        CategoryLookupPort port = categoryLookupPortProvider.getIfAvailable();
+        CategoryLookupPort port = categoryLookupPortProvider != null
+                ? categoryLookupPortProvider.getIfAvailable()
+                : null;
         Map<String, CategorySnapshot> result = new HashMap<>();
         if (port == null || listings == null || listings.isEmpty()) {
             return result;
@@ -652,7 +656,7 @@ public class ListingServiceImpl implements ListingService {
         }
         CategorySnapshot parent = rawCache.computeIfAbsent(
                 category.parentId(), id -> port.findById(id).orElse(null));
-        if (parent != null && !parent.active()) {
+        if (parent == null || !parent.active()) {
             return new CategorySnapshot(
                     category.id(),
                     category.name(),

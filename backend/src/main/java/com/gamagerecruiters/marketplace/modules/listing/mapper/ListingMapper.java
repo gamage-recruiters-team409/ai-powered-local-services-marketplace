@@ -58,11 +58,9 @@ public class ListingMapper {
                 ? List.of()
                 : listing.getAddOns().stream().map(this::toAddOnItemResponse).toList();
 
-        boolean categoryActive = category == null || category.active();
+        boolean categoryActive = isCategoryActive(category);
         int activeAddOnCount = countActiveAddOns(listing);
-        boolean availableForBooking = listing.getStatus() == ListingStatus.ACTIVE
-                && !listing.isHiddenByProviderSuspension()
-                && categoryActive;
+        boolean availableForBooking = isAvailableForBooking(listing, categoryActive);
 
         return new ListingResponse(
                 listing.getId(),
@@ -104,11 +102,9 @@ public class ListingMapper {
             CategorySnapshot category,
             boolean includeModerationDetails
     ) {
-        boolean categoryActive = category == null || category.active();
+        boolean categoryActive = isCategoryActive(category);
         int activeAddOnCount = countActiveAddOns(listing);
-        boolean availableForBooking = listing.getStatus() == ListingStatus.ACTIVE
-                && !listing.isHiddenByProviderSuspension()
-                && categoryActive;
+        boolean availableForBooking = isAvailableForBooking(listing, categoryActive);
 
         return new ListingSummaryResponse(
                 listing.getId(),
@@ -133,6 +129,16 @@ public class ListingMapper {
                 listing.getCreatedAt(),
                 listing.getUpdatedAt()
         );
+    }
+
+    private boolean isCategoryActive(CategorySnapshot category) {
+        return category != null && category.active();
+    }
+
+    private boolean isAvailableForBooking(ServiceListing listing, boolean categoryActive) {
+        return listing.getStatus() == ListingStatus.ACTIVE
+                && !listing.isHiddenByProviderSuspension()
+                && categoryActive;
     }
 
     private int countActiveAddOns(ServiceListing listing) {
