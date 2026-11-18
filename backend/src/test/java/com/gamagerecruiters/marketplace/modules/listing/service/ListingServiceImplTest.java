@@ -3,6 +3,8 @@ package com.gamagerecruiters.marketplace.modules.listing.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -448,6 +450,7 @@ class ListingServiceImplTest {
                 MODERATOR_ID, "flagged-1", new ListingModerationRequest(ModerationDecision.APPROVE, "False positive"));
         assertThat(approved.status()).isEqualTo(ListingStatus.ACTIVE);
         assertThat(approved.moderationFlags()).isEmpty();
+        verify(providerEligibilityChecker).assertEligibleToManageListing(PROVIDER_ID, true);
 
         ServiceListing active = persistedListing("active-1", ListingStatus.ACTIVE);
         when(listingRepository.findById("active-1")).thenReturn(Optional.of(active));
@@ -455,6 +458,50 @@ class ListingServiceImplTest {
         assertThatThrownBy(() -> listingService.moderateListing(
                 MODERATOR_ID, "active-1", new ListingModerationRequest(ModerationDecision.REJECT, "Nope")))
                 .isInstanceOf(ResourceConflictException.class);
+    }
+
+    @Test
+    @DisplayName("Moderation approval cannot activate FLAGGED listings belonging to suspended or unverified providers")
+    void moderationApprovalRejectsSuspendedOrUnverifiedProviders() {
+        ServiceListing suspendedOwnersListing = persistedListing("flagged-susp", ListingStatus.FLAGGED);
+        suspendedOwnersListing.setModerationFlags(List.of("SPAM_DETECTED"));
+        when(listingRepository.findById("flagged-susp")).thenReturn(Optional.of(suspendedOwnersListing));
+        doThrow(new ApiException(HttpStatus.FORBIDDEN, "PROVIDER_ACCOUNT_INACTIVE", "Account suspended"))
+                .when(providerEligibilityChecker).assertEligibleToManageListing(PROVIDER_ID, true);
+
+        assertThatThrownBy(() -> listingService.moderateListing(
+                MODERATOR_ID,
+                "flagged-susp",
+                new ListingModerationRequest(ModerationDecision.APPROVE, "Content clean")
+        ))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo("PROVIDER_ACCOUNT_INACTIVE"));
+        assertThat(suspendedOwnersListing.getStatus()).isEqualTo(ListingStatus.FLAGGED);
+        verify(listingRepository, never()).save(any(ServiceListing.class));
+
+        ServiceListing unverifiedOwnersListing = persistedListing("flagged-unver", ListingStatus.FLAGGED);
+        unverifiedOwnersListing.setProviderId(OTHER_PROVIDER_ID);
+        when(listingRepository.findById("flagged-unver")).thenReturn(Optional.of(unverifiedOwnersListing));
+        doThrow(new ApiException(HttpStatus.FORBIDDEN, "PROVIDER_NOT_VERIFIED", "Verification not approved"))
+                .when(providerEligibilityChecker).assertEligibleToManageListing(OTHER_PROVIDER_ID, true);
+
+        assertThatThrownBy(() -> listingService.moderateListing(
+                MODERATOR_ID,
+                "flagged-unver",
+                new ListingModerationRequest(ModerationDecision.APPROVE, "Content clean")
+        ))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo("PROVIDER_NOT_VERIFIED"));
+        assertThat(unverifiedOwnersListing.getStatus()).isEqualTo(ListingStatus.FLAGGED);
+        verify(listingRepository, never()).save(any(ServiceListing.class));
+
+        when(listingRepository.save(any(ServiceListing.class))).thenAnswer(inv -> inv.getArgument(0));
+        ListingResponse rejected = listingService.moderateListing(
+                MODERATOR_ID,
+                "flagged-susp",
+                new ListingModerationRequest(ModerationDecision.REJECT, "Confirmed violation")
+        );
+        assertThat(rejected.status()).isEqualTo(ListingStatus.REJECTED);
     }
 
     @Test

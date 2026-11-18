@@ -21,11 +21,13 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.GlobalExceptionHandler;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.config.SecurityConfig;
@@ -237,5 +239,19 @@ class AdminListingModerationControllerTest {
                         .content("{\"decision\":\"APPROVE\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value("INVALID_MODERATION_STATE"));
+
+        when(listingService.moderateListing(eq("user-moderator"), eq("flagged-unverified"), any()))
+                .thenThrow(new ApiException(
+                        HttpStatus.FORBIDDEN,
+                        "PROVIDER_NOT_VERIFIED",
+                        "Provider verification must be APPROVED before publishing listings"
+                ));
+
+        mockMvc.perform(patch(BASE + "/flagged-unverified/moderation")
+                        .header("Authorization", "Bearer " + modToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"decision\":\"APPROVE\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("PROVIDER_NOT_VERIFIED"));
     }
 }

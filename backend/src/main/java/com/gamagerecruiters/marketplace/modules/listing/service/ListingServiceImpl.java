@@ -430,7 +430,9 @@ public class ListingServiceImpl implements ListingService {
 
         CategorySnapshot category;
         if (targetStatus == ListingStatus.ACTIVE) {
+            providerEligibilityChecker.assertEligibleToManageListing(existing.getProviderId(), true);
             category = resolveActiveCategoryHierarchy(existing.getCategoryId());
+            existing.setHiddenByProviderSuspension(false);
             existing.setModerationFlags(List.of());
             existing.setModerationReason(trimmedReason == null || trimmedReason.isEmpty() ? null : trimmedReason);
         } else {
