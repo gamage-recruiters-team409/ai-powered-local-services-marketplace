@@ -10,10 +10,13 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 public record DisputeSummaryResponse(
         String id,
         String bookingId,
+        String customerId,
+        String providerId,
         Role raisedByRole,
         DisputeCategory category,
         DisputeStatus status,
         Instant responseDueAt,
+        Instant appealDeadline,
         Instant createdAt,
         Instant updatedAt
 ) {
