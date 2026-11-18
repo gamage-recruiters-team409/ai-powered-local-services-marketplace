@@ -1,4 +1,4 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate, Outlet } from 'react-router-dom';
 
 import Spinner from '../../../shared/components/feedback/Spinner';
 import { useAuth } from '../hooks/useAuth';
@@ -22,5 +22,5 @@ export default function RequireRole({ roles = [], children }) {
     return <Navigate to="/" replace />;
   }
 
-  return children;
+  return children ?? <Outlet />;
 }

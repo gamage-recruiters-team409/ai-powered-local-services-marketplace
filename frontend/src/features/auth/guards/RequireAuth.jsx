@@ -1,4 +1,4 @@
-import { Navigate, useLocation } from 'react-router-dom';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
 
 import Spinner from '../../../shared/components/feedback/Spinner';
 import { useAuth } from '../hooks/useAuth';
@@ -19,5 +19,5 @@ export default function RequireAuth({ children }) {
     return <Navigate to="/login" state={{ from: location.pathname }} replace />;
   }
 
-  return children;
+  return children ?? <Outlet />;
 }
