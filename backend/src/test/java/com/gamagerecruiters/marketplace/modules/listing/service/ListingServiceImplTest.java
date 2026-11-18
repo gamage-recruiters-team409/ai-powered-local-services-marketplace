@@ -27,6 +27,9 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.mongodb.core.geo.GeoJsonPoint;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.authority.AuthorityUtils;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
@@ -796,5 +799,43 @@ class ListingServiceImplTest {
         assertThat(missingParentPage.getContent().get(0).categoryActive()).isFalse();
         assertThat(missingParentPage.getContent().get(0).availableForBooking()).isFalse();
         assertThat(listingService.getMyListingsSummary(PROVIDER_ID).categoryInactiveCount()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Anonymous and empty SecurityContext lookups on getListingById expose customer-safe details only and hide non-public listings")
+    void getListingByIdSafelyHandlesAnonymousAndEmptyAuthContext() {
+        ServiceListing active = persistedListing("public-active", ListingStatus.ACTIVE);
+        active.setModerationFlags(List.of("HISTORICAL_FLAG"));
+        active.setModerationReason("Internal moderator audit note");
+        active.setModeratedAt(Instant.now());
+        ServiceListing draft = persistedListing("private-draft", ListingStatus.DRAFT);
+
+        when(listingRepository.findById("public-active")).thenReturn(Optional.of(active));
+        when(listingRepository.findById("private-draft")).thenReturn(Optional.of(draft));
+        stubActiveCategoryHierarchy();
+
+        try {
+            SecurityContextHolder.clearContext();
+            ListingResponse clearedRead = listingService.getListingById("public-active");
+            assertThat(clearedRead.status()).isEqualTo(ListingStatus.ACTIVE);
+            assertThat(clearedRead.availableForBooking()).isTrue();
+            assertThat(clearedRead.moderationFlags()).isEmpty();
+            assertThat(clearedRead.moderationReason()).isNull();
+            assertThat(clearedRead.moderatedAt()).isNull();
+            assertThatThrownBy(() -> listingService.getListingById("private-draft"))
+                    .isInstanceOf(ResourceNotFoundException.class);
+
+            SecurityContextHolder.getContext().setAuthentication(new AnonymousAuthenticationToken(
+                    "anon-key", "anonymousUser", AuthorityUtils.createAuthorityList("ROLE_ANONYMOUS")));
+            ListingResponse anonRead = listingService.getListingById("public-active");
+            assertThat(anonRead.id()).isEqualTo("public-active");
+            assertThat(anonRead.moderationFlags()).isEmpty();
+            assertThat(anonRead.moderationReason()).isNull();
+            assertThat(anonRead.moderatedAt()).isNull();
+            assertThatThrownBy(() -> listingService.getListingById("private-draft"))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
     }
 }

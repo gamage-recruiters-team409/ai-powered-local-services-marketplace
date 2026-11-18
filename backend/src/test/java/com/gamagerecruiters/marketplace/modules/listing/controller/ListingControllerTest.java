@@ -190,6 +190,20 @@ class ListingControllerTest {
                         .content(validPayloadJson()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+
+        mockMvc.perform(put(BASE + "/listing-1")
+                        .header("Authorization", "Bearer " + CUSTOMER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validPayloadJson()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+
+        mockMvc.perform(patch(BASE + "/listing-1/status")
+                        .header("Authorization", "Bearer " + CUSTOMER_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"PAUSED\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
     }
 
     @Test
