@@ -526,6 +526,195 @@ class BookingFacadeImplTest {
     }
 
     @Nested
+    @DisplayName("Dispute resolution (admin decision)")
+    class DisputeResolution {
+
+        private static final String ADMIN = "a-1";
+        private static final String REF = "dispute-d-1";
+
+        /** Booking that already moved DISPUTED → {@code status} (an applied decision). */
+        private Booking resolvedTo(BookingStatus status) {
+            Booking booking = booking(status);
+            booking.getTimeline().add(new BookingStatusChange(BookingStatus.DISPUTED, status,
+                    NOW.minus(Duration.ofHours(1)), ADMIN, "Dispute resolved (" + REF + ")"));
+            return booking;
+        }
+
+        @ParameterizedTest(name = "DISPUTED → {0}")
+        @EnumSource(value = BookingStatus.class, names = {"COMPLETED", "REFUNDED", "PARTIALLY_REFUNDED"})
+        @DisplayName("Logged-in ADMIN moves a DISPUTED booking to each final status")
+        void adminResolves(BookingStatus finalStatus) {
+            loginAs(ADMIN, Role.ADMIN);
+            insideHttpRequest();
+            Booking booking = booking(BookingStatus.DISPUTED);
+            givenBooking(booking);
+            givenSaveReturnsArgument();
+
+            BookingParticipants result = facade.resolveDispute("b-1", finalStatus, REF);
+
+            assertThat(result.status()).isEqualTo(finalStatus);
+            BookingStatusChange change = booking.getTimeline().get(booking.getTimeline().size() - 1);
+            assertThat(change.getFromStatus()).isEqualTo(BookingStatus.DISPUTED);
+            assertThat(change.getToStatus()).isEqualTo(finalStatus);
+            assertThat(change.getChangedBy()).isEqualTo(ADMIN);
+            assertThat(change.getReason()).isEqualTo("Dispute resolved (" + REF + ")");
+            assertThat(change.getChangedAt()).isEqualTo(NOW);
+        }
+
+        @Test
+        @DisplayName("Internal job (no request, no login) resolves as SYSTEM")
+        void internalJobResolvesAsSystem() {
+            Booking booking = booking(BookingStatus.DISPUTED);
+            givenBooking(booking);
+            givenSaveReturnsArgument();
+
+            facade.resolveDispute("b-1", BookingStatus.REFUNDED, REF);
+
+            assertThat(booking.getStatus()).isEqualTo(BookingStatus.REFUNDED);
+            assertThat(booking.getTimeline().get(booking.getTimeline().size() - 1).getChangedBy())
+                    .isEqualTo(BookingStatusChange.SYSTEM);
+        }
+
+        @Test
+        @DisplayName("HTTP request without login → 401, nothing loaded")
+        void requestWithoutLogin() {
+            insideHttpRequest();
+
+            assertThatThrownBy(() -> facade.resolveDispute("b-1", BookingStatus.COMPLETED, REF))
+                    .isInstanceOf(ApiException.class)
+                    .satisfies(e -> assertThat(((ApiException) e).getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+            verifyNoInteractions(bookingRepository);
+        }
+
+        @ParameterizedTest(name = "{0} denied")
+        @EnumSource(value = Role.class, names = {"CUSTOMER", "PROVIDER", "SUPER_ADMIN", "SUPPORT_ADMIN", "FINANCE_ADMIN", "MODERATOR"})
+        @DisplayName("Any role other than ADMIN → 403, nothing loaded")
+        void nonAdminDenied(Role role) {
+            loginAs(CUSTOMER, role);
+            insideHttpRequest();
+
+            assertThatThrownBy(() -> facade.resolveDispute("b-1", BookingStatus.REFUNDED, REF))
+                    .isInstanceOf(AccessDeniedException.class);
+            verifyNoInteractions(bookingRepository);
+        }
+
+        @ParameterizedTest(name = "{0} rejected")
+        @EnumSource(value = BookingStatus.class, names = {"COMPLETED", "REFUNDED", "PARTIALLY_REFUNDED"},
+                mode = EnumSource.Mode.EXCLUDE)
+        @DisplayName("A target that is not a final dispute status → 400 INVALID_DISPUTE_RESOLUTION")
+        void invalidTarget(BookingStatus target) {
+            loginAs(ADMIN, Role.ADMIN);
+
+            assertThatThrownBy(() -> facade.resolveDispute("b-1", target, REF))
+                    .isInstanceOf(ApiException.class)
+                    .satisfies(e -> {
+                        assertThat(((ApiException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                        assertErrorCode(e, "INVALID_DISPUTE_RESOLUTION");
+                    });
+            verifyNoInteractions(bookingRepository);
+        }
+
+        @Test
+        @DisplayName("Null target → 400 INVALID_DISPUTE_RESOLUTION")
+        void nullTarget() {
+            loginAs(ADMIN, Role.ADMIN);
+
+            assertThatThrownBy(() -> facade.resolveDispute("b-1", null, REF))
+                    .isInstanceOf(ApiException.class)
+                    .satisfies(e -> assertErrorCode(e, "INVALID_DISPUTE_RESOLUTION"));
+            verifyNoInteractions(bookingRepository);
+        }
+
+        @ParameterizedTest(name = "from {0}")
+        @EnumSource(value = BookingStatus.class, names = {"CONFIRMED", "IN_PROGRESS", "COMPLETION_PENDING", "CANCELLED_BY_CUSTOMER"})
+        @DisplayName("Booking that is not DISPUTED → 409 INVALID_STATUS_TRANSITION, nothing saved")
+        void notDisputed(BookingStatus current) {
+            loginAs(ADMIN, Role.ADMIN);
+            givenBooking(current);
+
+            assertThatThrownBy(() -> facade.resolveDispute("b-1", BookingStatus.REFUNDED, REF))
+                    .isInstanceOf(ResourceConflictException.class)
+                    .satisfies(e -> assertErrorCode(e, "INVALID_STATUS_TRANSITION"));
+            verify(bookingRepository, never()).save(any(Booking.class));
+        }
+
+        @Test
+        @DisplayName("Retry of the same decision → returns the booking unchanged, nothing saved")
+        void idempotentRetry() {
+            Booking booking = resolvedTo(BookingStatus.PARTIALLY_REFUNDED);
+            givenBooking(booking);
+
+            BookingParticipants result = facade.resolveDispute("b-1", BookingStatus.PARTIALLY_REFUNDED, REF);
+
+            assertThat(result.status()).isEqualTo(BookingStatus.PARTIALLY_REFUNDED);
+            assertThat(booking.getTimeline()).hasSize(1);
+            verify(bookingRepository, never()).save(any(Booking.class));
+        }
+
+        @Test
+        @DisplayName("Already resolved to a different final status → 409, nothing saved")
+        void differentFinalStatus() {
+            givenBooking(resolvedTo(BookingStatus.COMPLETED));
+
+            assertThatThrownBy(() -> facade.resolveDispute("b-1", BookingStatus.REFUNDED, REF))
+                    .isInstanceOf(ResourceConflictException.class)
+                    .satisfies(e -> assertErrorCode(e, "INVALID_STATUS_TRANSITION"));
+            verify(bookingRepository, never()).save(any(Booking.class));
+        }
+
+        @Test
+        @DisplayName("COMPLETED by the normal flow (not from a dispute) is not treated as a resolved dispute")
+        void normalCompletionIsNotAResolution() {
+            Booking booking = booking(BookingStatus.COMPLETED);
+            booking.getTimeline().add(new BookingStatusChange(BookingStatus.COMPLETION_PENDING,
+                    BookingStatus.COMPLETED, NOW.minus(Duration.ofHours(2)), CUSTOMER, null));
+            givenBooking(booking);
+
+            assertThatThrownBy(() -> facade.resolveDispute("b-1", BookingStatus.COMPLETED, REF))
+                    .isInstanceOf(ResourceConflictException.class)
+                    .satisfies(e -> assertErrorCode(e, "INVALID_STATUS_TRANSITION"));
+            verify(bookingRepository, never()).save(any(Booking.class));
+        }
+
+        @Test
+        @DisplayName("Unknown booking → 404 BOOKING_NOT_FOUND")
+        void unknownBooking() {
+            when(bookingRepository.findById("missing")).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> facade.resolveDispute("missing", BookingStatus.COMPLETED, REF))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @Test
+        @DisplayName("Concurrent update → 409 BOOKING_UPDATE_CONFLICT (safe to retry)")
+        void concurrentUpdate() {
+            givenBooking(BookingStatus.DISPUTED);
+            when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("v"));
+
+            assertThatThrownBy(() -> facade.resolveDispute("b-1", BookingStatus.COMPLETED, REF))
+                    .isInstanceOf(ResourceConflictException.class)
+                    .satisfies(e -> assertErrorCode(e, "BOOKING_UPDATE_CONFLICT"));
+        }
+
+        @Test
+        @DisplayName("Blank reference → generic reason; long reference is trimmed to 100 characters")
+        void referenceHandling() {
+            Booking first = booking(BookingStatus.DISPUTED);
+            givenBooking(first);
+            givenSaveReturnsArgument();
+
+            facade.resolveDispute("b-1", BookingStatus.COMPLETED, "  ");
+            assertThat(first.getTimeline().get(0).getReason()).isEqualTo("Dispute resolved");
+
+            Booking second = booking(BookingStatus.DISPUTED);
+            givenBooking(second);
+            facade.resolveDispute("b-1", BookingStatus.COMPLETED, "r".repeat(150));
+            assertThat(second.getTimeline().get(0).getReason())
+                    .isEqualTo("Dispute resolved (" + "r".repeat(100) + ")");
+        }
+    }
+
+    @Nested
     @DisplayName("Common error cases")
     class CommonErrors {
 

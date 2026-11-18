@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.booking.service;
 
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 
 /**
@@ -80,4 +81,24 @@ public interface BookingFacade {
      * @return the booking's participants and status, for the caller's own records
      */
     BookingParticipants assertDisputeEligible(String bookingId, String actorId);
+
+    /**
+     * Final admin decision of a dispute (WP09): DISPUTED → COMPLETED, REFUNDED or PARTIALLY_REFUNDED.
+     *
+     * <p>Caller: an authenticated ADMIN (recorded with their user ID), or the dispute module's internal
+     * job with no HTTP request and no authenticated user (recorded as SYSTEM). Any other caller gets
+     * 401 (request without login) or 403 ACCESS_DENIED.</p>
+     *
+     * <p>Idempotent for retries: if the booking already moved from DISPUTED to the same final status,
+     * the current state is returned and nothing is saved. Any other starting status (including a
+     * different final status) gives 409 INVALID_STATUS_TRANSITION.</p>
+     *
+     * <p>Errors: 400 INVALID_DISPUTE_RESOLUTION (finalStatus is not one of the three final statuses),
+     * 401 UNAUTHORIZED, 403 ACCESS_DENIED, 404 BOOKING_NOT_FOUND, 409 INVALID_STATUS_TRANSITION,
+     * 409 BOOKING_UPDATE_CONFLICT (concurrent update; safe to retry).</p>
+     *
+     * @param reference the dispute's idempotency key (for example {@code dispute-<id>}); stored in the
+     *                  booking timeline, never user-written text
+     */
+    BookingParticipants resolveDispute(String bookingId, BookingStatus finalStatus, String reference);
 }

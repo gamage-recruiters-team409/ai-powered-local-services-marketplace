@@ -17,6 +17,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.auth.security.OwnershipChecker;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
@@ -40,6 +41,16 @@ public class BookingFacadeImpl implements BookingFacade {
     private static final Set<BookingStatus> DISPUTABLE = EnumSet.of(
             BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS, BookingStatus.COMPLETION_PENDING,
             BookingStatus.COMPLETED);
+    private static final Set<BookingStatus> FROM_DISPUTED = EnumSet.of(BookingStatus.DISPUTED);
+
+    /** Final statuses an admin dispute decision can set (SRS 5.2). */
+    static final Set<BookingStatus> DISPUTE_FINAL_STATUSES = EnumSet.of(
+            BookingStatus.COMPLETED, BookingStatus.REFUNDED, BookingStatus.PARTIALLY_REFUNDED);
+
+    /** Same role the dispute module requires for decisions (ADMIN area edit). */
+    private static final Role DISPUTE_RESOLVER_ROLE = Role.ADMIN;
+
+    private static final int MAX_REFERENCE_LENGTH = 100;
 
     /** Which booking participant the authenticated actor must be. */
     private enum Participant {
@@ -135,6 +146,63 @@ public class BookingFacadeImpl implements BookingFacade {
         }
         // Read-only: nothing is saved.
         return toParticipants(booking);
+    }
+
+    @Override
+    public BookingParticipants resolveDispute(String bookingId, BookingStatus finalStatus, String reference) {
+        String changedBy = disputeResolverId();
+
+        if (finalStatus == null || !DISPUTE_FINAL_STATUSES.contains(finalStatus)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_DISPUTE_RESOLUTION",
+                    "A dispute can only be resolved to COMPLETED, REFUNDED or PARTIALLY_REFUNDED");
+        }
+
+        Booking booking = findBooking(bookingId);
+
+        // Retry of a decision that was already applied: return it unchanged.
+        if (alreadyResolvedTo(booking, finalStatus)) {
+            return toParticipants(booking);
+        }
+
+        assertStartsFrom(booking, FROM_DISPUTED, finalStatus);
+
+        String cleanReference = cleanReference(reference);
+        String reason = cleanReference == null ? "Dispute resolved" : "Dispute resolved (" + cleanReference + ")";
+        return applyAndSave(booking, finalStatus, changedBy, reason, Instant.now(clock));
+    }
+
+    /**
+     * ADMIN in a request → their user ID; internal job (no request, no login) → SYSTEM.
+     * A request without login → 401; any other role → 403.
+     */
+    private String disputeResolverId() {
+        if (CurrentUser.isAuthenticated()) {
+            if (CurrentUser.getRole() != DISPUTE_RESOLVER_ROLE) {
+                throw new AccessDeniedException("Access denied: only an admin can resolve a dispute");
+            }
+            return CurrentUser.getUserId();
+        }
+        if (RequestContextHolder.getRequestAttributes() != null) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required");
+        }
+        return BookingStatusChange.SYSTEM;
+    }
+
+    /** True when the latest timeline entry is DISPUTED → {@code finalStatus} (an applied decision). */
+    private boolean alreadyResolvedTo(Booking booking, BookingStatus finalStatus) {
+        if (booking.getStatus() != finalStatus || booking.getTimeline().isEmpty()) {
+            return false;
+        }
+        BookingStatusChange last = booking.getTimeline().get(booking.getTimeline().size() - 1);
+        return last.getFromStatus() == BookingStatus.DISPUTED && last.getToStatus() == finalStatus;
+    }
+
+    private static String cleanReference(String reference) {
+        if (reference == null || reference.isBlank()) {
+            return null;
+        }
+        String trimmed = reference.trim();
+        return trimmed.length() > MAX_REFERENCE_LENGTH ? trimmed.substring(0, MAX_REFERENCE_LENGTH) : trimmed;
     }
 
     /**
