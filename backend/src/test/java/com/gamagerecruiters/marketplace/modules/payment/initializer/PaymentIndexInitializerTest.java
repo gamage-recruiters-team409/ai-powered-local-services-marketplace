@@ -1,6 +1,8 @@
 
 package com.gamagerecruiters.marketplace.modules.payment.initializer;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -34,239 +36,388 @@ import com.mongodb.client.model.IndexOptions;
  * protection against incompatible index configurations
  * without connecting to a live MongoDB database.
  * </p>
+ *
+ * <p>
+ * Includes regression coverage for the previously approved
+ * booking and gateway indexes, as well as the customer payment
+ * history compound index required by the WP01 integration.
+ * </p>
  */
 class PaymentIndexInitializerTest {
 
-    private MongoTemplate mongoTemplate;
-    private MongoCollection<Document> collection;
-    private PaymentIndexInitializer initializer;
+        private MongoTemplate mongoTemplate;
+        private MongoCollection<Document> collection;
+        private PaymentIndexInitializer initializer;
 
-    @SuppressWarnings("unchecked")
-    @BeforeEach
-    void setUp() {
-        mongoTemplate = mock(MongoTemplate.class);
-        collection = mock(MongoCollection.class);
+        @SuppressWarnings("unchecked")
+        @BeforeEach
+        void setUp() {
+                mongoTemplate = mock(MongoTemplate.class);
+                collection = mock(MongoCollection.class);
 
-        when(mongoTemplate.collectionExists("payments"))
-                .thenReturn(true);
+                when(mongoTemplate.collectionExists("payments"))
+                                .thenReturn(true);
 
-        when(mongoTemplate.getCollection("payments"))
-                .thenReturn(collection);
+                when(mongoTemplate.getCollection("payments"))
+                                .thenReturn(collection);
 
-        initializer = new PaymentIndexInitializer(mongoTemplate);
-    }
+                initializer = new PaymentIndexInitializer(mongoTemplate);
+        }
 
-    /**
-     * Verifies that a valid non-unique booking index
-     * is accepted without creating a duplicate index.
-     */
-    @Test
-    void shouldAcceptExistingBookingIndex() {
-        Document index = bookingIndex();
+        /**
+         * Verifies that a valid non-unique booking index
+         * is accepted without creating a duplicate index.
+         */
+        @Test
+        void shouldAcceptExistingBookingIndex() {
+                mockIndexes(bookingIndex());
 
-        mockIndexes(index);
+                initializer.ensureIndex(
+                                "bookingId", "bookingId_1", false, false);
 
-        initializer.ensureIndex(
-                "bookingId", "bookingId_1", false, false);
+                verify(collection, never())
+                                .createIndex(any(Bson.class), any(IndexOptions.class));
+        }
 
-        verify(collection, never())
-                .createIndex(any(Bson.class), any(IndexOptions.class));
-    }
+        /**
+         * Verifies that an existing partial unique gateway index
+         * matches the required payment index configuration.
+         */
+        @Test
+        void shouldAcceptExistingGatewayIndex() {
+                mockIndexes(gatewayIndex());
 
-    /**
-     * Verifies that an existing partial unique gateway index
-     * matches the required payment index configuration.
-     */
-    @Test
-    void shouldAcceptExistingGatewayIndex() {
-        Document index = gatewayIndex();
+                initializer.ensureIndex(
+                                "gatewayRef", "gatewayRef_1", true, true);
 
-        mockIndexes(index);
+                verify(collection, never())
+                                .createIndex(any(Bson.class), any(IndexOptions.class));
+        }
 
-        initializer.ensureIndex(
-                "gatewayRef", "gatewayRef_1", true, true);
+        /**
+         * Ensures that a gateway index without uniqueness
+         * is rejected to protect transaction references.
+         */
+        @Test
+        void shouldRejectNonUniqueGatewayIndex() {
+                Document index = new Document("name", "gatewayRef_1")
+                                .append("key", new Document("gatewayRef", 1));
 
-        verify(collection, never())
-                .createIndex(any(Bson.class), any(IndexOptions.class));
-    }
+                mockIndexes(index);
 
-    /**
-     * Ensures that a gateway index without uniqueness
-     * is rejected to protect transaction references.
-     */
-    @Test
-    void shouldRejectNonUniqueGatewayIndex() {
-        Document index = new Document("name", "gatewayRef_1")
-                .append("key", new Document("gatewayRef", 1));
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureIndex(
+                                                "gatewayRef", "gatewayRef_1", true, true));
+        }
 
-        mockIndexes(index);
+        /**
+         * Ensures that a gateway index missing its partial
+         * filter expression is rejected.
+         */
+        @Test
+        void shouldRejectGatewayIndexWithoutPartialFilter() {
+                Document index = new Document("name", "gatewayRef_1")
+                                .append("key", new Document("gatewayRef", 1))
+                                .append("unique", true);
 
-        assertThrows(
-                IllegalStateException.class,
-                () -> initializer.ensureIndex(
-                        "gatewayRef", "gatewayRef_1", true, true));
-    }
+                mockIndexes(index);
 
-    /**
-     * Ensures that a gateway index missing its partial
-     * filter expression is rejected.
-     */
-    @Test
-    void shouldRejectGatewayIndexWithoutPartialFilter() {
-        Document index = new Document("name", "gatewayRef_1")
-                .append("key", new Document("gatewayRef", 1))
-                .append("unique", true);
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureIndex(
+                                                "gatewayRef", "gatewayRef_1", true, true));
+        }
 
-        mockIndexes(index);
+        /**
+         * Ensures that incompatible financial indexes
+         * are never automatically deleted.
+         */
+        @Test
+        void shouldNotDropIncompatibleIndexes() {
+                Document index = new Document("name", "gatewayRef_1")
+                                .append("key", new Document("gatewayRef", 1));
 
-        assertThrows(
-                IllegalStateException.class,
-                () -> initializer.ensureIndex(
-                        "gatewayRef", "gatewayRef_1", true, true));
-    }
+                mockIndexes(index);
 
-    /**
-     * Ensures that incompatible financial indexes
-     * are never automatically deleted.
-     */
-    @Test
-    void shouldNotDropIncompatibleIndexes() {
-        Document index = new Document("name", "gatewayRef_1")
-                .append("key", new Document("gatewayRef", 1));
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureIndex(
+                                                "gatewayRef", "gatewayRef_1", true, true));
 
-        mockIndexes(index);
+                verify(collection, never()).dropIndex(anyString());
+        }
 
-        assertThrows(
-                IllegalStateException.class,
-                () -> initializer.ensureIndex(
-                        "gatewayRef", "gatewayRef_1", true, true));
+        /**
+         * Verifies that a missing booking index is created
+         * and validated after creation.
+         */
+        @Test
+        void shouldCreateMissingBookingIndex() {
+                mockIndexCreation(bookingIndex());
 
-        verify(collection, never()).dropIndex(anyString());
-    }
+                initializer.ensureIndex(
+                                "bookingId", "bookingId_1", false, false);
 
-    /**
-     * Verifies that a missing booking index is created
-     * and validated after creation.
-     *
-     * <p>
-     * The mock simulates MongoDB returning no indexes
-     * initially and the new index on the next lookup.
-     * </p>
-     */
-    @Test
-    void shouldCreateMissingBookingIndex() {
-        mockIndexCreation(bookingIndex());
+                ArgumentCaptor<IndexOptions> optionsCaptor = ArgumentCaptor.forClass(IndexOptions.class);
 
-        initializer.ensureIndex(
-                "bookingId", "bookingId_1", false, false);
+                verify(collection, times(1))
+                                .createIndex(any(Bson.class), optionsCaptor.capture());
 
-        ArgumentCaptor<IndexOptions> optionsCaptor = ArgumentCaptor.forClass(IndexOptions.class);
+                IndexOptions options = optionsCaptor.getValue();
 
-        verify(collection, times(1))
-                .createIndex(any(Bson.class), optionsCaptor.capture());
+                assertFalse(Boolean.TRUE.equals(options.isUnique()));
+                assertEquals("bookingId_1", options.getName());
+        }
 
-        IndexOptions options = optionsCaptor.getValue();
+        /**
+         * Verifies that a missing gateway index is created
+         * with uniqueness and a string-only partial filter.
+         */
+        @Test
+        void shouldCreateMissingGatewayIndex() {
+                mockIndexCreation(gatewayIndex());
 
-        assertTrue(!options.isUnique());
-        assertTrue("bookingId_1".equals(options.getName()));
-    }
+                initializer.ensureIndex(
+                                "gatewayRef", "gatewayRef_1", true, true);
 
-    /**
-     * Verifies that a missing gateway index is created
-     * with uniqueness and a string-only partial filter.
-     */
-    @Test
-    void shouldCreateMissingGatewayIndex() {
-        mockIndexCreation(gatewayIndex());
+                ArgumentCaptor<IndexOptions> optionsCaptor = ArgumentCaptor.forClass(IndexOptions.class);
 
-        initializer.ensureIndex(
-                "gatewayRef", "gatewayRef_1", true, true);
+                verify(collection, times(1))
+                                .createIndex(any(Bson.class), optionsCaptor.capture());
 
-        ArgumentCaptor<IndexOptions> optionsCaptor = ArgumentCaptor.forClass(IndexOptions.class);
+                IndexOptions options = optionsCaptor.getValue();
 
-        verify(collection, times(1))
-                .createIndex(any(Bson.class), optionsCaptor.capture());
+                assertTrue(Boolean.TRUE.equals(options.isUnique()));
+                assertEquals("gatewayRef_1", options.getName());
 
-        IndexOptions options = optionsCaptor.getValue();
+                assertEquals(
+                                new Document(
+                                                "gatewayRef",
+                                                new Document("$type", "string")),
+                                options.getPartialFilterExpression());
+        }
 
-        assertTrue(Boolean.TRUE.equals(options.isUnique()));
-        assertTrue("gatewayRef_1".equals(options.getName()));
-        assertTrue(
-                new Document(
-                        "gatewayRef",
-                        new Document("$type", "string")).equals(options.getPartialFilterExpression()));
-    }
+        /**
+         * Verifies that an existing correctly configured
+         * customer history index is accepted.
+         */
+        @Test
+        void shouldAcceptExistingCustomerHistoryIndex() {
+                mockIndexes(customerHistoryIndex());
 
-    /**
-     * Creates metadata for a valid non-unique booking index.
-     *
-     * @return booking index metadata
-     */
-    private Document bookingIndex() {
-        return new Document("name", "bookingId_1")
-                .append("key", new Document("bookingId", 1));
-    }
+                initializer.ensureCustomerHistoryIndex();
 
-    /**
-     * Creates metadata for a valid partial unique gateway index.
-     *
-     * @return gateway index metadata
-     */
-    private Document gatewayIndex() {
-        return new Document("name", "gatewayRef_1")
-                .append("key", new Document("gatewayRef", 1))
-                .append("unique", true)
-                .append(
-                        "partialFilterExpression",
-                        new Document(
-                                "gatewayRef",
-                                new Document("$type", "string")));
-    }
+                verify(collection, never())
+                                .createIndex(any(Bson.class), any(IndexOptions.class));
+        }
 
-    /**
-     * Mocks an existing MongoDB index listing.
-     *
-     * @param indexes indexes returned by the mocked database
-     */
-    @SuppressWarnings("unchecked")
-    private void mockIndexes(Document... indexes) {
-        ListIndexesIterable<Document> iterable = mock(ListIndexesIterable.class);
+        /**
+         * Verifies that a missing customer history index
+         * is created with the correct field order and directions.
+         */
+        @Test
+        void shouldCreateMissingCustomerHistoryIndex() {
+                mockIndexCreation(customerHistoryIndex());
 
-        when(collection.listIndexes()).thenReturn(iterable);
+                initializer.ensureCustomerHistoryIndex();
 
-        when(iterable.into(anyCollection()))
-                .thenAnswer(invocation -> {
-                    Collection<Document> destination = invocation.getArgument(0);
+                ArgumentCaptor<Bson> keyCaptor = ArgumentCaptor.forClass(Bson.class);
 
-                    destination.addAll(List.of(indexes));
-                    return destination;
-                });
-    }
+                ArgumentCaptor<IndexOptions> optionsCaptor = ArgumentCaptor.forClass(IndexOptions.class);
 
-    /**
-     * Simulates MongoDB index creation by returning an empty
-     * index list first and the newly created index afterward.
-     *
-     * @param createdIndex metadata of the newly created index
-     */
-    @SuppressWarnings("unchecked")
-    private void mockIndexCreation(Document createdIndex) {
-        ListIndexesIterable<Document> beforeCreation = mock(ListIndexesIterable.class);
+                verify(collection, times(1))
+                                .createIndex(keyCaptor.capture(), optionsCaptor.capture());
 
-        ListIndexesIterable<Document> afterCreation = mock(ListIndexesIterable.class);
+                // Convert both index definitions to BSON for an exact comparison.
+                // This verifies the field names, field order, and sort directions.
+                org.bson.BsonDocument actualKey = keyCaptor.getValue()
+                                .toBsonDocument(
+                                                Document.class,
+                                                com.mongodb.MongoClientSettings
+                                                                .getDefaultCodecRegistry());
 
-        when(collection.listIndexes())
-                .thenReturn(beforeCreation, afterCreation);
+                org.bson.BsonDocument expectedKey = customerHistoryKey()
+                                .toBsonDocument(
+                                                Document.class,
+                                                com.mongodb.MongoClientSettings
+                                                                .getDefaultCodecRegistry());
 
-        when(beforeCreation.into(anyCollection()))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+                assertEquals(expectedKey, actualKey);
 
-        when(afterCreation.into(anyCollection()))
-                .thenAnswer(invocation -> {
-                    Collection<Document> destination = invocation.getArgument(0);
+                IndexOptions options = optionsCaptor.getValue();
 
-                    destination.add(createdIndex);
-                    return destination;
-                });
-    }
+                assertEquals(
+                                PaymentIndexInitializer.CUSTOMER_HISTORY_INDEX,
+                                options.getName());
+
+                assertFalse(Boolean.TRUE.equals(options.isUnique()));
+        }
+
+        /**
+         * Rejects a compound index when its fields
+         * appear in the wrong order.
+         */
+        @Test
+        void shouldRejectCustomerHistoryIndexWithWrongFieldOrder() {
+                Document wrongKey = new Document("createdAt", -1)
+                                .append("customerId", 1)
+                                .append("_id", -1);
+
+                mockIndexes(new Document(
+                                "name",
+                                PaymentIndexInitializer.CUSTOMER_HISTORY_INDEX)
+                                .append("key", wrongKey));
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureCustomerHistoryIndex());
+        }
+
+        /**
+         * Rejects a compound index when the creation timestamp
+         * uses ascending rather than descending order.
+         */
+        @Test
+        void shouldRejectCustomerHistoryIndexWithWrongSortDirection() {
+                Document wrongKey = new Document("customerId", 1)
+                                .append("createdAt", 1)
+                                .append("_id", -1);
+
+                mockIndexes(new Document(
+                                "name",
+                                PaymentIndexInitializer.CUSTOMER_HISTORY_INDEX)
+                                .append("key", wrongKey));
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureCustomerHistoryIndex());
+        }
+
+        /**
+         * Rejects a unique customer history index because
+         * customers must be able to have multiple payments.
+         */
+        @Test
+        void shouldRejectUniqueCustomerHistoryIndex() {
+                Document index = customerHistoryIndex()
+                                .append("unique", true);
+
+                mockIndexes(index);
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureCustomerHistoryIndex());
+        }
+
+        /**
+         * Verifies that incompatible customer history indexes
+         * are never automatically dropped.
+         */
+        @Test
+        void shouldNotDropIncompatibleCustomerHistoryIndex() {
+                Document index = customerHistoryIndex()
+                                .append("unique", true);
+
+                mockIndexes(index);
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureCustomerHistoryIndex());
+
+                verify(collection, never()).dropIndex(anyString());
+        }
+
+        /**
+         * Creates metadata for a valid non-unique booking index.
+         */
+        private Document bookingIndex() {
+                return new Document("name", "bookingId_1")
+                                .append("key", new Document("bookingId", 1));
+        }
+
+        /**
+         * Creates metadata for a valid partial unique gateway index.
+         */
+        private Document gatewayIndex() {
+                return new Document("name", "gatewayRef_1")
+                                .append("key", new Document("gatewayRef", 1))
+                                .append("unique", true)
+                                .append(
+                                                "partialFilterExpression",
+                                                new Document(
+                                                                "gatewayRef",
+                                                                new Document("$type", "string")));
+        }
+
+        /**
+         * Creates the expected customer history compound index key.
+         *
+         * <p>
+         * Field order is significant for MongoDB compound indexes.
+         * </p>
+         */
+        private Document customerHistoryKey() {
+                return new Document("customerId", 1)
+                                .append("createdAt", -1)
+                                .append("_id", -1);
+        }
+
+        /**
+         * Creates metadata for a valid non-unique
+         * customer history compound index.
+         */
+        private Document customerHistoryIndex() {
+                return new Document(
+                                "name",
+                                PaymentIndexInitializer.CUSTOMER_HISTORY_INDEX)
+                                .append("key", customerHistoryKey());
+        }
+
+        /**
+         * Mocks an existing MongoDB index listing.
+         *
+         * @param indexes indexes returned by the mocked database
+         */
+        @SuppressWarnings("unchecked")
+        private void mockIndexes(Document... indexes) {
+                ListIndexesIterable<Document> iterable = mock(ListIndexesIterable.class);
+
+                when(collection.listIndexes()).thenReturn(iterable);
+
+                when(iterable.into(anyCollection()))
+                                .thenAnswer(invocation -> {
+                                        Collection<Document> destination = invocation.getArgument(0);
+
+                                        destination.addAll(List.of(indexes));
+                                        return destination;
+                                });
+        }
+
+        /**
+         * Simulates MongoDB index creation by returning an empty
+         * index list first and the newly created index afterward.
+         *
+         * @param createdIndex metadata of the newly created index
+         */
+        @SuppressWarnings("unchecked")
+        private void mockIndexCreation(Document createdIndex) {
+                ListIndexesIterable<Document> beforeCreation = mock(ListIndexesIterable.class);
+
+                ListIndexesIterable<Document> afterCreation = mock(ListIndexesIterable.class);
+
+                when(collection.listIndexes())
+                                .thenReturn(beforeCreation, afterCreation);
+
+                when(beforeCreation.into(anyCollection()))
+                                .thenAnswer(invocation -> invocation.getArgument(0));
+
+                when(afterCreation.into(anyCollection()))
+                                .thenAnswer(invocation -> {
+                                        Collection<Document> destination = invocation.getArgument(0);
+
+                                        destination.add(createdIndex);
+                                        return destination;
+                                });
+        }
 }

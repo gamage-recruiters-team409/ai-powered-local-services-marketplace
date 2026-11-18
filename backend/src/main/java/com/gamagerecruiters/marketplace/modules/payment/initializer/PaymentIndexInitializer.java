@@ -32,6 +32,12 @@ import com.mongodb.client.model.Indexes;
  * </p>
  *
  * <p>
+ * Customer payment history uses a compound index on customer ID,
+ * creation time, and MongoDB document ID. This supports the WP01
+ * Customer Payments List with customer-scoped, newest-first pagination.
+ * </p>
+ *
+ * <p>
  * Incompatible indexes are never dropped automatically. They require
  * an explicit database migration to protect existing financial data.
  * </p>
@@ -43,6 +49,8 @@ public class PaymentIndexInitializer {
     static final String PAYMENTS_COLLECTION = "payments";
     static final String BOOKING_ID_INDEX = "bookingId_1";
     static final String GATEWAY_REF_INDEX = "gatewayRef_1";
+
+    static final String CUSTOMER_HISTORY_INDEX = "customerId_1_createdAt_-1__id_-1";
 
     private static final Logger log = LoggerFactory.getLogger(PaymentIndexInitializer.class);
 
@@ -59,14 +67,18 @@ public class PaymentIndexInitializer {
     public void initializeIndexes() {
         log.info("Initializing MongoDB indexes for payment transactions...");
 
+        // Preserve previously approved payment foundation indexes.
         ensureIndex("bookingId", BOOKING_ID_INDEX, false, false);
         ensureIndex("gatewayRef", GATEWAY_REF_INDEX, true, true);
+
+        // Support paginated customer payment history without booking-ID scans.
+        ensureCustomerHistoryIndex();
 
         log.info("Payment transaction indexes verified successfully.");
     }
 
     /**
-     * Creates a missing index or validates an existing index.
+     * Creates a missing single-field index or validates an existing index.
      *
      * @param field     the indexed MongoDB document field
      * @param indexName the expected index name
@@ -143,6 +155,88 @@ public class PaymentIndexInitializer {
     }
 
     /**
+     * Creates or verifies the compound customer payment history index.
+     *
+     * <p>
+     * The index supports filtering by customerId and sorting by
+     * createdAt descending, followed by MongoDB _id descending.
+     * It is non-unique because a customer may have many payments.
+     * </p>
+     *
+     * <p>
+     * Existing incompatible indexes are not automatically removed.
+     * </p>
+     */
+    void ensureCustomerHistoryIndex() {
+        try {
+            ensureCollectionExists();
+
+            MongoCollection<Document> collection = mongoTemplate.getCollection(PAYMENTS_COLLECTION);
+
+            Document expectedKey = new Document("customerId", 1)
+                    .append("createdAt", -1)
+                    .append("_id", -1);
+
+            List<Document> indexes = collection.listIndexes().into(new ArrayList<>());
+
+            Document existing = findByName(indexes, CUSTOMER_HISTORY_INDEX);
+
+            if (existing == null) {
+                Document conflicting = findByExactKey(indexes, expectedKey);
+
+                if (conflicting != null) {
+                    throw incompatible(
+                            CUSTOMER_HISTORY_INDEX,
+                            conflicting);
+                }
+
+                IndexOptions options = new IndexOptions()
+                        .name(CUSTOMER_HISTORY_INDEX)
+                        .unique(false);
+
+                collection.createIndex(
+                        Indexes.compoundIndex(
+                                Indexes.ascending("customerId"),
+                                Indexes.descending("createdAt"),
+                                Indexes.descending("_id")),
+                        options);
+
+                indexes = collection.listIndexes().into(new ArrayList<>());
+                existing = findByName(indexes, CUSTOMER_HISTORY_INDEX);
+
+                if (existing == null) {
+                    throw new IllegalStateException(
+                            "Payment index '" + CUSTOMER_HISTORY_INDEX
+                                    + "' was not found after creation.");
+                }
+            }
+
+            if (!hasExpectedCompoundKey(existing, expectedKey)
+                    || !hasExpectedUniqueness(existing, false)
+                    || existing.get("partialFilterExpression") != null
+                    || existing.get("sparse") != null
+                    || existing.get("expireAfterSeconds") != null) {
+                throw incompatible(CUSTOMER_HISTORY_INDEX, existing);
+            }
+
+            log.info(
+                    "Payment customer history index verified: {} -> {}",
+                    CUSTOMER_HISTORY_INDEX,
+                    existing.toJson());
+
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Unable to create or verify payment index '"
+                            + CUSTOMER_HISTORY_INDEX
+                            + "'. Check MongoDB connectivity and "
+                            + "existing payment indexes.",
+                    e);
+        }
+    }
+
+    /**
      * Ensures the payments collection exists before creating indexes.
      */
     private void ensureCollectionExists() {
@@ -158,8 +252,7 @@ public class PaymentIndexInitializer {
                 throw e;
             }
 
-            log.info(
-                    "Payments collection was created concurrently.");
+            log.info("Payments collection was created concurrently.");
         }
     }
 
@@ -187,6 +280,26 @@ public class PaymentIndexInitializer {
         return null;
     }
 
+    /**
+     * Finds an index with the exact expected compound key.
+     *
+     * <p>
+     * MongoDB compound index field order matters, so both field
+     * names and sort directions must match.
+     * </p>
+     */
+    private Document findByExactKey(
+            List<Document> indexes,
+            Document expectedKey) {
+        for (Document index : indexes) {
+            if (hasExpectedCompoundKey(index, expectedKey)) {
+                return index;
+            }
+        }
+
+        return null;
+    }
+
     private boolean hasExpectedKey(Document index, String field) {
         Document key = index.get("key", Document.class);
 
@@ -198,6 +311,41 @@ public class PaymentIndexInitializer {
 
         return direction instanceof Number number
                 && number.intValue() == 1;
+    }
+
+    /**
+     * Verifies the complete compound key, including field order
+     * and ascending or descending directions.
+     */
+    private boolean hasExpectedCompoundKey(
+            Document index,
+            Document expectedKey) {
+        Document actualKey = index.get("key", Document.class);
+
+        if (actualKey == null
+                || actualKey.size() != expectedKey.size()) {
+            return false;
+        }
+
+        var actualEntries = actualKey.entrySet().iterator();
+        var expectedEntries = expectedKey.entrySet().iterator();
+
+        while (actualEntries.hasNext() && expectedEntries.hasNext()) {
+            var actual = actualEntries.next();
+            var expected = expectedEntries.next();
+
+            if (!actual.getKey().equals(expected.getKey())) {
+                return false;
+            }
+
+            if (!(actual.getValue() instanceof Number actualDirection)
+                    || !(expected.getValue() instanceof Number expectedDirection)
+                    || actualDirection.intValue() != expectedDirection.intValue()) {
+                return false;
+            }
+        }
+
+        return !actualEntries.hasNext() && !expectedEntries.hasNext();
     }
 
     private boolean hasExpectedUniqueness(

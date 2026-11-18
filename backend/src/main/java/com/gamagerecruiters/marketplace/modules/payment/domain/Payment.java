@@ -25,6 +25,18 @@ public class Payment {
     @Indexed
     private String bookingId;
 
+    /**
+     * Customer identifier captured from verified BookingFacade data
+     * when the payment is created.
+     *
+     * <p>
+     * This value must never be populated from untrusted client input.
+     * It enables customer-scoped payment queries without repeatedly
+     * retrieving booking ownership information.
+     * </p>
+     */
+    private String customerId;
+
     private String gatewayRef;
 
     // Store the payment amount as MongoDB Decimal128.
@@ -68,6 +80,30 @@ public class Payment {
 
     public void setBookingId(String bookingId) {
         this.bookingId = bookingId;
+    }
+
+
+    /**
+     * Returns the customer identifier captured at payment creation.
+     *
+     * @return verified customer identifier, or null for legacy records
+     */
+    public String getCustomerId() {
+        return customerId;
+    }
+
+    /**
+     * Sets the verified customer identifier for this payment.
+     *
+     * <p>
+     * Only trusted internal payment creation workflows should call
+     * this method using customer information from BookingFacade.
+     * </p>
+     *
+     * @param customerId verified customer identifier
+     */
+    public void setCustomerId(String customerId) {
+        this.customerId = customerId;
     }
 
     public String getGatewayRef() {

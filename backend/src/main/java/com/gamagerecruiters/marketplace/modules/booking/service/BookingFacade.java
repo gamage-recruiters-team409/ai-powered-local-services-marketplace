@@ -68,4 +68,16 @@ public interface BookingFacade {
      * customer or provider.
      */
     BookingParticipants markDisputed(String bookingId, String actorId, String reason);
+
+    /**
+     * Read-only check used by the dispute module before it records a dispute. Changes nothing.
+     * Same identity and participant rules as {@link #markDisputed}; eligible when the booking is
+     * CONFIRMED, IN_PROGRESS or COMPLETION_PENDING; COMPLETED within 72 h of completion (BR-008);
+     * or already DISPUTED within 72 h of the time it moved to DISPUTED (timeline entry).
+     * Errors: 401 UNAUTHORIZED, 404 BOOKING_NOT_FOUND, 403 ACCESS_DENIED,
+     * 409 INVALID_STATUS_TRANSITION, 409 DISPUTE_WINDOW_CLOSED.
+     *
+     * @return the booking's participants and status, for the caller's own records
+     */
+    BookingParticipants assertDisputeEligible(String bookingId, String actorId);
 }
