@@ -1,20 +1,16 @@
 package com.gamagerecruiters.marketplace.modules.auth.integration;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doCallRealMethod;
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -27,28 +23,27 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.AdditionalAnswers;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.http.MediaType;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 import org.testcontainers.containers.MongoDBContainer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamagerecruiters.marketplace.modules.auth.domain.AuthToken;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.TokenType;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
-import com.gamagerecruiters.marketplace.modules.auth.dto.VerifyEmailRequest;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
+import com.gamagerecruiters.marketplace.modules.auth.service.EmailTokenServiceImpl;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.notification.service.EmailResult;
 import com.gamagerecruiters.marketplace.modules.notification.service.EmailSender;
@@ -90,27 +85,48 @@ public class EmailVerificationFailureRecoveryIntegrationTest {
     }
 
     @Autowired
-    private MockMvc mockMvc;
-
-    @Autowired
-    private ObjectMapper objectMapper;
-
-    @MockitoSpyBean
     private UserRepository userRepository;
 
-    @MockitoSpyBean
+    @Autowired
     private AuthTokenRepository authTokenRepository;
-
-    @MockitoBean
-    private EmailSender emailSender;
 
     @Autowired
     private TokenService tokenService;
 
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
+    @MockitoBean
+    private EmailSender emailSender;
+
+    @Value("${app.auth.email-verification-expiry-minutes:1440}")
+    private int emailVerificationExpiryMinutes;
+
+    @Value("${app.auth.password-reset-expiry-minutes:30}")
+    private int passwordResetExpiryMinutes;
+
+    @Value("${app.auth.resend-verification-wait-seconds:60}")
+    private int resendVerificationWaitSeconds;
+
+    @Value("${app.frontend.base-url:http://localhost:5173}")
+    private String frontendBaseUrl;
+
+    private EmailTokenServiceImpl createService(UserRepository userRepo, AuthTokenRepository tokenRepo) {
+        return new EmailTokenServiceImpl(
+                userRepo,
+                tokenRepo,
+                tokenService,
+                passwordEncoder,
+                emailSender,
+                emailVerificationExpiryMinutes,
+                passwordResetExpiryMinutes,
+                resendVerificationWaitSeconds,
+                frontendBaseUrl
+        );
+    }
+
     @BeforeEach
     void cleanDatabase() {
-        doCallRealMethod().when(userRepository).save(any(User.class));
-        doCallRealMethod().when(authTokenRepository).consumeValidToken(anyString(), any(TokenType.class), any(Instant.class));
         authTokenRepository.deleteAll();
         userRepository.deleteAll();
         when(emailSender.sendEmail(any(EmailType.class), any(), anyMap()))
@@ -119,7 +135,7 @@ public class EmailVerificationFailureRecoveryIntegrationTest {
 
     @Test
     @DisplayName("Verification: userRepository.save fails once -> request fails, user still PENDING, token unused, retry succeeds")
-    void testVerifyEmail_userSaveFailsOnce_retrySucceeds() throws Exception {
+    void testVerifyEmail_userSaveFailsOnce_retrySucceeds() {
         User user = new User();
         user.setEmail("verify-fail@marketplace.local");
         user.setName("Verify Fail");
@@ -137,19 +153,16 @@ public class EmailVerificationFailureRecoveryIntegrationTest {
         AuthToken token = new AuthToken(savedUser.getId(), TokenType.EMAIL_VERIFICATION, tokenHash, expiresAt, now);
         authTokenRepository.save(token);
 
-        // Make userRepository.save fail on the next call (inside verifyEmail), then succeed on retry
-        doThrow(new RuntimeException("Simulated DB failure on user activation save"))
-                .doCallRealMethod()
-                .when(userRepository)
+        // Delegating wrapper that fails on save
+        UserRepository failingUserRepository = Mockito.mock(UserRepository.class, AdditionalAnswers.delegatesTo(userRepository));
+        Mockito.doThrow(new RuntimeException("Simulated DB failure on user activation save"))
+                .when(failingUserRepository)
                 .save(any(User.class));
 
-        // First attempt: must fail
-        MvcResult failResult = mockMvc.perform(post("/api/v1/auth/verify-email")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(new VerifyEmailRequest(rawToken))))
-                .andReturn();
+        EmailTokenServiceImpl serviceWithFailure = createService(failingUserRepository, authTokenRepository);
 
-        assertThat(failResult.getResponse().getStatus()).isEqualTo(500);
+        // Phase 1: Call with failing repository wrapper -> must throw
+        assertThrows(RuntimeException.class, () -> serviceWithFailure.verifyEmail(rawToken));
 
         // Verify user is STILL pending and unverified
         User checkUser = userRepository.findById(savedUser.getId()).orElseThrow();
@@ -161,13 +174,9 @@ public class EmailVerificationFailureRecoveryIntegrationTest {
         assertNull(checkToken.getUsedAt(), "Token must not be burned when user save fails");
         assertTrue(checkToken.isValid());
 
-        // Retry with the EXACT SAME link/token: must succeed
-        MvcResult retryResult = mockMvc.perform(post("/api/v1/auth/verify-email")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(new VerifyEmailRequest(rawToken))))
-                .andReturn();
-
-        assertThat(retryResult.getResponse().getStatus()).isEqualTo(200);
+        // Phase 2 (retry): Fresh service instance with plain real repository -> must succeed
+        EmailTokenServiceImpl realService = createService(userRepository, authTokenRepository);
+        assertDoesNotThrow(() -> realService.verifyEmail(rawToken));
 
         // Verify user is now ACTIVE and emailVerified=true
         User activeUser = userRepository.findById(savedUser.getId()).orElseThrow();
@@ -182,7 +191,7 @@ public class EmailVerificationFailureRecoveryIntegrationTest {
 
     @Test
     @DisplayName("Verification: token consume returns empty after successful activation -> still returns success")
-    void testVerifyEmail_parallelConsume_treatedAsSuccess() throws Exception {
+    void testVerifyEmail_parallelConsume_treatedAsSuccess() {
         User user = new User();
         user.setEmail("parallel-consume@marketplace.local");
         user.setName("Parallel User");
@@ -200,17 +209,16 @@ public class EmailVerificationFailureRecoveryIntegrationTest {
         AuthToken token = new AuthToken(savedUser.getId(), TokenType.EMAIL_VERIFICATION, tokenHash, expiresAt, now);
         authTokenRepository.save(token);
 
-        // Simulate parallel consumption returning empty after user activation
-        doReturn(Optional.empty())
-                .when(authTokenRepository)
+        // Delegating wrapper whose consumeValidToken returns empty (parallel request already consumed)
+        AuthTokenRepository delegatingTokenRepo = Mockito.mock(AuthTokenRepository.class, AdditionalAnswers.delegatesTo(authTokenRepository));
+        Mockito.doReturn(Optional.empty())
+                .when(delegatingTokenRepo)
                 .consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class));
 
-        MvcResult result = mockMvc.perform(post("/api/v1/auth/verify-email")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(new VerifyEmailRequest(rawToken))))
-                .andReturn();
+        EmailTokenServiceImpl service = createService(userRepository, delegatingTokenRepo);
 
-        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        // Verification must still succeed because the account activation succeeded
+        assertDoesNotThrow(() -> service.verifyEmail(rawToken));
 
         User activeUser = userRepository.findById(savedUser.getId()).orElseThrow();
         assertEquals(UserStatus.ACTIVE, activeUser.getStatus());

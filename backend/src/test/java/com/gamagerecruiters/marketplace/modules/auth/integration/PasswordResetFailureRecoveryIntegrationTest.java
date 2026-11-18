@@ -1,25 +1,19 @@
 package com.gamagerecruiters.marketplace.modules.auth.integration;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doCallRealMethod;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -33,29 +27,29 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.AdditionalAnswers;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 import org.testcontainers.containers.MongoDBContainer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.AuthToken;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.TokenType;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
-import com.gamagerecruiters.marketplace.modules.auth.dto.ResetPasswordRequest;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
+import com.gamagerecruiters.marketplace.modules.auth.service.EmailTokenServiceImpl;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.notification.service.EmailResult;
 import com.gamagerecruiters.marketplace.modules.notification.service.EmailSender;
@@ -97,19 +91,10 @@ public class PasswordResetFailureRecoveryIntegrationTest {
     }
 
     @Autowired
-    private MockMvc mockMvc;
-
-    @Autowired
-    private ObjectMapper objectMapper;
-
-    @MockitoSpyBean
     private UserRepository userRepository;
 
-    @MockitoSpyBean
+    @Autowired
     private AuthTokenRepository authTokenRepository;
-
-    @MockitoBean
-    private EmailSender emailSender;
 
     @Autowired
     private TokenService tokenService;
@@ -117,10 +102,37 @@ public class PasswordResetFailureRecoveryIntegrationTest {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @MockitoBean
+    private EmailSender emailSender;
+
+    @Value("${app.auth.email-verification-expiry-minutes:1440}")
+    private int emailVerificationExpiryMinutes;
+
+    @Value("${app.auth.password-reset-expiry-minutes:30}")
+    private int passwordResetExpiryMinutes;
+
+    @Value("${app.auth.resend-verification-wait-seconds:60}")
+    private int resendVerificationWaitSeconds;
+
+    @Value("${app.frontend.base-url:http://localhost:5173}")
+    private String frontendBaseUrl;
+
+    private EmailTokenServiceImpl createService(UserRepository userRepo, AuthTokenRepository tokenRepo) {
+        return new EmailTokenServiceImpl(
+                userRepo,
+                tokenRepo,
+                tokenService,
+                passwordEncoder,
+                emailSender,
+                emailVerificationExpiryMinutes,
+                passwordResetExpiryMinutes,
+                resendVerificationWaitSeconds,
+                frontendBaseUrl
+        );
+    }
+
     @BeforeEach
     void cleanDatabase() {
-        doCallRealMethod().when(userRepository).save(any(User.class));
-        doCallRealMethod().when(authTokenRepository).revokeAllActiveTokensByUserIdAndType(anyString(), any(TokenType.class));
         authTokenRepository.deleteAll();
         userRepository.deleteAll();
         when(emailSender.sendEmail(any(EmailType.class), any(), anyMap()))
@@ -129,7 +141,7 @@ public class PasswordResetFailureRecoveryIntegrationTest {
 
     @Test
     @DisplayName("Reset: userRepository.save fails once -> request fails, password unchanged, token usable again, retry succeeds")
-    void testResetPassword_userSaveFailsOnce_compensationAllowsRetry() throws Exception {
+    void testResetPassword_userSaveFailsOnce_compensationAllowsRetry() {
         User user = new User();
         user.setEmail("reset-save-fail@marketplace.local");
         user.setName("Reset Save Fail");
@@ -154,22 +166,17 @@ public class PasswordResetFailureRecoveryIntegrationTest {
         AuthToken resetToken = new AuthToken(savedUser.getId(), TokenType.PASSWORD_RESET, tokenHash, expiresAt, now);
         authTokenRepository.save(resetToken);
 
-        // Make userRepository.save fail on next call (inside resetPassword), then succeed on retry
-        doThrow(new RuntimeException("Simulated DB failure on password save"))
-                .doCallRealMethod()
-                .when(userRepository)
+        // Delegating wrapper that fails on save
+        UserRepository failingUserRepository = Mockito.mock(UserRepository.class, AdditionalAnswers.delegatesTo(userRepository));
+        Mockito.doThrow(new RuntimeException("Simulated DB failure on password save"))
+                .when(failingUserRepository)
                 .save(any(User.class));
 
+        EmailTokenServiceImpl serviceWithSaveFailure = createService(failingUserRepository, authTokenRepository);
         String newPassword = "NewPassword123!";
-        ResetPasswordRequest req = new ResetPasswordRequest(rawToken, newPassword);
 
-        // First attempt: must fail
-        MvcResult failResult = mockMvc.perform(post("/api/v1/auth/reset-password")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
-                .andReturn();
-
-        assertThat(failResult.getResponse().getStatus()).isEqualTo(500);
+        // Phase 1: Call with failing repository wrapper -> must throw
+        assertThrows(RuntimeException.class, () -> serviceWithSaveFailure.resetPassword(rawToken, newPassword));
 
         // Check password hash is UNCHANGED
         User checkUser = userRepository.findById(savedUser.getId()).orElseThrow();
@@ -181,13 +188,9 @@ public class PasswordResetFailureRecoveryIntegrationTest {
         assertNull(checkToken.getUsedAt(), "Reset token usedAt must be reset to null via compensation");
         assertTrue(checkToken.isValid(), "Token must be valid for retry");
 
-        // Retry with the EXACT SAME link/token: must succeed
-        MvcResult retryResult = mockMvc.perform(post("/api/v1/auth/reset-password")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
-                .andReturn();
-
-        assertThat(retryResult.getResponse().getStatus()).isEqualTo(200);
+        // Phase 2 (retry): Fresh service instance with plain real repository -> must succeed
+        EmailTokenServiceImpl realService = createService(userRepository, authTokenRepository);
+        assertDoesNotThrow(() -> realService.resetPassword(rawToken, newPassword));
 
         // Verify password changed, mustChangePassword cleared
         User updatedUser = userRepository.findById(savedUser.getId()).orElseThrow();
@@ -205,7 +208,7 @@ public class PasswordResetFailureRecoveryIntegrationTest {
 
     @Test
     @DisplayName("Reset: refresh-token revocation fails once -> request fails, password unchanged, token usable again, retry succeeds")
-    void testResetPassword_revokeRefreshFailsOnce_compensationAllowsRetry() throws Exception {
+    void testResetPassword_revokeRefreshFailsOnce_compensationAllowsRetry() {
         User user = new User();
         user.setEmail("reset-revoke-fail@marketplace.local");
         user.setName("Revoke Fail User");
@@ -230,22 +233,17 @@ public class PasswordResetFailureRecoveryIntegrationTest {
         AuthToken resetToken = new AuthToken(savedUser.getId(), TokenType.PASSWORD_RESET, tokenHash, expiresAt, now);
         authTokenRepository.save(resetToken);
 
-        // Make revocation fail on first call, succeed on retry
-        doThrow(new RuntimeException("Simulated DB failure during refresh token revocation"))
-                .doCallRealMethod()
-                .when(authTokenRepository)
-                .revokeAllActiveTokensByUserIdAndType(savedUser.getId(), TokenType.REFRESH);
+        // Delegating wrapper that fails on refresh token revocation
+        AuthTokenRepository failingTokenRepo = Mockito.mock(AuthTokenRepository.class, AdditionalAnswers.delegatesTo(authTokenRepository));
+        Mockito.doThrow(new RuntimeException("Simulated DB failure during refresh token revocation"))
+                .when(failingTokenRepo)
+                .revokeAllActiveTokensByUserIdAndType(eq(savedUser.getId()), eq(TokenType.REFRESH));
 
+        EmailTokenServiceImpl serviceWithRevocationFailure = createService(userRepository, failingTokenRepo);
         String newPassword = "NewPassword123!";
-        ResetPasswordRequest req = new ResetPasswordRequest(rawToken, newPassword);
 
-        // First attempt: must fail
-        MvcResult failResult = mockMvc.perform(post("/api/v1/auth/reset-password")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
-                .andReturn();
-
-        assertThat(failResult.getResponse().getStatus()).isEqualTo(500);
+        // Phase 1: Call with failing repository wrapper -> must throw
+        assertThrows(RuntimeException.class, () -> serviceWithRevocationFailure.resetPassword(rawToken, newPassword));
 
         // Check password hash unchanged
         User checkUser = userRepository.findById(savedUser.getId()).orElseThrow();
@@ -256,13 +254,9 @@ public class PasswordResetFailureRecoveryIntegrationTest {
         assertNull(checkToken.getUsedAt());
         assertTrue(checkToken.isValid());
 
-        // Retry with same token: succeeds
-        MvcResult retryResult = mockMvc.perform(post("/api/v1/auth/reset-password")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
-                .andReturn();
-
-        assertThat(retryResult.getResponse().getStatus()).isEqualTo(200);
+        // Phase 2 (retry): Fresh service instance with plain real repository -> must succeed
+        EmailTokenServiceImpl realService = createService(userRepository, authTokenRepository);
+        assertDoesNotThrow(() -> realService.resetPassword(rawToken, newPassword));
 
         User updatedUser = userRepository.findById(savedUser.getId()).orElseThrow();
         assertTrue(passwordEncoder.matches(newPassword, updatedUser.getPasswordHash()));
@@ -288,26 +282,25 @@ public class PasswordResetFailureRecoveryIntegrationTest {
         AuthToken resetToken = new AuthToken(savedUser.getId(), TokenType.PASSWORD_RESET, tokenHash, now.plus(Duration.ofMinutes(30)), now);
         authTokenRepository.save(resetToken);
 
+        EmailTokenServiceImpl realService = createService(userRepository, authTokenRepository);
+
         int threadCount = 2;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
         CountDownLatch startLatch = new CountDownLatch(1);
         CountDownLatch finishLatch = new CountDownLatch(threadCount);
         AtomicInteger successCount = new AtomicInteger(0);
-        List<Integer> statuses = Collections.synchronizedList(new ArrayList<>());
+        AtomicInteger rejectedCount = new AtomicInteger(0);
 
         for (int i = 0; i < threadCount; i++) {
             final String newPassword = "NewPassword123" + i + "!";
             executor.submit(() -> {
                 try {
                     startLatch.await();
-                    MvcResult res = mockMvc.perform(post("/api/v1/auth/reset-password")
-                                    .contentType(MediaType.APPLICATION_JSON)
-                                    .content(objectMapper.writeValueAsString(new ResetPasswordRequest(rawToken, newPassword))))
-                            .andReturn();
-                    int status = res.getResponse().getStatus();
-                    statuses.add(status);
-                    if (status == 200) {
-                        successCount.incrementAndGet();
+                    realService.resetPassword(rawToken, newPassword);
+                    successCount.incrementAndGet();
+                } catch (ApiException ex) {
+                    if (ex.getStatus() == HttpStatus.BAD_REQUEST) {
+                        rejectedCount.incrementAndGet();
                     }
                 } catch (Exception ex) {
                     // Ignored
@@ -322,9 +315,7 @@ public class PasswordResetFailureRecoveryIntegrationTest {
         executor.shutdown();
 
         assertEquals(1, successCount.get(), "Exactly one concurrent reset request must succeed");
-        assertEquals(2, statuses.size());
-        assertTrue(statuses.contains(200));
-        assertTrue(statuses.contains(400));
+        assertEquals(1, rejectedCount.get(), "The other concurrent request must be rejected with 400 Bad Request");
     }
 
     @Test
