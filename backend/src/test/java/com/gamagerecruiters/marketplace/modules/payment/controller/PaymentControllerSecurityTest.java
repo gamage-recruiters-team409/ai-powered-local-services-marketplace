@@ -8,6 +8,9 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -32,6 +35,7 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.security.CustomAccessDeniedHandler;
+import com.gamagerecruiters.marketplace.modules.auth.security.CustomAccessDeniedHandler;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationEntryPoint;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
@@ -55,284 +59,487 @@ import com.gamagerecruiters.marketplace.modules.payment.service.PaymentRetrieval
  */
 @WebMvcTest(PaymentController.class)
 @Import({
-        SecurityConfig.class,
-        JwtAuthenticationFilter.class,
-        JwtAuthenticationEntryPoint.class,
-        CustomAccessDeniedHandler.class,
-        GlobalExceptionHandler.class
+                SecurityConfig.class,
+                JwtAuthenticationFilter.class,
+                JwtAuthenticationEntryPoint.class,
+                CustomAccessDeniedHandler.class,
+                GlobalExceptionHandler.class
 })
 @ActiveProfiles("test")
 class PaymentControllerSecurityTest {
 
-    private static final String PAYMENT_URL = "/api/v1/payments/payment-123";
-    private static final String BOOKING_URL = "/api/v1/payments/booking/booking-456";
+        private static final String PAYMENT_URL = "/api/v1/payments/payment-123";
+        private static final String BOOKING_URL = "/api/v1/payments/booking/booking-456";
+        private static final String MY_PAYMENTS_URL = "/api/v1/payments/me";
 
-    private static final String PAYMENT_ID = "payment-123";
-    private static final String BOOKING_ID = "booking-456";
+        private static final String PAYMENT_ID = "payment-123";
+        private static final String BOOKING_ID = "booking-456";
 
-    @Autowired
-    private MockMvc mockMvc;
+        @Autowired
+        private MockMvc mockMvc;
 
-    @MockitoBean
-    private PaymentRetrievalService paymentRetrievalService;
+        @MockitoBean
+        private PaymentRetrievalService paymentRetrievalService;
 
-    @MockitoBean
-    private TokenService tokenService;
+        @MockitoBean
+        private TokenService tokenService;
 
-    @MockitoBean
-    private UserInternalService userInternalService;
+        @MockitoBean
+        private UserInternalService userInternalService;
 
-    /**
-     * Creates a payment record for HTTP response mapping tests.
-     */
-    private Payment createPayment() {
-        Payment payment = new Payment();
+        /**
+         * Creates a payment record for HTTP response mapping tests.
+         */
+        private Payment createPayment() {
+                Payment payment = new Payment();
 
-        payment.setId(PAYMENT_ID);
-        payment.setBookingId(BOOKING_ID);
-        payment.setAmount(new BigDecimal("2500.00"));
-        payment.setCurrency("LKR");
-        payment.setStatus(PaymentStatus.INITIATED);
-        payment.setRefundedAmount(new BigDecimal("0.00"));
-        payment.setCreatedAt(
-                Instant.parse("2026-11-11T17:00:00Z"));
+                payment.setId(PAYMENT_ID);
+                payment.setBookingId(BOOKING_ID);
+                payment.setAmount(new BigDecimal("2500.00"));
+                payment.setCurrency("LKR");
+                payment.setStatus(PaymentStatus.INITIATED);
+                payment.setRefundedAmount(new BigDecimal("0.00"));
+                payment.setCreatedAt(
+                                Instant.parse("2026-11-11T17:00:00Z"));
 
-        // Internal fields must not be exposed in customer responses.
-        payment.setGatewayRef("internal-gateway-reference");
-        payment.setCommissionRate(new BigDecimal("0.10"));
-        payment.setCommissionAmount(new BigDecimal("250.00"));
+                // Internal fields must not be exposed in customer responses.
+                payment.setGatewayRef("internal-gateway-reference");
+                payment.setCommissionRate(new BigDecimal("0.10"));
+                payment.setCommissionAmount(new BigDecimal("250.00"));
 
-        return payment;
-    }
+                return payment;
+        }
 
-    @Test
-    void paymentEndpointReturns401WithoutToken() throws Exception {
-        mockMvc.perform(get(PAYMENT_URL))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.status").value(401))
-                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
+        @Test
+        void paymentEndpointReturns401WithoutToken() throws Exception {
+                mockMvc.perform(get(PAYMENT_URL))
+                                .andExpect(status().isUnauthorized())
+                                .andExpect(jsonPath("$.status").value(401))
+                                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
 
-        verifyNoInteractions(paymentRetrievalService);
-    }
+                verifyNoInteractions(paymentRetrievalService);
+        }
 
-    @Test
-    void bookingEndpointReturns401WithoutToken() throws Exception {
-        mockMvc.perform(get(BOOKING_URL))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.status").value(401))
-                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
+        @Test
+        void bookingEndpointReturns401WithoutToken() throws Exception {
+                mockMvc.perform(get(BOOKING_URL))
+                                .andExpect(status().isUnauthorized())
+                                .andExpect(jsonPath("$.status").value(401))
+                                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
 
-        verifyNoInteractions(paymentRetrievalService);
-    }
+                verifyNoInteractions(paymentRetrievalService);
+        }
 
-    @ParameterizedTest
-    @EnumSource(value = Role.class, names = { "PROVIDER", "ADMIN" })
-    void paymentEndpointReturns403ForNonCustomer(Role role)
-            throws Exception {
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = { "PROVIDER", "ADMIN" })
+        void paymentEndpointReturns403ForNonCustomer(Role role)
+                        throws Exception {
 
-        String token = authenticateAs(role);
+                String token = authenticateAs(role);
 
-        mockMvc.perform(
-                get(PAYMENT_URL)
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.status").value(403))
-                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+                mockMvc.perform(
+                                get(PAYMENT_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isForbidden())
+                                .andExpect(jsonPath("$.status").value(403))
+                                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
 
-        verifyNoInteractions(paymentRetrievalService);
-    }
+                verifyNoInteractions(paymentRetrievalService);
+        }
 
-    @ParameterizedTest
-    @EnumSource(value = Role.class, names = { "PROVIDER", "ADMIN" })
-    void bookingEndpointReturns403ForNonCustomer(Role role)
-            throws Exception {
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = { "PROVIDER", "ADMIN" })
+        void bookingEndpointReturns403ForNonCustomer(Role role)
+                        throws Exception {
 
-        String token = authenticateAs(role);
+                String token = authenticateAs(role);
 
-        mockMvc.perform(
-                get(BOOKING_URL)
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.status").value(403))
-                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+                mockMvc.perform(
+                                get(BOOKING_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isForbidden())
+                                .andExpect(jsonPath("$.status").value(403))
+                                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
 
-        verifyNoInteractions(paymentRetrievalService);
-    }
+                verifyNoInteractions(paymentRetrievalService);
+        }
 
-    @Test
-    void paymentEndpointReturns200ForCustomer() throws Exception {
-        String token = authenticateAs(Role.CUSTOMER);
-        String customerId = "user-customer";
+        @Test
+        void paymentEndpointReturns200ForCustomer() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+                String customerId = "user-customer";
 
-        when(paymentRetrievalService.getPaymentForCustomer(
-                PAYMENT_ID,
-                customerId)).thenReturn(createPayment());
+                when(paymentRetrievalService.getPaymentForCustomer(
+                                PAYMENT_ID,
+                                customerId)).thenReturn(createPayment());
 
-        mockMvc.perform(
-                get(PAYMENT_URL)
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.paymentId").value(PAYMENT_ID))
-                .andExpect(jsonPath("$.bookingId").value(BOOKING_ID))
-                .andExpect(jsonPath("$.amount").value(2500.00))
-                .andExpect(jsonPath("$.currency").value("LKR"))
-                .andExpect(jsonPath("$.status").value("INITIATED"))
-                .andExpect(jsonPath("$.refundedAmount").value(0.00))
-                .andExpect(jsonPath("$.gatewayRef").doesNotExist())
-                .andExpect(jsonPath("$.commissionRate").doesNotExist())
-                .andExpect(jsonPath("$.commissionAmount").doesNotExist());
+                mockMvc.perform(
+                                get(PAYMENT_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.paymentId").value(PAYMENT_ID))
+                                .andExpect(jsonPath("$.bookingId").value(BOOKING_ID))
+                                .andExpect(jsonPath("$.amount").value(2500.00))
+                                .andExpect(jsonPath("$.currency").value("LKR"))
+                                .andExpect(jsonPath("$.status").value("INITIATED"))
+                                .andExpect(jsonPath("$.refundedAmount").value(0.00))
+                                .andExpect(jsonPath("$.gatewayRef").doesNotExist())
+                                .andExpect(jsonPath("$.commissionRate").doesNotExist())
+                                .andExpect(jsonPath("$.commissionAmount").doesNotExist());
 
-        verify(paymentRetrievalService).getPaymentForCustomer(
-                PAYMENT_ID,
-                customerId);
-    }
+                verify(paymentRetrievalService).getPaymentForCustomer(
+                                PAYMENT_ID,
+                                customerId);
+        }
 
-    @Test
-    void bookingEndpointReturns200ForCustomer() throws Exception {
-        String token = authenticateAs(Role.CUSTOMER);
-        String customerId = "user-customer";
+        @Test
+        void bookingEndpointReturns200ForCustomer() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+                String customerId = "user-customer";
 
-        when(paymentRetrievalService.getPaymentsForBooking(
-                BOOKING_ID,
-                customerId)).thenReturn(List.of(createPayment()));
+                when(paymentRetrievalService.getPaymentsForBooking(
+                                BOOKING_ID,
+                                customerId)).thenReturn(List.of(createPayment()));
 
-        mockMvc.perform(
-                get(BOOKING_URL)
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].paymentId").value(PAYMENT_ID))
-                .andExpect(jsonPath("$[0].bookingId").value(BOOKING_ID))
-                .andExpect(jsonPath("$[0].gatewayRef").doesNotExist())
-                .andExpect(jsonPath("$[0].commissionRate").doesNotExist());
+                mockMvc.perform(
+                                get(BOOKING_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$[0].paymentId").value(PAYMENT_ID))
+                                .andExpect(jsonPath("$[0].bookingId").value(BOOKING_ID))
+                                .andExpect(jsonPath("$[0].gatewayRef").doesNotExist())
+                                .andExpect(jsonPath("$[0].commissionRate").doesNotExist());
 
-        verify(paymentRetrievalService).getPaymentsForBooking(
-                BOOKING_ID,
-                customerId);
-    }
+                verify(paymentRetrievalService).getPaymentsForBooking(
+                                BOOKING_ID,
+                                customerId);
+        }
 
-    @Test
-    void bookingEndpointReturnsEmptyListForCustomer() throws Exception {
-        String token = authenticateAs(Role.CUSTOMER);
+        @Test
+        void bookingEndpointReturnsEmptyListForCustomer() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
 
-        when(paymentRetrievalService.getPaymentsForBooking(
-                BOOKING_ID,
-                "user-customer")).thenReturn(List.of());
+                when(paymentRetrievalService.getPaymentsForBooking(
+                                BOOKING_ID,
+                                "user-customer")).thenReturn(List.of());
 
-        mockMvc.perform(
-                get(BOOKING_URL)
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$").isArray())
-                .andExpect(jsonPath("$").isEmpty());
-    }
+                mockMvc.perform(
+                                get(BOOKING_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$").isArray())
+                                .andExpect(jsonPath("$").isEmpty());
+        }
 
-    @Test
-    void paymentEndpointReturns404WhenPaymentNotFound() throws Exception {
-        String token = authenticateAs(Role.CUSTOMER);
+        @Test
+        void paymentEndpointReturns404WhenPaymentNotFound() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
 
-        when(paymentRetrievalService.getPaymentForCustomer(
-                PAYMENT_ID,
-                "user-customer")).thenThrow(new ApiException(
-                        HttpStatus.NOT_FOUND,
-                        "PAYMENT_NOT_FOUND",
-                        "Payment not found"));
+                when(paymentRetrievalService.getPaymentForCustomer(
+                                PAYMENT_ID,
+                                "user-customer")).thenThrow(new ApiException(
+                                                HttpStatus.NOT_FOUND,
+                                                "PAYMENT_NOT_FOUND",
+                                                "Payment not found"));
 
-        mockMvc.perform(
-                get(PAYMENT_URL)
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.status").value(404))
-                .andExpect(jsonPath("$.error").value("PAYMENT_NOT_FOUND"));
-    }
+                mockMvc.perform(
+                                get(PAYMENT_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.status").value(404))
+                                .andExpect(jsonPath("$.error").value("PAYMENT_NOT_FOUND"));
+        }
 
-    @Test
-    void paymentEndpointHidesUnauthorizedPayment() throws Exception {
-        String token = authenticateAs(Role.CUSTOMER);
+        @Test
+        void paymentEndpointHidesUnauthorizedPayment() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
 
-        // Retrieval service hides inaccessible payments behind a generic 404.
-        when(paymentRetrievalService.getPaymentForCustomer(
-                PAYMENT_ID,
-                "user-customer")).thenThrow(new ApiException(
-                        HttpStatus.NOT_FOUND,
-                        "PAYMENT_NOT_FOUND",
-                        "Payment not found"));
+                // Retrieval service hides inaccessible payments behind a generic 404.
+                when(paymentRetrievalService.getPaymentForCustomer(
+                                PAYMENT_ID,
+                                "user-customer")).thenThrow(new ApiException(
+                                                HttpStatus.NOT_FOUND,
+                                                "PAYMENT_NOT_FOUND",
+                                                "Payment not found"));
 
-        mockMvc.perform(
-                get(PAYMENT_URL)
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.error").value("PAYMENT_NOT_FOUND"))
-                .andExpect(jsonPath("$.gatewayRef").doesNotExist());
-    }
+                mockMvc.perform(
+                                get(PAYMENT_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error").value("PAYMENT_NOT_FOUND"))
+                                .andExpect(jsonPath("$.gatewayRef").doesNotExist());
+        }
 
-    @Test
-    void bookingEndpointReturns403ForUnauthorizedBooking()
-            throws Exception {
+        @Test
+        void bookingEndpointReturns403ForUnauthorizedBooking()
+                        throws Exception {
 
-        String token = authenticateAs(Role.CUSTOMER);
+                String token = authenticateAs(Role.CUSTOMER);
 
-        when(paymentRetrievalService.getPaymentsForBooking(
-                BOOKING_ID,
-                "user-customer")).thenThrow(
-                        new AccessDeniedException("Access denied"));
+                when(paymentRetrievalService.getPaymentsForBooking(
+                                BOOKING_ID,
+                                "user-customer")).thenThrow(
+                                                new AccessDeniedException("Access denied"));
 
-        mockMvc.perform(
-                get(BOOKING_URL)
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.status").value(403))
-                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
-    }
+                mockMvc.perform(
+                                get(BOOKING_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isForbidden())
+                                .andExpect(jsonPath("$.status").value(403))
+                                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+        }
 
-    @Test
-    void paymentEndpointUsesAuthenticatedIdentityNotRequestParameter()
-            throws Exception {
+        @Test
+        void paymentEndpointUsesAuthenticatedIdentityNotRequestParameter()
+                        throws Exception {
 
-        String token = authenticateAs(Role.CUSTOMER);
+                String token = authenticateAs(Role.CUSTOMER);
 
-        when(paymentRetrievalService.getPaymentForCustomer(
-                PAYMENT_ID,
-                "user-customer")).thenReturn(createPayment());
+                when(paymentRetrievalService.getPaymentForCustomer(
+                                PAYMENT_ID,
+                                "user-customer")).thenReturn(createPayment());
 
-        mockMvc.perform(
-                get(PAYMENT_URL)
-                        .param("customerId", "another-customer")
-                        .header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk());
+                mockMvc.perform(
+                                get(PAYMENT_URL)
+                                                .param("customerId", "another-customer")
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk());
 
-        verify(paymentRetrievalService).getPaymentForCustomer(
-                PAYMENT_ID,
-                "user-customer");
+                verify(paymentRetrievalService).getPaymentForCustomer(
+                                PAYMENT_ID,
+                                "user-customer");
 
-        verify(paymentRetrievalService, never())
-                .getPaymentForCustomer(
-                        PAYMENT_ID,
-                        "another-customer");
-    }
+                verify(paymentRetrievalService, never())
+                                .getPaymentForCustomer(
+                                                PAYMENT_ID,
+                                                "another-customer");
+        }
 
-    /**
-     * Configures a mock JWT token recognized by the project's actual
-     * JWT authentication filter.
-     *
-     * @param role authenticated user's role
-     * @return test token
-     */
-    private String authenticateAs(Role role) {
-        String token = "test-token-" + role.name().toLowerCase();
-        String userId = "user-" + role.name().toLowerCase();
+        /**
+         * Unauthenticated requests must be rejected by the security
+         * filter chain before the payment retrieval service is called.
+         */
+        @Test
+        void myPaymentsEndpointReturns401WithoutToken() throws Exception {
+                mockMvc.perform(get(MY_PAYMENTS_URL))
+                                .andExpect(status().isUnauthorized())
+                                .andExpect(jsonPath("$.status").value(401))
+                                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
 
-        when(tokenService.validateToken(token)).thenReturn(true);
-        when(tokenService.getUserIdFromToken(token)).thenReturn(userId);
-        when(tokenService.getRoleFromToken(token)).thenReturn(role);
+                verifyNoInteractions(paymentRetrievalService);
+        }
 
-        User user = new User();
-        user.setId(userId);
-        user.setEmail(userId + "@test.local");
-        user.setRole(role);
-        user.setStatus(UserStatus.ACTIVE);
+        /**
+         * Only customers may access their payment history.
+         * Providers and administrators must receive HTTP 403.
+         */
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = { "PROVIDER", "ADMIN" })
+        void myPaymentsEndpointReturns403ForNonCustomer(Role role)
+                        throws Exception {
 
-        when(userInternalService.getById(userId)).thenReturn(user);
+                String token = authenticateAs(role);
 
-        return token;
-    }
+                mockMvc.perform(
+                                get(MY_PAYMENTS_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isForbidden())
+                                .andExpect(jsonPath("$.status").value(403))
+                                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+
+                verifyNoInteractions(paymentRetrievalService);
+        }
+
+        /**
+         * Verifies the customer-facing paginated response and confirms
+         * internal gateway and commission fields are not exposed.
+         */
+        @Test
+        void myPaymentsEndpointReturns200ForCustomer() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                Page<Payment> paymentPage = new PageImpl<>(
+                                List.of(createPayment()),
+                                PageRequest.of(0, 10),
+                                1);
+
+                when(paymentRetrievalService.getPaymentsForCustomer(
+                                "user-customer", 0, 10))
+                                .thenReturn(paymentPage);
+
+                mockMvc.perform(
+                                get(MY_PAYMENTS_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.content[0].paymentId")
+                                                .value(PAYMENT_ID))
+                                .andExpect(jsonPath("$.content[0].bookingId")
+                                                .value(BOOKING_ID))
+                                .andExpect(jsonPath("$.content[0].amount")
+                                                .value(2500.00))
+                                .andExpect(jsonPath("$.content[0].currency")
+                                                .value("LKR"))
+                                .andExpect(jsonPath("$.content[0].status")
+                                                .value("INITIATED"))
+                                .andExpect(jsonPath("$.content[0].gatewayRef")
+                                                .doesNotExist())
+                                .andExpect(jsonPath("$.content[0].commissionRate")
+                                                .doesNotExist())
+                                .andExpect(jsonPath("$.content[0].commissionAmount")
+                                                .doesNotExist())
+                                .andExpect(jsonPath("$.page").value(0))
+                                .andExpect(jsonPath("$.size").value(10))
+                                .andExpect(jsonPath("$.totalElements").value(1))
+                                .andExpect(jsonPath("$.totalPages").value(1));
+
+                verify(paymentRetrievalService).getPaymentsForCustomer(
+                                "user-customer", 0, 10);
+        }
+
+        /**
+         * Ensures query parameters cannot override the authenticated
+         * customer identity obtained from the verified JWT.
+         */
+        @Test
+        void myPaymentsEndpointIgnoresSuppliedCustomerId() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(paymentRetrievalService.getPaymentsForCustomer(
+                                "user-customer", 0, 10))
+                                .thenReturn(Page.empty(PageRequest.of(0, 10)));
+
+                mockMvc.perform(
+                                get(MY_PAYMENTS_URL)
+                                                .param("customerId", "another-customer")
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk());
+
+                verify(paymentRetrievalService).getPaymentsForCustomer(
+                                "user-customer", 0, 10);
+
+                verify(paymentRetrievalService, never())
+                                .getPaymentsForCustomer(
+                                                "another-customer", 0, 10);
+        }
+
+        /**
+         * Confirms custom pagination values are forwarded correctly
+         * through the HTTP endpoint.
+         */
+        @Test
+        void myPaymentsEndpointAcceptsCustomPagination() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(paymentRetrievalService.getPaymentsForCustomer(
+                                "user-customer", 2, 20))
+                                .thenReturn(Page.empty(PageRequest.of(2, 20)));
+
+                mockMvc.perform(
+                                get(MY_PAYMENTS_URL)
+                                                .param("page", "2")
+                                                .param("size", "20")
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.page").value(2))
+                                .andExpect(jsonPath("$.size").value(20))
+                                .andExpect(jsonPath("$.content").isEmpty());
+
+                verify(paymentRetrievalService).getPaymentsForCustomer(
+                                "user-customer", 2, 20);
+        }
+
+        /**
+         * Verifies that invalid page numbers produce the expected
+         * HTTP 400 response.
+         */
+        @Test
+        void myPaymentsEndpointRejectsNegativePage() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(paymentRetrievalService.getPaymentsForCustomer(
+                                "user-customer", -1, 10))
+                                .thenThrow(new ApiException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "INVALID_PAYMENT_PAGINATION",
+                                                "Page number must not be negative"));
+
+                mockMvc.perform(
+                                get(MY_PAYMENTS_URL)
+                                                .param("page", "-1")
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isBadRequest())
+                                .andExpect(jsonPath("$.error")
+                                                .value("INVALID_PAYMENT_PAGINATION"));
+        }
+
+        /**
+         * Verifies that excessive page sizes are rejected
+         * instead of returning unbounded payment records.
+         */
+        @Test
+        void myPaymentsEndpointRejectsExcessivePageSize() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(paymentRetrievalService.getPaymentsForCustomer(
+                                "user-customer", 0, 101))
+                                .thenThrow(new ApiException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "INVALID_PAYMENT_PAGINATION",
+                                                "Page size must be between 1 and 100"));
+
+                mockMvc.perform(
+                                get(MY_PAYMENTS_URL)
+                                                .param("size", "101")
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isBadRequest())
+                                .andExpect(jsonPath("$.error")
+                                                .value("INVALID_PAYMENT_PAGINATION"));
+        }
+
+        /**
+         * Confirms that a customer with no payments receives
+         * a valid empty pagination response.
+         */
+        @Test
+        void myPaymentsEndpointReturnsEmptyPage() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(paymentRetrievalService.getPaymentsForCustomer(
+                                "user-customer", 0, 10))
+                                .thenReturn(Page.empty(PageRequest.of(0, 10)));
+
+                mockMvc.perform(
+                                get(MY_PAYMENTS_URL)
+                                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.content").isEmpty())
+                                .andExpect(jsonPath("$.totalElements").value(0))
+                                .andExpect(jsonPath("$.totalPages").value(0));
+        }
+
+        /**
+         * Configures a mock JWT token recognized by the project's actual
+         * JWT authentication filter.
+         *
+         * @param role authenticated user's role
+         * @return test token
+         */
+        private String authenticateAs(Role role) {
+                String token = "test-token-" + role.name().toLowerCase();
+                String userId = "user-" + role.name().toLowerCase();
+
+                when(tokenService.validateToken(token)).thenReturn(true);
+                when(tokenService.getUserIdFromToken(token)).thenReturn(userId);
+                when(tokenService.getRoleFromToken(token)).thenReturn(role);
+
+                User user = new User();
+                user.setId(userId);
+                user.setEmail(userId + "@test.local");
+                user.setRole(role);
+                user.setStatus(UserStatus.ACTIVE);
+
+                when(userInternalService.getById(userId)).thenReturn(user);
+
+                return token;
+        }
 }
