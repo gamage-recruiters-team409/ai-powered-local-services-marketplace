@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
+import com.gamagerecruiters.marketplace.modules.completion.service.CompletionLookup;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEntry;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEventType;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
@@ -42,6 +44,7 @@ public class EarningsLifecycleService {
 
     private final PaymentPersistenceService paymentPersistenceService;
     private final BookingFacade bookingFacade;
+    private final CompletionLookup completionLookup;
     private final EarningsLedgerService earningsLedgerService;
 
     /**
@@ -49,11 +52,13 @@ public class EarningsLifecycleService {
      *
      * @param paymentPersistenceService service for retrieving payments
      * @param bookingFacade             trusted booking information interface
+     * @param completionLookup          verified service completion lookup
      * @param earningsLedgerService     append-only earnings ledger service
      */
     public EarningsLifecycleService(
             PaymentPersistenceService paymentPersistenceService,
             BookingFacade bookingFacade,
+            CompletionLookup completionLookup,
             EarningsLedgerService earningsLedgerService) {
 
         this.paymentPersistenceService = Objects.requireNonNull(
@@ -63,6 +68,10 @@ public class EarningsLifecycleService {
         this.bookingFacade = Objects.requireNonNull(
                 bookingFacade,
                 "Booking facade is required");
+
+        this.completionLookup = Objects.requireNonNull(
+                completionLookup,
+                "Completion lookup is required");
 
         this.earningsLedgerService = Objects.requireNonNull(
                 earningsLedgerService,
@@ -151,6 +160,18 @@ public class EarningsLifecycleService {
         String providerId = requireNonBlank(
                 participants.providerId(),
                 "Booking provider ID");
+
+        // Pending earnings require verified service completion, not payment capture alone.
+        // The current booking must be completed and WP08 must retain confirmation evidence.
+        if (participants.status() != BookingStatus.COMPLETED) {
+            throw new IllegalStateException(
+                    "Pending earnings require a COMPLETED booking");
+        }
+
+        if (completionLookup.findConfirmedAt(bookingId).isEmpty()) {
+            throw new IllegalStateException(
+                    "Pending earnings require verified service completion");
+        }
 
         // Construct an append-only event for this specific payment capture.
         EarningsLedgerEntry entry = new EarningsLedgerEntry();

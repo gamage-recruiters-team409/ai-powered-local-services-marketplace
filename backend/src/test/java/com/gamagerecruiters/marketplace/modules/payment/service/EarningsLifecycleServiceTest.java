@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
+import com.gamagerecruiters.marketplace.modules.completion.service.CompletionLookup;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEntry;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEventType;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
@@ -31,6 +32,7 @@ class EarningsLifecycleServiceTest {
 
     private PaymentPersistenceService paymentPersistenceService;
     private BookingFacade bookingFacade;
+    private CompletionLookup completionLookup;
     private EarningsLedgerService earningsLedgerService;
     private EarningsLifecycleService service;
 
@@ -38,11 +40,16 @@ class EarningsLifecycleServiceTest {
     void setUp() {
         paymentPersistenceService = mock(PaymentPersistenceService.class);
         bookingFacade = mock(BookingFacade.class);
+        completionLookup = mock(CompletionLookup.class);
+        lenient().when(completionLookup.findConfirmedAt("booking-001"))
+                        .thenReturn(Optional.of(
+                                        java.time.Instant.parse("2026-11-18T10:00:00Z")));
         earningsLedgerService = mock(EarningsLedgerService.class);
 
         service = new EarningsLifecycleService(
                 paymentPersistenceService,
                 bookingFacade,
+                completionLookup,
                 earningsLedgerService);
     }
 
@@ -77,6 +84,90 @@ class EarningsLifecycleServiceTest {
 
         verify(earningsLedgerService)
                 .appendEvent(any(EarningsLedgerEntry.class));
+    }
+
+    @Test
+    void rejectsCapturedPaymentWhenBookingIsIncomplete() {
+        Payment payment = validCapturedPayment();
+
+        BookingParticipants participants = new BookingParticipants(
+                "booking-001",
+                null,
+                "listing-001",
+                "customer-001",
+                "provider-001",
+                BookingStatus.IN_PROGRESS,
+                null,
+                null);
+
+        when(paymentPersistenceService.findPaymentById("payment-001"))
+                .thenReturn(Optional.of(payment));
+
+        when(bookingFacade.getBookingParticipants("booking-001"))
+                .thenReturn(participants);
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.recordPendingEarnings("payment-001"));
+
+        assertEquals("Pending earnings require a COMPLETED booking",
+                exception.getMessage());
+
+        verifyNoInteractions(earningsLedgerService);
+    }
+
+    @Test
+    void rejectsCompletedBookingWithoutVerifiedConfirmation() {
+        Payment payment = validCapturedPayment();
+
+        when(paymentPersistenceService.findPaymentById("payment-001"))
+                .thenReturn(Optional.of(payment));
+
+        when(bookingFacade.getBookingParticipants("booking-001"))
+                .thenReturn(validParticipants());
+
+        // A completed booking status alone is insufficient without WP08 evidence.
+        when(completionLookup.findConfirmedAt("booking-001"))
+                .thenReturn(Optional.empty());
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.recordPendingEarnings("payment-001"));
+
+        assertEquals("Pending earnings require verified service completion",
+                exception.getMessage());
+
+        verifyNoInteractions(earningsLedgerService);
+    }
+
+    @Test
+    void rejectsCapturedPaymentWhenBookingIsCancelled() {
+        Payment payment = validCapturedPayment();
+
+        BookingParticipants participants = new BookingParticipants(
+                "booking-001",
+                null,
+                "listing-001",
+                "customer-001",
+                "provider-001",
+                BookingStatus.CANCELLED_BY_CUSTOMER,
+                null,
+                null);
+
+        when(paymentPersistenceService.findPaymentById("payment-001"))
+                .thenReturn(Optional.of(payment));
+
+        when(bookingFacade.getBookingParticipants("booking-001"))
+                .thenReturn(participants);
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.recordPendingEarnings("payment-001"));
+
+        assertEquals("Pending earnings require a COMPLETED booking",
+                exception.getMessage());
+
+        verifyNoInteractions(earningsLedgerService);
     }
 
     @Test
@@ -193,7 +284,7 @@ class EarningsLifecycleServiceTest {
                 "listing-001",
                 "customer-001",
                 "provider-001",
-                BookingStatus.CONFIRMED,
+                BookingStatus.COMPLETED,
                 null,
                 null);
 
@@ -357,7 +448,7 @@ class EarningsLifecycleServiceTest {
                 "listing-001",
                 "customer-001",
                 "provider-001",
-                BookingStatus.CONFIRMED,
+                BookingStatus.COMPLETED,
                 null,
                 null);
     }
