@@ -1,15 +1,18 @@
 import { useState } from 'react'
 
 import * as mockApi from '../api/completionApi.mock'
-import ServiceCompletionSection from '../components/ServiceCompletionSection'
 import CompletionStatusBadge from '../components/CompletionStatusBadge'
+import CustomerCompletionSection from '../components/CustomerCompletionSection'
+import ServiceCompletionSection from '../components/ServiceCompletionSection'
 import '../styles/completion.css'
 
 const HOUR = 60 * 60 * 1000
+const MINUTE = 60 * 1000
 
 /**
- * Development preview of the provider Service Completion card (WP08, S01–S03) with the mock API.
- * The real booking details page belongs to WP05; it will render <ServiceCompletionSection />.
+ * Development preview of the Service Completion card (WP08) with the mock API.
+ * Provider view: S01–S03 + S06 · Customer view: S04–S06.
+ * The real booking details page belongs to WP05; it will render one of these cards.
  */
 function buildScenario(name) {
   const now = Date.now()
@@ -19,19 +22,24 @@ function buildScenario(name) {
     ref: 'BK-2026-00123',
     title: 'Deep House Cleaning',
     customerName: 'Nimal Perera',
-    providerName: 'Bright Home Cleaning',
+    providerName: 'Kamal Services',
     slotStart: iso(-1 * HOUR),
     slotEnd: iso(2 * HOUR),
   }
-  const started = { startedAt: iso(-55 * 60 * 1000) }
+  const started = { startedAt: iso(-55 * MINUTE) }
   const marked = {
     ...started,
     completionNote: 'Cleaned 3 rooms, kitchen and 2 bathrooms. Balcony glass wiped.',
     photoUrls: ['mock://photo-1', 'mock://photo-2', 'mock://photo-3'],
-    markedCompletedAt: iso(-(16 * HOUR + 40 * 60 * 1000)),
+    markedCompletedAt: iso(-(16 * HOUR + 40 * MINUTE)),
   }
 
   switch (name) {
+    case 'no-show-allowed':
+      return {
+        booking: { ...booking, status: 'CONFIRMED', slotStart: iso(-(2 * HOUR + 30 * MINUTE)), slotEnd: iso(-30 * MINUTE) },
+        completion: null,
+      }
     case 'in-progress':
       return { booking: { ...booking, status: 'IN_PROGRESS' }, completion: started }
     case 'overdue':
@@ -71,38 +79,73 @@ function buildScenario(name) {
   }
 }
 
-const SCENARIOS = [
-  ['confirmed', 'Confirmed'],
-  ['in-progress', 'In progress'],
-  ['overdue', 'In progress – overdue'],
-  ['pending', 'Awaiting confirmation'],
-  ['disputed', 'Disputed'],
-  ['resolved', 'Dispute resolved – appeal'],
-  ['completed', 'Completed'],
-]
+const SCENARIOS = {
+  PROVIDER: [
+    ['confirmed', 'Confirmed (no-show too early)'],
+    ['no-show-allowed', 'Confirmed (no-show allowed)'],
+    ['in-progress', 'In progress'],
+    ['overdue', 'In progress – overdue'],
+    ['pending', 'Awaiting confirmation'],
+    ['disputed', 'Disputed'],
+    ['resolved', 'Dispute resolved – appeal'],
+    ['completed', 'Completed'],
+  ],
+  CUSTOMER: [
+    ['confirmed', 'Confirmed (no-show too early)'],
+    ['no-show-allowed', 'Confirmed (no-show allowed)'],
+    ['in-progress', 'In progress'],
+    ['pending', 'Awaiting confirmation'],
+    ['disputed', 'Disputed'],
+    ['resolved', 'Dispute resolved – appeal'],
+    ['completed', 'Completed'],
+  ],
+}
+
+function seed(scenario) {
+  mockApi.seedCompletion(scenario.booking.id, scenario.completion)
+  mockApi.seedBookingSlot(scenario.booking.id, scenario.booking.slotStart)
+}
 
 export default function CompletionPreviewPage() {
   const [run, setRun] = useState(() => {
     const scenario = buildScenario('confirmed')
-    mockApi.seedCompletion(scenario.booking.id, scenario.completion)
-    return { name: 'confirmed', version: 0, scenario, status: scenario.booking.status }
+    seed(scenario)
+    return { role: 'PROVIDER', name: 'confirmed', version: 0, scenario, status: scenario.booking.status }
   })
 
-  const choose = (name) => {
+  const choose = (name, role = run.role) => {
     const scenario = buildScenario(name)
-    mockApi.seedCompletion(scenario.booking.id, scenario.completion)
-    setRun((previous) => ({ name, version: previous.version + 1, scenario, status: scenario.booking.status }))
+    seed(scenario)
+    setRun((previous) => ({ role, name, version: previous.version + 1, scenario, status: scenario.booking.status }))
+  }
+
+  const switchRole = (role) => {
+    const available = SCENARIOS[role].some(([name]) => name === run.name)
+    choose(available ? run.name : 'confirmed', role)
   }
 
   const { scenario } = run
+  const onStatus = (status) => setRun((previous) => ({ ...previous, status }))
+  const key = `${run.role}-${run.name}-${run.version}`
 
   return (
     <main className="sc-preview">
-      <p className="sc-preview__note">
-        Preview – WP08 Service Completion (provider) with mock data. Pick a state:
-      </p>
+      <p className="sc-preview__note">Preview – WP08 Service Completion with mock data. Pick a view and a state:</p>
+      <div className="sc-preview__roles" role="group" aria-label="View">
+        {['PROVIDER', 'CUSTOMER'].map((role) => (
+          <button
+            key={role}
+            type="button"
+            className={`sc-preview__role${run.role === role ? ' sc-preview__role--active' : ''}`}
+            aria-pressed={run.role === role}
+            onClick={() => switchRole(role)}
+          >
+            {role === 'PROVIDER' ? 'Provider' : 'Customer'}
+          </button>
+        ))}
+      </div>
       <div className="sc-preview__tabs" role="group" aria-label="Preview state">
-        {SCENARIOS.map(([name, label]) => (
+        {SCENARIOS[run.role].map(([name, label]) => (
           <button
             key={name}
             type="button"
@@ -115,23 +158,36 @@ export default function CompletionPreviewPage() {
         ))}
       </div>
 
-      <nav className="sc-preview__crumbs" aria-label="Breadcrumb">Dashboard › My Bookings › {scenario.booking.ref}</nav>
+      <nav className="sc-preview__crumbs" aria-label="Breadcrumb">
+        {run.role === 'PROVIDER' ? 'Dashboard' : 'Home'} › My Bookings › {scenario.booking.ref}
+      </nav>
       <div className="sc-preview__title">
         <h1>{scenario.booking.title}</h1>
         <CompletionStatusBadge status={run.status} />
       </div>
 
-      <ServiceCompletionSection
-        key={`${run.name}-${run.version}`}
-        booking={scenario.booking}
-        api={mockApi}
-        dispute={scenario.dispute}
-        earnings={scenario.earnings}
-        review={scenario.review}
-        onBookingStatusChange={(status) => setRun((previous) => ({ ...previous, status }))}
-        onReportNoShow={() => window.alert('Report No-Show will be added in the next task.')}
-        onReplyToReview={() => window.alert('Reply to review will be added with the review pages.')}
-      />
+      {run.role === 'PROVIDER' ? (
+        <ServiceCompletionSection
+          key={key}
+          booking={scenario.booking}
+          api={mockApi}
+          dispute={scenario.dispute}
+          earnings={scenario.earnings}
+          review={scenario.review}
+          onBookingStatusChange={onStatus}
+          onReplyToReview={() => window.alert('Reply to review will be added with the review pages.')}
+        />
+      ) : (
+        <CustomerCompletionSection
+          key={key}
+          booking={scenario.booking}
+          api={mockApi}
+          dispute={scenario.dispute}
+          disputeUrlFor={(id) => `#dispute-${id}`}
+          onBookingStatusChange={onStatus}
+          onLeaveReview={() => window.alert('The review pages (S07) will be added next.')}
+        />
+      )}
     </main>
   )
 }

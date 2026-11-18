@@ -7,7 +7,7 @@ import { MAX_PHOTOS, toPhotoItems } from '../utils/completionUtils'
  * Photo selector for the completion form: JPG or PNG, up to 5, max 5 MB each.
  * Controlled: `items` and `onChange` are owned by the parent form.
  */
-export default function PhotoPicker({ items, onChange, disabled = false }) {
+export default function PhotoPicker({ items, onChange, disabled = false, label = 'Photos' }) {
   const inputRef = useRef(null)
   const [failed, setFailed] = useState([]) // previews that could not be displayed
   const validCount = items.filter((item) => !item.error).length
@@ -42,7 +42,7 @@ export default function PhotoPicker({ items, onChange, disabled = false }) {
   return (
     <div className="sc-photo-picker">
       <p className="sc-field-label" id="sc-photos-label">
-        Photos <span className="sc-field-label__hint">(optional · JPG or PNG · up to 5 · max 5 MB each)</span>
+        {label} <span className="sc-field-label__hint">(optional · JPG or PNG · up to 5 · max 5 MB each)</span>
       </p>
 
       <div className="sc-photo-grid" role="group" aria-labelledby="sc-photos-label">

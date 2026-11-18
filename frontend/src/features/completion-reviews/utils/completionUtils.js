@@ -9,6 +9,23 @@ export const PAYOUT_RELEASE_HOURS = 72
 export const NOTE_MAX_LENGTH = 500
 export const MAX_PHOTOS = 5
 export const MAX_PHOTO_BYTES = 5 * 1024 * 1024
+/** A no-show can be reported this many minutes after the booking start time (backend NO_SHOW_GRACE). */
+export const NO_SHOW_GRACE_MINUTES = 120
+/** Raise Issue: the backend accepts a reason of 10–500 characters ("<reason>: <description>"). */
+export const ISSUE_REASON_MAX_LENGTH = 500
+export const ISSUE_DESCRIPTION_MIN_LENGTH = 10
+export const ISSUE_DESCRIPTION_MAX_LENGTH = 450
+/** Response time for the other party once a dispute is opened (shown in S05 / S06). */
+export const DISPUTE_RESPONSE_HOURS = 72
+
+/** Reasons offered in the Raise Issue form (S05). */
+export const ISSUE_REASONS = [
+  { value: 'NOT_COMPLETED', label: 'Work was not completed' },
+  { value: 'POOR_QUALITY', label: 'Poor quality of work' },
+  { value: 'DAMAGE', label: 'Damage to my property' },
+  { value: 'DIFFERENT_SERVICE', label: 'Different from what was booked' },
+  { value: 'OTHER', label: 'Other' },
+]
 const ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png']
 const ALLOWED_PHOTO_EXTENSIONS = ['jpg', 'jpeg', 'png']
 
@@ -118,6 +135,23 @@ export function hoursSinceSlotEnded(slotEnd, now = new Date()) {
   }
   const diff = toDate(now).getTime() - toDate(slotEnd).getTime()
   return diff > 0 ? Math.floor(diff / HOUR_MS) : 0
+}
+
+/** Time from which a no-show can be reported (slot start + 120 minutes), or null. */
+export function noShowAllowedFrom(slotStart) {
+  return slotStart ? new Date(toDate(slotStart).getTime() + NO_SHOW_GRACE_MINUTES * 60 * 1000) : null
+}
+
+/** Milliseconds until a no-show can be reported (0 when it is already allowed). */
+export function noShowRemainingMs(slotStart, now = new Date()) {
+  const from = noShowAllowedFrom(slotStart)
+  return from ? Math.max(0, from.getTime() - toDate(now).getTime()) : 0
+}
+
+/** Builds the single `reason` text the backend stores for a raised issue. */
+export function buildIssueReason(reasonValue, description) {
+  const label = ISSUE_REASONS.find((option) => option.value === reasonValue)?.label ?? 'Other'
+  return `${label}: ${description.trim()}`.slice(0, ISSUE_REASON_MAX_LENGTH)
 }
 
 export function payoutReleaseDate(confirmedAt) {

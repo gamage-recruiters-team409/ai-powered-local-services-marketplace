@@ -8,6 +8,8 @@ import CompletionStatusBadge from './CompletionStatusBadge'
 import CompletionStepper from './CompletionStepper'
 import MarkCompletedModal from './MarkCompletedModal'
 import PhotoThumb from './PhotoThumb'
+import ReportNoShowModal from './ReportNoShowModal'
+import ResolvedDisputeNotice from './ResolvedDisputeNotice'
 import StartServiceModal from './StartServiceModal'
 import {
   DISPUTE_OUTCOME_STATUSES,
@@ -30,7 +32,8 @@ const MINUTE_MS = 60 * 1000
  * Provider view of the "Service Completion" card on the booking details page (WP08).
  *
  * The booking details page (WP05) passes the booking; this card owns the completion
- * flow: Start Service (S01), Mark Completed (S02) and Completion details (S03).
+ * flow: Start Service (S01), Mark Completed (S02), Completion details (S03) and
+ * Report No-Show (S06, provider view: "The customer was not available").
  * Remount it with a new `key` if the booking is reloaded from outside.
  *
  * Props
@@ -42,7 +45,7 @@ const MINUTE_MS = 60 * 1000
  *     `url` is the Dispute Details screen; "Open appeal" links there (appeal reviewed by a different admin).
  * - earnings: { amountLabel, payoutStatus: 'PENDING' | 'RELEASED' | 'ON_HOLD', url } (WP07)
  * - review: { customerName, rating, comment, status } shown when the booking is COMPLETED
- * - onBookingStatusChange(status), onReportNoShow(), onReplyToReview()
+ * - onBookingStatusChange(status), onReplyToReview()
  * - now: current time (tests only)
  */
 export default function ServiceCompletionSection({
@@ -52,7 +55,6 @@ export default function ServiceCompletionSection({
   earnings = null,
   review = null,
   onBookingStatusChange,
-  onReportNoShow,
   onReplyToReview,
   now: fixedNow,
 }) {
@@ -61,7 +63,8 @@ export default function ServiceCompletionSection({
   const needsCompletion = initialStatus !== 'CONFIRMED'
 
   const [load, setLoad] = useState({ loading: needsCompletion, completion: null, error: null })
-  const [modal, setModal] = useState(null) // 'start' | 'mark' | 'details' | null
+  const [modal, setModal] = useState(null) // 'start' | 'mark' | 'details' | 'noShow' | null
+  const [noShowReported, setNoShowReported] = useState(false)
   const [action, setAction] = useState({ loading: false, error: null })
   const [justStarted, setJustStarted] = useState(false)
   const [tick, setTick] = useState(() => new Date())
@@ -141,6 +144,25 @@ export default function ServiceCompletionSection({
     }
   }
 
+  const handleReportNoShow = async ({ note, files }) => {
+    setAction({ loading: true, error: null })
+    try {
+      const evidenceUrls = []
+      if (api.supportsEvidence) {
+        for (const file of files ?? []) {
+          evidenceUrls.push(await api.uploadEvidence(file))
+        }
+      }
+      await api.reportNoShow(booking.id, { note, evidenceUrls })
+      setNoShowReported(true)
+      setAction({ loading: false, error: null })
+      setModal(null)
+      changeStatus('DISPUTED')
+    } catch (error) {
+      setAction({ loading: false, error: error?.response ? completionErrorMessage(error) : error.message })
+    }
+  }
+
   return (
     <section className="sc-card" aria-labelledby="sc-heading">
       <header className="sc-card__header">
@@ -169,11 +191,9 @@ export default function ServiceCompletionSection({
               </p>
               <div className="sc-actions">
                 <Button icon={<CompletionIcon name="play" />} onClick={() => openModal('start')}>Start Service</Button>
-                {onReportNoShow && (
-                  <Button variant="outline" icon={<CompletionIcon name="flag" />} onClick={onReportNoShow}>
-                    Report No-Show
-                  </Button>
-                )}
+                <Button variant="outline" icon={<CompletionIcon name="flag" />} onClick={() => openModal('noShow')}>
+                  Report No-Show
+                </Button>
               </div>
             </>
           )}
@@ -214,7 +234,10 @@ export default function ServiceCompletionSection({
               <p className="sc-callout sc-callout--error">
                 <CompletionIcon name="alert" />
                 <span>
-                  <strong>A dispute is open for this booking{dispute?.id ? ` (${dispute.id})` : ''}.</strong>
+                  <strong>
+                    {noShowReported ? 'Your no-show report was submitted' : 'A dispute is open for this booking'}
+                    {dispute?.id ? ` (${dispute.id})` : ''}.
+                  </strong>
                   {' '}Your payout is on hold until it is resolved.
                 </span>
               </p>
@@ -234,7 +257,7 @@ export default function ServiceCompletionSection({
           )}
 
           {DISPUTE_OUTCOME_STATUSES.includes(status) && dispute?.status === 'RESOLVED' && (
-            <ResolvedDisputeBody dispute={dispute} />
+            <ResolvedDisputeNotice dispute={dispute} />
           )}
 
           {status === 'COMPLETED' && completion && dispute?.status !== 'RESOLVED' && (
@@ -270,44 +293,23 @@ export default function ServiceCompletionSection({
           error={action.error}
         />
       )}
+      {modal === 'noShow' && (
+        <ReportNoShowModal
+          isOpen
+          booking={booking}
+          role="PROVIDER"
+          allowEvidence={Boolean(api.supportsEvidence)}
+          onClose={closeModal}
+          onSubmit={handleReportNoShow}
+          loading={action.loading}
+          error={action.error}
+          now={now}
+        />
+      )}
       {modal === 'details' && (
         <CompletionDetailsModal isOpen booking={booking} completion={completion} onClose={closeModal} />
       )}
     </section>
-  )
-}
-
-function ResolvedDisputeBody({ dispute }) {
-  const resolvedOn = dispute.resolvedAt ? ` on ${formatDateTime(dispute.resolvedAt).replace(' · ', ' at ')}` : ''
-  return (
-    <>
-      <p className="sc-callout sc-callout--info">
-        <CompletionIcon name="info" />
-        <span>
-          <strong>The dispute for this booking{dispute.id ? ` (${dispute.id})` : ''} was resolved{resolvedOn}.</strong>
-          {dispute.outcome ? ` Decision: ${dispute.outcome}` : ''}
-        </span>
-      </p>
-      {dispute.canAppeal && (
-        <p className="sc-muted">
-          If you disagree with the decision, you can open an appeal. It will be reviewed by a different admin.
-        </p>
-      )}
-      {dispute.url && (
-        <div className="sc-actions">
-          {dispute.canAppeal && (
-            <a className="shared-btn shared-btn--primary shared-btn--medium sc-link-btn" href={dispute.url}>
-              Open appeal <CompletionIcon name="chevronRight" size={16} />
-            </a>
-          )}
-          {!dispute.canAppeal && (
-            <a className="shared-btn shared-btn--outline shared-btn--medium sc-link-btn" href={dispute.url}>
-              View dispute <CompletionIcon name="chevronRight" size={16} />
-            </a>
-          )}
-        </div>
-      )}
-    </>
   )
 }
 

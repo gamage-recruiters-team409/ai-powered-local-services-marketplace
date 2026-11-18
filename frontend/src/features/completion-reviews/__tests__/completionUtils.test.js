@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import {
   autoConfirmRemainingMs,
+  buildIssueReason,
   formatDuration,
   formatSlot,
   hoursSinceSlotEnded,
+  noShowAllowedFrom,
+  noShowRemainingMs,
   shortName,
   stepState,
   toPhotoItems,
@@ -56,5 +59,21 @@ describe('completionUtils', () => {
     const items = toPhotoItems(files, 3)
     expect(items.filter((item) => !item.error)).toHaveLength(2)
     expect(items[2].error).toBe('p2.jpg – you can add up to 5 photos')
+  })
+})
+
+describe('no-show and raise-issue helpers', () => {
+  it('allows a no-show report 120 minutes after the slot start', () => {
+    const slotStart = '2026-11-11T04:30:00Z'
+    expect(noShowAllowedFrom(slotStart).toISOString()).toBe('2026-11-11T06:30:00.000Z')
+    expect(noShowRemainingMs(slotStart, new Date('2026-11-11T05:15:00Z'))).toBe(75 * 60 * 1000)
+    expect(noShowRemainingMs(slotStart, new Date('2026-11-11T06:30:00Z'))).toBe(0)
+    expect(noShowRemainingMs(null)).toBe(0)
+  })
+
+  it('builds the backend reason as "<reason label>: <description>" (max 500 characters)', () => {
+    expect(buildIssueReason('DAMAGE', '  Broken glass on the balcony door. ')).toBe('Damage to my property: Broken glass on the balcony door.')
+    expect(buildIssueReason('UNKNOWN', 'Something else went wrong')).toBe('Other: Something else went wrong')
+    expect(buildIssueReason('OTHER', 'x'.repeat(600))).toHaveLength(500)
   })
 })

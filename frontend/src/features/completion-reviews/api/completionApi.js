@@ -45,6 +45,28 @@ export async function confirmCompletion(bookingId) {
   return data
 }
 
+/** S05 – body: { reason } (10–500 characters). Moves the booking to DISPUTED. */
+export async function raiseIssue(bookingId, { reason }) {
+  const { data } = await http.post(`${base(bookingId)}/raise-issue`, { reason })
+  return data
+}
+
+/** S06 – body: { note } (optional, max 500). Returns { bookingId, type, bookingStatus, reportedAt }. */
+export async function reportNoShow(bookingId, { note }) {
+  const { data } = await http.post(`${base(bookingId)}/no-show`, note ? { note } : {})
+  return data
+}
+
+/**
+ * Evidence photos for Raise Issue / Report No-Show belong to the dispute (WP09).
+ * The backend does not accept them yet, so the evidence picker is hidden for the real API.
+ */
+export const supportsEvidence = false
+
+export async function uploadEvidence() {
+  throw new Error('Evidence upload is not available yet')
+}
+
 /**
  * Photo upload is not available yet: the media upload endpoint is still to be agreed.
  * Until then the mock API is used for photos.

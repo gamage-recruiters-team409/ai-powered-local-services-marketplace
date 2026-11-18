@@ -12,6 +12,8 @@ const PATHS = {
   close: [<path key="a" d="M18 6 6 18" />, <path key="b" d="m6 6 12 12" />],
   user: [<circle key="c" cx="12" cy="8" r="3.5" />, <path key="p" d="M5 20a7 7 0 0 1 14 0" />],
   wallet: [<rect key="r" x="3.5" y="5.5" width="17" height="14" rx="2" />, <path key="p" d="M3.5 9.5h17" />],
+  star: [<path key="p" d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" />],
+  message: [<path key="p" d="M20 14.5a2 2 0 0 1-2 2H8l-4 3.5V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />],
   chevronRight: [<path key="p" d="m9 6 6 6-6 6" />],
 }
 
