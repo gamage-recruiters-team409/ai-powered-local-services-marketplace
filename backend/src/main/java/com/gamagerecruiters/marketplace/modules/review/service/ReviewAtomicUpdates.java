@@ -1,6 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.review.service;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
@@ -10,7 +11,10 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Component;
 
+import com.gamagerecruiters.marketplace.modules.review.domain.ModerationEntry;
+import com.gamagerecruiters.marketplace.modules.review.domain.ModerationFlag;
 import com.gamagerecruiters.marketplace.modules.review.domain.ProviderReply;
+import com.gamagerecruiters.marketplace.modules.review.domain.RemovalReason;
 import com.gamagerecruiters.marketplace.modules.review.domain.Review;
 import com.gamagerecruiters.marketplace.modules.review.domain.ReviewStatus;
 
@@ -34,12 +38,15 @@ public class ReviewAtomicUpdates {
     /**
      * Applies a customer edit only if, at that moment, the review still belongs to the customer,
      * is not REMOVED, has no provider reply, and was created at or after {@code editableFrom}
-     * (a review without createdAt never matches).
+     * (a review without createdAt never matches). It also writes the result of the automated checks on the
+     * new text (FR-REV-003): the new status (PUBLISHED, or AWAITING_MODERATION when flagged), the flags,
+     * and an AUTO_FLAGGED history entry when {@code autoFlagEntry} is not null.
      *
      * @return the updated review, or empty when any condition no longer holds
      */
     public Optional<Review> applyCustomerEdit(String reviewId, String customerId, int rating, String comment,
-                                              Instant editableFrom, Instant now) {
+                                              Instant editableFrom, Instant now, ReviewStatus newStatus,
+                                              List<ModerationFlag> flags, ModerationEntry autoFlagEntry) {
         Query query = new Query(Criteria.where("id").is(reviewId)
                 .and("customerId").is(customerId)
                 .and("status").ne(ReviewStatus.REMOVED.name())
@@ -50,7 +57,12 @@ public class ReviewAtomicUpdates {
                 .set("rating", rating)
                 .set("edited", true)
                 .set("editedAt", now)
-                .set("updatedAt", now);
+                .set("updatedAt", now)
+                .set("status", newStatus)
+                .set("moderationFlags", flags);
+        if (autoFlagEntry != null) {
+            update.push("moderationHistory", autoFlagEntry);
+        }
         if (comment == null) {
             update.unset("comment");
         } else {
@@ -78,6 +90,44 @@ public class ReviewAtomicUpdates {
                 .set("updatedAt", now);
 
         return Optional.ofNullable(mongoTemplate.findAndModify(query, update,
+                FindAndModifyOptions.options().returnNew(true), Review.class));
+    }
+
+    /**
+     * Counts a new user report, only while the review is PUBLISHED (FR-REV-003).
+     *
+     * @return the updated review, or empty when the review is no longer published
+     */
+    public Optional<Review> addOpenReport(String reviewId, Instant now) {
+        Query query = new Query(Criteria.where("id").is(reviewId).and("status").is(ReviewStatus.PUBLISHED.name()));
+        Update update = new Update().inc("openReportCount", 1).set("updatedAt", now);
+        return Optional.ofNullable(mongoTemplate.findAndModify(query, update,
+                FindAndModifyOptions.options().returnNew(true), Review.class));
+    }
+
+    /**
+     * Applies a moderator decision only if the review is still in {@code expectedStatus} (and, when
+     * {@code requireOpenReports}, still has open reports), so two moderators can never both decide.
+     * Sets the new status and reason, clears the open report counter and appends the history entry.
+     *
+     * @return the updated review, or empty when the review changed in the meantime
+     */
+    public Optional<Review> applyModerationDecision(String reviewId, ReviewStatus expectedStatus, boolean requireOpenReports,
+                                                    ReviewStatus newStatus, RemovalReason removalReason,
+                                                    ModerationEntry entry, Instant now) {
+        Criteria criteria = Criteria.where("id").is(reviewId).and("status").is(expectedStatus.name());
+        if (requireOpenReports) {
+            criteria = criteria.and("openReportCount").gt(0);
+        }
+        Update update = new Update()
+                .set("status", newStatus)
+                .set("openReportCount", 0)
+                .set("updatedAt", now)
+                .push("moderationHistory", entry);
+        if (removalReason != null) {
+            update.set("removalReason", removalReason).set("statusReason", removalReason.getLabel());
+        }
+        return Optional.ofNullable(mongoTemplate.findAndModify(new Query(criteria), update,
                 FindAndModifyOptions.options().returnNew(true), Review.class));
     }
 }

@@ -83,6 +83,15 @@ public class CompletionAtomicUpdates {
         return modify(query, update);
     }
 
+    /** Stores the WP09 dispute ID once (only when none is stored yet). */
+    public Optional<ServiceCompletion> recordDisputeId(String bookingId, String disputeId, Instant now) {
+        Query query = new Query(Criteria.where("bookingId").is(bookingId).and("disputeId").is(null));
+        Update update = new Update()
+                .set("disputeId", disputeId)
+                .set("updatedAt", now);
+        return modify(query, update);
+    }
+
     private Optional<ServiceCompletion> modify(Query query, Update update) {
         return Optional.ofNullable(mongoTemplate.findAndModify(query, update,
                 FindAndModifyOptions.options().returnNew(true), ServiceCompletion.class));

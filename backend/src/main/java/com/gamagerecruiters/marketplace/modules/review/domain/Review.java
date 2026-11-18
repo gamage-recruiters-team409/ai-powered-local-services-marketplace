@@ -1,12 +1,18 @@
 package com.gamagerecruiters.marketplace.modules.review.domain;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 /**
  * A customer review for one completed booking (one review per booking, FR-REV-001).
+ *
+ * <p>Moderation (FR-REV-003): {@code moderationFlags} holds what the automated checks found (empty = clean),
+ * {@code openReportCount} the number of open user reports, {@code removalReason}/{@code statusReason} the
+ * moderator's reason for a removal, and {@code moderationHistory} every decision (append-only).
  */
 @Document(collection = "reviews")
 public class Review {
@@ -26,6 +32,10 @@ public class Review {
     private Instant editedAt;
     private Instant createdAt;
     private Instant updatedAt;
+    private List<ModerationFlag> moderationFlags = new ArrayList<>();
+    private int openReportCount;
+    private RemovalReason removalReason;
+    private List<ModerationEntry> moderationHistory = new ArrayList<>();
 
     public Review() {
     }
@@ -140,5 +150,37 @@ public class Review {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public List<ModerationFlag> getModerationFlags() {
+        return moderationFlags;
+    }
+
+    public void setModerationFlags(List<ModerationFlag> moderationFlags) {
+        this.moderationFlags = moderationFlags;
+    }
+
+    public int getOpenReportCount() {
+        return openReportCount;
+    }
+
+    public void setOpenReportCount(int openReportCount) {
+        this.openReportCount = openReportCount;
+    }
+
+    public RemovalReason getRemovalReason() {
+        return removalReason;
+    }
+
+    public void setRemovalReason(RemovalReason removalReason) {
+        this.removalReason = removalReason;
+    }
+
+    public List<ModerationEntry> getModerationHistory() {
+        return moderationHistory;
+    }
+
+    public void setModerationHistory(List<ModerationEntry> moderationHistory) {
+        this.moderationHistory = moderationHistory;
     }
 }

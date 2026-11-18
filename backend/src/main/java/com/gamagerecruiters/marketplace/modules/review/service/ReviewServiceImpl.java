@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -21,6 +22,9 @@ import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
 import com.gamagerecruiters.marketplace.modules.completion.service.CompletionLookup;
+import com.gamagerecruiters.marketplace.modules.review.domain.ModerationAction;
+import com.gamagerecruiters.marketplace.modules.review.domain.ModerationEntry;
+import com.gamagerecruiters.marketplace.modules.review.domain.ModerationFlag;
 import com.gamagerecruiters.marketplace.modules.review.domain.ProviderReply;
 import com.gamagerecruiters.marketplace.modules.review.domain.Review;
 import com.gamagerecruiters.marketplace.modules.review.domain.ReviewStatus;
@@ -31,6 +35,7 @@ import com.gamagerecruiters.marketplace.modules.review.dto.ReviewPageResponse;
 import com.gamagerecruiters.marketplace.modules.review.dto.ReviewResponse;
 import com.gamagerecruiters.marketplace.modules.review.dto.UpdateReviewRequest;
 import com.gamagerecruiters.marketplace.modules.review.mapper.ReviewMapper;
+import com.gamagerecruiters.marketplace.modules.review.moderation.ReviewContentChecker;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 
 /**
@@ -38,7 +43,10 @@ import com.gamagerecruiters.marketplace.modules.review.repository.ReviewReposito
  * - only the booking's customer can review, only when the booking is COMPLETED;
  * - within 7 days of completion; one review per booking (unique bookingId index);
  *   if the completion time cannot be verified, the review is rejected (never unlimited);
- * - a new review is PUBLISHED straight away (moderation/reports can remove it later, WP09);
+ * - automated checks run before publishing (FR-REV-003): a clean review is PUBLISHED straight away,
+ *   a flagged one (contact details, links, blocked words) is held as AWAITING_MODERATION for a moderator;
+ *   an edit is checked again; users can report published reviews (ReviewModerationService);
+ * - the stored provider/listing rating aggregates are recalculated after every change (FR-REV-004);
  * - the customer can edit within 48 hours, and not after the provider has replied;
  *   a review without a posting time cannot be edited;
  * - edits and replies are atomic conditional updates (ReviewAtomicUpdates), so concurrent
@@ -60,23 +68,32 @@ public class ReviewServiceImpl implements ReviewService {
     private final CompletionLookup completionLookup;
     private final ReviewRatingQuery ratingQuery;
     private final ReviewAtomicUpdates reviewUpdates;
+    private final ReviewContentChecker contentChecker;
+    private final ReviewRatingStatsService ratingStats;
+    private final ReviewPeople people;
     private final Clock clock;
 
     @Autowired
     public ReviewServiceImpl(ReviewRepository reviewRepository, BookingFacade bookingFacade,
                              CompletionLookup completionLookup, ReviewRatingQuery ratingQuery,
-                             ReviewAtomicUpdates reviewUpdates) {
-        this(reviewRepository, bookingFacade, completionLookup, ratingQuery, reviewUpdates, Clock.systemUTC());
+                             ReviewAtomicUpdates reviewUpdates, ReviewContentChecker contentChecker,
+                             ReviewRatingStatsService ratingStats, ReviewPeople people) {
+        this(reviewRepository, bookingFacade, completionLookup, ratingQuery, reviewUpdates, contentChecker,
+                ratingStats, people, Clock.systemUTC());
     }
 
     ReviewServiceImpl(ReviewRepository reviewRepository, BookingFacade bookingFacade,
                       CompletionLookup completionLookup, ReviewRatingQuery ratingQuery,
-                      ReviewAtomicUpdates reviewUpdates, Clock clock) {
+                      ReviewAtomicUpdates reviewUpdates, ReviewContentChecker contentChecker,
+                      ReviewRatingStatsService ratingStats, ReviewPeople people, Clock clock) {
         this.reviewRepository = reviewRepository;
         this.bookingFacade = bookingFacade;
         this.completionLookup = completionLookup;
         this.ratingQuery = ratingQuery;
         this.reviewUpdates = reviewUpdates;
+        this.contentChecker = contentChecker;
+        this.ratingStats = ratingStats;
+        this.people = people;
         this.clock = clock;
     }
 
@@ -111,17 +128,29 @@ public class ReviewServiceImpl implements ReviewService {
         review.setCustomerId(booking.customerId());
         review.setRating(request.rating());
         review.setComment(trimToNull(request.comment()));
-        review.setStatus(ReviewStatus.PUBLISHED);
         review.setEdited(false);
         review.setCreatedAt(now);
         review.setUpdatedAt(now);
 
+        // Automated checks before publishing (FR-REV-003)
+        List<ModerationFlag> flags = contentChecker.check(review.getComment());
+        review.setModerationFlags(flags);
+        if (flags.isEmpty()) {
+            review.setStatus(ReviewStatus.PUBLISHED);
+        } else {
+            review.setStatus(ReviewStatus.AWAITING_MODERATION);
+            review.getModerationHistory().add(autoFlagEntry(null, flags, now));
+        }
+
+        Review saved;
         try {
-            return ReviewMapper.toResponse(reviewRepository.save(review));
+            saved = reviewRepository.save(review);
         } catch (DuplicateKeyException ex) {
             // Unique bookingId index: a concurrent request already created the review
             throw reviewAlreadyExists();
         }
+        ratingStats.recompute(saved.getProviderId(), saved.getListingId());
+        return ReviewMapper.toResponse(saved);
     }
 
     @Override
@@ -147,11 +176,18 @@ public class ReviewServiceImpl implements ReviewService {
                     "Reviews can be edited within 48 hours of posting");
         }
 
+        // The edited text is checked again (FR-REV-003): clean -> PUBLISHED, flagged -> AWAITING_MODERATION
+        String comment = trimToNull(request.comment());
+        List<ModerationFlag> flags = contentChecker.check(comment);
+        ReviewStatus newStatus = flags.isEmpty() ? ReviewStatus.PUBLISHED : ReviewStatus.AWAITING_MODERATION;
+        ModerationEntry flagEntry = flags.isEmpty() ? null : autoFlagEntry(review.getStatus(), flags, now);
+
         // The same rules are checked again inside one atomic MongoDB update
-        return reviewUpdates.applyCustomerEdit(reviewId, customerId, request.rating(),
-                        trimToNull(request.comment()), now.minus(EDIT_WINDOW), now)
-                .map(ReviewMapper::toResponse)
+        Review updated = reviewUpdates.applyCustomerEdit(reviewId, customerId, request.rating(), comment,
+                        now.minus(EDIT_WINDOW), now, newStatus, flags, flagEntry)
                 .orElseThrow(() -> editRejectedByConcurrentChange(reviewId));
+        ratingStats.recompute(updated.getProviderId(), updated.getListingId());
+        return ReviewMapper.toResponse(updated);
     }
 
     @Override
@@ -161,7 +197,10 @@ public class ReviewServiceImpl implements ReviewService {
 
     @Override
     public ReviewPageResponse getProviderOwnReviews(String providerId, int page, int size) {
-        return toPage(reviewRepository.findByProviderId(providerId, pageable(page, size)));
+        org.springframework.data.domain.Page<Review> reviews = reviewRepository.findByProviderId(providerId, pageable(page, size));
+        // S11 shows who wrote each review
+        Map<String, String> names = people.namesOf(reviews.getContent().stream().map(Review::getCustomerId).toList());
+        return ReviewPageResponse.from(reviews.map(r -> ReviewMapper.toResponse(r, names.get(r.getCustomerId()))));
     }
 
     @Override
@@ -192,6 +231,13 @@ public class ReviewServiceImpl implements ReviewService {
     @Override
     public RatingSummaryResponse getRatingSummary(String providerId) {
         return summarize(providerId, ratingQuery.countPublishedByRating(providerId));
+    }
+
+    private static ModerationEntry autoFlagEntry(ReviewStatus fromStatus, List<ModerationFlag> flags, Instant now) {
+        ModerationEntry entry = ModerationEntry.of(ModerationAction.AUTO_FLAGGED, fromStatus,
+                ReviewStatus.AWAITING_MODERATION, ModerationEntry.SYSTEM, now);
+        entry.setFlags(List.copyOf(flags));
+        return entry;
     }
 
     // ------------------------------------------------------------------ helpers
