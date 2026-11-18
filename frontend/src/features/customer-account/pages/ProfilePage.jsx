@@ -5,13 +5,6 @@ import { getProfile, updateProfile } from '../services/customerAccountApi';
 import { StatusBadge } from './components/StatusBadge';
 import styles from './customerAccount.module.css';
 
-function getInitials(name = '') {
-  if (!name.trim()) return 'C';
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
-  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
-}
-
 /**
  * Validates Sri Lankan phone number format matching SriLankanPhoneUtil:
  * Accepts +94XXXXXXXXX, 0XXXXXXXXX, or 94XXXXXXXXX (9 digits after prefix)
@@ -45,7 +38,7 @@ export function ProfilePage() {
       .then((data) => {
         if (mounted) {
           setProfile(data);
-          setFullName(data.name || '');
+          setFullName(data.fullName || '');
           setPhone(data.phone || '');
           setLoading(false);
         }
@@ -64,7 +57,7 @@ export function ProfilePage() {
 
   const handleReset = () => {
     if (profile) {
-      setFullName(profile.name || '');
+      setFullName(profile.fullName || '');
       setPhone(profile.phone || '');
     }
     setNameError('');
@@ -121,7 +114,6 @@ export function ProfilePage() {
     );
   }
 
-  const initials = getInitials(profile?.name || fullName);
   const isEmailVerified = Boolean(profile?.emailVerified);
 
   return (
@@ -143,10 +135,6 @@ export function ProfilePage() {
           <div className={styles.cardHeader}>
             <h2 className={styles.cardTitle}>Personal details</h2>
             <span className={styles.cardHeaderTag}>Profile Settings</span>
-          </div>
-
-          <div className={styles.avatarRow}>
-            <div className={styles.avatarCircle}>{initials}</div>
           </div>
 
           <form onSubmit={handleSave}>

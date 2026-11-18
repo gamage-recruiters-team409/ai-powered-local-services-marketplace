@@ -14,13 +14,15 @@ export async function getFavourites(type, page = 0, size = 6) {
 }
 
 /**
- * Idempotently adds a target to favourites.
+ * Idempotently adds a target to favourites and returns the favourite response.
  *
  * @param {'PROVIDER' | 'LISTING'} type
  * @param {string} targetId
+ * @returns {Promise<Object>}
  */
 export async function addFavourite(type, targetId) {
-  await apiClient.put(`/customers/me/favorites/${type}/${targetId}`);
+  const response = await apiClient.put(`/customers/me/favorites/${type}/${targetId}`);
+  return response.data;
 }
 
 /**

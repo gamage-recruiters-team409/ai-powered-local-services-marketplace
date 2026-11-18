@@ -21,7 +21,7 @@ describe('customerAccountApi', () => {
   });
 
   it('getProfile calls GET /customers/me', async () => {
-    const mockData = { id: 'c1', name: 'Nimal' };
+    const mockData = { id: 'c1', fullName: 'Nimal' };
     apiClient.get.mockResolvedValueOnce({ data: mockData });
 
     const result = await getProfile();

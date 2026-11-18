@@ -26,7 +26,7 @@ describe('ProfilePage', () => {
   beforeEach(() => {
     customerAccountApi.getProfile.mockResolvedValue({
       id: 'cust-1',
-      name: 'Nimal Perera',
+      fullName: 'Nimal Perera',
       email: 'nimal@email.com',
       phone: '+94 77 123 4567',
       emailVerified: true,
@@ -51,14 +51,12 @@ describe('ProfilePage', () => {
 
     // Check VERIFIED badge exists for emailVerified: true
     expect(screen.getByText(/verified/i)).toBeTruthy();
-    // Check avatar initials NP
-    expect(screen.getByText('NP')).toBeTruthy();
   });
 
   it('hides VERIFIED badge when email is not verified', async () => {
     customerAccountApi.getProfile.mockResolvedValueOnce({
       id: 'cust-2',
-      name: 'Sunil Shantha',
+      fullName: 'Sunil Shantha',
       email: 'sunil@email.com',
       phone: '+94 71 987 6543',
       emailVerified: false,
@@ -110,7 +108,7 @@ describe('ProfilePage', () => {
   it('saves updated profile successfully and shows success toast', async () => {
     customerAccountApi.updateProfile.mockResolvedValueOnce({
       id: 'cust-1',
-      name: 'Nimal P. Updated',
+      fullName: 'Nimal P. Updated',
       email: 'nimal@email.com',
       phone: '+94779999999',
       emailVerified: true,
