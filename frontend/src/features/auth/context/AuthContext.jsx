@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import tokenStore from '../../../shared/services/tokenStore';
-import { onSessionExpired } from '../../../shared/services/apiClient';
+import { onSessionExpired, refreshSession } from '../../../shared/services/apiClient';
 import * as authApi from '../api/authApi';
 import { AuthContext } from './authContextValue';
 
@@ -27,30 +27,31 @@ export function AuthProvider({ children }) {
         return;
       }
 
+      let usedToken = null;
       try {
-        const refreshTokenVal = tokenStore.getRefreshToken();
-        const tokens = await authApi.refreshToken(refreshTokenVal);
-        tokenStore.setTokens({
-          accessToken: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-        });
+        usedToken = tokenStore.getRefreshToken();
+        const refreshData = await refreshSession();
 
-        if (tokens.mustChangePassword) {
+        if (refreshData.mustChangePassword) {
           if (!cancelled) {
             setMustChangePassword(true);
-            setUser({ mustChangePassword: true });
+            setUser(refreshData.user ? { ...refreshData.user, mustChangePassword: true } : { mustChangePassword: true });
             setStatus(AUTH_STATUS.AUTHENTICATED);
           }
           return;
         }
 
-        const userData = await authApi.getCurrentUser();
+        const userData = refreshData.user || (await authApi.getCurrentUser());
         if (!cancelled) {
           setUser(userData);
           setStatus(AUTH_STATUS.AUTHENTICATED);
         }
-      } catch {
-        tokenStore.clear();
+      } catch (err) {
+        const isDefinitiveAuthError = err?.response?.status === 401 || err?.status === 401;
+        if (isDefinitiveAuthError) {
+          const failedToken = err?.usedRefreshToken || usedToken;
+          tokenStore.clearIfRefreshTokenUnchanged(failedToken);
+        }
         if (!cancelled) {
           setStatus(AUTH_STATUS.UNAUTHENTICATED);
         }

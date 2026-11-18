@@ -75,6 +75,15 @@ export const tokenStore = {
     memoryAccessToken = null;
     safeRemoveItem(REFRESH_TOKEN_KEY);
   },
+
+  clearIfRefreshTokenUnchanged(usedRefreshToken) {
+    const current = this.getRefreshToken();
+    if (!usedRefreshToken || current === usedRefreshToken) {
+      this.clear();
+      return true;
+    }
+    return false;
+  },
 };
 
 export default tokenStore;

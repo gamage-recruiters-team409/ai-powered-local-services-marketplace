@@ -52,36 +52,55 @@ export function __resetForTests() {
   sessionExpiredListeners.clear();
 }
 
+function broadcastTokenUpdated(payload) {
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel('auth');
+      channel.postMessage({ type: 'token-updated', payload });
+      channel.close();
+    }
+  } catch {
+    // Ignore BroadcastChannel errors in unsupported environments
+  }
+}
+
 async function executeTokenRefresh() {
   const currentRefreshToken = tokenStore.getRefreshToken();
   if (!currentRefreshToken) {
-    throw new Error('No refresh token available');
+    const error = new Error('No refresh token available');
+    error.status = 401;
+    error.code = 'NO_REFRESH_TOKEN';
+    throw error;
   }
 
-  const response = await axios.post(
-    `${BASE_URL}/auth/refresh`,
-    { refreshToken: currentRefreshToken },
-    {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 15000,
-    }
-  );
+  let response;
+  try {
+    response = await axios.post(
+      `${BASE_URL}/auth/refresh`,
+      { refreshToken: currentRefreshToken },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000,
+      }
+    );
+  } catch (error) {
+    error.usedRefreshToken = currentRefreshToken;
+    throw error;
+  }
 
-  const { accessToken, refreshToken } = response.data;
+  const data = response.data;
+  const { accessToken, refreshToken } = data;
   tokenStore.setTokens({ accessToken, refreshToken });
-  return accessToken;
+  broadcastTokenUpdated({ accessToken, refreshToken });
+  return data;
 }
 
 async function performTokenRefreshWithLock() {
   // Use Web Locks API if available to coordinate token refresh across browser tabs
   if (typeof navigator !== 'undefined' && navigator.locks && navigator.locks.request) {
-    try {
-      return await navigator.locks.request('auth_token_refresh', async () => {
-        return await executeTokenRefresh();
-      });
-    } catch {
-      // If Web Locks fails, fall through to direct execution
-    }
+    return await navigator.locks.request('auth_token_refresh', async () => {
+      return await executeTokenRefresh();
+    });
   }
   return await executeTokenRefresh();
 }
@@ -97,6 +116,15 @@ async function performTokenRefresh() {
     }
     throw error;
   }
+}
+
+export async function refreshSession() {
+  if (!refreshPromise) {
+    refreshPromise = performTokenRefresh().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return await refreshPromise;
 }
 
 export function normalizeError(error) {
@@ -167,19 +195,17 @@ apiClient.interceptors.response.use(
     originalRequest._retry = true;
 
     try {
-      if (!refreshPromise) {
-        refreshPromise = performTokenRefresh().finally(() => {
-          refreshPromise = null;
-        });
-      }
-
-      const newAccessToken = await refreshPromise;
+      const refreshData = await refreshSession();
+      const newAccessToken = refreshData.accessToken;
       originalRequest.headers = originalRequest.headers || {};
       originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
       return apiClient(originalRequest);
     } catch (refreshError) {
-      tokenStore.clear();
-      notifySessionExpired();
+      const isDefinitiveAuthError = refreshError.response?.status === 401 || refreshError.status === 401;
+      if (isDefinitiveAuthError) {
+        tokenStore.clearIfRefreshTokenUnchanged(refreshError.usedRefreshToken);
+        notifySessionExpired();
+      }
       return Promise.reject(normalizeError(refreshError));
     }
   }

@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
+import axios from 'axios';
 import tokenStore from '../tokenStore';
 import {
   isPublicAuthEndpoint,
   normalizeError,
   notifySessionExpired,
   onSessionExpired,
+  refreshSession,
   __resetForTests,
 } from '../apiClient';
 
@@ -107,6 +109,46 @@ describe('apiClient', () => {
       unsubscribe();
       notifySessionExpired();
       expect(listener).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('refreshSession coordination', () => {
+    it('shares the same in-flight refresh across multiple calls (only one network call)', async () => {
+      tokenStore.setRefreshToken('stored-refresh');
+      const axiosSpy = vi.spyOn(axios, 'post').mockImplementation(() =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                data: {
+                  accessToken: 'acc-new',
+                  refreshToken: 'ref-new',
+                  mustChangePassword: false,
+                },
+              }),
+            20
+          )
+        )
+      );
+
+      const [res1, res2] = await Promise.all([
+        refreshSession(),
+        refreshSession(),
+      ]);
+
+      expect(axiosSpy).toHaveBeenCalledTimes(1);
+      expect(res1.accessToken).toBe('acc-new');
+      expect(res2.accessToken).toBe('acc-new');
+      expect(tokenStore.getRefreshToken()).toBe('ref-new');
+    });
+
+    it('network error during refresh does not clear tokens', async () => {
+      tokenStore.setRefreshToken('stored-refresh');
+      vi.spyOn(axios, 'post').mockRejectedValueOnce(new Error('Network Error'));
+
+      await expect(refreshSession()).rejects.toThrow('Network Error');
+
+      expect(tokenStore.getRefreshToken()).toBe('stored-refresh');
     });
   });
 });
