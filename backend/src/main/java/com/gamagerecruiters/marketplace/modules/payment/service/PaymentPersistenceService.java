@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
@@ -23,6 +25,12 @@ import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentReposi
  * communication, and payment status transitions are handled
  * separately. Callers must ensure that payment data is trusted
  * and validated before saving it.
+ * </p>
+ *
+ * <p>
+ * Customer-scoped retrieval requires the caller to supply the
+ * authenticated customer's identifier. This service does not
+ * independently authenticate or authorize requests.
  * </p>
  */
 @Service
@@ -104,6 +112,38 @@ public class PaymentPersistenceService {
         validateIdentifier(gatewayRef, "Gateway reference");
 
         return paymentRepository.findByGatewayRef(gatewayRef.trim());
+    }
+
+    /**
+     * Retrieves paginated payments belonging to a customer.
+     *
+     * <p>
+     * The customer identifier must come from the authenticated
+     * security context through a trusted calling service.
+     * Client-supplied customer identifiers must not be used.
+     * </p>
+     *
+     * <p>
+     * Pagination and sorting are performed by MongoDB through
+     * the supplied Pageable.
+     * </p>
+     *
+     * @param customerId authenticated customer identifier
+     * @param pageable   pagination and sorting configuration
+     * @return page of matching payment records
+     * @throws IllegalArgumentException if customer ID is blank
+     * @throws NullPointerException     if pageable is null
+     */
+    public Page<Payment> findPaymentsByCustomerId(
+            String customerId,
+            Pageable pageable) {
+
+        validateIdentifier(customerId, "Customer ID");
+        Objects.requireNonNull(pageable, "Pageable must not be null");
+
+        return paymentRepository.findByCustomerId(
+                customerId.trim(),
+                pageable);
     }
 
     /**

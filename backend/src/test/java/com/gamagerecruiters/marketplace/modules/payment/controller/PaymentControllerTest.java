@@ -22,7 +22,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
+import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentPageResponse;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
@@ -324,4 +328,178 @@ class PaymentControllerTest {
         assertEquals("payment-789", responses.get(1).paymentId());
         assertEquals(PaymentStatus.FAILED, responses.get(1).status());
     }
+
+
+    /**
+     * Verifies that the payment history endpoint returns
+     * the expected customer-facing pagination structure.
+     */
+    @Test
+    void getMyPaymentsReturnsPaginatedPaymentHistory() {
+            authenticateCustomer();
+
+            Page<Payment> paymentPage = new PageImpl<>(
+                            List.of(createPayment()),
+                            PageRequest.of(0, 10),
+                            1);
+
+            when(retrievalService.getPaymentsForCustomer(
+                            CUSTOMER_ID, 0, 10))
+                            .thenReturn(paymentPage);
+
+            ResponseEntity<PaymentPageResponse> response = controller.getMyPayments(0, 10);
+
+            assertEquals(HttpStatus.OK, response.getStatusCode());
+            assertNotNull(response.getBody());
+
+            PaymentPageResponse body = response.getBody();
+
+            assertEquals(0, body.page());
+            assertEquals(10, body.size());
+            assertEquals(1L, body.totalElements());
+            assertEquals(1, body.totalPages());
+
+            assertEquals(1, body.content().size());
+            assertEquals(
+                            PAYMENT_ID,
+                            body.content().get(0).paymentId());
+
+            verify(retrievalService).getPaymentsForCustomer(
+                            CUSTOMER_ID, 0, 10);
+    }
+
+    /**
+     * Ensures customer history exposes only PaymentResponse fields
+     * and does not return internal gateway or commission details.
+     */
+    @Test
+    void getMyPaymentsMapsCustomerFacingFields() {
+            authenticateCustomer();
+
+            Page<Payment> paymentPage = new PageImpl<>(
+                            List.of(createPayment()),
+                            PageRequest.of(0, 10),
+                            1);
+
+            when(retrievalService.getPaymentsForCustomer(
+                            CUSTOMER_ID, 0, 10))
+                            .thenReturn(paymentPage);
+
+            PaymentPageResponse response = controller
+                            .getMyPayments(0, 10)
+                            .getBody();
+
+            assertNotNull(response);
+
+            PaymentResponse payment = response.content().get(0);
+
+            assertEquals(PAYMENT_ID, payment.paymentId());
+            assertEquals(BOOKING_ID, payment.bookingId());
+            assertEquals(
+                            new BigDecimal("2500.00"),
+                            payment.amount());
+            assertEquals("LKR", payment.currency());
+            assertEquals(
+                            PaymentStatus.INITIATED,
+                            payment.status());
+            assertEquals(
+                            new BigDecimal("0.00"),
+                            payment.refundedAmount());
+            assertEquals(
+                            Instant.parse("2026-11-11T17:00:00Z"),
+                            payment.createdAt());
+    }
+
+    /**
+     * Verifies that an authenticated customer with no payments
+     * receives an empty page rather than an error.
+     */
+    @Test
+    void getMyPaymentsReturnsEmptyPage() {
+            authenticateCustomer();
+
+            Page<Payment> emptyPage = Page.empty(
+                            PageRequest.of(0, 10));
+
+            when(retrievalService.getPaymentsForCustomer(
+                            CUSTOMER_ID, 0, 10))
+                            .thenReturn(emptyPage);
+
+            ResponseEntity<PaymentPageResponse> response = controller.getMyPayments(0, 10);
+
+            assertEquals(HttpStatus.OK, response.getStatusCode());
+            assertNotNull(response.getBody());
+            assertTrue(response.getBody().content().isEmpty());
+            assertEquals(0L, response.getBody().totalElements());
+            assertEquals(0, response.getBody().totalPages());
+    }
+
+    /**
+     * Verifies that the controller forwards the requested
+     * pagination values and the authenticated customer ID.
+     */
+    @Test
+    void getMyPaymentsUsesAuthenticatedCustomerAndRequestedPage() {
+            authenticateCustomer();
+
+            Page<Payment> paymentPage = Page.empty(
+                            PageRequest.of(2, 20));
+
+            when(retrievalService.getPaymentsForCustomer(
+                            CUSTOMER_ID, 2, 20))
+                            .thenReturn(paymentPage);
+
+            ResponseEntity<PaymentPageResponse> response = controller.getMyPayments(2, 20);
+
+            assertEquals(HttpStatus.OK, response.getStatusCode());
+
+            verify(retrievalService).getPaymentsForCustomer(
+                            CUSTOMER_ID, 2, 20);
+    }
+
+    /**
+     * Rejects payment history requests when no authenticated
+     * customer identity is available.
+     */
+    @Test
+    void getMyPaymentsRejectsMissingAuthentication() {
+            ApiException exception = assertThrows(
+                            ApiException.class,
+                            () -> controller.getMyPayments(0, 10));
+
+            assertEquals(
+                            HttpStatus.UNAUTHORIZED,
+                            exception.getStatus());
+
+            assertEquals(
+                            "AUTHENTICATION_REQUIRED",
+                            exception.getErrorCode());
+
+            verifyNoInteractions(retrievalService);
+    }
+
+    /**
+     * Ensures pagination validation errors are propagated
+     * without converting them into successful responses.
+     */
+    @Test
+    void getMyPaymentsPropagatesInvalidPaginationError() {
+            authenticateCustomer();
+
+            ApiException original = new ApiException(
+                            HttpStatus.BAD_REQUEST,
+                            "INVALID_PAYMENT_PAGINATION",
+                            "Page number must not be negative");
+
+            when(retrievalService.getPaymentsForCustomer(
+                            CUSTOMER_ID, -1, 10))
+                            .thenThrow(original);
+
+            ApiException actual = assertThrows(
+                            ApiException.class,
+                            () -> controller.getMyPayments(-1, 10));
+
+            assertSame(original, actual);
+    }
+
 }

@@ -16,6 +16,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import com.gamagerecruiters.marketplace.modules.admin.repository.AdminAuditLogRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
@@ -31,7 +32,9 @@ import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCom
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
@@ -85,6 +88,16 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private PaymentRepository paymentRepository;
+
+    @MockitoBean
+    private EarningsLedgerRepository earningsLedgerRepository;
+
+    @MockitoBean
+    private ProviderEarningsStateRepository providerEarningsStateRepository;
+
+    // Provides a transaction manager dependency for the startup test context.
+    @MockitoBean
+    private PlatformTransactionManager transactionManager;
 
     @MockitoBean
     private MongoTemplate mongoTemplate;

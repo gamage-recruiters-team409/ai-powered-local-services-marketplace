@@ -21,6 +21,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -419,6 +421,107 @@ class BookingFacadeImplTest {
             assertThatThrownBy(() -> facade.markDisputed("b-1", STRANGER, "x"))
                     .isInstanceOf(AccessDeniedException.class);
             verify(bookingRepository, never()).save(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("assertDisputeEligible (read-only, for the dispute module)")
+    class DisputeEligibility {
+
+        @ParameterizedTest(name = "{0} is eligible")
+        @EnumSource(value = BookingStatus.class, names = {"CONFIRMED", "IN_PROGRESS", "COMPLETION_PENDING"})
+        @DisplayName("Open service statuses are eligible; nothing is saved")
+        void openStatusesEligible(BookingStatus status) {
+            loginAs(CUSTOMER, Role.CUSTOMER);
+            givenBooking(status);
+
+            assertThat(facade.assertDisputeEligible("b-1", CUSTOMER).status()).isEqualTo(status);
+            verify(bookingRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("COMPLETED within 72 h: eligible (provider can also check)")
+        void completedWithinWindow() {
+            loginAs(PROVIDER, Role.PROVIDER);
+            givenBooking(bookingReached(BookingStatus.COMPLETED, NOW.minus(Duration.ofHours(71))));
+
+            assertThat(facade.assertDisputeEligible("b-1", PROVIDER).status()).isEqualTo(BookingStatus.COMPLETED);
+        }
+
+        @Test
+        @DisplayName("COMPLETED after 72 h: 409 DISPUTE_WINDOW_CLOSED")
+        void completedAfterWindow() {
+            loginAs(CUSTOMER, Role.CUSTOMER);
+            givenBooking(bookingReached(BookingStatus.COMPLETED, NOW.minus(Duration.ofHours(73))));
+
+            assertThatThrownBy(() -> facade.assertDisputeEligible("b-1", CUSTOMER))
+                    .isInstanceOf(ResourceConflictException.class)
+                    .satisfies(e -> assertErrorCode(e, "DISPUTE_WINDOW_CLOSED"));
+        }
+
+        @Test
+        @DisplayName("Already DISPUTED within 72 h of being disputed: eligible")
+        void disputedWithinWindow() {
+            loginAs(CUSTOMER, Role.CUSTOMER);
+            givenBooking(bookingReached(BookingStatus.DISPUTED, NOW.minus(Duration.ofHours(2))));
+
+            assertThat(facade.assertDisputeEligible("b-1", CUSTOMER).status()).isEqualTo(BookingStatus.DISPUTED);
+            verify(bookingRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Already DISPUTED more than 72 h ago, or with no timeline time: 409 DISPUTE_WINDOW_CLOSED")
+        void disputedAfterWindowOrMissingTime() {
+            loginAs(CUSTOMER, Role.CUSTOMER);
+            givenBooking(bookingReached(BookingStatus.DISPUTED, NOW.minus(Duration.ofHours(73))));
+
+            assertThatThrownBy(() -> facade.assertDisputeEligible("b-1", CUSTOMER))
+                    .isInstanceOf(ResourceConflictException.class)
+                    .satisfies(e -> assertErrorCode(e, "DISPUTE_WINDOW_CLOSED"));
+        }
+
+        @Test
+        @DisplayName("DISPUTED with no timeline entry fails closed (409 DISPUTE_WINDOW_CLOSED)")
+        void disputedWithoutTimeline() {
+            loginAs(CUSTOMER, Role.CUSTOMER);
+            givenBooking(BookingStatus.DISPUTED);
+
+            assertThatThrownBy(() -> facade.assertDisputeEligible("b-1", CUSTOMER))
+                    .isInstanceOf(ResourceConflictException.class)
+                    .satisfies(e -> assertErrorCode(e, "DISPUTE_WINDOW_CLOSED"));
+        }
+
+        @Test
+        @DisplayName("Not yet confirmed (PENDING_PROVIDER): 409 INVALID_STATUS_TRANSITION")
+        void pendingNotEligible() {
+            loginAs(CUSTOMER, Role.CUSTOMER);
+            givenBooking(BookingStatus.PENDING_PROVIDER);
+
+            assertThatThrownBy(() -> facade.assertDisputeEligible("b-1", CUSTOMER))
+                    .isInstanceOf(ResourceConflictException.class)
+                    .satisfies(e -> assertErrorCode(e, "INVALID_STATUS_TRANSITION"));
+        }
+
+        @Test
+        @DisplayName("Non-participant: 403; spoofed actor: 403; not logged in: 401; unknown booking: 404")
+        void identityAndNotFound() {
+            loginAs(STRANGER, Role.CUSTOMER);
+            givenBooking(BookingStatus.CONFIRMED);
+            assertThatThrownBy(() -> facade.assertDisputeEligible("b-1", STRANGER))
+                    .isInstanceOf(AccessDeniedException.class);
+
+            assertThatThrownBy(() -> facade.assertDisputeEligible("b-1", CUSTOMER))
+                    .isInstanceOf(AccessDeniedException.class);
+
+            SecurityContextHolder.clearContext();
+            assertThatThrownBy(() -> facade.assertDisputeEligible("b-1", CUSTOMER))
+                    .isInstanceOf(ApiException.class)
+                    .satisfies(e -> assertErrorCode(e, "UNAUTHORIZED"));
+
+            loginAs(CUSTOMER, Role.CUSTOMER);
+            when(bookingRepository.findById("missing")).thenReturn(Optional.empty());
+            assertThatThrownBy(() -> facade.assertDisputeEligible("missing", CUSTOMER))
+                    .isInstanceOf(ResourceNotFoundException.class);
         }
     }
 
