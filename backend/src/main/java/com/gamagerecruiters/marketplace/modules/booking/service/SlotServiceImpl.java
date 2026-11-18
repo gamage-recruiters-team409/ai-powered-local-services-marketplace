@@ -127,6 +127,17 @@ public class SlotServiceImpl implements SlotService {
         return response(providerId, date, duration, buffer, "WORKING", slots);
     }
 
+    @Override
+    public boolean isSlotAvailable(String providerId, Instant slotStart, int durationMinutes) {
+        if (slotStart == null) {
+            return false;
+        }
+        LocalDate date = slotStart.atZone(BUSINESS_ZONE).toLocalDate();
+        AvailableSlotsResponse available = getAvailableSlots(providerId, date.toString(),
+                String.valueOf(durationMinutes));
+        return available.slots().stream().anyMatch(slot -> slot.start().equals(slotStart));
+    }
+
     /** A slot conflicts if it is closer than the buffer to any existing booking. */
     private boolean overlapsExisting(Instant start, Instant end, List<Booking> existing, Duration buffer) {
         for (Booking booking : existing) {
