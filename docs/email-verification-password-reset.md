@@ -162,23 +162,17 @@ Completes password recovery by consuming the reset token and setting a new passw
    - The database stores only the SHA-256 hash (`TokenService.hashToken(rawToken)`).
    - If the database is compromised, stored hashes cannot be reversed to forge verification or reset links.
 
-3. **Atomic Consumption (Single-Use Guarantee):**
-   - Implemented in `AuthTokenRepositoryCustomImpl.consumeValidToken`:
-     ```java
-     Query query = new Query(Criteria.where("tokenHash").is(tokenHash)
-             .and("type").is(type)
-             .and("used").is(false)
-             .and("revoked").is(false)
-             .and("expiresAt").gt(now));
-
-     Update update = new Update()
-             .set("used", true)
-             .set("usedAt", now);
-
-     return Optional.ofNullable(mongoTemplate.findAndModify(
-             query, update, FindAndModifyOptions.options().returnNew(true), AuthToken.class));
-     ```
-   - Uses MongoDB's atomic document-level `findAndModify`. Under concurrent requests, exactly one request can transition `used: false` to `true`; all other concurrent requests find no matching document and return `Optional.empty()`.
+3. **Atomic Consumption & Consistency Strategies (Standalone MongoDB):**
+   - The local Docker-compose MongoDB environment is standalone (no replica set transactions), so the authentication service employs failure-safe ordering and compensation strategies instead of `@Transactional`:
+     - **Email Verification (Idempotent Activation):**
+       `EmailTokenServiceImpl.verifyEmail` validates the token via `findValidToken(...)`, activates the user in the database, and only consumes the token (`consumeValidToken(...)`) after the user save succeeds. If saving the user fails, the token remains untouched and valid for retry. If a parallel request already consumed the token, the request still succeeds because the account has been verified.
+     - **Password Reset (Fail-Secure Ordering & Compensation):**
+       `EmailTokenServiceImpl.resetPassword` validates policy, account eligibility, and `SAME_PASSWORD` pre-checks before atomically claiming the token with `consumeValidToken(...)` (guaranteeing single-use under concurrency). Inside a guarded block, it executes in fail-secure order:
+       1. Revokes all active refresh tokens for the user first (if this fails, the password is unchanged and sessions remain intact).
+       2. Encodes the new password, resets lockouts and `mustChangePassword`, and saves the user (if this fails, the user simply logs in again with the old credentials).
+       3. If ANY exception occurs after the atomic claim, a compensation routine (`AuthTokenRepository.releaseConsumedToken`) atomically resets `usedAt` back to `null` (matching `usedAt != null` and `revokedAt == null`), allowing the same reset link to be reused until expiration.
+     - **Residual Crash Window:**
+       In the rare event of an unrecoverable JVM crash or hardware power loss during the milliseconds between the token claim and the user save, the link could remain consumed in the standalone database; in this residual case, the user simply requests a new reset link.
 
 ---
 

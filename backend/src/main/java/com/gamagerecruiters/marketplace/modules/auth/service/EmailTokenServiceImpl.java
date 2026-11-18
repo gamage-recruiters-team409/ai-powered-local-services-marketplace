@@ -224,8 +224,7 @@ public class EmailTokenServiceImpl implements EmailTokenService {
         String tokenHash = tokenService.hashToken(rawToken);
         Instant now = Instant.now();
 
-        AuthToken token = authTokenRepository.findByTokenHash(tokenHash)
-                .filter(t -> t.getType() == TokenType.PASSWORD_RESET && t.isValid())
+        AuthToken token = authTokenRepository.findValidToken(tokenHash, TokenType.PASSWORD_RESET, now)
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "INVALID_OR_EXPIRED_TOKEN", INVALID_TOKEN_MSG));
 
         User user = userRepository.findById(token.getUserId())
@@ -239,21 +238,39 @@ public class EmailTokenServiceImpl implements EmailTokenService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "SAME_PASSWORD", "New password cannot be the same as the current password");
         }
 
+        // 1. Atomically claim token with consumeValidToken (single-use under concurrency)
         authTokenRepository.consumeValidToken(tokenHash, TokenType.PASSWORD_RESET, now)
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "INVALID_OR_EXPIRED_TOKEN", INVALID_TOKEN_MSG));
 
-        user.setPasswordHash(passwordEncoder.encode(newPassword));
-        user.setMustChangePassword(false);
-        user.setFailedLoginCount(0);
-        user.setLockStartedAt(null);
-        if (user.getStatus() == UserStatus.LOCKED) {
-            user.setStatus(UserStatus.ACTIVE);
-        }
-        userRepository.save(user);
+        // 2. Fail-secure ordering and compensation:
+        // (a) Revoke ALL refresh tokens of the user first.
+        //     If (a) fails, password is unchanged and sessions are intact.
+        // (b) Save new password hash and clear mustChangePassword, lock and failed-login counters.
+        //     If (b) fails after (a), password is unchanged and user only logs in again (fail-secure).
+        // In both cases account state stays consistent.
+        try {
+            authTokenRepository.revokeAllActiveTokensByUserIdAndType(user.getId(), TokenType.REFRESH);
 
-        // Revoke all refresh tokens so previous sessions die, and invalidate other unused password reset tokens
-        authTokenRepository.revokeAllActiveTokensByUserIdAndType(user.getId(), TokenType.REFRESH);
-        authTokenRepository.revokeAllUnusedTokensByUserIdAndType(user.getId(), TokenType.PASSWORD_RESET);
+            user.setPasswordHash(passwordEncoder.encode(newPassword));
+            user.setMustChangePassword(false);
+            user.setFailedLoginCount(0);
+            user.setLockStartedAt(null);
+            if (user.getStatus() == UserStatus.LOCKED) {
+                user.setStatus(UserStatus.ACTIVE);
+            }
+            userRepository.save(user);
+
+            // Invalidate other unused password reset tokens
+            authTokenRepository.revokeAllUnusedTokensByUserIdAndType(user.getId(), TokenType.PASSWORD_RESET);
+        } catch (RuntimeException ex) {
+            // 3. Compensation: atomically release the claimed token so the user can retry until expiration
+            try {
+                authTokenRepository.releaseConsumedToken(tokenHash, TokenType.PASSWORD_RESET);
+            } catch (Exception compEx) {
+                log.error("Failed to release consumed reset token during compensation for userId={}", user.getId());
+            }
+            throw ex;
+        }
     }
 
     private static String cleanBaseUrl(String url) {

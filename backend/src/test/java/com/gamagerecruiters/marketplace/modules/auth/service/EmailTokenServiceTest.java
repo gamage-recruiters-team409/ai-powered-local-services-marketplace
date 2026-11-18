@@ -458,7 +458,8 @@ class EmailTokenServiceTest {
         when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
 
         AuthToken token = new AuthToken("u123", TokenType.PASSWORD_RESET, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
-        when(authTokenRepository.findByTokenHash(tokenHash)).thenReturn(Optional.of(token));
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.of(token));
         when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
                 .thenReturn(Optional.of(token));
 
@@ -482,9 +483,100 @@ class EmailTokenServiceTest {
         assertNull(user.getLockStartedAt());
         assertFalse(user.isMustChangePassword());
 
-        verify(userRepository).save(user);
         verify(authTokenRepository).revokeAllActiveTokensByUserIdAndType("u123", TokenType.REFRESH);
+        verify(userRepository).save(user);
         verify(authTokenRepository).revokeAllUnusedTokensByUserIdAndType("u123", TokenType.PASSWORD_RESET);
+    }
+
+    @Test
+    @DisplayName("resetPassword triggers compensation and rethrows if userRepository.save fails")
+    void resetPassword_userSaveFails_compensationReleasesTokenAndRethrows() {
+        String rawToken = "valid-reset-token";
+        String tokenHash = "valid-reset-hash";
+
+        when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
+
+        AuthToken token = new AuthToken("u123", TokenType.PASSWORD_RESET, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+
+        User user = new User();
+        user.setId("u123");
+        user.setStatus(UserStatus.ACTIVE);
+        user.setPasswordHash("oldEncodedPassword");
+
+        when(userRepository.findById("u123")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("NewStrongPass1!", "oldEncodedPassword")).thenReturn(false);
+        when(passwordEncoder.encode("NewStrongPass1!")).thenReturn("newEncodedPassword");
+        when(userRepository.save(user)).thenThrow(new RuntimeException("DB save failure"));
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, () -> emailTokenService.resetPassword(rawToken, "NewStrongPass1!"));
+        assertEquals("DB save failure", thrown.getMessage());
+
+        verify(authTokenRepository).releaseConsumedToken(tokenHash, TokenType.PASSWORD_RESET);
+    }
+
+    @Test
+    @DisplayName("resetPassword triggers compensation and rethrows if refresh token revocation fails")
+    void resetPassword_revokeRefreshFails_compensationReleasesTokenAndRethrows() {
+        String rawToken = "valid-reset-token";
+        String tokenHash = "valid-reset-hash";
+
+        when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
+
+        AuthToken token = new AuthToken("u123", TokenType.PASSWORD_RESET, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+
+        User user = new User();
+        user.setId("u123");
+        user.setStatus(UserStatus.ACTIVE);
+        user.setPasswordHash("oldEncodedPassword");
+
+        when(userRepository.findById("u123")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("NewStrongPass1!", "oldEncodedPassword")).thenReturn(false);
+        org.mockito.Mockito.doThrow(new RuntimeException("Revocation failure"))
+                .when(authTokenRepository)
+                .revokeAllActiveTokensByUserIdAndType("u123", TokenType.REFRESH);
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, () -> emailTokenService.resetPassword(rawToken, "NewStrongPass1!"));
+        assertEquals("Revocation failure", thrown.getMessage());
+
+        verify(authTokenRepository).releaseConsumedToken(tokenHash, TokenType.PASSWORD_RESET);
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("resetPassword rethrows original exception even if compensation fails")
+    void resetPassword_compensationFails_rethrowsOriginalException() {
+        String rawToken = "valid-reset-token";
+        String tokenHash = "valid-reset-hash";
+
+        when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
+
+        AuthToken token = new AuthToken("u123", TokenType.PASSWORD_RESET, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+
+        User user = new User();
+        user.setId("u123");
+        user.setStatus(UserStatus.ACTIVE);
+        user.setPasswordHash("oldEncodedPassword");
+
+        when(userRepository.findById("u123")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("NewStrongPass1!", "oldEncodedPassword")).thenReturn(false);
+        when(passwordEncoder.encode("NewStrongPass1!")).thenReturn("newEncodedPassword");
+        when(userRepository.save(user)).thenThrow(new RuntimeException("Primary failure"));
+        when(authTokenRepository.releaseConsumedToken(anyString(), any())).thenThrow(new RuntimeException("Compensation error"));
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, () -> emailTokenService.resetPassword(rawToken, "NewStrongPass1!"));
+        assertEquals("Primary failure", thrown.getMessage());
     }
 
     @Test
@@ -496,7 +588,8 @@ class EmailTokenServiceTest {
         when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
 
         AuthToken token = new AuthToken("u123", TokenType.PASSWORD_RESET, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
-        when(authTokenRepository.findByTokenHash(tokenHash)).thenReturn(Optional.of(token));
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.of(token));
 
         User user = new User();
         user.setId("u123");
@@ -536,7 +629,8 @@ class EmailTokenServiceTest {
     @DisplayName("resetPassword throws 400 INVALID_OR_EXPIRED_TOKEN on token lookup failure")
     void resetPassword_invalidToken_throws400() {
         when(tokenService.hashToken("bad-token")).thenReturn("bad-hash");
-        when(authTokenRepository.findByTokenHash("bad-hash")).thenReturn(Optional.empty());
+        when(authTokenRepository.findValidToken(eq("bad-hash"), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.empty());
 
         ApiException ex = assertThrows(ApiException.class, () -> emailTokenService.resetPassword("bad-token", "ValidPassword123"));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
@@ -550,9 +644,8 @@ class EmailTokenServiceTest {
         String tokenHash = "expired-hash";
 
         when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
-
-        AuthToken expiredToken = new AuthToken("u123", TokenType.PASSWORD_RESET, tokenHash, Instant.now().minus(1, ChronoUnit.HOURS), Instant.now().minus(2, ChronoUnit.HOURS));
-        when(authTokenRepository.findByTokenHash(tokenHash)).thenReturn(Optional.of(expiredToken));
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.empty());
 
         ApiException ex = assertThrows(ApiException.class, () -> emailTokenService.resetPassword(rawToken, "ValidPassword123!"));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());

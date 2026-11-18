@@ -62,4 +62,14 @@ public interface AuthTokenRepositoryCustom {
      * @return Optional containing the AuthToken if valid, or empty if used/expired/revoked/missing.
      */
     Optional<AuthToken> findValidToken(String tokenHash, TokenType type, Instant now);
+
+    /**
+     * Atomically releases a previously consumed token by resetting usedAt back to null,
+     * allowing the token to be reused if it has not expired or been revoked.
+     *
+     * @param tokenHash SHA-256 hash of the token
+     * @param type The token type
+     * @return Optional containing the updated AuthToken if released, or empty if conditions not met
+     */
+    Optional<AuthToken> releaseConsumedToken(String tokenHash, TokenType type);
 }

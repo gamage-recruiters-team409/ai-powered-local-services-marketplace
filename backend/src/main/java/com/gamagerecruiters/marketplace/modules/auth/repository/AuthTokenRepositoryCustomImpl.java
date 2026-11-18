@@ -89,4 +89,20 @@ public class AuthTokenRepositoryCustomImpl implements AuthTokenRepositoryCustom 
         AuthToken token = mongoTemplate.findOne(query, AuthToken.class);
         return Optional.ofNullable(token);
     }
+
+    @Override
+    public Optional<AuthToken> releaseConsumedToken(String tokenHash, TokenType type) {
+        Query query = new Query(
+                Criteria.where("tokenHash").is(tokenHash)
+                        .and("type").is(type)
+                        .and("usedAt").ne(null)
+                        .and("revokedAt").isNull()
+        );
+
+        Update update = new Update().set("usedAt", null);
+        FindAndModifyOptions options = FindAndModifyOptions.options().returnNew(true);
+
+        AuthToken updated = mongoTemplate.findAndModify(query, update, options, AuthToken.class);
+        return Optional.ofNullable(updated);
+    }
 }
