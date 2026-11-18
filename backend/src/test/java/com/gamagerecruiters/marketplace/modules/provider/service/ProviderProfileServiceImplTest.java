@@ -1,4 +1,3 @@
-
 package com.gamagerecruiters.marketplace.modules.provider.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -36,6 +35,7 @@ import com.gamagerecruiters.marketplace.modules.provider.dto.CreateProviderProfi
 import com.gamagerecruiters.marketplace.modules.provider.dto.ProviderProfileResponse;
 import com.gamagerecruiters.marketplace.modules.provider.dto.UpdateProviderProfileRequest;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
+import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationReverificationService;
 
 @ExtendWith(MockitoExtension.class)
 class ProviderProfileServiceImplTest {
@@ -48,6 +48,10 @@ class ProviderProfileServiceImplTest {
 
     @Mock
     private CategoryService categoryService;
+
+    @Mock
+    private ProviderVerificationReverificationService
+            providerVerificationReverificationService;
 
     @InjectMocks
     private ProviderProfileServiceImpl providerProfileService;
@@ -107,6 +111,10 @@ class ProviderProfileServiceImplTest {
 
         verify(providerProfileRepository)
                 .save(any(ProviderProfile.class));
+
+        // Creating a profile must not trigger re-verification.
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification("profile-1");
     }
 
     @Test
@@ -234,6 +242,10 @@ class ProviderProfileServiceImplTest {
 
         verify(providerProfileRepository)
                 .save(existingProfile);
+
+        // Non-category profile updates must not trigger re-verification.
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification("profile-1");
     }
 
     // CATEGORY TESTS
@@ -273,6 +285,9 @@ class ProviderProfileServiceImplTest {
 
         verify(categoryService).getCategoryById("category-1");
         verify(categoryService).getCategoryById("category-2");
+
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification("profile-1");
     }
 
     @Test
@@ -367,6 +382,116 @@ class ProviderProfileServiceImplTest {
 
         verify(providerProfileRepository)
                 .save(existingProfile);
+
+        // The new category must request re-verification.
+        verify(providerVerificationReverificationService)
+                .requestCategoryReverification("profile-1");
+    }
+
+    @Test
+    void updateMyProfile_shouldRequestReverificationWhenNewCategoryIsAdded() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(categoryService.getCategoryById("existing-category"))
+                .thenReturn(activeCategory("existing-category"));
+
+        when(categoryService.getCategoryById("category-2"))
+                .thenReturn(activeCategory("category-2"));
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        UpdateProviderProfileRequest request =
+                new UpdateProviderProfileRequest();
+
+        request.setCategoryIds(
+                List.of("existing-category", "category-2")
+        );
+
+        ProviderProfileResponse response =
+                providerProfileService.updateMyProfile(request);
+
+        assertEquals(
+                List.of("existing-category", "category-2"),
+                response.getCategoryIds()
+        );
+
+        verify(providerVerificationReverificationService)
+                .requestCategoryReverification("profile-1");
+    }
+
+    @Test
+    void updateMyProfile_shouldNotRequestReverificationWhenCategoriesAreUnchanged() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(categoryService.getCategoryById("existing-category"))
+                .thenReturn(activeCategory("existing-category"));
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        UpdateProviderProfileRequest request =
+                new UpdateProviderProfileRequest();
+
+        request.setCategoryIds(
+                List.of("existing-category")
+        );
+
+        ProviderProfileResponse response =
+                providerProfileService.updateMyProfile(request);
+
+        assertEquals(
+                List.of("existing-category"),
+                response.getCategoryIds()
+        );
+
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification("profile-1");
+    }
+
+    @Test
+    void updateMyProfile_shouldNotRequestReverificationWhenCategoryIsRemoved() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+
+        existingProfile.setCategoryIds(
+                List.of("existing-category", "category-2")
+        );
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(categoryService.getCategoryById("existing-category"))
+                .thenReturn(activeCategory("existing-category"));
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        UpdateProviderProfileRequest request =
+                new UpdateProviderProfileRequest();
+
+        request.setCategoryIds(
+                List.of("existing-category")
+        );
+
+        ProviderProfileResponse response =
+                providerProfileService.updateMyProfile(request);
+
+        assertEquals(
+                List.of("existing-category"),
+                response.getCategoryIds()
+        );
+
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification("profile-1");
     }
 
     private CreateProviderProfileRequest createProfileRequest() {

@@ -525,6 +525,51 @@ public class VerificationAtomicUpdates {
     }
 
     /**
+     * Requests re-verification when an already-approved provider adds
+     * a new service category.
+     *
+     * Only APPROVED verification records are changed. Providers whose
+     * verification is not currently APPROVED keep their existing status.
+     *
+     * The existing review metadata and submitted document snapshot are
+     * deliberately preserved. The provider must upload and submit the
+     * documents required by the existing resubmission workflow.
+     */
+    public Optional<ProviderVerification> requestCategoryReverification(
+            String providerId,
+            Instant now
+    ) {
+        Query query = new Query(
+                new Criteria().andOperator(
+                        Criteria.where("providerId").is(providerId),
+                        Criteria.where("status")
+                                .is(ProviderVerificationStatus.APPROVED)
+                )
+        );
+
+        Update update = new Update()
+                .set(
+                        "status",
+                        ProviderVerificationStatus.RESUBMISSION_REQUESTED
+                )
+                .set(
+                        "decisionReason",
+                        "A new service category was added. Please upload updated verification documents and resubmit."
+                )
+                .set("updatedAt", now)
+                .inc("coordinationRevision", 1);
+
+        ProviderVerification updated = mongoTemplate.findAndModify(
+                query,
+                update,
+                FindAndModifyOptions.options().returnNew(true),
+                ProviderVerification.class
+        );
+
+        return Optional.ofNullable(updated);
+    }
+
+    /**
      * Applies one administrative decision using a conditional atomic update.
      * The expected document-ID snapshot prevents a stale decision from being
      * applied to a later resubmission.

@@ -1,4 +1,3 @@
-
 package com.gamagerecruiters.marketplace.modules.provider.service;
 
 import java.time.Instant;
@@ -10,6 +9,7 @@ import java.util.Set;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
@@ -21,19 +21,26 @@ import com.gamagerecruiters.marketplace.modules.provider.dto.CreateProviderProfi
 import com.gamagerecruiters.marketplace.modules.provider.dto.ProviderProfileResponse;
 import com.gamagerecruiters.marketplace.modules.provider.dto.UpdateProviderProfileRequest;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
+import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationReverificationService;
 
 @Service
 public class ProviderProfileServiceImpl implements ProviderProfileService {
 
     private final ProviderProfileRepository providerProfileRepository;
     private final CategoryService categoryService;
+    private final ProviderVerificationReverificationService
+            providerVerificationReverificationService;
 
     public ProviderProfileServiceImpl(
             ProviderProfileRepository providerProfileRepository,
-            CategoryService categoryService
+            CategoryService categoryService,
+            ProviderVerificationReverificationService
+                    providerVerificationReverificationService
     ) {
         this.providerProfileRepository = providerProfileRepository;
         this.categoryService = categoryService;
+        this.providerVerificationReverificationService =
+                providerVerificationReverificationService;
     }
 
     @Override
@@ -59,7 +66,7 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
                 trimToNull(request.getProfileImageUrl())
         );
 
-        // Validate selected categories before saving.
+        // Existing category validation is preserved.
         profile.setCategoryIds(
                 validateCategoryIds(request.getCategoryIds())
         );
@@ -98,6 +105,7 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
     }
 
     @Override
+    @Transactional
     public ProviderProfileResponse updateMyProfile(
             UpdateProviderProfileRequest request
     ) {
@@ -141,11 +149,35 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
             );
         }
 
-        // Preserve existing categories if categoryIds is omitted.
+        /*
+         * Preserve existing categories if categoryIds is omitted.
+         *
+         * Re-verification is requested only when a new category
+         * is added to the existing category selection.
+         */
         if (request.getCategoryIds() != null) {
-            profile.setCategoryIds(
-                    validateCategoryIds(request.getCategoryIds())
+
+            List<String> validatedCategoryIds =
+                    validateCategoryIds(request.getCategoryIds());
+
+            boolean newCategoryAdded = hasNewCategory(
+                    profile.getCategoryIds(),
+                    validatedCategoryIds
             );
+
+            if (newCategoryAdded) {
+
+                /*
+                 * The verification service only changes records
+                 * currently in APPROVED status.
+                 *
+                 * Non-approved verification statuses remain unchanged.
+                 */
+                providerVerificationReverificationService
+                        .requestCategoryReverification(profile.getId());
+            }
+
+            profile.setCategoryIds(validatedCategoryIds);
         }
 
         profile.setUpdatedAt(Instant.now());
@@ -153,6 +185,29 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
         return toResponse(
                 providerProfileRepository.save(profile)
         );
+    }
+
+    /**
+     * Checks whether the updated selection contains a category
+     * that was not present in the existing selection.
+     *
+     * Category removal and category ordering changes do not
+     * count as adding a new category.
+     */
+    private boolean hasNewCategory(
+            List<String> existingCategoryIds,
+            List<String> updatedCategoryIds
+    ) {
+
+        Set<String> existingCategories =
+                existingCategoryIds == null
+                        ? Set.of()
+                        : new LinkedHashSet<>(existingCategoryIds);
+
+        return updatedCategoryIds.stream()
+                .anyMatch(categoryId ->
+                        !existingCategories.contains(categoryId)
+                );
     }
 
     /**
