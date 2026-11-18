@@ -149,13 +149,23 @@ class CustomerFavouriteControllerTest {
     }
 
     @Test
-    @DisplayName("PUT /api/v1/customers/me/favorites/{type}/{targetId} returns 200 when adding favourite")
+    @DisplayName("PUT /api/v1/customers/me/favorites/{type}/{targetId} returns 200 with item when adding favourite")
     void shouldReturn200ForAddFavourite() throws Exception {
         mockAuth("cust-token", "cust-1", Role.CUSTOMER);
 
+        CustomerFavouriteResponse response = new CustomerFavouriteResponse(
+                "fav-1", FavouriteType.PROVIDER, "prov-100", "Sunil Shanta",
+                null, null, "Colombo", null, null, null, null, null, null, false, Instant.now()
+        );
+        when(customerFavouriteService.addFavourite("cust-1", FavouriteType.PROVIDER, "prov-100"))
+                .thenReturn(response);
+
         mockMvc.perform(put("/api/v1/customers/me/favorites/PROVIDER/prov-100")
                         .header("Authorization", "Bearer cust-token"))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.favouriteId").value("fav-1"))
+                .andExpect(jsonPath("$.targetId").value("prov-100"))
+                .andExpect(jsonPath("$.name").value("Sunil Shanta"));
 
         verify(customerFavouriteService).addFavourite("cust-1", FavouriteType.PROVIDER, "prov-100");
     }

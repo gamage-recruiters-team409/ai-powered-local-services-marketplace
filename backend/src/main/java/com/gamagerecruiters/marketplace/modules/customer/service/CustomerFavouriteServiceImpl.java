@@ -118,36 +118,61 @@ public class CustomerFavouriteServiceImpl implements CustomerFavouriteService {
     }
 
     @Override
-    public void addFavourite(String customerId, FavouriteType type, String targetId) {
+    public CustomerFavouriteResponse addFavourite(String customerId, FavouriteType type, String targetId) {
         validateType(type);
         validateTargetId(targetId);
 
         // Verify target exists
+        FavouriteTargetDetails details;
         if (type == FavouriteType.PROVIDER) {
             Optional<FavouriteTargetDetails> provider = favouriteProviderLookup.lookup(targetId);
             if (provider.isEmpty()) {
                 throw new ResourceNotFoundException("TARGET_NOT_FOUND", "Provider not found with targetId: " + targetId);
             }
+            details = provider.get();
         } else if (type == FavouriteType.LISTING) {
             FavouriteListingLookup listingLookup = requireListingLookup();
             Optional<FavouriteTargetDetails> listing = listingLookup.lookup(targetId);
             if (listing.isEmpty()) {
                 throw new ResourceNotFoundException("TARGET_NOT_FOUND", "Listing not found with targetId: " + targetId);
             }
+            details = listing.get();
+        } else {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_FAVOURITE_TYPE", "Invalid favourite type: " + type);
         }
 
-        // Idempotent add: check existing first
-        if (customerFavouriteRepository.existsByCustomerIdAndTypeAndTargetId(customerId, type, targetId)) {
-            return;
+        CustomerFavourite favourite;
+        Optional<CustomerFavourite> existing = customerFavouriteRepository.findByCustomerIdAndTypeAndTargetId(customerId, type, targetId);
+        if (existing.isPresent()) {
+            favourite = existing.get();
+        } else {
+            try {
+                favourite = customerFavouriteRepository.save(new CustomerFavourite(customerId, type, targetId, Instant.now()));
+            } catch (DuplicateKeyException ex) {
+                log.debug("Concurrent duplicate favourite add treated as idempotent success: customerId={}, type={}, targetId={}",
+                        customerId, type, targetId);
+                favourite = customerFavouriteRepository.findByCustomerIdAndTypeAndTargetId(customerId, type, targetId)
+                        .orElse(new CustomerFavourite(customerId, type, targetId, Instant.now()));
+            }
         }
 
-        try {
-            CustomerFavourite favourite = new CustomerFavourite(customerId, type, targetId, Instant.now());
-            customerFavouriteRepository.save(favourite);
-        } catch (DuplicateKeyException ex) {
-            log.debug("Concurrent duplicate favourite add treated as idempotent success: customerId={}, type={}, targetId={}",
-                    customerId, type, targetId);
-        }
+        return new CustomerFavouriteResponse(
+                favourite.getId(),
+                favourite.getType(),
+                favourite.getTargetId(),
+                details.name(),
+                details.subtitle(),
+                details.category(),
+                details.city(),
+                details.imageUrl(),
+                details.rating(),
+                details.reviewCount(),
+                details.priceFrom(),
+                details.priceUnit(),
+                details.currency(),
+                details.inactive(),
+                favourite.getCreatedAt()
+        );
     }
 
     @Override

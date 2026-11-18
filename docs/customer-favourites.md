@@ -56,8 +56,28 @@ All endpoints require authentication with the `CUSTOMER` role (`hasRole('CUSTOME
   - `type`: `PROVIDER` or `LISTING`
   - `targetId`: Unique identifier of the provider or listing
 - **Response Status:** `200 OK`
+- **Response Body (`CustomerFavouriteResponse`):**
+  ```json
+  {
+    "favouriteId": "654321abcdef...",
+    "type": "PROVIDER",
+    "targetId": "prov-123",
+    "name": "Nuwan Perera",
+    "subtitle": null,
+    "category": null,
+    "city": "Colombo",
+    "imageUrl": "https://cdn.example.lk/profiles/nuwan.jpg",
+    "rating": null,
+    "reviewCount": null,
+    "priceFrom": null,
+    "priceUnit": null,
+    "currency": null,
+    "inactive": false,
+    "savedAt": "2026-11-19T03:00:00Z"
+  }
+  ```
 - **Behavior:**
-  - Idempotent: If the target is already saved, returns `200 OK` without creating a duplicate.
+  - Idempotent: If the target is already saved, returns `200 OK` with the item without creating a duplicate.
   - Concurrent duplicate submissions are protected by MongoDB unique index and caught cleanly.
 - **Error Codes:**
   - `400 INVALID_FAVOURITE_TYPE`: if `type` is invalid.

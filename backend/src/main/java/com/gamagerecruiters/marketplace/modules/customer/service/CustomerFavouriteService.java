@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.customer.service;
 
 import com.gamagerecruiters.marketplace.modules.customer.domain.FavouriteType;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerFavouritePageResponse;
+import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerFavouriteResponse;
 
 /**
  * Service managing customer favourites for providers and service listings (FR-CUST-005).
@@ -21,13 +22,15 @@ public interface CustomerFavouriteService {
     CustomerFavouritePageResponse getFavourites(String customerId, FavouriteType type, int page, int size);
 
     /**
-     * Idempotently adds a favourite target. If already saved, succeeds without creating a duplicate.
+     * Idempotently adds a favourite target and returns the saved favourite item.
+     * If already saved, succeeds without creating a duplicate.
      *
      * @param customerId ID of the authenticated customer
      * @param type       PROVIDER or LISTING
      * @param targetId   ID of the target provider or listing
+     * @return the saved favourite item details
      */
-    void addFavourite(String customerId, FavouriteType type, String targetId);
+    CustomerFavouriteResponse addFavourite(String customerId, FavouriteType type, String targetId);
 
     /**
      * Idempotently removes a favourite target. Returns successfully even if target was not saved.

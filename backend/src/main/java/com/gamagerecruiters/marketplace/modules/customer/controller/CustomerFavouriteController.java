@@ -19,6 +19,7 @@ import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.customer.domain.FavouriteType;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerFavouritePageResponse;
+import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerFavouriteResponse;
 import com.gamagerecruiters.marketplace.modules.customer.service.CustomerFavouriteService;
 
 @RestController
@@ -45,14 +46,14 @@ public class CustomerFavouriteController {
     }
 
     @PutMapping("/{type}/{targetId}")
-    public ResponseEntity<Void> addFavourite(
+    public ResponseEntity<CustomerFavouriteResponse> addFavourite(
             @PathVariable String type,
             @PathVariable String targetId
     ) {
         String currentUserId = CurrentUser.getUserId();
         FavouriteType parsedType = parseType(type);
-        customerFavouriteService.addFavourite(currentUserId, parsedType, targetId);
-        return ResponseEntity.ok().build();
+        CustomerFavouriteResponse response = customerFavouriteService.addFavourite(currentUserId, parsedType, targetId);
+        return ResponseEntity.ok(response);
     }
 
     @DeleteMapping("/{type}/{targetId}")

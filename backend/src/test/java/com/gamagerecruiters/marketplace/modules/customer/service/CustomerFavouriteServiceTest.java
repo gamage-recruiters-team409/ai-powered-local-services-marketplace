@@ -78,18 +78,31 @@ class CustomerFavouriteServiceTest {
                 null, null, null, null, null, false
         );
         when(favouriteProviderLookup.lookup(targetId)).thenReturn(Optional.of(details));
-        when(customerFavouriteRepository.existsByCustomerIdAndTypeAndTargetId(customerId, FavouriteType.PROVIDER, targetId))
-                .thenReturn(false);
+        when(customerFavouriteRepository.findByCustomerIdAndTypeAndTargetId(customerId, FavouriteType.PROVIDER, targetId))
+                .thenReturn(Optional.empty());
+        when(customerFavouriteRepository.save(any(CustomerFavourite.class)))
+                .thenAnswer(inv -> {
+                    CustomerFavourite f = inv.getArgument(0);
+                    f.setId("fav-generated-id");
+                    return f;
+                });
 
-        customerFavouriteService.addFavourite(customerId, FavouriteType.PROVIDER, targetId);
+        CustomerFavouriteResponse response = customerFavouriteService.addFavourite(customerId, FavouriteType.PROVIDER, targetId);
 
-        ArgumentCaptor<CustomerFavourite> captor = ArgumentCaptor.forClass(CustomerFavourite);
+        ArgumentCaptor<CustomerFavourite> captor = ArgumentCaptor.forClass(CustomerFavourite.class);
         verify(customerFavouriteRepository).save(captor.capture());
         CustomerFavourite saved = captor.getValue();
         assertEquals(customerId, saved.getCustomerId());
         assertEquals(FavouriteType.PROVIDER, saved.getType());
         assertEquals(targetId, saved.getTargetId());
         assertNotNull(saved.getCreatedAt());
+
+        assertNotNull(response);
+        assertEquals("prov-1", response.targetId());
+        assertEquals("Nuwan Perera", response.name());
+        assertEquals("Colombo", response.city());
+        assertEquals("https://img.local/nuwan.jpg", response.imageUrl());
+        assertFalse(response.inactive());
     }
 
     @Test
@@ -102,13 +115,19 @@ class CustomerFavouriteServiceTest {
                 targetId, "Nuwan Perera", null, null, "Colombo", null,
                 null, null, null, null, null, false
         );
-        when(favouriteProviderLookup.lookup(targetId)).thenReturn(Optional.of(details));
-        when(customerFavouriteRepository.existsByCustomerIdAndTypeAndTargetId(customerId, FavouriteType.PROVIDER, targetId))
-                .thenReturn(true);
+        CustomerFavourite existing = new CustomerFavourite(customerId, FavouriteType.PROVIDER, targetId, Instant.now());
+        existing.setId("fav-existing");
 
-        customerFavouriteService.addFavourite(customerId, FavouriteType.PROVIDER, targetId);
+        when(favouriteProviderLookup.lookup(targetId)).thenReturn(Optional.of(details));
+        when(customerFavouriteRepository.findByCustomerIdAndTypeAndTargetId(customerId, FavouriteType.PROVIDER, targetId))
+                .thenReturn(Optional.of(existing));
+
+        CustomerFavouriteResponse response = customerFavouriteService.addFavourite(customerId, FavouriteType.PROVIDER, targetId);
 
         verify(customerFavouriteRepository, never()).save(any());
+        assertNotNull(response);
+        assertEquals("prov-1", response.targetId());
+        assertEquals("Nuwan Perera", response.name());
     }
 
     @Test
@@ -121,14 +140,20 @@ class CustomerFavouriteServiceTest {
                 targetId, "Nuwan Perera", null, null, "Colombo", null,
                 null, null, null, null, null, false
         );
+        CustomerFavourite existing = new CustomerFavourite(customerId, FavouriteType.PROVIDER, targetId, Instant.now());
+        existing.setId("fav-race-won");
+
         when(favouriteProviderLookup.lookup(targetId)).thenReturn(Optional.of(details));
-        when(customerFavouriteRepository.existsByCustomerIdAndTypeAndTargetId(customerId, FavouriteType.PROVIDER, targetId))
-                .thenReturn(false);
+        when(customerFavouriteRepository.findByCustomerIdAndTypeAndTargetId(customerId, FavouriteType.PROVIDER, targetId))
+                .thenReturn(Optional.empty(), Optional.of(existing));
         when(customerFavouriteRepository.save(any(CustomerFavourite.class)))
                 .thenThrow(new DuplicateKeyException("E11000 duplicate key error"));
 
-        // Must not throw
-        customerFavouriteService.addFavourite(customerId, FavouriteType.PROVIDER, targetId);
+        CustomerFavouriteResponse response = customerFavouriteService.addFavourite(customerId, FavouriteType.PROVIDER, targetId);
+
+        assertNotNull(response);
+        assertEquals("prov-1", response.targetId());
+        assertEquals("Nuwan Perera", response.name());
     }
 
     @Test
