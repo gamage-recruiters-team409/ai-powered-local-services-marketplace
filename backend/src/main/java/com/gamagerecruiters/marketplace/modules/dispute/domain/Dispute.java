@@ -52,6 +52,17 @@ public class Dispute {
     private Instant syncLeaseUntil;
     /** Internal: random token of the worker holding the lease; removal is only allowed for that worker. Never exposed. */
     private String syncLeaseOwner;
+    /** The admin decision (set when the dispute becomes RESOLVED). Its note is internal. */
+    private DisputeDecision decision;
+    /** End of the appeal window: decision time + {@link DisputeRules#APPEAL_WINDOW}. */
+    private Instant appealDeadline;
+    /** The single appeal, if one was filed, and the reviewing admin's verdict. */
+    private DisputeAppeal appeal;
+    /** The binding decision once RESOLVED_FINAL: the original one, or the reviewer's if the appeal changed it. */
+    private DisputeDecision finalDecision;
+    private Instant finalizedAt;
+    /** Carrying out the final decision in other modules (set when the dispute becomes RESOLVED_FINAL). */
+    private DisputeSettlement settlement;
 
     /**
      * Moves the dispute to {@code toStatus} and records the change in the status history.
@@ -100,6 +111,54 @@ public class Dispute {
 
     public void setSyncLeaseOwner(String syncLeaseOwner) {
         this.syncLeaseOwner = syncLeaseOwner;
+    }
+
+    public DisputeDecision getDecision() {
+        return decision;
+    }
+
+    public void setDecision(DisputeDecision decision) {
+        this.decision = decision;
+    }
+
+    public Instant getAppealDeadline() {
+        return appealDeadline;
+    }
+
+    public void setAppealDeadline(Instant appealDeadline) {
+        this.appealDeadline = appealDeadline;
+    }
+
+    public DisputeAppeal getAppeal() {
+        return appeal;
+    }
+
+    public void setAppeal(DisputeAppeal appeal) {
+        this.appeal = appeal;
+    }
+
+    public DisputeDecision getFinalDecision() {
+        return finalDecision;
+    }
+
+    public void setFinalDecision(DisputeDecision finalDecision) {
+        this.finalDecision = finalDecision;
+    }
+
+    public Instant getFinalizedAt() {
+        return finalizedAt;
+    }
+
+    public void setFinalizedAt(Instant finalizedAt) {
+        this.finalizedAt = finalizedAt;
+    }
+
+    public DisputeSettlement getSettlement() {
+        return settlement;
+    }
+
+    public void setSettlement(DisputeSettlement settlement) {
+        this.settlement = settlement;
     }
 
     public void setId(String id) {
