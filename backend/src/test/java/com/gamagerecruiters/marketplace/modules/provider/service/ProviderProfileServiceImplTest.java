@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -422,6 +423,58 @@ class ProviderProfileServiceImplTest {
 
         verify(providerVerificationReverificationService)
                 .requestCategoryReverification("profile-1");
+    }
+
+    @Test
+    void updateMyProfile_shouldNotSaveCategoriesWhenVerificationIsInProgress() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+
+        existingProfile.setCategoryIds(
+                List.of("existing-category")
+        );
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(categoryService.getCategoryById("existing-category"))
+                .thenReturn(activeCategory("existing-category"));
+
+        when(categoryService.getCategoryById("category-2"))
+                .thenReturn(activeCategory("category-2"));
+
+        doThrow(new ResourceConflictException(
+                "PROVIDER_VERIFICATION_IN_PROGRESS",
+                "You cannot add a new service category while your verification is submitted or under review."
+        )).when(providerVerificationReverificationService)
+                .requestCategoryReverification("profile-1");
+
+        UpdateProviderProfileRequest request =
+                new UpdateProviderProfileRequest();
+
+        request.setCategoryIds(
+                List.of("existing-category", "category-2")
+        );
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> providerProfileService.updateMyProfile(request)
+        );
+
+        assertEquals(
+                "PROVIDER_VERIFICATION_IN_PROGRESS",
+                exception.getErrorCode()
+        );
+
+        // The original category selection must remain unchanged.
+        assertEquals(
+                List.of("existing-category"),
+                existingProfile.getCategoryIds()
+        );
+
+        // A rejected category update must never persist the profile.
+        verify(providerProfileRepository, never())
+                .save(any(ProviderProfile.class));
     }
 
     @Test

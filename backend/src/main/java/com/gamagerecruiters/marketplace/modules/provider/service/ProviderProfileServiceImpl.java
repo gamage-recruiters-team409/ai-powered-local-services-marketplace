@@ -168,10 +168,14 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
             if (newCategoryAdded) {
 
                 /*
-                 * The verification service only changes records
-                 * currently in APPROVED status.
+                 * Coordinate category additions with the verification lifecycle:
                  *
-                 * Non-approved verification statuses remain unchanged.
+                 * - APPROVED providers move to RESUBMISSION_REQUESTED.
+                 * - SUBMITTED and UNDER_REVIEW providers receive a conflict.
+                 * - Other verification statuses retain their existing workflow.
+                 *
+                 * The verification service must complete this check before the
+                 * updated category selection is saved.
                  */
                 providerVerificationReverificationService
                         .requestCategoryReverification(profile.getId());
