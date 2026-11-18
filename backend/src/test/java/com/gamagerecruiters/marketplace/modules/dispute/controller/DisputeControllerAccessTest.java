@@ -42,9 +42,13 @@ import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService;
+import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeResolutionService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
 
 /** Role access for every dispute endpoint, through the real SecurityConfig and admin access policy. */
@@ -81,6 +85,12 @@ class DisputeControllerAccessTest {
     @MockitoBean
     private DisputeService disputeService;
 
+    @MockitoBean
+    private DisputeResolutionService resolutionService;
+
+    @MockitoBean
+    private DisputeAdminQueryService adminQueryService;
+
     /** Registers a valid token for a user with the given role and returns the Authorization header value. */
     private String bearer(Role role) {
         String token = "token-" + role.name();
@@ -103,6 +113,14 @@ class DisputeControllerAccessTest {
         return new DisputeDetailResponse(DISPUTE_ID, "booking-1", "cust-1", "prov-1", "cust-1", Role.CUSTOMER,
                 DisputeCategory.NO_SHOW, "Provider did not come", List.of(), DisputeStatus.AWAITING_RESPONSE,
                 null, now.plusSeconds(3600), now, now, List.of());
+    }
+
+    private static AdminDisputeDetailResponse adminDetail() {
+        Instant now = Instant.parse("2026-11-10T10:00:00Z");
+        return new AdminDisputeDetailResponse(DISPUTE_ID, "booking-1", "cust-1", "Customer", "prov-1", "Provider",
+                "cust-1", Role.CUSTOMER, DisputeCategory.NO_SHOW, "Provider did not come", List.of(),
+                DisputeStatus.UNDER_REVIEW, null, now.plusSeconds(3600), now, now, null, null,
+                AppealStatus.NOT_AVAILABLE, null, null, null, null, List.of());
     }
 
     private static DisputePageResponse<DisputeSummaryResponse> emptyPage() {
@@ -128,7 +146,7 @@ class DisputeControllerAccessTest {
         mockMvc.perform(respond()).andExpect(status().isUnauthorized());
         mockMvc.perform(get(ADMIN_DISPUTES)).andExpect(status().isUnauthorized());
         mockMvc.perform(get(ADMIN_DISPUTES + "/" + DISPUTE_ID)).andExpect(status().isUnauthorized());
-        verifyNoInteractions(disputeService);
+        verifyNoInteractions(disputeService, resolutionService, adminQueryService);
     }
 
     // ---------- POST /disputes ----------
@@ -223,17 +241,18 @@ class DisputeControllerAccessTest {
         mockMvc.perform(get(DISPUTES + "/" + DISPUTE_ID).header("Authorization", bearer(role)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(DISPUTE_ID));
-        verify(disputeService, never()).getDisputeForAdmin(any());
+        verifyNoInteractions(adminQueryService);
     }
 
     @ParameterizedTest
     @EnumSource(value = Role.class, names = {"ADMIN", "SUPER_ADMIN"})
     @DisplayName("GET /disputes/{id}: ADMIN and SUPER_ADMIN (read-only) can view any dispute")
     void getDisputeAsAuthorizedAdmin(Role role) throws Exception {
-        when(disputeService.getDisputeForAdmin(DISPUTE_ID)).thenReturn(detail());
+        when(adminQueryService.getDetail(DISPUTE_ID)).thenReturn(adminDetail());
 
         mockMvc.perform(get(DISPUTES + "/" + DISPUTE_ID).header("Authorization", bearer(role)))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.customerName").value("Customer"));
         verify(disputeService, never()).getDisputeForParty(any(), any());
     }
 
@@ -243,7 +262,7 @@ class DisputeControllerAccessTest {
     void getDisputeForbiddenForOtherAdmins(Role role) throws Exception {
         mockMvc.perform(get(DISPUTES + "/" + DISPUTE_ID).header("Authorization", bearer(role)))
                 .andExpect(status().isForbidden());
-        verifyNoInteractions(disputeService);
+        verifyNoInteractions(disputeService, adminQueryService);
     }
 
     // ---------- POST /disputes/{id}/response ----------
@@ -284,9 +303,11 @@ class DisputeControllerAccessTest {
     @EnumSource(value = Role.class, names = {"ADMIN", "SUPER_ADMIN"})
     @DisplayName("GET /admin/disputes and /admin/disputes/{id}: ADMIN and SUPER_ADMIN (read-only) (200)")
     void adminEndpointsAllowed(Role role) throws Exception {
-        when(disputeService.getDisputesForAdmin(eq("UNDER_REVIEW"), anyInt(), anyInt())).thenReturn(emptyPage());
-        when(disputeService.getDisputesForAdmin(isNull(), anyInt(), anyInt())).thenReturn(emptyPage());
-        when(disputeService.getDisputeForAdmin(DISPUTE_ID)).thenReturn(detail());
+        when(adminQueryService.search(eq("UNDER_REVIEW"), isNull(), isNull(), isNull(), isNull(), any(), anyInt(),
+                anyInt())).thenReturn(emptyPage());
+        when(adminQueryService.search(isNull(), isNull(), isNull(), isNull(), isNull(), any(), anyInt(), anyInt()))
+                .thenReturn(emptyPage());
+        when(adminQueryService.getDetail(DISPUTE_ID)).thenReturn(adminDetail());
         String auth = bearer(role);
 
         mockMvc.perform(get(ADMIN_DISPUTES).header("Authorization", auth)).andExpect(status().isOk());
@@ -308,6 +329,6 @@ class DisputeControllerAccessTest {
                 .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
         mockMvc.perform(get(ADMIN_DISPUTES + "/" + DISPUTE_ID).header("Authorization", auth))
                 .andExpect(status().isForbidden());
-        verifyNoInteractions(disputeService);
+        verifyNoInteractions(disputeService, adminQueryService);
     }
 }

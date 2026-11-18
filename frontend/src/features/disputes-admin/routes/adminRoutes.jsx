@@ -4,6 +4,7 @@ import { ADMIN_AREAS, ADMIN_BASE_PATH, AREA_ORDER } from '../config/adminAreas'
 import { findNavConfigProblems, getAreaEntries } from '../config/navModel'
 import { RequireAreaAccess } from '../guards/RequireAreaAccess'
 import { RequireAuth } from '../guards/RequireAuth'
+import { RequirePasswordChanged } from '../../auth'
 import { AdminNotFoundPage } from '../pages/AdminNotFoundPage'
 import { AreaPlaceholderPage } from '../pages/AreaPlaceholderPage'
 import { RoleSelectionPage } from '../pages/RoleSelectionPage'
@@ -38,9 +39,11 @@ export const adminRoutes = {
   path: ADMIN_BASE_PATH,
   element: (
     <RequireAuth>
-      <AdminAccessProvider>
-        <AdminShell />
-      </AdminAccessProvider>
+      <RequirePasswordChanged>
+        <AdminAccessProvider>
+          <AdminShell />
+        </AdminAccessProvider>
+      </RequirePasswordChanged>
     </RequireAuth>
   ),
   children: [
