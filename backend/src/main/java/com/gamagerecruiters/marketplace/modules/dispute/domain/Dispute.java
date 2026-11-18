@@ -16,6 +16,9 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
  *
  * <p>Status changes go through {@link #changeStatus}, which always appends a {@link StatusHistoryEntry}.</p>
  *
+ * <p>A RESOLVED_FINAL dispute keeps {@code activeBookingKey} until the booking resolution is confirmed APPLIED
+ * (DisputeResolutionStore.recordSettlement), because the booking stays DISPUTED until then.</p>
+ *
  * <p>{@code activeBookingKey} holds the bookingId while the dispute is active and is removed when it
  * stops being active. A unique partial index on it (see DisputeIndexInitializer) guarantees at most one
  * active dispute per booking, even under concurrent requests.</p>

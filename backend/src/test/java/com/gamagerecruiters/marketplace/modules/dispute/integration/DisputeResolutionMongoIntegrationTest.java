@@ -8,6 +8,8 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -61,8 +63,11 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealDecisionReques
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.ResolveDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.port.BookingResolutionPort;
+import com.gamagerecruiters.marketplace.modules.dispute.port.BookingSnapshot;
+import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeEligibilityPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeSettlementPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.SettlementOutcome;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService;
@@ -132,6 +137,12 @@ class DisputeResolutionMongoIntegrationTest {
     private DisputeSettlementPort settlementPort;
     @MockitoSpyBean
     private BookingResolutionPort bookingResolutionPort;
+    /**
+     * Behaves like the approved WP05 contract (BookingFacade.assertDisputeEligible): a booking that is already
+     * DISPUTED and still inside its 72-hour dispute window is ELIGIBLE (alreadyDisputed = true).
+     */
+    @MockitoBean
+    private DisputeEligibilityPort eligibilityPort;
 
     @Autowired
     private DisputeResolutionService resolutionService;
@@ -383,8 +394,8 @@ class DisputeResolutionMongoIntegrationTest {
     }
 
     @Test
-    @DisplayName("appeal decision CHANGE by a different admin -> RESOLVED_FINAL with the new binding decision, the "
-            + "booking key released, settlement attempted once and left NOT_APPLIED by the stubs")
+    @DisplayName("appeal decision CHANGE by a different admin -> RESOLVED_FINAL with the new binding decision, "
+            + "settlement attempted once and left NOT_APPLIED by the stubs")
     void differentAdminChangesDecision() {
         String id = appealedByCustomer();
 
@@ -393,7 +404,8 @@ class DisputeResolutionMongoIntegrationTest {
 
         Dispute stored = load(id);
         assertThat(stored.getStatus()).isEqualTo(DisputeStatus.RESOLVED_FINAL);
-        assertThat(stored.getActiveBookingKey()).isNull();
+        assertThat(stored.getActiveBookingKey()).as("kept: the stub did not resolve the booking")
+                .isEqualTo(stored.getBookingId());
         assertThat(stored.getDecision().getAction()).as("original kept").isEqualTo(ResolutionAction.REFUND_PARTIAL);
         assertThat(stored.getFinalDecision().getAction()).isEqualTo(ResolutionAction.REFUND_FULL);
         assertThat(stored.getFinalDecision().getCustomerRefundPercent()).isEqualTo(100);
@@ -484,6 +496,97 @@ class DisputeResolutionMongoIntegrationTest {
         assertThat(afterRetry.getSettlement().getAttempts()).isEqualTo(2);
         verify(bookingResolutionPort, times(1)).resolveBooking(any());
         verify(settlementPort, times(2)).settle(any());
+    }
+
+    // ---------- duplicate-dispute protection after finalization ----------
+
+    /** What the real eligibility check answers for a booking that is DISPUTED and inside its 72h window. */
+    private void bookingIsDisputedAndEligible(String bookingId) {
+        when(eligibilityPort.assertEligible(bookingId))
+                .thenReturn(new BookingSnapshot(bookingId, CUSTOMER_ID, PROVIDER_ID, true));
+    }
+
+    private static RaiseDisputeRequest raiseRequest(String bookingId) {
+        return new RaiseDisputeRequest(bookingId, DisputeCategory.NO_SHOW, "A second dispute for the same booking",
+                List.of());
+    }
+
+    private List<Dispute> disputesFor(String bookingId) {
+        return mongoTemplate.find(Query.query(Criteria.where("bookingId").is(bookingId)), Dispute.class);
+    }
+
+    @Test
+    @DisplayName("finalized (window passed) while booking resolution is NOT_APPLIED: the booking stays DISPUTED and "
+            + "keeps its key, so a second dispute inside the 72h window is rejected with 409, nothing created")
+    void finalizedNotAppliedBlocksSecondDispute() {
+        String id = resolvedByAdminA();
+        expireAppealWindow(id);
+        String bookingId = load(id).getBookingId();
+
+        finalizer.run();
+
+        Dispute finalDispute = load(id);
+        assertThat(finalDispute.getStatus()).isEqualTo(DisputeStatus.RESOLVED_FINAL);
+        assertThat(finalDispute.getSettlement().getBookingState()).isEqualTo(SettlementState.NOT_APPLIED);
+        assertThat(finalDispute.getActiveBookingKey()).isEqualTo(bookingId);
+        // Nothing moved the booking out of DISPUTED (the stub never calls the Booking module).
+        verifyNoInteractions(bookingFacade);
+
+        bookingIsDisputedAndEligible(bookingId);
+        assertApiError(catchThrowable(() -> disputeService.raiseDispute(CUSTOMER_ID, Role.CUSTOMER,
+                raiseRequest(bookingId))), 409, "DISPUTE_ALREADY_EXISTS");
+        assertApiError(catchThrowable(() -> disputeService.raiseDispute(PROVIDER_ID, Role.PROVIDER,
+                raiseRequest(bookingId))), 409, "DISPUTE_ALREADY_EXISTS");
+
+        assertThat(disputesFor(bookingId)).singleElement().satisfies(d -> assertThat(d.getId()).isEqualTo(id));
+        verifyNoInteractions(bookingFacade);
+    }
+
+    @Test
+    @DisplayName("finalized by the appeal decision while NOT_APPLIED: a second dispute is rejected the same way")
+    void appealDecisionNotAppliedBlocksSecondDispute() {
+        String id = appealedByCustomer();
+        String bookingId = load(id).getBookingId();
+        resolutionService.decideAppeal(ADMIN_B, Role.ADMIN, id,
+                new AppealDecisionRequest(AppealVerdict.UPHOLD, null, null, null, NOTE));
+        assertThat(load(id).getActiveBookingKey()).isEqualTo(bookingId);
+
+        bookingIsDisputedAndEligible(bookingId);
+        assertApiError(catchThrowable(() -> disputeService.raiseDispute(CUSTOMER_ID, Role.CUSTOMER,
+                raiseRequest(bookingId))), 409, "DISPUTE_ALREADY_EXISTS");
+        assertThat(disputesFor(bookingId)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("booking resolution confirmed APPLIED -> only then is the booking's dispute key released")
+    void appliedBookingResolutionReleasesKey() {
+        doReturn(SettlementOutcome.APPLIED).when(bookingResolutionPort).resolveBooking(any());
+        String id = resolvedByAdminA();
+        expireAppealWindow(id);
+
+        finalizer.run();
+
+        Dispute stored = load(id);
+        assertThat(stored.getStatus()).isEqualTo(DisputeStatus.RESOLVED_FINAL);
+        assertThat(stored.getSettlement().getBookingState()).isEqualTo(SettlementState.APPLIED);
+        assertThat(stored.getActiveBookingKey()).isNull();
+    }
+
+    @Test
+    @DisplayName("recovery still works: the user's own unfinished (PENDING) dispute on a DISPUTED booking is "
+            + "completed by a retry, not rejected")
+    void ownPendingIntentRecoveryStillWorks() {
+        Dispute intent = insert(DisputeStatus.AWAITING_RESPONSE);
+        mongoTemplate.updateFirst(Query.query(Criteria.where("_id").is(intent.getId())),
+                new Update().set("bookingSyncState", BookingSyncState.PENDING), Dispute.class);
+        bookingIsDisputedAndEligible(intent.getBookingId());
+
+        DisputeDetailResponse recovered = disputeService.raiseDispute(CUSTOMER_ID, Role.CUSTOMER,
+                raiseRequest(intent.getBookingId()));
+
+        assertThat(recovered.id()).isEqualTo(intent.getId());
+        assertThat(disputesFor(intent.getBookingId())).singleElement()
+                .satisfies(d -> assertThat(d.getBookingSyncState()).isEqualTo(BookingSyncState.SYNCED));
     }
 
     // ---------- party and admin views ----------

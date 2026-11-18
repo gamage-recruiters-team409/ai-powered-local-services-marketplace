@@ -160,9 +160,10 @@ public class DisputeResolutionStore {
         return change(DisputeStatus.RESOLVED_FINAL, entry, now)
                 .set(F_FINAL_DECISION, finalDecision)
                 .set(F_FINALIZED_AT, now)
-                .set(F_SETTLEMENT, DisputeSettlement.pending())
-                // Final: no longer blocks a new dispute for the booking.
-                .unset(F_ACTIVE_KEY);
+                // activeBookingKey is KEPT: the booking is still DISPUTED until the booking-resolution port confirms
+                // the change, and a booking that is still DISPUTED may pass the Booking module's eligibility check.
+                // The unique key keeps blocking a second dispute for it (see recordSettlement).
+                .set(F_SETTLEMENT, DisputeSettlement.pending());
     }
 
     /**
@@ -194,7 +195,9 @@ public class DisputeResolutionStore {
 
     /**
      * Records one settlement attempt, only while the caller still holds the lease. Never touches the status or the
-     * decision. True if recorded.
+     * decision. Only when the booking resolution is confirmed APPLIED (the booking has left DISPUTED) is the
+     * booking's active-dispute key released; NOT_APPLIED (stub) or FAILED keep it, so no second dispute can be
+     * created for a booking that is still DISPUTED. True if recorded.
      */
     public boolean recordSettlement(String disputeId, String leaseOwner, SettlementState bookingState,
                                     SettlementState payoutState, Instant now) {
@@ -210,6 +213,9 @@ public class DisputeResolutionStore {
                 .unset(F_S_LEASE)
                 .unset(F_S_OWNER)
                 .inc(F_VERSION, 1);
+        if (bookingState == SettlementState.APPLIED) {
+            update.unset(F_ACTIVE_KEY);
+        }
         return mongoTemplate.updateFirst(query, update, Dispute.class).getModifiedCount() == 1;
     }
 }
