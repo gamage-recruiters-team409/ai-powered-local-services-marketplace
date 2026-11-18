@@ -104,6 +104,10 @@ class DisputeRaiseWebTest {
     @MockitoBean
     private DisputeRepository disputeRepository;
     @MockitoBean
+    private com.gamagerecruiters.marketplace.modules.dispute.service.DisputeResolutionService resolutionService;
+    @MockitoBean
+    private com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService adminQueryService;
+    @MockitoBean
     private PayoutHoldPort payoutHoldPort;
     @MockitoBean
     private DisputeBookingSyncStore syncStore;

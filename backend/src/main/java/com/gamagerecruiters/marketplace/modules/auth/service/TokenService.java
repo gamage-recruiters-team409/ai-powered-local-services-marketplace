@@ -8,6 +8,8 @@ public interface TokenService {
 
     String generateRefreshToken();
 
+    String generateOpaqueToken();
+
     String hashToken(String rawToken);
 
     boolean validateToken(String token);
