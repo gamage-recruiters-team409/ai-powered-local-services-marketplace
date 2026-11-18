@@ -167,10 +167,11 @@ Completes password recovery by consuming the reset token and setting a new passw
      - **Email Verification (Idempotent Activation):**
        `EmailTokenServiceImpl.verifyEmail` validates the token via `findValidToken(...)`, activates the user in the database, and only consumes the token (`consumeValidToken(...)`) after the user save succeeds. If saving the user fails, the token remains untouched and valid for retry. If a parallel request already consumed the token, the request still succeeds because the account has been verified.
      - **Password Reset (Fail-Secure Ordering & Compensation):**
-       `EmailTokenServiceImpl.resetPassword` validates policy, account eligibility, and `SAME_PASSWORD` pre-checks before atomically claiming the token with `consumeValidToken(...)` (guaranteeing single-use under concurrency). Inside a guarded block, it executes in fail-secure order:
+       `EmailTokenServiceImpl.resetPassword` validates policy, account eligibility, and `SAME_PASSWORD` pre-checks before atomically claiming the token with `consumeValidToken(...)` (guaranteeing single-use under concurrency). Inside a guarded block (**Phase A**), it executes in fail-secure order:
        1. Revokes all active refresh tokens for the user first (if this fails, the password is unchanged and sessions remain intact).
        2. Encodes the new password, resets lockouts and `mustChangePassword`, and saves the user (if this fails, the user simply logs in again with the old credentials).
-       3. If ANY exception occurs after the atomic claim, a compensation routine (`AuthTokenRepository.releaseConsumedToken`) atomically resets `usedAt` back to `null` (matching `usedAt != null` and `revokedAt == null`), allowing the same reset link to be reused until expiration.
+       3. If ANY exception occurs during Phase A (before the password is persisted), a compensation routine (`AuthTokenRepository.releaseConsumedToken`) atomically resets `usedAt` back to `null` (matching `usedAt != null` and `revokedAt == null`), allowing the same reset link to be reused until expiration.
+       4. **Phase B (best-effort cleanup):** After the password is persisted, other unused password-reset tokens for the same user are revoked. This runs outside the compensation block; if it fails the error is logged at `WARN` level and swallowed. The consumed token is **never** released after the password is saved — the other unused links simply expire within 30 minutes.
      - **Residual Crash Window:**
        In the rare event of an unrecoverable JVM crash or hardware power loss during the milliseconds between the token claim and the user save, the link could remain consumed in the standalone database; in this residual case, the user simply requests a new reset link.
 

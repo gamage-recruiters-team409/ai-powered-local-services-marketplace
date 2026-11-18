@@ -319,6 +319,70 @@ public class PasswordResetFailureRecoveryIntegrationTest {
     }
 
     @Test
+    @DisplayName("Reset: unused-token cleanup fails after password save -> succeeds, token stays consumed, never released")
+    void testResetPassword_cleanupThrowsAfterSave_tokenNotReleased() {
+        User user = new User();
+        user.setEmail("reset-cleanup-fail@marketplace.local");
+        user.setName("Cleanup Fail User");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setEmailVerified(true);
+        String initialPassword = "OldPassword123!";
+        user.setPasswordHash(passwordEncoder.encode(initialPassword));
+        user.setMustChangePassword(true);
+        user.setCreatedAt(Instant.now());
+        User savedUser = userRepository.save(user);
+
+        // Active refresh token for this user
+        AuthToken refreshToken = new AuthToken(savedUser.getId(), TokenType.REFRESH, "refresh-hash-cleanup", Instant.now().plusSeconds(3600), Instant.now());
+        authTokenRepository.save(refreshToken);
+
+        // Reset token
+        String rawToken = tokenService.generateOpaqueToken();
+        String tokenHash = tokenService.hashToken(rawToken);
+        Instant now = Instant.now();
+        Instant expiresAt = now.plus(Duration.ofMinutes(30));
+        AuthToken resetToken = new AuthToken(savedUser.getId(), TokenType.PASSWORD_RESET, tokenHash, expiresAt, now);
+        authTokenRepository.save(resetToken);
+
+        // Delegating wrapper that fails on unused-token cleanup
+        AuthTokenRepository failingTokenRepo = Mockito.mock(AuthTokenRepository.class, AdditionalAnswers.delegatesTo(authTokenRepository));
+        Mockito.doThrow(new RuntimeException("Simulated DB failure during unused token cleanup"))
+                .when(failingTokenRepo)
+                .revokeAllUnusedTokensByUserIdAndType(eq(savedUser.getId()), eq(TokenType.PASSWORD_RESET));
+
+        EmailTokenServiceImpl serviceWithCleanupFailure = createService(userRepository, failingTokenRepo);
+        String newPassword = "NewPassword123!";
+
+        // Must NOT throw — cleanup is best-effort after password save
+        assertDoesNotThrow(() -> serviceWithCleanupFailure.resetPassword(rawToken, newPassword));
+
+        // Password must be changed
+        User updatedUser = userRepository.findById(savedUser.getId()).orElseThrow();
+        assertTrue(passwordEncoder.matches(newPassword, updatedUser.getPasswordHash()));
+        assertFalse(updatedUser.isMustChangePassword());
+
+        // Token must stay consumed (usedAt not null) — never released
+        AuthToken finalToken = authTokenRepository.findByTokenHash(tokenHash).orElseThrow();
+        assertNotNull(finalToken.getUsedAt(), "Reset token must remain consumed after password save");
+
+        // Refresh tokens revoked
+        AuthToken finalRefreshToken = authTokenRepository.findByTokenHash("refresh-hash-cleanup").orElseThrow();
+        assertNotNull(finalRefreshToken.getRevokedAt());
+
+        // Compensation must NOT have been called
+        Mockito.verify(failingTokenRepo, Mockito.never()).releaseConsumedToken(any(), any());
+
+        // Second attempt with same raw token must fail (token already consumed)
+        EmailTokenServiceImpl realService = createService(userRepository, authTokenRepository);
+        com.gamagerecruiters.marketplace.common.exception.ApiException ex = assertThrows(
+                com.gamagerecruiters.marketplace.common.exception.ApiException.class,
+                () -> realService.resetPassword(rawToken, "AnotherPassword1!")
+        );
+        assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, ex.getStatus());
+    }
+
+    @Test
     @DisplayName("Repository: releaseConsumedToken releases used token but not revoked token")
     void testReleaseConsumedToken_behavior() {
         String userId = "u-comp-test";

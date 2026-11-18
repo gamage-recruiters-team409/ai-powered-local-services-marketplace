@@ -242,12 +242,13 @@ public class EmailTokenServiceImpl implements EmailTokenService {
         authTokenRepository.consumeValidToken(tokenHash, TokenType.PASSWORD_RESET, now)
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "INVALID_OR_EXPIRED_TOKEN", INVALID_TOKEN_MSG));
 
-        // 2. Fail-secure ordering and compensation:
+        // 2. Phase A – Fail-secure ordering and compensation:
         // (a) Revoke ALL refresh tokens of the user first.
         //     If (a) fails, password is unchanged and sessions are intact.
         // (b) Save new password hash and clear mustChangePassword, lock and failed-login counters.
         //     If (b) fails after (a), password is unchanged and user only logs in again (fail-secure).
         // In both cases account state stays consistent.
+        // A reset token must NEVER be released once the password is persisted.
         try {
             authTokenRepository.revokeAllActiveTokensByUserIdAndType(user.getId(), TokenType.REFRESH);
 
@@ -259,9 +260,6 @@ public class EmailTokenServiceImpl implements EmailTokenService {
                 user.setStatus(UserStatus.ACTIVE);
             }
             userRepository.save(user);
-
-            // Invalidate other unused password reset tokens
-            authTokenRepository.revokeAllUnusedTokensByUserIdAndType(user.getId(), TokenType.PASSWORD_RESET);
         } catch (RuntimeException ex) {
             // 3. Compensation: atomically release the claimed token so the user can retry until expiration
             try {
@@ -270,6 +268,14 @@ public class EmailTokenServiceImpl implements EmailTokenService {
                 log.error("Failed to release consumed reset token during compensation for userId={}", user.getId());
             }
             throw ex;
+        }
+
+        // Phase B – Best-effort cleanup of other unused reset tokens.
+        // Password is already persisted; the consumed token must NOT be released even if this fails.
+        try {
+            authTokenRepository.revokeAllUnusedTokensByUserIdAndType(user.getId(), TokenType.PASSWORD_RESET);
+        } catch (Exception ex) {
+            log.warn("Failed to revoke unused reset tokens after password change for userId={}", user.getId());
         }
     }
 

@@ -489,6 +489,48 @@ class EmailTokenServiceTest {
     }
 
     @Test
+    @DisplayName("resetPassword does not release token when unused-token cleanup fails after password save")
+    void resetPassword_cleanupThrowsAfterSave_tokenNotReleased() {
+        String rawToken = "valid-reset-token";
+        String tokenHash = "valid-reset-hash";
+
+        when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
+
+        AuthToken token = new AuthToken("u123", TokenType.PASSWORD_RESET, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.PASSWORD_RESET), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+
+        User user = new User();
+        user.setId("u123");
+        user.setStatus(UserStatus.LOCKED);
+        user.setPasswordHash("oldEncodedPassword");
+        user.setFailedLoginCount(5);
+        user.setLockStartedAt(Instant.now());
+        user.setMustChangePassword(true);
+
+        when(userRepository.findById("u123")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("NewStrongPass1!", "oldEncodedPassword")).thenReturn(false);
+        when(passwordEncoder.encode("NewStrongPass1!")).thenReturn("newEncodedPassword");
+        org.mockito.Mockito.doThrow(new RuntimeException("Cleanup failure"))
+                .when(authTokenRepository)
+                .revokeAllUnusedTokensByUserIdAndType("u123", TokenType.PASSWORD_RESET);
+
+        // Cleanup failure must NOT propagate
+        assertDoesNotThrow(() -> emailTokenService.resetPassword(rawToken, "NewStrongPass1!"));
+
+        // Password must be saved
+        assertEquals("newEncodedPassword", user.getPasswordHash());
+        assertEquals(UserStatus.ACTIVE, user.getStatus());
+        assertFalse(user.isMustChangePassword());
+        verify(userRepository).save(user);
+
+        // Token must NOT be released (compensation must NOT fire)
+        verify(authTokenRepository, never()).releaseConsumedToken(anyString(), any());
+    }
+
+    @Test
     @DisplayName("resetPassword triggers compensation and rethrows if userRepository.save fails")
     void resetPassword_userSaveFails_compensationReleasesTokenAndRethrows() {
         String rawToken = "valid-reset-token";
