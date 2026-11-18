@@ -467,6 +467,9 @@ public class ListingServiceImpl implements ListingService {
 
         List<AddOnItemResponse> selectedAddOnResponses = resolveSelectedAddOns(listing, selectedAddOnIds);
 
+        // basePrice represents the price for the full configured listing.durationMin across both
+        // FIXED and HOURLY models (FR-LIST-005); pricingModel and baseDurationMin are preserved
+        // on the snapshot should WP05/WP07 later introduce variable booking-duration scaling.
         BigDecimal totalPrice = listing.getBasePrice();
         int totalDuration = listing.getDurationMin();
         for (AddOnItemResponse addOn : selectedAddOnResponses) {

@@ -508,14 +508,16 @@ class ListingServiceImplTest {
     }
 
     @Test
-    @DisplayName("PriceSnapshot computes total price/duration with active add-ons and rejects inactive/unknown add-ons or non-ACTIVE listings")
-    void priceSnapshotValidationAndCalculation() {
+    @DisplayName("PriceSnapshot FIXED pricing computes total price/duration with active add-ons and rejects inactive/unknown add-ons or non-ACTIVE listings")
+    void priceSnapshotFixedPricingAndValidation() {
         ServiceListing active = persistedListing("active-1", ListingStatus.ACTIVE);
         when(listingRepository.findById("active-1")).thenReturn(Optional.of(active));
         stubActiveCategoryHierarchy();
 
         PriceSnapshotResponse snapshot = listingService.getListingPriceSnapshot("active-1", List.of("addon-rush"));
+        assertThat(snapshot.pricingModel()).isEqualTo(PricingModel.FIXED);
         assertThat(snapshot.basePrice()).isEqualByComparingTo("3500.00");
+        assertThat(snapshot.baseDurationMin()).isEqualTo(90);
         assertThat(snapshot.commissionRate()).isEqualByComparingTo("0.12");
         assertThat(snapshot.totalPrice()).isEqualByComparingTo("4500.00");
         assertThat(snapshot.totalDurationMin()).isEqualTo(120);
@@ -532,6 +534,30 @@ class ListingServiceImplTest {
 
         assertThatThrownBy(() -> listingService.getListingPriceSnapshot("paused-1", List.of()))
                 .isInstanceOf(ResourceConflictException.class);
+    }
+
+    @Test
+    @DisplayName("PriceSnapshot HOURLY pricing treats basePrice as covering configured multi-hour durationMin plus add-ons")
+    void priceSnapshotHourlyPricingCalculation() {
+        ServiceListing hourlyActive = persistedListing("hourly-1", ListingStatus.ACTIVE);
+        hourlyActive.setPricingModel(PricingModel.HOURLY);
+        hourlyActive.setBasePrice(new BigDecimal("4000.00"));
+        hourlyActive.setDurationMin(120);
+        when(listingRepository.findById("hourly-1")).thenReturn(Optional.of(hourlyActive));
+        stubActiveCategoryHierarchy();
+
+        PriceSnapshotResponse baseOnly = listingService.getListingPriceSnapshot("hourly-1", List.of());
+        assertThat(baseOnly.pricingModel()).isEqualTo(PricingModel.HOURLY);
+        assertThat(baseOnly.basePrice()).isEqualByComparingTo("4000.00");
+        assertThat(baseOnly.baseDurationMin()).isEqualTo(120);
+        assertThat(baseOnly.totalPrice()).isEqualByComparingTo("4000.00");
+        assertThat(baseOnly.totalDurationMin()).isEqualTo(120);
+        assertThat(baseOnly.commissionRate()).isEqualByComparingTo("0.12");
+
+        PriceSnapshotResponse withAddOn = listingService.getListingPriceSnapshot("hourly-1", List.of("addon-rush"));
+        assertThat(withAddOn.pricingModel()).isEqualTo(PricingModel.HOURLY);
+        assertThat(withAddOn.totalPrice()).isEqualByComparingTo("5000.00");
+        assertThat(withAddOn.totalDurationMin()).isEqualTo(150);
     }
 
     @Test

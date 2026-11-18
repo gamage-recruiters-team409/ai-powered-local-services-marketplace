@@ -59,6 +59,13 @@ public interface ListingService {
 
     ListingResponse moderateListing(String moderatorUserId, String id, ListingModerationRequest request);
 
+    /**
+     * Captures a read-only price, duration, and category commission snapshot for booking creation (FR-LIST-005).
+     * Both {@code FIXED} and {@code HOURLY} listings treat {@code basePrice} as covering the listing's
+     * configured {@code baseDurationMin}, returning {@code totalPrice = basePrice + sum(selectedAddOns.extraPrice)}
+     * and {@code totalDurationMin = baseDurationMin + sum(selectedAddOns.extraDurationMin)} unless a variable
+     * duration-multiplier contract is later agreed with WP05/WP07.
+     */
     PriceSnapshotResponse getListingPriceSnapshot(String listingId, List<String> selectedAddOnIds);
 
     void updateProviderSuspensionVisibility(String providerId, boolean suspended);
