@@ -6,7 +6,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -72,8 +72,9 @@ public class MessageServiceImpl implements MessageService {
         conversation.setUpdatedAt(now);
         try {
             conversationRepository.save(conversation);
-        } catch (OptimisticLockingFailureException e) {
-            log.warn("Conversation metadata update skipped after concurrent message save");
+        } catch (DataAccessException e) {
+            // The message is already stored; metadata failure must not make clients retry and duplicate it.
+            log.warn("Conversation metadata update failed after message save");
         }
         return toResponse(saved, participants.status());
     }

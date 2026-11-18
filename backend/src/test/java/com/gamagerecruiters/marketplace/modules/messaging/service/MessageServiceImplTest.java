@@ -24,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -197,6 +198,46 @@ class MessageServiceImplTest {
     }
 
     @Test
+    void sendMessageMasksPhoneAfterIsoDateWhileBookingIsUnconfirmed() {
+        participants = participants(BookingStatus.PENDING_PROVIDER, null);
+
+        MessageResponse response = service.sendMessage(BOOKING_ID, "2026-11-20 0771234567");
+
+        assertThat(response.body()).isEqualTo("2026-11-20 [contact hidden]");
+        ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
+        verify(messageRepository).save(captor.capture());
+        assertThat(captor.getValue().getBody()).isEqualTo("2026-11-20 0771234567");
+    }
+
+    @Test
+    void listMessagesMasksPhoneWithDoubleSpacesWhileBookingIsUnconfirmed() {
+        participants = participants(BookingStatus.PENDING_PROVIDER, null);
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Message message = message("message-1", "conversation-1", "077  123  4567", MessageStatus.VISIBLE);
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(message)));
+
+        MessageResponse response = service.listMessages(BOOKING_ID, 0, 20).content().get(0);
+
+        assertThat(response.body()).isEqualTo("[contact hidden]");
+    }
+
+    @Test
+    void listMessagesShowsSamePhoneAfterBookingIsConfirmed() {
+        participants = participants(BookingStatus.CONFIRMED, null);
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Message message = message("message-1", "conversation-1", "077  123  4567", MessageStatus.VISIBLE);
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(message)));
+
+        MessageResponse response = service.listMessages(BOOKING_ID, 0, 20).content().get(0);
+
+        assertThat(response.body()).isEqualTo("077  123  4567");
+    }
+
+    @Test
     void contactsAreVisibleWhenConfirmed() {
         participants = participants(BookingStatus.CONFIRMED, null);
 
@@ -281,6 +322,24 @@ class MessageServiceImplTest {
 
         assertThat(response.body()).isEqualTo("hello");
         verify(messageRepository).save(any(Message.class));
+    }
+
+    @Test
+    void metadataUpdateFailureWithGenericDataAccessExceptionStillReturnsSavedMessage() {
+        AtomicInteger saves = new AtomicInteger();
+        doAnswer(invocation -> {
+            if (saves.incrementAndGet() == 2) {
+                throw new DataAccessResourceFailureException("metadata unavailable");
+            }
+            Conversation conversation = invocation.getArgument(0);
+            conversation.setId("conversation-1");
+            return conversation;
+        }).when(conversationRepository).save(any(Conversation.class));
+
+        MessageResponse response = service.sendMessage(BOOKING_ID, "hello");
+
+        assertThat(response.body()).isEqualTo("hello");
+        verify(messageRepository, org.mockito.Mockito.times(1)).save(any(Message.class));
     }
 
     @Test
