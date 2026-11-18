@@ -50,6 +50,7 @@ import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterResponse;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
+import com.gamagerecruiters.marketplace.modules.auth.service.EmailTokenService;
 
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
@@ -66,6 +67,9 @@ class AuthServiceTest {
     @Mock
     private TokenService tokenService;
 
+    @Mock
+    private EmailTokenService emailTokenService;
+
     private AuthServiceImpl authService;
 
     @BeforeEach
@@ -75,6 +79,7 @@ class AuthServiceTest {
                 authTokenRepository,
                 passwordEncoder,
                 tokenService,
+                emailTokenService,
                 false, // requireEmailVerification = false for dev
                 5,     // maxFailedLogins = 5
                 15,    // lockDurationMinutes = 15
@@ -124,6 +129,7 @@ class AuthServiceTest {
                 authTokenRepository,
                 passwordEncoder,
                 tokenService,
+                emailTokenService,
                 true, // requireEmailVerification = true
                 5,
                 15,
