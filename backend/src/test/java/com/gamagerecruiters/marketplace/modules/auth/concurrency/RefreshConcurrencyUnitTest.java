@@ -38,6 +38,7 @@ import com.gamagerecruiters.marketplace.modules.auth.dto.RefreshTokenRequest;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.service.AuthServiceImpl;
+import com.gamagerecruiters.marketplace.modules.auth.service.EmailTokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 
 @ExtendWith(MockitoExtension.class)
@@ -55,6 +56,9 @@ class RefreshConcurrencyUnitTest {
     @Mock
     private TokenService tokenService;
 
+    @Mock
+    private EmailTokenService emailTokenService;
+
     private AuthServiceImpl authService;
 
     @BeforeEach
@@ -64,6 +68,7 @@ class RefreshConcurrencyUnitTest {
                 authTokenRepository,
                 passwordEncoder,
                 tokenService,
+                emailTokenService,
                 false,
                 5,
                 15,
