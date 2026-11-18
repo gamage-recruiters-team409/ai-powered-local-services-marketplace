@@ -349,7 +349,7 @@ public class DisputeServiceImpl implements DisputeService {
     public DisputeDetailResponse getDisputeForParty(String userId, String disputeId) {
         Dispute dispute = findDispute(disputeId);
         assertParty(dispute, userId);
-        return DisputeMapper.toDetail(dispute);
+        return DisputeMapper.toPartyDetail(dispute, userId, clock.instant());
     }
 
     @Override

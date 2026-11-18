@@ -14,11 +14,25 @@ public final class DisputeRules {
     /** The other party has 72 hours after the dispute is raised to respond. */
     public static final Duration RESPONSE_WINDOW = Duration.ofHours(72);
 
-    /** Appeal window after a decision. Constant only; appeal logic comes in a later PR. */
+    /** Appeal window after an admin decision: one appeal per dispute within this time. */
     public static final Duration APPEAL_WINDOW = Duration.ofHours(48);
 
-    /** Provider penalty percentage. Constant only; penalty logic comes in a later PR. */
+    /** Provider penalty percentage, applied only together with a full or partial refund to the customer. */
     public static final int PROVIDER_PENALTY_PERCENT = 30;
+
+    /** Customer refund percentage bounds for a partial refund (full refund = 100, release to provider = 0). */
+    public static final int MIN_PARTIAL_REFUND_PERCENT = 1;
+    public static final int MAX_PARTIAL_REFUND_PERCENT = 99;
+
+    /** Admin decision notes (internal, never shown to the parties) and appeal grounds. */
+    public static final int MAX_ADMIN_NOTE_LENGTH = 1000;
+    public static final int MAX_APPEAL_GROUNDS_LENGTH = 2000;
+
+    /** Admin list search text (an id or the start of one). */
+    public static final int MAX_SEARCH_TEXT_LENGTH = 64;
+
+    /** "Resolved" count window of the admin summary. */
+    public static final Duration SUMMARY_RESOLVED_WINDOW = Duration.ofDays(30);
 
     /** Limits for request content. */
     public static final int MAX_DESCRIPTION_LENGTH = 2000;
