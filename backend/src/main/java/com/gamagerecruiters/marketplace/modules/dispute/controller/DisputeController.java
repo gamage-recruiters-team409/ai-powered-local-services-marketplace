@@ -16,12 +16,15 @@ import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeRules;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.SubmitDisputeResponseRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.security.DisputeAccess;
+import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService;
+import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeResolutionService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
 
 import jakarta.validation.Valid;
@@ -32,9 +35,14 @@ import jakarta.validation.Valid;
 public class DisputeController {
 
     private final DisputeService disputeService;
+    private final DisputeResolutionService resolutionService;
+    private final DisputeAdminQueryService adminQueryService;
 
-    public DisputeController(DisputeService disputeService) {
+    public DisputeController(DisputeService disputeService, DisputeResolutionService resolutionService,
+                             DisputeAdminQueryService adminQueryService) {
         this.disputeService = disputeService;
+        this.resolutionService = resolutionService;
+        this.adminQueryService = adminQueryService;
     }
 
     @PostMapping
@@ -52,15 +60,18 @@ public class DisputeController {
         return ResponseEntity.ok(disputeService.getMyDisputes(currentUserId(), page, size));
     }
 
-    /** Parties see their own disputes; admins who can view the disputes area see any dispute. */
+    /**
+     * Parties see their own disputes (party view: no admin identity, no internal notes); admins who can view the
+     * disputes area see any dispute in the admin view.
+     */
     @GetMapping("/{disputeId}")
     @PreAuthorize(DisputeAccess.PARTY_OR_ADMIN_AREA_VIEW)
-    public ResponseEntity<DisputeDetailResponse> getDispute(@PathVariable String disputeId) {
+    public ResponseEntity<?> getDispute(@PathVariable String disputeId) {
         Role role = CurrentUser.getRole();
         if (role == Role.CUSTOMER || role == Role.PROVIDER) {
             return ResponseEntity.ok(disputeService.getDisputeForParty(currentUserId(), disputeId));
         }
-        return ResponseEntity.ok(disputeService.getDisputeForAdmin(disputeId));
+        return ResponseEntity.ok(adminQueryService.getDetail(disputeId));
     }
 
     @PostMapping("/{disputeId}/response")
@@ -70,6 +81,14 @@ public class DisputeController {
             @Valid @RequestBody SubmitDisputeResponseRequest request) {
         return ResponseEntity.ok(
                 disputeService.submitResponse(currentUserId(), CurrentUser.getRole(), disputeId, request));
+    }
+
+    /** One appeal per dispute, by the customer or the provider, within the appeal window after the decision. */
+    @PostMapping("/{disputeId}/appeal")
+    @PreAuthorize(DisputeAccess.PARTY)
+    public ResponseEntity<DisputeDetailResponse> appeal(@PathVariable String disputeId,
+                                                        @Valid @RequestBody AppealDisputeRequest request) {
+        return ResponseEntity.ok(resolutionService.appeal(currentUserId(), CurrentUser.getRole(), disputeId, request));
     }
 
     private static String currentUserId() {

@@ -1,0 +1,901 @@
+.layout {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  background: var(--cus-color-bg);
+  color: var(--cus-color-text);
+  font-family: var(--cus-font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: normal;
+  text-align: left;
+}
+
+.layout *,
+.layout *::before,
+.layout *::after {
+  box-sizing: border-box;
+}
+
+.layout :focus-visible {
+  outline: 2px solid var(--cus-color-focus);
+  outline-offset: 2px;
+}
+
+.skipLink {
+  position: fixed;
+  left: 16px;
+  top: -100px;
+  z-index: 100;
+  padding: 8px 14px;
+  border-radius: var(--cus-radius-sm);
+  background: var(--cus-color-primary);
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.skipLink:focus {
+  top: 10px;
+}
+
+.desktopOnly {
+  display: inline-flex;
+}
+
+/* ---------- Header ---------- */
+
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  height: var(--cus-header-height);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 40px;
+  border-bottom: 1px solid var(--cus-color-border);
+  background: var(--cus-color-surface);
+  box-shadow: var(--cus-shadow-header);
+}
+
+.headerStart,
+.headerEnd {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.headerStart {
+  gap: 40px;
+  height: 100%;
+}
+
+.headerEnd {
+  gap: 36px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  color: var(--cus-color-heading);
+  text-decoration: none;
+}
+
+.logo {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--cus-color-primary);
+  color: #fff;
+}
+
+.logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+}
+
+.brandName {
+  font-family: var(--cus-font-heading);
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.brandNameAccent {
+  color: var(--cus-color-primary);
+}
+
+.headerNav {
+  height: 100%;
+}
+
+.headerNavList {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.headerNavList li {
+  height: 100%;
+}
+
+.headerNavLink {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  color: var(--cus-color-text);
+  font-size: 15px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.headerNavLink:hover {
+  color: var(--cus-color-primary);
+}
+
+.headerNavLinkActive {
+  color: var(--cus-color-primary);
+  font-weight: 600;
+}
+
+.headerNavLinkActive::after {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: var(--cus-color-primary);
+}
+
+.locationButton {
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 15px;
+  border: 1px solid var(--cus-color-border);
+  border-radius: 999px;
+  background: var(--cus-color-surface);
+  color: var(--cus-color-heading);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.locationButton:hover:not(:disabled) {
+  background: var(--cus-color-primary-50);
+}
+
+.locationButton:disabled {
+  cursor: default;
+}
+
+.locationIcon {
+  color: var(--cus-color-primary);
+}
+
+.locationChevron {
+  color: var(--cus-color-muted);
+}
+
+/* ---------- Count badge (shared) ---------- */
+
+.countBadge {
+  min-width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--cus-color-accent);
+  color: var(--cus-color-badge-text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.countBadgeCorner {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--cus-color-surface);
+  border-radius: 9px;
+  font-size: 10px;
+  transform: translate(35%, -35%);
+}
+
+/* ---------- Profile menu ---------- */
+
+.profileMenuRoot {
+  position: relative;
+}
+
+.profileButton {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 11px 4px 4px;
+  border: 1px solid var(--cus-color-border);
+  border-radius: 999px;
+  background: var(--cus-color-surface);
+  color: var(--cus-color-heading);
+  cursor: pointer;
+}
+
+.profileButton:hover {
+  background: var(--cus-color-primary-50);
+}
+
+.headerAvatar,
+.menuAvatar,
+.sidebarAvatar,
+.accountAvatar {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--cus-avatar-gradient);
+  color: #fff;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.headerAvatar {
+  width: 32px;
+  height: 32px;
+  font-size: 12px;
+}
+
+.headerProfileName {
+  max-width: 140px;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.profileChevron,
+.profileChevronOpen {
+  color: var(--cus-color-text);
+  transition: transform 0.15s ease;
+}
+
+.profileChevronOpen {
+  transform: rotate(180deg);
+}
+
+.profileMenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 80;
+  width: 250px;
+  padding: 8px;
+  border: 1px solid var(--cus-color-border);
+  border-radius: var(--cus-radius-lg);
+  background: var(--cus-color-surface);
+  box-shadow: var(--cus-shadow-menu);
+}
+
+.profileMenuIdentity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+  padding: 10px 8px 14px;
+  border-bottom: 1px solid var(--cus-color-border);
+}
+
+.menuAvatar {
+  width: 44px;
+  height: 44px;
+  font-size: 15px;
+}
+
+.profileMenuItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--cus-radius-sm);
+  background: transparent;
+  color: var(--cus-color-text);
+  font-size: 15px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.profileMenuItem:hover,
+.profileMenuItem:focus-visible {
+  background: var(--cus-color-bg);
+  color: var(--cus-color-heading);
+}
+
+.profileMenuDivider {
+  height: 1px;
+  margin: 6px 0;
+  background: var(--cus-color-border);
+}
+
+.identityText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.identityText strong {
+  overflow: hidden;
+  color: var(--cus-color-heading);
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.identityText span {
+  overflow: hidden;
+  color: var(--cus-color-text);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Body ---------- */
+
+.body {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  padding: 28px 40px 40px;
+  outline: none;
+}
+
+.mainCentered {
+  width: 100%;
+  max-width: calc(var(--cus-content-max-width) + 80px);
+  margin: 0 auto;
+}
+
+/* ---------- Account sidebar ---------- */
+
+.sidebar {
+  width: var(--cus-sidebar-width);
+  flex-shrink: 0;
+  border-right: 1px solid var(--cus-color-border);
+  background: var(--cus-color-surface);
+}
+
+/* Stays visible while the page scrolls; scrolls itself on short screens. */
+.sidebarInner {
+  position: sticky;
+  top: var(--cus-header-height);
+  max-height: calc(100svh - var(--cus-header-height));
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 20px 16px 20px 8px;
+}
+
+.sidebarIdentity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 8px 12px;
+  padding: 4px 12px 17px;
+  border-bottom: 1px solid var(--cus-color-border);
+}
+
+.sidebarAvatar {
+  width: 48px;
+  height: 48px;
+  font-size: 16px;
+}
+
+.sidebarNav {
+  display: flex;
+  flex-direction: column;
+}
+
+.navSection {
+  margin-top: 8px;
+}
+
+.sectionTitle {
+  margin: 4px 0 4px 20px;
+  color: var(--cus-color-muted);
+  font-family: var(--cus-font-body);
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+.navList {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.navLink {
+  position: relative;
+  width: calc(100% - 8px);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: 8px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--cus-radius-sm);
+  background: transparent;
+  color: var(--cus-color-text);
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.navLink:hover {
+  background: var(--cus-color-primary-50);
+  color: var(--cus-color-primary);
+}
+
+.navLinkActive {
+  background: var(--cus-color-primary-light);
+  color: var(--cus-color-primary);
+  font-weight: 600;
+}
+
+.navLinkActive::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  border-radius: 0 4px 4px 0;
+  background: var(--cus-color-primary);
+}
+
+.navLinkDanger,
+.navLinkDanger:hover {
+  color: var(--cus-color-danger);
+}
+
+.navLinkDanger:hover {
+  background: var(--cus-color-danger-50);
+}
+
+.navIcon {
+  flex-shrink: 0;
+}
+
+.navLabel {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebarDivider {
+  height: 1px;
+  margin: 10px 0 10px 12px;
+  background: var(--cus-color-border);
+}
+
+/* ---------- Page frame ---------- */
+
+.page {
+  width: 100%;
+}
+
+.breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.breadcrumbs li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.breadcrumbs a {
+  color: var(--cus-color-muted);
+  text-decoration: none;
+}
+
+.breadcrumbs a:hover {
+  color: var(--cus-color-primary);
+  text-decoration: underline;
+}
+
+.breadcrumbs [aria-current='page'] {
+  color: var(--cus-color-text);
+  font-weight: 500;
+}
+
+.breadcrumbSeparator {
+  color: var(--cus-color-muted);
+}
+
+.pageHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.pageTitle {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--cus-color-heading);
+  font-family: var(--cus-font-heading);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: normal;
+}
+
+.pageActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.mobileBackButton {
+  display: none;
+}
+
+/* ---------- Mobile account menu ---------- */
+
+.accountMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.accountCard {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--cus-color-border);
+  border-radius: var(--cus-radius-lg);
+  background: var(--cus-color-surface);
+}
+
+.accountIdentity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.accountIdentity .identityText {
+  flex: 1;
+}
+
+.accountAvatar {
+  width: 52px;
+  height: 52px;
+  font-size: 17px;
+}
+
+.viewProfile {
+  color: var(--cus-color-primary) !important;
+  font-weight: 500;
+}
+
+.accountList {
+  padding: 6px 0;
+}
+
+.accountRow {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--cus-color-text);
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.accountRow:hover {
+  background: var(--cus-color-bg);
+}
+
+.accountRowDanger {
+  color: var(--cus-color-danger);
+}
+
+.accountRowChevron {
+  flex-shrink: 0;
+  color: var(--cus-color-muted);
+}
+
+/* ---------- Footer ---------- */
+
+.footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--cus-color-border);
+  background: var(--cus-color-surface);
+  color: var(--cus-color-text);
+  font-size: 13px;
+}
+
+.footerInner {
+  max-width: calc(var(--cus-content-max-width) + 80px);
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 0 auto;
+  padding: 12px 40px;
+}
+
+.footerStart {
+  display: flex;
+  align-items: center;
+  gap: 40px;
+}
+
+.footerStart strong {
+  color: var(--cus-color-heading);
+  font-family: var(--cus-font-heading);
+  font-weight: 600;
+}
+
+.footerLinks {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.footerLinks a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.footerLinks a:hover {
+  color: var(--cus-color-primary);
+  text-decoration: underline;
+}
+
+/* ---------- Mobile bottom nav ---------- */
+
+.bottomNav {
+  display: none;
+}
+
+/* ---------- Tablet ---------- */
+
+@media (max-width: 1023px) {
+  .header {
+    padding: 0 20px;
+  }
+
+  .headerStart {
+    gap: 16px;
+  }
+
+  .headerEnd {
+    gap: 12px;
+  }
+
+  .headerNavLink {
+    padding: 0 10px;
+  }
+
+  .main {
+    padding: 24px 20px 32px;
+  }
+
+  .footerInner {
+    padding: 12px 20px;
+  }
+
+  .footerStart {
+    gap: 20px;
+  }
+}
+
+/* ---------- Mobile ---------- */
+
+@media (max-width: 767px) {
+  .desktopOnly,
+  .headerNav,
+  .sidebar,
+  .breadcrumbs,
+  .footer {
+    display: none;
+  }
+
+  .header {
+    height: var(--cus-mobile-header-height);
+    padding: 0 12px;
+  }
+
+  .brandName {
+    font-size: 17px;
+  }
+
+  .locationButton {
+    height: 34px;
+    padding: 0 12px;
+  }
+
+  .main {
+    padding: 14px 16px calc(var(--cus-bottom-nav-height) + 20px);
+  }
+
+  .pageHeader {
+    margin-bottom: 12px;
+  }
+
+  .pageTitle {
+    font-size: 20px;
+  }
+
+  .mobileBackButton {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--cus-color-border);
+    border-radius: var(--cus-radius-sm);
+    background: var(--cus-color-surface);
+    color: var(--cus-color-heading);
+    cursor: pointer;
+  }
+
+  .bottomNav {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 70;
+    height: var(--cus-bottom-nav-height);
+    display: grid;
+    grid-template-columns: repeat(var(--cus-bottom-nav-columns, 5), 1fr);
+    padding: 0 6px;
+    border-top: 1px solid var(--cus-color-border);
+    background: var(--cus-color-surface);
+  }
+
+  .bottomNavLink {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    margin: 6px 2px;
+    border-radius: var(--cus-radius-md);
+    color: var(--cus-color-muted);
+    font-size: 12px;
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .bottomNavLinkActive {
+    background: var(--cus-color-primary-light);
+    color: var(--cus-color-primary);
+    font-weight: 600;
+  }
+
+  .bottomNavIconWrap {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .bottomNavBadge {
+    position: absolute;
+    top: -8px;
+    right: -12px;
+  }
+
+  .bottomNavBadge .countBadge {
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    font-size: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profileChevron,
+  .profileChevronOpen {
+    transition: none;
+  }
+}
+
+/* ---------- Header icon link (messages / notifications) ---------- */
+
+.headerIconButton {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--cus-color-border);
+  border-radius: var(--cus-radius-md);
+  background: var(--cus-color-surface);
+  color: var(--cus-color-text);
+  text-decoration: none;
+}
+
+.headerIconButton:hover {
+  background: var(--cus-color-primary-50);
+  color: var(--cus-color-primary);
+}
+
+@media (max-width: 767px) {
+  .headerIconButton {
+    width: 36px;
+    height: 36px;
+    border-color: transparent;
+  }
+}
