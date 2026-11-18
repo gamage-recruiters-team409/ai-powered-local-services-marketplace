@@ -357,6 +357,62 @@ class EarningsLedgerServiceTest {
                 verifyNoInteractions(repository, transactionService);
         }
 
+        @Test
+        void findMatchingCommittedEventReturnsMatchingEntryWithoutWriting() {
+                EarningsLedgerEntry committed = validEntry();
+                committed.setId("ledger-001");
+                committed.setSequenceNumber(1L);
+
+                EarningsLedgerEntry requested = validEntry();
+
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.of(committed));
+
+                Optional<EarningsLedgerEntry> result =
+                                service.findMatchingCommittedEvent(requested);
+
+                assertTrue(result.isPresent());
+                assertSame(committed, result.get());
+                verify(repository).findByEventKey("event-001");
+                verifyNoInteractions(transactionService);
+        }
+
+        @Test
+        void findMatchingCommittedEventReturnsEmptyWithoutWriting() {
+                EarningsLedgerEntry requested = validEntry();
+
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.empty());
+
+                Optional<EarningsLedgerEntry> result =
+                                service.findMatchingCommittedEvent(requested);
+
+                assertTrue(result.isEmpty());
+                verify(repository).findByEventKey("event-001");
+                verifyNoInteractions(transactionService);
+        }
+
+        @Test
+        void findMatchingCommittedEventRejectsConflictingFinancialData() {
+                EarningsLedgerEntry committed = validEntry();
+                committed.setAmount(new BigDecimal("999.00"));
+
+                EarningsLedgerEntry requested = validEntry();
+
+                when(repository.findByEventKey("event-001"))
+                                .thenReturn(Optional.of(committed));
+
+                IllegalStateException exception = assertThrows(
+                                IllegalStateException.class,
+                                () -> service.findMatchingCommittedEvent(requested));
+
+                assertEquals(
+                                "Ledger event key already exists with different financial data",
+                                exception.getMessage());
+
+                verifyNoInteractions(transactionService);
+        }
+
         /**
          * Creates a structurally valid financial event for each test.
          *

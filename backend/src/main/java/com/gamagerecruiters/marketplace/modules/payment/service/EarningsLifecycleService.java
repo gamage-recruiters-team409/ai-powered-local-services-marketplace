@@ -163,7 +163,8 @@ public class EarningsLifecycleService {
 
         // Pending earnings require verified service completion, not payment capture alone.
         // The current booking must be completed and WP08 must retain confirmation evidence.
-        if (participants.status() != BookingStatus.COMPLETED) {
+        if (participants.status() != BookingStatus.COMPLETED
+                && participants.status() != BookingStatus.DISPUTED) {
             throw new IllegalStateException(
                     "Pending earnings require a COMPLETED booking");
         }
@@ -188,6 +189,12 @@ public class EarningsLifecycleService {
         entry.setCreatedAt(Instant.now());
 
         // The ledger service validates and enforces event-key idempotency.
+        if (participants.status() == BookingStatus.DISPUTED) {
+            return earningsLedgerService.findMatchingCommittedEvent(entry)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Disputed booking has no previously committed pending earnings event"));
+        }
+
         return earningsLedgerService.appendEvent(entry);
     }
 

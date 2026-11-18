@@ -421,6 +421,118 @@ class EarningsLifecycleServiceTest {
                 .appendEvent(any(EarningsLedgerEntry.class));
     }
 
+    @Test
+    void recoversExistingPendingEarningsAfterBookingBecomesDisputed() {
+        Payment payment = validCapturedPayment();
+
+        BookingParticipants disputed = new BookingParticipants(
+                "booking-001", null, "listing-001", "customer-001",
+                "provider-001", BookingStatus.DISPUTED, null, null);
+
+        when(paymentPersistenceService.findPaymentById("payment-001"))
+                .thenReturn(Optional.of(payment));
+        when(bookingFacade.getBookingParticipants("booking-001"))
+                .thenReturn(disputed);
+
+        EarningsLedgerEntry committed = new EarningsLedgerEntry();
+        committed.setEventKey("earning-pending:payment-001");
+        committed.setPaymentId("payment-001");
+        committed.setBookingId("booking-001");
+        committed.setProviderId("provider-001");
+        committed.setEventType(EarningsLedgerEventType.EARNING_PENDING);
+        committed.setAmount(new BigDecimal("850.00"));
+        committed.setCurrency("LKR");
+
+        when(earningsLedgerService.findMatchingCommittedEvent(any(EarningsLedgerEntry.class)))
+                .thenReturn(Optional.of(committed));
+
+        EarningsLedgerEntry result = service.recordPendingEarnings("payment-001");
+
+        assertSame(committed, result);
+        verify(earningsLedgerService).findMatchingCommittedEvent(any(EarningsLedgerEntry.class));
+        verify(earningsLedgerService, never()).appendEvent(any(EarningsLedgerEntry.class));
+    }
+
+    @Test
+    void rejectsDisputedBookingWithoutExistingPendingEarnings() {
+        Payment payment = validCapturedPayment();
+
+        BookingParticipants disputed = new BookingParticipants(
+                "booking-001", null, "listing-001", "customer-001",
+                "provider-001", BookingStatus.DISPUTED, null, null);
+
+        when(paymentPersistenceService.findPaymentById("payment-001"))
+                .thenReturn(Optional.of(payment));
+        when(bookingFacade.getBookingParticipants("booking-001"))
+                .thenReturn(disputed);
+        when(earningsLedgerService.findMatchingCommittedEvent(any(EarningsLedgerEntry.class)))
+                .thenReturn(Optional.empty());
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.recordPendingEarnings("payment-001"));
+
+        assertEquals(
+                "Disputed booking has no previously committed pending earnings event",
+                exception.getMessage());
+
+        verify(earningsLedgerService, never()).appendEvent(any(EarningsLedgerEntry.class));
+    }
+
+    @Test
+    void rejectsDisputedBookingWhenCommittedFinancialDataConflicts() {
+        Payment payment = validCapturedPayment();
+
+        BookingParticipants disputed = new BookingParticipants(
+                "booking-001", null, "listing-001", "customer-001",
+                "provider-001", BookingStatus.DISPUTED, null, null);
+
+        when(paymentPersistenceService.findPaymentById("payment-001"))
+                .thenReturn(Optional.of(payment));
+        when(bookingFacade.getBookingParticipants("booking-001"))
+                .thenReturn(disputed);
+
+        when(earningsLedgerService.findMatchingCommittedEvent(any(EarningsLedgerEntry.class)))
+                .thenThrow(new IllegalStateException(
+                        "Ledger event key already exists with different financial data"));
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.recordPendingEarnings("payment-001"));
+
+        assertEquals(
+                "Ledger event key already exists with different financial data",
+                exception.getMessage());
+
+        verify(earningsLedgerService, never()).appendEvent(any(EarningsLedgerEntry.class));
+    }
+
+    @Test
+    void rejectsDisputedBookingWithoutVerifiedCompletionEvidence() {
+        Payment payment = validCapturedPayment();
+
+        BookingParticipants disputed = new BookingParticipants(
+                "booking-001", null, "listing-001", "customer-001",
+                "provider-001", BookingStatus.DISPUTED, null, null);
+
+        when(paymentPersistenceService.findPaymentById("payment-001"))
+                .thenReturn(Optional.of(payment));
+        when(bookingFacade.getBookingParticipants("booking-001"))
+                .thenReturn(disputed);
+        when(completionLookup.findConfirmedAt("booking-001"))
+                .thenReturn(Optional.empty());
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.recordPendingEarnings("payment-001"));
+
+        assertEquals(
+                "Pending earnings require verified service completion",
+                exception.getMessage());
+
+        verifyNoInteractions(earningsLedgerService);
+    }
+
     /**
      * Creates a payment with a 15% commission snapshot.
      */

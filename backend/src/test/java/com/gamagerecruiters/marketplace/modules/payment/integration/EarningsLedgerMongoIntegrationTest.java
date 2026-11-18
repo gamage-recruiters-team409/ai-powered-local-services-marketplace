@@ -452,9 +452,83 @@ class EarningsLedgerMongoIntegrationTest {
     }
 
     /**
+     * PR #37: A later booking dispute must recover the previously
+     * committed pending event without changing financial balances.
+     */
+    @Test
+    void disputedBookingRecoversCommittedPendingEarningsWithoutDuplicate() {
+        withLedger((ledgerService, ledgerRepository, template) -> {
+
+            Payment payment = new Payment();
+            payment.setId("payment-001");
+            payment.setBookingId("booking-001");
+            payment.setCustomerId("customer-001");
+            payment.setAmount(new BigDecimal("1000.00"));
+            payment.setCommissionAmount(new BigDecimal("150.00"));
+            payment.setCurrency("LKR");
+            payment.setStatus(PaymentStatus.CAPTURED);
+
+            PaymentPersistenceService paymentService =
+                    mock(PaymentPersistenceService.class);
+
+            when(paymentService.findPaymentById("payment-001"))
+                    .thenReturn(Optional.of(payment));
+
+            BookingFacade bookingFacade = mock(BookingFacade.class);
+
+            when(bookingFacade.getBookingParticipants("booking-001"))
+                    .thenReturn(
+                            new BookingParticipants(
+                                    "booking-001", null, "listing-001",
+                                    "customer-001", "provider-001",
+                                    BookingStatus.COMPLETED, null, null),
+                            new BookingParticipants(
+                                    "booking-001", null, "listing-001",
+                                    "customer-001", "provider-001",
+                                    BookingStatus.DISPUTED, null, null));
+
+            CompletionLookup completionLookup = mock(CompletionLookup.class);
+
+            when(completionLookup.findConfirmedAt("booking-001"))
+                    .thenReturn(Optional.of(
+                            Instant.parse("2026-11-18T10:00:00Z")));
+
+            EarningsLifecycleService lifecycleService =
+                    new EarningsLifecycleService(
+                            paymentService,
+                            bookingFacade,
+                            completionLookup,
+                            ledgerService);
+
+            EarningsLedgerEntry first =
+                    lifecycleService.recordPendingEarnings("payment-001");
+
+            assertEquals(1, ledgerRepository.count());
+
+            EarningsLedgerEntry recovered =
+                    lifecycleService.recordPendingEarnings("payment-001");
+
+            assertEquals(first.getId(), recovered.getId());
+            assertEquals(first.getSequenceNumber(),
+                    recovered.getSequenceNumber());
+            assertEquals(1, ledgerRepository.count());
+
+            ProviderEarningsState state = template.findById(
+                    new ProviderEarningsState("provider-001", "LKR").getId(),
+                    ProviderEarningsState.class);
+
+            assertNotNull(state);
+            assertEquals(0, new BigDecimal("850.00")
+                    .compareTo(state.getPending()));
+            assertEquals(0, BigDecimal.ZERO
+                    .compareTo(state.getAvailable()));
+            assertEquals(1L, state.getLastSequenceNumber());
+        });
+    }
+
+    /**
      * Runs one test against an isolated temporary MongoDB database.
      */
-
     private void withLedger(LedgerTestAction action) {
 
         String databaseName = "wp07_earnings_ledger_test_"
