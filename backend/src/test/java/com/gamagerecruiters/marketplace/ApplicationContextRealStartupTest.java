@@ -32,6 +32,7 @@ import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddr
 import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
 import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
 import com.gamagerecruiters.marketplace.modules.listing.service.CatalogCategoryLookupAdapter;
+import com.gamagerecruiters.marketplace.modules.listing.service.ProviderVerificationLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
@@ -127,6 +128,11 @@ class ApplicationContextRealStartupTest {
         assertNotNull(
                 applicationContext.getBean(CatalogCategoryLookupAdapter.class),
                 "CatalogCategoryLookupAdapter bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(ProviderVerificationLookupAdapter.class),
+                "ProviderVerificationLookupAdapter bean must exist"
         );
     }
 

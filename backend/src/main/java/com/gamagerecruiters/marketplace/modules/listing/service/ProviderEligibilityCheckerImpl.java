@@ -12,7 +12,7 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 
 /**
- * Verifies active provider account status, role, and optional WP02 KYC approval before managing listings.
+ * Verifies active provider account status, role, and mandatory WP02 KYC approval before publishing listings.
  */
 @Service
 public class ProviderEligibilityCheckerImpl implements ProviderEligibilityChecker {
@@ -47,8 +47,17 @@ public class ProviderEligibilityCheckerImpl implements ProviderEligibilityChecke
         }
 
         if (publishing) {
-            ProviderVerificationPort verificationPort = verificationPortProvider.getIfAvailable();
-            if (verificationPort != null && !verificationPort.isProviderVerified(providerUserId)) {
+            ProviderVerificationPort verificationPort = verificationPortProvider != null
+                    ? verificationPortProvider.getIfAvailable()
+                    : null;
+            if (verificationPort == null) {
+                throw new ApiException(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "PROVIDER_VERIFICATION_UNAVAILABLE",
+                        "Provider verification service is unavailable; listings cannot be published"
+                );
+            }
+            if (!verificationPort.isProviderVerified(providerUserId)) {
                 throw new ApiException(
                         HttpStatus.FORBIDDEN,
                         "PROVIDER_NOT_VERIFIED",

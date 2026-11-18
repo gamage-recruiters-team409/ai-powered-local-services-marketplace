@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.listing.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
@@ -64,27 +66,48 @@ class ProviderEligibilityCheckerImplTest {
 
         assertThatThrownBy(() -> checker.assertEligibleToManageListing("prov-1", false))
                 .isInstanceOf(ApiException.class)
-                .satisfies(ex -> assertThatCode(() -> {
-                    if (!"PROVIDER_ACCOUNT_INACTIVE".equals(((ApiException) ex).getErrorCode())) {
-                        throw new AssertionError("Unexpected code: " + ((ApiException) ex).getErrorCode());
-                    }
-                }).doesNotThrowAnyException());
+                .satisfies(ex -> {
+                    ApiException apiEx = (ApiException) ex;
+                    assertThat(apiEx.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(apiEx.getErrorCode()).isEqualTo("PROVIDER_ACCOUNT_INACTIVE");
+                });
     }
 
     @Test
-    @DisplayName("Allows ACTIVE provider when WP02 verification port is not yet registered, and enforces APPROVED when registered")
-    void checksOptionalVerificationPortOnPublish() {
+    @DisplayName("Fails closed on publish when verification bean is absent, while preserving draft creation")
+    void failsClosedWhenVerificationBeanAbsentButPreservesDrafts() {
         when(userInternalService.getById("prov-1")).thenReturn(user(Role.PROVIDER, UserStatus.ACTIVE));
         when(verificationPortProvider.getIfAvailable()).thenReturn(null);
 
-        assertThatCode(() -> checker.assertEligibleToManageListing("prov-1", true)).doesNotThrowAnyException();
+        assertThatCode(() -> checker.assertEligibleToManageListing("prov-1", false)).doesNotThrowAnyException();
 
+        assertThatThrownBy(() -> checker.assertEligibleToManageListing("prov-1", true))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> {
+                    ApiException apiEx = (ApiException) ex;
+                    assertThat(apiEx.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(apiEx.getErrorCode()).isEqualTo("PROVIDER_VERIFICATION_UNAVAILABLE");
+                });
+    }
+
+    @Test
+    @DisplayName("Rejects publish with 403 PROVIDER_NOT_VERIFIED when verification is not APPROVED, allows drafts and approved publish")
+    void enforcesApprovedVerificationOnPublish() {
+        when(userInternalService.getById("prov-1")).thenReturn(user(Role.PROVIDER, UserStatus.ACTIVE));
         when(verificationPortProvider.getIfAvailable()).thenReturn(verificationPort);
         when(verificationPort.isProviderVerified("prov-1")).thenReturn(false);
 
         assertThatCode(() -> checker.assertEligibleToManageListing("prov-1", false)).doesNotThrowAnyException();
         assertThatThrownBy(() -> checker.assertEligibleToManageListing("prov-1", true))
                 .isInstanceOf(ApiException.class)
-                .hasMessageContaining("APPROVED");
+                .satisfies(ex -> {
+                    ApiException apiEx = (ApiException) ex;
+                    assertThat(apiEx.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(apiEx.getErrorCode()).isEqualTo("PROVIDER_NOT_VERIFIED");
+                    assertThat(apiEx.getMessage()).contains("APPROVED");
+                });
+
+        when(verificationPort.isProviderVerified("prov-1")).thenReturn(true);
+        assertThatCode(() -> checker.assertEligibleToManageListing("prov-1", true)).doesNotThrowAnyException();
     }
 }
