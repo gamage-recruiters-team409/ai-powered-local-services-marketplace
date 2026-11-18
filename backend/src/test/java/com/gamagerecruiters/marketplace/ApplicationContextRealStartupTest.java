@@ -30,6 +30,7 @@ import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepos
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
+import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
 import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
 import com.gamagerecruiters.marketplace.modules.listing.service.CatalogCategoryLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.listing.service.ProviderVerificationLookupAdapter;
@@ -54,6 +55,9 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private BlockedDateRepository blockedDateRepository;
+
+    @MockitoBean
+    private DisputeRepository disputeRepository;
 
     @MockitoBean
     private CategoryRepository categoryRepository;
