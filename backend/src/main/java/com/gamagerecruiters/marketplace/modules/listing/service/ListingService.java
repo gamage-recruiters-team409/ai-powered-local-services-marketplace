@@ -36,14 +36,15 @@ public interface ListingService {
     ProviderListingDashboardSummaryResponse getMyListingsSummary(String providerUserId);
 
     /**
-     * Exact contract promised to Customer module (FR-CUST-005): returns ACTIVE plus PAUSED/ARCHIVED
-     * read-only state cards, and hides DRAFT/FLAGGED/REJECTED unless viewer is owner or moderator/super-admin.
+     * Public &amp; Customer lookup contract (WP01 / FR-CUST-005): returns {@code ACTIVE} plus
+     * {@code PAUSED} (marked unavailable), and hides {@code DRAFT}/{@code ARCHIVED}/{@code FLAGGED}/
+     * {@code REJECTED} unless the authenticated viewer is the owning provider or a moderator/super-admin.
      */
     ListingResponse getListingById(String id);
 
     /**
      * Batch contract agreed with Customer module (FR-CUST-005) to load favourites in a single query.
-     * Returns only customer-readable statuses ({@code ACTIVE}, {@code PAUSED}, {@code ARCHIVED}).
+     * Returns only non-owner readable statuses ({@code ACTIVE}, {@code PAUSED}).
      */
     List<ListingResponse> getListingsByIds(Collection<String> ids);
 

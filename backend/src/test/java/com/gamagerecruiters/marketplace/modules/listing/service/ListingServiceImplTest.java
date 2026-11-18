@@ -413,11 +413,15 @@ class ListingServiceImplTest {
     }
 
     @Test
-    @DisplayName("FR-CUST-005: returns PAUSED/ARCHIVED publicly and hides DRAFT/FLAGGED unless owner or moderator")
+    @DisplayName("WP01 / FR-CUST-005: returns ACTIVE and PAUSED (unavailable) publicly, hides DRAFT/ARCHIVED/FLAGGED from guests & non-owners")
     void customerFavouriteVisibilityRules() {
         when(categoryLookupPortProvider.getIfAvailable()).thenReturn(null);
         when(listingRepository.findById("paused-1"))
                 .thenReturn(Optional.of(persistedListing("paused-1", ListingStatus.PAUSED)));
+        when(listingRepository.findById("draft-1"))
+                .thenReturn(Optional.of(persistedListing("draft-1", ListingStatus.DRAFT)));
+        when(listingRepository.findById("archived-1"))
+                .thenReturn(Optional.of(persistedListing("archived-1", ListingStatus.ARCHIVED)));
         when(listingRepository.findById("flagged-1"))
                 .thenReturn(Optional.of(persistedListing("flagged-1", ListingStatus.FLAGGED)));
 
@@ -425,8 +429,19 @@ class ListingServiceImplTest {
         assertThat(publicPaused.status()).isEqualTo(ListingStatus.PAUSED);
         assertThat(publicPaused.availableForBooking()).isFalse();
 
+        assertThatThrownBy(() -> listingService.getListingForViewer("draft-1", null, null))
+                .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> listingService.getListingForViewer("archived-1", null, null))
+                .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> listingService.getListingForViewer("archived-1", "cust-1", Role.CUSTOMER))
+                .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> listingService.getListingForViewer("archived-1", OTHER_PROVIDER_ID, Role.PROVIDER))
+                .isInstanceOf(ResourceNotFoundException.class);
         assertThatThrownBy(() -> listingService.getListingForViewer("flagged-1", "cust-1", Role.CUSTOMER))
                 .isInstanceOf(ResourceNotFoundException.class);
+
+        ListingResponse ownerArchived = listingService.getListingForViewer("archived-1", PROVIDER_ID, Role.PROVIDER);
+        assertThat(ownerArchived.status()).isEqualTo(ListingStatus.ARCHIVED);
 
         ListingResponse ownerFlagged = listingService.getListingForViewer("flagged-1", PROVIDER_ID, Role.PROVIDER);
         assertThat(ownerFlagged.status()).isEqualTo(ListingStatus.FLAGGED);
@@ -700,23 +715,26 @@ class ListingServiceImplTest {
     }
 
     @Test
-    @DisplayName("FR-CUST-005 batch lookup returns ACTIVE and PAUSED only in requested order, excluding DRAFT and FLAGGED")
+    @DisplayName("FR-CUST-005 batch lookup returns ACTIVE and PAUSED only in requested order, excluding DRAFT, ARCHIVED, and FLAGGED")
     void batchGetListingsByIdsRespectsOrderAndPrivacy() {
         ServiceListing active = persistedListing("id-active", ListingStatus.ACTIVE);
         ServiceListing paused = persistedListing("id-paused", ListingStatus.PAUSED);
         ServiceListing draft = persistedListing("id-draft", ListingStatus.DRAFT);
+        ServiceListing archived = persistedListing("id-archived", ListingStatus.ARCHIVED);
         ServiceListing flagged = persistedListing("id-flagged", ListingStatus.FLAGGED);
 
         when(listingRepository.findAllById(any()))
-                .thenReturn(List.of(flagged, paused, draft, active));
+                .thenReturn(List.of(flagged, archived, paused, draft, active));
         stubActiveCategoryHierarchy();
 
         List<ListingResponse> results = listingService.getListingsByIds(
-                List.of("id-active", "id-draft", "id-paused", "id-flagged"));
+                List.of("id-active", "id-draft", "id-archived", "id-paused", "id-flagged"));
 
         assertThat(results).extracting(ListingResponse::id)
                 .containsExactly("id-active", "id-paused");
         assertThat(results.get(0).availableForBooking()).isTrue();
+        assertThat(results.get(0).version()).isNull();
+        assertThat(results.get(0).addOns()).hasSize(1);
         assertThat(results.get(1).availableForBooking()).isFalse();
     }
 
@@ -835,9 +853,11 @@ class ListingServiceImplTest {
         active.setModerationReason("Internal moderator audit note");
         active.setModeratedAt(Instant.now());
         ServiceListing draft = persistedListing("private-draft", ListingStatus.DRAFT);
+        ServiceListing archived = persistedListing("private-archived", ListingStatus.ARCHIVED);
 
         when(listingRepository.findById("public-active")).thenReturn(Optional.of(active));
         when(listingRepository.findById("private-draft")).thenReturn(Optional.of(draft));
+        when(listingRepository.findById("private-archived")).thenReturn(Optional.of(archived));
         stubActiveCategoryHierarchy();
 
         try {
@@ -848,7 +868,11 @@ class ListingServiceImplTest {
             assertThat(clearedRead.moderationFlags()).isEmpty();
             assertThat(clearedRead.moderationReason()).isNull();
             assertThat(clearedRead.moderatedAt()).isNull();
+            assertThat(clearedRead.version()).isNull();
+            assertThat(clearedRead.addOns()).hasSize(1);
             assertThatThrownBy(() -> listingService.getListingById("private-draft"))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            assertThatThrownBy(() -> listingService.getListingById("private-archived"))
                     .isInstanceOf(ResourceNotFoundException.class);
 
             SecurityContextHolder.getContext().setAuthentication(new AnonymousAuthenticationToken(
@@ -858,7 +882,11 @@ class ListingServiceImplTest {
             assertThat(anonRead.moderationFlags()).isEmpty();
             assertThat(anonRead.moderationReason()).isNull();
             assertThat(anonRead.moderatedAt()).isNull();
+            assertThat(anonRead.version()).isNull();
+            assertThat(anonRead.addOns()).hasSize(1);
             assertThatThrownBy(() -> listingService.getListingById("private-draft"))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            assertThatThrownBy(() -> listingService.getListingById("private-archived"))
                     .isInstanceOf(ResourceNotFoundException.class);
         } finally {
             SecurityContextHolder.clearContext();

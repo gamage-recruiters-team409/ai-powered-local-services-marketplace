@@ -11,6 +11,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.mongodb.core.geo.GeoJsonPoint;
 
+import com.gamagerecruiters.marketplace.modules.listing.domain.AddOnItem;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ExecutionModel;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ListingStatus;
 import com.gamagerecruiters.marketplace.modules.listing.domain.PricingModel;
@@ -100,5 +101,36 @@ class ListingMapperTest {
         active.setHiddenByProviderSuspension(true);
         assertThat(mapper.toResponse(active, activeCat, false).availableForBooking()).isFalse();
         assertThat(mapper.toSummaryResponse(active, activeCat, false).availableForBooking()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Public view hides inactive add-ons, moderation metadata, and optimistic version while owner view includes them")
+    void publicMappingFiltersInactiveAddOnsAndInternalFields() {
+        ServiceListing listing = activeListing();
+        listing.setAddOns(List.of(
+                new AddOnItem("a-1", "Active Extra", new BigDecimal("500.00"), 15, true),
+                new AddOnItem("a-2", "Disabled Extra", new BigDecimal("900.00"), 30, false)
+        ));
+        listing.setModerationFlags(List.of("INTERNAL_NOTE"));
+        listing.setModerationReason("Audit log");
+        listing.setModeratedAt(Instant.now());
+        listing.setVersion(4L);
+        CategorySnapshot activeCat = new CategorySnapshot("cat-sub", "Wiring", "cat-root", true, new BigDecimal("0.10"));
+
+        ListingResponse publicDto = mapper.toResponse(listing, activeCat, false);
+        assertThat(publicDto.addOns()).hasSize(1);
+        assertThat(publicDto.addOns().get(0).addOnId()).isEqualTo("a-1");
+        assertThat(publicDto.activeAddOnCount()).isEqualTo(1);
+        assertThat(publicDto.moderationFlags()).isEmpty();
+        assertThat(publicDto.moderationReason()).isNull();
+        assertThat(publicDto.moderatedAt()).isNull();
+        assertThat(publicDto.version()).isNull();
+
+        ListingResponse internalDto = mapper.toResponse(listing, activeCat, true);
+        assertThat(internalDto.addOns()).hasSize(2);
+        assertThat(internalDto.moderationFlags()).containsExactly("INTERNAL_NOTE");
+        assertThat(internalDto.moderationReason()).isEqualTo("Audit log");
+        assertThat(internalDto.moderatedAt()).isNotNull();
+        assertThat(internalDto.version()).isEqualTo(4L);
     }
 }

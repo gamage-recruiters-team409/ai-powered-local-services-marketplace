@@ -22,11 +22,12 @@ public enum ListingStatus {
     REJECTED;
 
     /**
-     * Statuses visible to customers via direct listing lookup / favourites (FR-CUST-005),
-     * where {@code PAUSED} and {@code ARCHIVED} render as read-only unavailable cards.
+     * Statuses visible to guests and non-owner customers via direct listing lookup / favourites
+     * (FR-CUST-005), where {@code PAUSED} renders as read-only unavailable while {@code DRAFT},
+     * {@code ARCHIVED}, {@code FLAGGED}, and {@code REJECTED} remain restricted to owners/moderators.
      */
     public static final Set<ListingStatus> FAVOURITE_READABLE_STATUSES =
-            Collections.unmodifiableSet(EnumSet.of(ACTIVE, PAUSED, ARCHIVED));
+            Collections.unmodifiableSet(EnumSet.of(ACTIVE, PAUSED));
 
     /**
      * Statuses that prevent soft-deactivation of the listing's parent category (FR-LIST-001).

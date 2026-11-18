@@ -24,10 +24,10 @@ class ListingStatusTest {
     }
 
     @Test
-    @DisplayName("Favourite-readable and category-blocking status sets match FR-CUST-005 and FR-LIST-001")
+    @DisplayName("Favourite/public-readable and category-blocking status sets match WP01/FR-CUST-005 and FR-LIST-001")
     void contractSetsMatch() {
         assertThat(ListingStatus.FAVOURITE_READABLE_STATUSES)
-                .containsExactlyInAnyOrder(ACTIVE, PAUSED, ARCHIVED);
+                .containsExactlyInAnyOrder(ACTIVE, PAUSED);
         assertThat(ListingStatus.CATEGORY_BLOCKING_STATUSES)
                 .containsExactlyInAnyOrder(ACTIVE, PAUSED, FLAGGED);
     }
@@ -111,7 +111,7 @@ class ListingStatusTest {
         assertThat(ARCHIVED.isProviderEditable()).isFalse();
         assertThat(ARCHIVED.allowedProviderTransitions()).isEmpty();
         assertThat(ARCHIVED.isBookable()).isFalse();
-        assertThat(ARCHIVED.isFavouriteReadable()).isTrue();
+        assertThat(ARCHIVED.isFavouriteReadable()).isFalse();
     }
 
     @ParameterizedTest

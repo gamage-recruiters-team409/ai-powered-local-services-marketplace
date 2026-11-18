@@ -52,11 +52,14 @@ public class ListingMapper {
     public ListingResponse toResponse(
             ServiceListing listing,
             CategorySnapshot category,
-            boolean includeModerationDetails
+            boolean includeInternalDetails
     ) {
         List<AddOnItemResponse> addOnResponses = listing.getAddOns() == null
                 ? List.of()
-                : listing.getAddOns().stream().map(this::toAddOnItemResponse).toList();
+                : listing.getAddOns().stream()
+                        .filter(item -> includeInternalDetails || item.isActive())
+                        .map(this::toAddOnItemResponse)
+                        .toList();
 
         boolean categoryActive = isCategoryActive(category);
         int activeAddOnCount = countActiveAddOns(listing);
@@ -86,12 +89,12 @@ public class ListingMapper {
                 availableForBooking,
                 categoryActive,
                 activeAddOnCount,
-                includeModerationDetails ? listing.getModerationFlags() : List.of(),
-                includeModerationDetails ? listing.getModerationReason() : null,
-                includeModerationDetails ? listing.getModeratedAt() : null,
+                includeInternalDetails ? listing.getModerationFlags() : List.of(),
+                includeInternalDetails ? listing.getModerationReason() : null,
+                includeInternalDetails ? listing.getModeratedAt() : null,
                 listing.getRatingAvg(),
                 listing.getRatingCount(),
-                listing.getVersion(),
+                includeInternalDetails ? listing.getVersion() : null,
                 listing.getCreatedAt(),
                 listing.getUpdatedAt()
         );

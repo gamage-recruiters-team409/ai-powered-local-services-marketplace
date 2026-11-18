@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.listing.controller;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -172,6 +173,9 @@ class ListingControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"status\":\"PAUSED\"}"))
                 .andExpect(status().isUnauthorized());
+
+        mockMvc.perform(delete(BASE + "/listing-1"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -320,17 +324,38 @@ class ListingControllerTest {
     }
 
     @Test
-    @DisplayName("Unauthenticated requests to GET /listings/{id} and /listings/locations/districts return 401 UNAUTHORIZED until SecurityConfig permits them")
-    void unauthenticatedReadEndpointsReturn401UntilSecurityConfigPermit() throws Exception {
-        mockMvc.perform(get(BASE + "/listing-1"))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.status").value(401))
-                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
+    @DisplayName("Unauthenticated guests get 200 on public GET /listings/{id} and /listings/locations/districts, and 404 on hidden statuses")
+    void guestCanReadPublicListingAndDistrictMetadataWithoutAuth() throws Exception {
+        when(listingService.getListingById("listing-active"))
+                .thenReturn(sampleResponse("listing-active", ListingStatus.ACTIVE));
+        when(listingService.getListingById("listing-paused"))
+                .thenReturn(sampleResponse("listing-paused", ListingStatus.PAUSED));
+        when(listingService.getListingById("listing-hidden"))
+                .thenThrow(new ResourceNotFoundException("LISTING_NOT_FOUND", "Listing not found"));
+        when(listingService.getDistrictLocations())
+                .thenReturn(List.of(new ProvinceGeoDto("Western", List.of(
+                        new DistrictGeoDto("Colombo", "Western", 6.9271, 79.8612, 12)
+                ))));
+
+        mockMvc.perform(get(BASE + "/listing-active"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("listing-active"))
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.availableForBooking").value(true));
+
+        mockMvc.perform(get(BASE + "/listing-paused"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PAUSED"))
+                .andExpect(jsonPath("$.availableForBooking").value(false));
+
+        mockMvc.perform(get(BASE + "/listing-hidden"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("LISTING_NOT_FOUND"));
 
         mockMvc.perform(get(BASE + "/locations/districts"))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.status").value(401))
-                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].name").value("Western"))
+                .andExpect(jsonPath("$[0].districts[0].name").value("Colombo"));
     }
 
     @Test

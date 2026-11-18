@@ -37,15 +37,10 @@ import jakarta.validation.Valid;
 /**
  * Service listing endpoints.
  *
- * <p><strong>Public Guest Access Follow-Up Plan (WP01 Coordination):</strong>
- * {@code GET /api/v1/listings/{id}} and {@code GET /api/v1/listings/locations/districts}
- * intentionally retain {@code isAuthenticated()} in PR #30 and are tracked as a dedicated
- * follow-up coordinated with WP01 (Kalana) rather than modifying {@code SecurityConfig.java}
- * unilaterally here. In that follow-up PR, WP01 will permit {@code GET /api/v1/listings/locations/districts}
- * and {@code GET /api/v1/listings/*} only after explicitly matching {@code /api/v1/listings/me}
- * and {@code /api/v1/listings/me/summary} as authenticated, and these two read handlers will
- * switch to public access; the service layer already handles anonymous context safely and
- * scrubs moderation details.
+ * <p>Public guest read access is enabled in {@code SecurityConfig} (coordinated with WP01)
+ * exclusively for {@code GET /api/v1/listings/locations/districts} and
+ * {@code GET /api/v1/listings/{id}}, returning only customer-safe {@code ACTIVE}/{@code PAUSED}
+ * listing details while keeping {@code /me}, {@code /me/summary}, and all mutations protected.
  */
 @RestController
 @RequestMapping(ApiPaths.API_V1 + "/listings")
@@ -85,13 +80,11 @@ public class ListingController {
     }
 
     @GetMapping("/locations/districts")
-    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<List<ProvinceGeoDto>> getDistrictLocations() {
         return ResponseEntity.ok(listingService.getDistrictLocations());
     }
 
     @GetMapping("/{id}")
-    @PreAuthorize("isAuthenticated()")
     public ResponseEntity<ListingResponse> getListingById(@PathVariable String id) {
         return ResponseEntity.ok(listingService.getListingById(id));
     }
