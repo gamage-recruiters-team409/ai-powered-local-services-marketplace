@@ -257,7 +257,7 @@ public class ListingServiceImpl implements ListingService {
         List<ServiceListing> found = listingRepository.findAllById(orderedIds);
         Map<String, ServiceListing> byId = new HashMap<>();
         for (ServiceListing listing : found) {
-            if (listing.getStatus().isFavouriteReadable()) {
+            if (isPubliclyReadable(listing)) {
                 byId.put(listing.getId(), listing);
             }
         }
@@ -286,7 +286,7 @@ public class ListingServiceImpl implements ListingService {
         boolean isOwner = currentUserIdOrNull != null && currentUserIdOrNull.equals(listing.getProviderId());
         boolean isModeratorViewer = currentRoleOrNull == Role.MODERATOR || currentRoleOrNull == Role.SUPER_ADMIN;
 
-        if (!listing.getStatus().isFavouriteReadable() && !isOwner && !isModeratorViewer) {
+        if (!isPubliclyReadable(listing) && !isOwner && !isModeratorViewer) {
             throw new ResourceNotFoundException("LISTING_NOT_FOUND", "Listing not found");
         }
 
@@ -979,5 +979,16 @@ public class ListingServiceImpl implements ListingService {
             selected.add(listingMapper.toAddOnItemResponse(item));
         }
         return selected;
+    }
+
+    /**
+     * Excludes non-public statuses and suspension-hidden listings from guest/customer reads (BR-010)
+     * while preserving ordinary provider-paused visibility for customer favourites (FR-CUST-005).
+     */
+    private boolean isPubliclyReadable(ServiceListing listing) {
+        return listing != null
+                && listing.getStatus() != null
+                && listing.getStatus().isFavouriteReadable()
+                && !listing.isHiddenByProviderSuspension();
     }
 }

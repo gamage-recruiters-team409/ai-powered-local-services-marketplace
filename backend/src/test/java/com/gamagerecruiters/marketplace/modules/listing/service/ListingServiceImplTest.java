@@ -715,20 +715,22 @@ class ListingServiceImplTest {
     }
 
     @Test
-    @DisplayName("FR-CUST-005 batch lookup returns ACTIVE and PAUSED only in requested order, excluding DRAFT, ARCHIVED, and FLAGGED")
+    @DisplayName("FR-CUST-005 batch lookup returns ACTIVE and ordinary PAUSED in order, excluding suspension-hidden, DRAFT, ARCHIVED, and FLAGGED")
     void batchGetListingsByIdsRespectsOrderAndPrivacy() {
         ServiceListing active = persistedListing("id-active", ListingStatus.ACTIVE);
         ServiceListing paused = persistedListing("id-paused", ListingStatus.PAUSED);
+        ServiceListing suspensionHidden = persistedListing("id-suspended-paused", ListingStatus.PAUSED);
+        suspensionHidden.setHiddenByProviderSuspension(true);
         ServiceListing draft = persistedListing("id-draft", ListingStatus.DRAFT);
         ServiceListing archived = persistedListing("id-archived", ListingStatus.ARCHIVED);
         ServiceListing flagged = persistedListing("id-flagged", ListingStatus.FLAGGED);
 
         when(listingRepository.findAllById(any()))
-                .thenReturn(List.of(flagged, archived, paused, draft, active));
+                .thenReturn(List.of(flagged, archived, suspensionHidden, paused, draft, active));
         stubActiveCategoryHierarchy();
 
         List<ListingResponse> results = listingService.getListingsByIds(
-                List.of("id-active", "id-draft", "id-archived", "id-paused", "id-flagged"));
+                List.of("id-active", "id-draft", "id-suspended-paused", "id-archived", "id-paused", "id-flagged"));
 
         assertThat(results).extracting(ListingResponse::id)
                 .containsExactly("id-active", "id-paused");
@@ -888,6 +890,75 @@ class ListingServiceImplTest {
                     .isInstanceOf(ResourceNotFoundException.class);
             assertThatThrownBy(() -> listingService.getListingById("private-archived"))
                     .isInstanceOf(ResourceNotFoundException.class);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
+    @DisplayName("BR-010: excludes suspension-hidden PAUSED listings from guest/customer lookups while keeping owner, moderator, and ordinary PAUSED visibility")
+    void suspendedProviderListingsHiddenFromPublicWhileOrdinaryPausedRemainsReadable() {
+        ServiceListing activeListing = persistedListing("susp-active", ListingStatus.ACTIVE);
+        ServiceListing ordinaryPaused = persistedListing("ord-paused", ListingStatus.PAUSED);
+
+        when(listingRepository.findByProviderIdAndStatus(PROVIDER_ID, ListingStatus.ACTIVE))
+                .thenReturn(List.of(activeListing));
+        listingService.updateProviderSuspensionVisibility(PROVIDER_ID, true);
+
+        assertThat(activeListing.getStatus()).isEqualTo(ListingStatus.PAUSED);
+        assertThat(activeListing.isHiddenByProviderSuspension()).isTrue();
+
+        when(listingRepository.findById("susp-active")).thenReturn(Optional.of(activeListing));
+        when(listingRepository.findById("ord-paused")).thenReturn(Optional.of(ordinaryPaused));
+        when(listingRepository.findAllById(any())).thenReturn(List.of(activeListing, ordinaryPaused));
+        stubActiveCategoryHierarchy();
+
+        try {
+            // Single-listing public/guest & customer & other-provider checks reject suspension-hidden PAUSED
+            SecurityContextHolder.clearContext();
+            assertThatThrownBy(() -> listingService.getListingById("susp-active"))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            assertThatThrownBy(() -> listingService.getListingForViewer("susp-active", null, null))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            assertThatThrownBy(() -> listingService.getListingForViewer("susp-active", "cust-1", Role.CUSTOMER))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            assertThatThrownBy(() -> listingService.getListingForViewer("susp-active", OTHER_PROVIDER_ID, Role.PROVIDER))
+                    .isInstanceOf(ResourceNotFoundException.class);
+
+            // Ordinary PAUSED listing remains publicly readable as unavailable (WP01/FR-CUST-005 contract)
+            ListingResponse publicOrdinaryPaused = listingService.getListingById("ord-paused");
+            assertThat(publicOrdinaryPaused.status()).isEqualTo(ListingStatus.PAUSED);
+            assertThat(publicOrdinaryPaused.availableForBooking()).isFalse();
+
+            // Batch favourites retrieval filters out suspension-hidden while retaining ordinary PAUSED
+            List<ListingResponse> batchResults = listingService.getListingsByIds(List.of("susp-active", "ord-paused"));
+            assertThat(batchResults).extracting(ListingResponse::id).containsExactly("ord-paused");
+            assertThat(batchResults.get(0).status()).isEqualTo(ListingStatus.PAUSED);
+            assertThat(batchResults.get(0).availableForBooking()).isFalse();
+
+            // Owner, MODERATOR, and SUPER_ADMIN retain authorized access to suspension-hidden listings
+            ListingResponse ownerView = listingService.getListingForViewer("susp-active", PROVIDER_ID, Role.PROVIDER);
+            assertThat(ownerView.status()).isEqualTo(ListingStatus.PAUSED);
+            assertThat(ownerView.availableForBooking()).isFalse();
+
+            ListingResponse moderatorView = listingService.getListingForViewer("susp-active", MODERATOR_ID, Role.MODERATOR);
+            assertThat(moderatorView.status()).isEqualTo(ListingStatus.PAUSED);
+            assertThat(moderatorView.availableForBooking()).isFalse();
+
+            ListingResponse superAdminView = listingService.getListingForViewer("susp-active", "super-1", Role.SUPER_ADMIN);
+            assertThat(superAdminView.status()).isEqualTo(ListingStatus.PAUSED);
+            assertThat(superAdminView.availableForBooking()).isFalse();
+
+            // Unsuspending restores ACTIVE status and public visibility
+            when(listingRepository.findByProviderIdAndHiddenByProviderSuspensionTrue(PROVIDER_ID))
+                    .thenReturn(List.of(activeListing));
+            listingService.updateProviderSuspensionVisibility(PROVIDER_ID, false);
+            assertThat(activeListing.getStatus()).isEqualTo(ListingStatus.ACTIVE);
+            assertThat(activeListing.isHiddenByProviderSuspension()).isFalse();
+
+            ListingResponse restoredPublicView = listingService.getListingById("susp-active");
+            assertThat(restoredPublicView.status()).isEqualTo(ListingStatus.ACTIVE);
+            assertThat(restoredPublicView.availableForBooking()).isTrue();
         } finally {
             SecurityContextHolder.clearContext();
         }
