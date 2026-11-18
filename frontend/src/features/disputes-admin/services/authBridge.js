@@ -1,38 +1,38 @@
+import tokenStore from '../../../shared/services/tokenStore';
+
 /**
- * TEMPORARY auth bridge until WP01 (Kalana) frontend auth is merged.
- *
- * The admin feature reads auth ONLY through this file. When the real login/auth
- * state lands, replace the bodies below with calls to that API and nothing else changes.
- *
- * DEV ONLY: the access token is read from sessionStorage key "dev.accessToken",
- * set by hand in the browser console after logging in with Postman. Production
- * builds never read it, so they always redirect to login.
- * This file never stores passwords and never calls the login endpoint.
+ * Auth bridge for the admin feature.
+ * Delegates to the shared WP01 tokenStore, with backwards-compatible DEV fallback.
  */
 
-export const LOGIN_PATH = '/login'
+export const LOGIN_PATH = '/login';
 
-const DEV_TOKEN_KEY = 'dev.accessToken'
+const DEV_TOKEN_KEY = 'dev.accessToken';
 
 export function getAccessToken() {
+  const token = tokenStore.getAccessToken();
+  if (token) {
+    return token;
+  }
   if (!import.meta.env.DEV) {
-    return null
+    return null;
   }
   try {
-    return window.sessionStorage.getItem(DEV_TOKEN_KEY)
+    return window.sessionStorage.getItem(DEV_TOKEN_KEY);
   } catch {
-    return null
+    return null;
   }
 }
 
 export function hasSession() {
-  return Boolean(getAccessToken())
+  return Boolean(getAccessToken() || tokenStore.hasRefreshToken());
 }
 
 /** Clears the local session. Server-side token revocation belongs to WP01 logout. */
 export function endSession() {
+  tokenStore.clear();
   try {
-    window.sessionStorage.removeItem(DEV_TOKEN_KEY)
+    window.sessionStorage.removeItem(DEV_TOKEN_KEY);
   } catch {
     // Storage unavailable: nothing to clear.
   }

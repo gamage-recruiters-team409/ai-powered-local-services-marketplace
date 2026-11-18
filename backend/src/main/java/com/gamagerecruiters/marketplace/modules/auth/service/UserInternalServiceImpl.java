@@ -60,6 +60,12 @@ public class UserInternalServiceImpl implements UserInternalService {
     }
 
     @Override
+    public UserContact getContactById(String userId) {
+        User user = getById(userId);
+        return new UserContact(user.getId(), user.getName(), user.getEmail(), user.getStatus());
+    }
+
+    @Override
     public User getById(String userId) {
         return userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("USER_NOT_FOUND", "User not found with id: " + userId));
