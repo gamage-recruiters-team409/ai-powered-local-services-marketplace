@@ -37,6 +37,18 @@ public enum BookingStatus {
             COMPLETION_PENDING,
             DISPUTED));
 
+    /**
+     * Statuses in which the customer's and provider's contact details and the service address
+     * may be shown to the other party (BR-011: masked until the booking is CONFIRMED).
+     * Shared with messaging (WP06) through {@link #isContactVisible()}.
+     */
+    public static final Set<BookingStatus> CONTACT_VISIBLE_STATUSES = Collections.unmodifiableSet(EnumSet.of(
+            CONFIRMED,
+            IN_PROGRESS,
+            COMPLETION_PENDING,
+            COMPLETED,
+            DISPUTED));
+
     private static final Map<BookingStatus, Set<BookingStatus>> ALLOWED_TRANSITIONS =
             new EnumMap<>(BookingStatus.class);
 
@@ -67,6 +79,11 @@ public enum BookingStatus {
 
     public boolean isOpen() {
         return OPEN_STATUSES.contains(this);
+    }
+
+    /** True when contact details and the full service address may be shown to the other party. */
+    public boolean isContactVisible() {
+        return CONTACT_VISIBLE_STATUSES.contains(this);
     }
 
     public boolean isFinal() {
