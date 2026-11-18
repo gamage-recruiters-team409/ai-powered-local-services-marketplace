@@ -16,6 +16,10 @@ import com.gamagerecruiters.marketplace.modules.auth.dto.AdminUserSummary;
  */
 public interface UserInternalService {
 
+    record UserContact(String id, String fullName, String email, UserStatus status) {}
+
+    UserContact getContactById(String userId);
+
     User getById(String userId);
 
     User changeStatus(String userId, UserStatus status);

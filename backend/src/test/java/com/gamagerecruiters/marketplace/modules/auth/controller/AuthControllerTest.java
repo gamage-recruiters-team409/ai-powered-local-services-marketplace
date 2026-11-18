@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -34,14 +35,19 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.dto.AuthResponse;
 import com.gamagerecruiters.marketplace.modules.auth.dto.ChangePasswordRequest;
+import com.gamagerecruiters.marketplace.modules.auth.dto.ForgotPasswordRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.LoginRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterRequest;
+import com.gamagerecruiters.marketplace.modules.auth.dto.ResendVerificationRequest;
+import com.gamagerecruiters.marketplace.modules.auth.dto.ResetPasswordRequest;
+import com.gamagerecruiters.marketplace.modules.auth.dto.VerifyEmailRequest;
 import com.gamagerecruiters.marketplace.modules.auth.security.CustomAccessDeniedHandler;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationEntryPoint;
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
 import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitExceededException;
 import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitService;
 import com.gamagerecruiters.marketplace.modules.auth.service.AuthService;
+import com.gamagerecruiters.marketplace.modules.auth.service.EmailTokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 
@@ -73,6 +79,9 @@ class AuthControllerTest {
 
     @MockitoBean
     private RateLimitService rateLimitService;
+
+    @MockitoBean
+    private EmailTokenService emailTokenService;
 
     private void mockAuth(String token, String userId, Role role) {
         when(tokenService.validateToken(token)).thenReturn(true);
@@ -396,14 +405,12 @@ class AuthControllerTest {
     }
 
     private void wireRealRateLimiter(int loginIpLimit, int loginAccountLimit) {
-        RateLimitService realLimiter = new RateLimitService(
+        RateLimitService realLimiter = RateLimitService.createForTest(
                 true,
                 1000,
-                loginIpLimit, 15,
-                loginAccountLimit, 15,
-                10, 60,
-                5, 15,
-                Optional.empty()
+                loginIpLimit,
+                loginAccountLimit,
+                null
         );
         doAnswer(inv -> {
             realLimiter.checkLoginIp(inv.getArgument(0, String.class));
@@ -555,5 +562,199 @@ class AuthControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(innocentReq)))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("POST /verify-email returns 200 OK with success message when valid")
+    void verifyEmail_success() throws Exception {
+        VerifyEmailRequest request = new VerifyEmailRequest("valid-token-123");
+
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .with(r -> { r.setRemoteAddr("192.168.1.1"); return r; })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Email verified successfully"));
+
+        verify(rateLimitService).checkVerifyEmail("192.168.1.1");
+        verify(emailTokenService).verifyEmail("valid-token-123");
+    }
+
+    @Test
+    @DisplayName("POST /verify-email returns 400 VALIDATION_FAILED when token is blank")
+    void verifyEmail_blankToken_returns400() throws Exception {
+        VerifyEmailRequest request = new VerifyEmailRequest("   ");
+
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+
+        verify(emailTokenService, never()).verifyEmail(anyString());
+    }
+
+    @Test
+    @DisplayName("POST /verify-email returns 429 RATE_LIMITED when rate limit exceeded")
+    void verifyEmail_rateLimited_returns429() throws Exception {
+        doThrow(new RateLimitExceededException(45L))
+                .when(rateLimitService).checkVerifyEmail(anyString());
+
+        VerifyEmailRequest request = new VerifyEmailRequest("some-token");
+
+        mockMvc.perform(post("/api/v1/auth/verify-email")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "45"))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
+
+        verify(emailTokenService, never()).verifyEmail(anyString());
+    }
+
+    @Test
+    @DisplayName("POST /resend-verification returns 200 OK with generic message when valid")
+    void resendVerification_success() throws Exception {
+        ResendVerificationRequest request = new ResendVerificationRequest("user@example.com");
+
+        mockMvc.perform(post("/api/v1/auth/resend-verification")
+                        .with(r -> { r.setRemoteAddr("192.168.1.2"); return r; })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("If an account needs verification, a new email has been sent"));
+
+        verify(rateLimitService).checkResendVerificationIp("192.168.1.2");
+        verify(rateLimitService).checkResendVerificationEmail("user@example.com");
+        verify(emailTokenService).resendVerification("user@example.com");
+    }
+
+    @Test
+    @DisplayName("POST /resend-verification returns 400 VALIDATION_FAILED when email is malformed")
+    void resendVerification_invalidEmail_returns400() throws Exception {
+        ResendVerificationRequest request = new ResendVerificationRequest("not-an-email");
+
+        mockMvc.perform(post("/api/v1/auth/resend-verification")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+
+        verify(emailTokenService, never()).resendVerification(anyString());
+    }
+
+    @Test
+    @DisplayName("POST /resend-verification returns 429 when IP rate limit exceeded")
+    void resendVerification_ipRateLimited_returns429() throws Exception {
+        doThrow(new RateLimitExceededException(60L))
+                .when(rateLimitService).checkResendVerificationIp(anyString());
+
+        ResendVerificationRequest request = new ResendVerificationRequest("user@example.com");
+
+        mockMvc.perform(post("/api/v1/auth/resend-verification")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "60"))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
+
+        verify(emailTokenService, never()).resendVerification(anyString());
+    }
+
+    @Test
+    @DisplayName("POST /forgot-password returns 200 OK with generic message when valid")
+    void forgotPassword_success() throws Exception {
+        ForgotPasswordRequest request = new ForgotPasswordRequest("user@example.com");
+
+        mockMvc.perform(post("/api/v1/auth/forgot-password")
+                        .with(r -> { r.setRemoteAddr("192.168.1.3"); return r; })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("If an account exists for this email, a reset link has been sent"));
+
+        verify(rateLimitService).checkForgotPasswordIp("192.168.1.3");
+        verify(rateLimitService).checkForgotPasswordEmail("user@example.com");
+        verify(emailTokenService).forgotPassword("user@example.com");
+    }
+
+    @Test
+    @DisplayName("POST /forgot-password returns 400 VALIDATION_FAILED when email is invalid")
+    void forgotPassword_invalidEmail_returns400() throws Exception {
+        ForgotPasswordRequest request = new ForgotPasswordRequest("invalid-email");
+
+        mockMvc.perform(post("/api/v1/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+
+        verify(emailTokenService, never()).forgotPassword(anyString());
+    }
+
+    @Test
+    @DisplayName("POST /forgot-password returns 429 when email rate limit exceeded")
+    void forgotPassword_emailRateLimited_returns429() throws Exception {
+        doThrow(new RateLimitExceededException(90L))
+                .when(rateLimitService).checkForgotPasswordEmail(anyString());
+
+        ForgotPasswordRequest request = new ForgotPasswordRequest("user@example.com");
+
+        mockMvc.perform(post("/api/v1/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "90"))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
+
+        verify(emailTokenService, never()).forgotPassword(anyString());
+    }
+
+    @Test
+    @DisplayName("POST /reset-password returns 200 OK when valid")
+    void resetPassword_success() throws Exception {
+        ResetPasswordRequest request = new ResetPasswordRequest("valid-token", "NewStrongPass1!");
+
+        mockMvc.perform(post("/api/v1/auth/reset-password")
+                        .with(r -> { r.setRemoteAddr("192.168.1.4"); return r; })
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Password reset successfully"));
+
+        verify(rateLimitService).checkResetPassword("192.168.1.4");
+        verify(emailTokenService).resetPassword("valid-token", "NewStrongPass1!");
+    }
+
+    @Test
+    @DisplayName("POST /reset-password returns 400 VALIDATION_FAILED when token is blank or password is weak")
+    void resetPassword_validationFailure_returns400() throws Exception {
+        ResetPasswordRequest request = new ResetPasswordRequest("", "weak");
+
+        mockMvc.perform(post("/api/v1/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+
+        verify(emailTokenService, never()).resetPassword(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("POST /reset-password returns 429 when IP rate limit exceeded")
+    void resetPassword_rateLimited_returns429() throws Exception {
+        doThrow(new RateLimitExceededException(30L))
+                .when(rateLimitService).checkResetPassword(anyString());
+
+        ResetPasswordRequest request = new ResetPasswordRequest("valid-token", "NewStrongPass1!");
+
+        mockMvc.perform(post("/api/v1/auth/reset-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "30"))
+                .andExpect(jsonPath("$.error").value("RATE_LIMITED"));
+
+        verify(emailTokenService, never()).resetPassword(anyString(), anyString());
     }
 }
