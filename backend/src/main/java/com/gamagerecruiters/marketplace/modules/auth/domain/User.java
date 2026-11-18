@@ -23,6 +23,7 @@ public class User {
     private int failedLoginCount;
     private Instant lockStartedAt;
     private Instant createdAt;
+    private boolean mustChangePassword = false;
 
     public User() {
     }
@@ -137,5 +138,13 @@ public class User {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public boolean isMustChangePassword() {
+        return mustChangePassword;
+    }
+
+    public void setMustChangePassword(boolean mustChangePassword) {
+        this.mustChangePassword = mustChangePassword;
     }
 }

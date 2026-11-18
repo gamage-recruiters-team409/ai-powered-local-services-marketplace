@@ -3,12 +3,20 @@ package com.gamagerecruiters.marketplace.modules.booking.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -24,22 +32,29 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MongoDBContainer;
 
+import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
+import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.initializer.BookingIndexInitializer;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
+import com.gamagerecruiters.marketplace.modules.booking.service.SlotServiceImpl;
 
 /**
  * Runs the booking foundation against a real MongoDB (Testcontainers):
- * index creation on a fresh database, BookingFacade queries on real data,
- * unique booking reference and optimistic locking.
+ * index creation on a fresh database, BookingFacade queries and status changes on real data,
+ * unique booking reference, optimistic locking and simultaneous status changes.
  * Requires Docker. Skip explicitly with -DSKIP_DOCKER_TESTS=true.
  */
 @SpringBootTest
@@ -88,6 +103,11 @@ class BookingMongoIntegrationTest {
 
     @Autowired
     private MongoTemplate mongoTemplate;
+
+    @AfterEach
+    void clearSecurityContext() {
+        SecurityContextHolder.clearContext();
+    }
 
     @BeforeEach
     void cleanData() {
@@ -162,7 +182,8 @@ class BookingMongoIntegrationTest {
         BookingParticipants participants = bookingFacade.getBookingParticipants(saved.getId());
 
         assertThat(participants).isEqualTo(new BookingParticipants(
-                saved.getId(), null, "listing-1", "customer-2", "provider-1", BookingStatus.CONFIRMED));
+                saved.getId(), null, "listing-1", "customer-2", "provider-1", BookingStatus.CONFIRMED,
+                Instant.parse("2026-12-01T04:30:00Z"), Instant.parse("2026-12-01T06:30:00Z")));
     }
 
     @Test
@@ -197,6 +218,146 @@ class BookingMongoIntegrationTest {
         Booking stored = bookingRepository.findById(saved.getId()).orElseThrow();
         assertThat(stored.getStatus()).isEqualTo(BookingStatus.AWAITING_PAYMENT);
         assertThat(stored.getTimeline()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: provider starts and marks completion (authenticated), internal job auto-confirms after 48 h as SYSTEM")
+    void completionFlowIsStoredWithTimeline() throws Exception {
+        Booking saved = bookingRepository.save(booking("customer-6", BookingStatus.CONFIRMED));
+
+        loginAs("provider-1", Role.PROVIDER);
+        bookingFacade.markInProgress(saved.getId(), "provider-1");
+        bookingFacade.markCompletionPending(saved.getId(), "provider-1");
+        SecurityContextHolder.clearContext();
+
+        // Simulate that 49 hours have passed since the provider marked completion.
+        Booking pending = bookingRepository.findById(saved.getId()).orElseThrow();
+        pending.getTimeline().get(pending.getTimeline().size() - 1)
+                .setChangedAt(Instant.now().minus(Duration.ofHours(49)));
+        bookingRepository.save(pending);
+
+        // Run like a scheduled job: separate thread, no HTTP request, no logged-in user.
+        ExecutorService scheduler = Executors.newSingleThreadExecutor();
+        BookingParticipants result;
+        try {
+            result = scheduler.submit(() -> bookingFacade.markCompletedBySystem(saved.getId()))
+                    .get(30, TimeUnit.SECONDS);
+        } finally {
+            scheduler.shutdownNow();
+        }
+
+        Booking stored = bookingRepository.findById(saved.getId()).orElseThrow();
+        log.info("Completion flow stored: status={}, timeline={}", stored.getStatus(),
+                stored.getTimeline().stream().map(c -> c.getFromStatus() + "->" + c.getToStatus()
+                        + " by " + c.getChangedBy()).toList());
+
+        assertThat(result.status()).isEqualTo(BookingStatus.COMPLETED);
+        assertThat(stored.getStatus()).isEqualTo(BookingStatus.COMPLETED);
+        assertThat(stored.getTimeline()).extracting(BookingStatusChange::getToStatus).containsExactly(
+                BookingStatus.IN_PROGRESS, BookingStatus.COMPLETION_PENDING, BookingStatus.COMPLETED);
+        assertThat(stored.getTimeline()).extracting(BookingStatusChange::getChangedBy).containsExactly(
+                "provider-1", "provider-1", "SYSTEM");
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: 10 simultaneous markInProgress calls -> exactly one succeeds, others get 409, one timeline entry")
+    void simultaneousStatusChangesApplyOnce() throws Exception {
+        Booking saved = bookingRepository.save(booking("customer-7", BookingStatus.CONFIRMED));
+        int parallel = 10;
+        ExecutorService executor = Executors.newFixedThreadPool(parallel);
+        CountDownLatch ready = new CountDownLatch(parallel);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<String>> results = new ArrayList<>();
+
+        try {
+            for (int i = 0; i < parallel; i++) {
+                results.add(executor.submit(() -> {
+                    loginAs("provider-1", Role.PROVIDER);
+                    ready.countDown();
+                    start.await();
+                    try {
+                        bookingFacade.markInProgress(saved.getId(), "provider-1");
+                        return "OK";
+                    } catch (ResourceConflictException e) {
+                        return e.getErrorCode();
+                    } finally {
+                        SecurityContextHolder.clearContext();
+                    }
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            List<String> outcomes = new ArrayList<>();
+            for (Future<String> result : results) {
+                outcomes.add(result.get(30, TimeUnit.SECONDS));
+            }
+
+            Booking stored = bookingRepository.findById(saved.getId()).orElseThrow();
+            log.info("Simultaneous markInProgress: requests={}, succeeded={}, conflicts={}, timeline entries={}",
+                    parallel, outcomes.stream().filter("OK"::equals).count(),
+                    outcomes.stream().filter(o -> !"OK".equals(o)).count(), stored.getTimeline().size());
+
+            assertThat(outcomes).filteredOn("OK"::equals).hasSize(1);
+            assertThat(outcomes).filteredOn(o -> !"OK".equals(o))
+                    .allMatch(o -> o.equals("BOOKING_UPDATE_CONFLICT") || o.equals("INVALID_STATUS_TRANSITION"));
+            assertThat(stored.getStatus()).isEqualTo(BookingStatus.IN_PROGRESS);
+            assertThat(stored.getTimeline()).hasSize(1);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: slot conflict query returns only time-holding bookings of this provider that overlap the window")
+    void slotConflictQueryOnRealData() {
+        Instant from = Instant.parse("2026-12-01T03:30:00Z");
+        Instant to = Instant.parse("2026-12-01T11:30:00Z");
+
+        Booking overlappingConfirmed = booking("customer-8", BookingStatus.CONFIRMED);   // 04:30–06:30 UTC
+        Booking overlappingDeclined = booking("customer-9", BookingStatus.DECLINED);
+        Booking otherDay = booking("customer-10", BookingStatus.CONFIRMED);
+        otherDay.setSlotStart(Instant.parse("2026-12-02T04:30:00Z"));
+        otherDay.setSlotEnd(Instant.parse("2026-12-02T06:30:00Z"));
+        Booking otherProvider = booking("customer-11", BookingStatus.PENDING_PROVIDER);
+        otherProvider.setProviderId("provider-2");
+        bookingRepository.saveAll(List.of(overlappingConfirmed, overlappingDeclined, otherDay, otherProvider));
+
+        List<Booking> found = bookingRepository.findByProviderIdAndStatusInAndSlotStartLessThanAndSlotEndGreaterThan(
+                "provider-1", SlotServiceImpl.TIME_BLOCKING_STATUSES, to, from);
+
+        log.info("Slot conflict query: found={} (expected only the overlapping CONFIRMED booking of provider-1)",
+                found.stream().map(b -> b.getCustomerId() + ":" + b.getStatus()).toList());
+
+        assertThat(found).extracting(Booking::getCustomerId).containsExactly("customer-8");
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: COMPLETION_PENDING and DISPUTED bookings still block their time; resolved bookings do not")
+    void unresolvedStatusesStillBlockTimeOnRealData() {
+        Instant from = Instant.parse("2026-12-01T03:30:00Z");
+        Instant to = Instant.parse("2026-12-01T11:30:00Z");
+
+        Booking completionPending = booking("customer-12", BookingStatus.COMPLETION_PENDING);
+        Booking disputed = booking("customer-13", BookingStatus.DISPUTED);
+        Booking completed = booking("customer-14", BookingStatus.COMPLETED);
+        Booking cancelled = booking("customer-15", BookingStatus.CANCELLED_BY_CUSTOMER);
+        bookingRepository.saveAll(List.of(completionPending, disputed, completed, cancelled));
+
+        List<Booking> found = bookingRepository.findByProviderIdAndStatusInAndSlotStartLessThanAndSlotEndGreaterThan(
+                "provider-1", SlotServiceImpl.TIME_BLOCKING_STATUSES, to, from);
+
+        log.info("Unresolved status conflict query: found={} (expected COMPLETION_PENDING and DISPUTED only)",
+                found.stream().map(b -> b.getCustomerId() + ":" + b.getStatus()).toList());
+
+        assertThat(found).extracting(Booking::getStatus)
+                .containsExactlyInAnyOrder(BookingStatus.COMPLETION_PENDING, BookingStatus.DISPUTED);
+    }
+
+    private static void loginAs(String userId, Role role) {
+        UserPrincipal principal = new UserPrincipal(userId, userId + "@test.local", role);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
     }
 
     private Document findIndex(String indexName) {
