@@ -52,4 +52,14 @@ public interface AuthTokenRepositoryCustom {
      * @param type The token type
      */
     void revokeAllUnusedTokensByUserIdAndType(String userId, TokenType type);
+
+    /**
+     * Finds a valid, unexpired, unrevoked, and unused token of the specified type without consuming it.
+     *
+     * @param tokenHash SHA-256 hash of the token
+     * @param type The token type
+     * @param now Current timestamp
+     * @return Optional containing the AuthToken if valid, or empty if used/expired/revoked/missing.
+     */
+    Optional<AuthToken> findValidToken(String tokenHash, TokenType type, Instant now);
 }

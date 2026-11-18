@@ -108,7 +108,7 @@ public class EmailTokenServiceImpl implements EmailTokenService {
         String tokenHash = tokenService.hashToken(rawToken);
         Instant now = Instant.now();
 
-        AuthToken token = authTokenRepository.consumeValidToken(tokenHash, TokenType.EMAIL_VERIFICATION, now)
+        AuthToken token = authTokenRepository.findValidToken(tokenHash, TokenType.EMAIL_VERIFICATION, now)
                 .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "INVALID_OR_EXPIRED_TOKEN", INVALID_TOKEN_MSG));
 
         User user = userRepository.findById(token.getUserId())
@@ -121,6 +121,14 @@ public class EmailTokenServiceImpl implements EmailTokenService {
         // Never change SUSPENDED, LOCKED, or DEACTIVATED status
 
         userRepository.save(user);
+
+        // Only after save succeeds, consume token atomically. If consume returns empty (parallel request)
+        // or throws, treat as success because user is already verified.
+        try {
+            authTokenRepository.consumeValidToken(tokenHash, TokenType.EMAIL_VERIFICATION, now);
+        } catch (Exception ex) {
+            log.warn("Failed to consume verification token after saving user for userId={}", user.getId());
+        }
     }
 
     @Override

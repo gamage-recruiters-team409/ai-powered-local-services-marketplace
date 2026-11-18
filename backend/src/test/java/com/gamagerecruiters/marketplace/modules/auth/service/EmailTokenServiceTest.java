@@ -144,7 +144,7 @@ class EmailTokenServiceTest {
         when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
 
         AuthToken token = new AuthToken("u123", TokenType.EMAIL_VERIFICATION, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
-        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
                 .thenReturn(Optional.of(token));
 
         User user = new User();
@@ -158,6 +158,7 @@ class EmailTokenServiceTest {
         assertTrue(user.isEmailVerified());
         assertEquals(UserStatus.ACTIVE, user.getStatus());
         verify(userRepository).save(user);
+        verify(authTokenRepository).consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class));
     }
 
     @Test
@@ -169,7 +170,7 @@ class EmailTokenServiceTest {
         when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
 
         AuthToken token = new AuthToken("u123", TokenType.EMAIL_VERIFICATION, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
-        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
                 .thenReturn(Optional.of(token));
 
         User user = new User();
@@ -183,6 +184,7 @@ class EmailTokenServiceTest {
         assertTrue(user.isEmailVerified());
         assertEquals(UserStatus.ACTIVE, user.getStatus());
         verify(userRepository).save(user);
+        verify(authTokenRepository).consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class));
     }
 
     @Test
@@ -194,7 +196,7 @@ class EmailTokenServiceTest {
         when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
 
         AuthToken token = new AuthToken("u123", TokenType.EMAIL_VERIFICATION, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
-        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
                 .thenReturn(Optional.of(token));
 
         User user = new User();
@@ -208,18 +210,94 @@ class EmailTokenServiceTest {
         assertTrue(user.isEmailVerified());
         assertEquals(UserStatus.SUSPENDED, user.getStatus());
         verify(userRepository).save(user);
+        verify(authTokenRepository).consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class));
     }
 
     @Test
     @DisplayName("verifyEmail throws 400 INVALID_OR_EXPIRED_TOKEN when token is unknown, expired, or already used")
     void verifyEmail_invalidToken_throws400() {
         when(tokenService.hashToken("invalid-token")).thenReturn("invalid-hash");
-        when(authTokenRepository.consumeValidToken(eq("invalid-hash"), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+        when(authTokenRepository.findValidToken(eq("invalid-hash"), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
                 .thenReturn(Optional.empty());
 
         ApiException ex = assertThrows(ApiException.class, () -> emailTokenService.verifyEmail("invalid-token"));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
         assertEquals("INVALID_OR_EXPIRED_TOKEN", ex.getErrorCode());
+        verify(userRepository, never()).save(any());
+        verify(authTokenRepository, never()).consumeValidToken(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("verifyEmail does not consume token and propagates exception when user save fails")
+    void verifyEmail_userSaveFails_tokenUntouched() {
+        String rawToken = "raw-token-abc";
+        String tokenHash = "hash-abc";
+
+        when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
+
+        AuthToken token = new AuthToken("u123", TokenType.EMAIL_VERIFICATION, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+
+        User user = new User();
+        user.setId("u123");
+        user.setStatus(UserStatus.PENDING_VERIFICATION);
+        when(userRepository.findById("u123")).thenReturn(Optional.of(user));
+        when(userRepository.save(user)).thenThrow(new RuntimeException("Database error during save"));
+
+        assertThrows(RuntimeException.class, () -> emailTokenService.verifyEmail(rawToken));
+
+        verify(authTokenRepository, never()).consumeValidToken(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("verifyEmail succeeds even if parallel request consumed token after user save")
+    void verifyEmail_parallelConsume_treatedAsSuccess() {
+        String rawToken = "raw-token-abc";
+        String tokenHash = "hash-abc";
+
+        when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
+
+        AuthToken token = new AuthToken("u123", TokenType.EMAIL_VERIFICATION, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+
+        User user = new User();
+        user.setId("u123");
+        user.setStatus(UserStatus.PENDING_VERIFICATION);
+        when(userRepository.findById("u123")).thenReturn(Optional.of(user));
+        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+                .thenReturn(Optional.empty());
+
+        assertDoesNotThrow(() -> emailTokenService.verifyEmail(rawToken));
+
+        verify(userRepository).save(user);
+        assertTrue(user.isEmailVerified());
+    }
+
+    @Test
+    @DisplayName("verifyEmail succeeds even if consume throws after user save")
+    void verifyEmail_consumeThrows_treatedAsSuccess() {
+        String rawToken = "raw-token-abc";
+        String tokenHash = "hash-abc";
+
+        when(tokenService.hashToken(rawToken)).thenReturn(tokenHash);
+
+        AuthToken token = new AuthToken("u123", TokenType.EMAIL_VERIFICATION, tokenHash, Instant.now().plus(1, ChronoUnit.HOURS), Instant.now());
+        when(authTokenRepository.findValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+                .thenReturn(Optional.of(token));
+
+        User user = new User();
+        user.setId("u123");
+        user.setStatus(UserStatus.PENDING_VERIFICATION);
+        when(userRepository.findById("u123")).thenReturn(Optional.of(user));
+        when(authTokenRepository.consumeValidToken(eq(tokenHash), eq(TokenType.EMAIL_VERIFICATION), any(Instant.class)))
+                .thenThrow(new RuntimeException("Transient DB issue on consume"));
+
+        assertDoesNotThrow(() -> emailTokenService.verifyEmail(rawToken));
+
+        verify(userRepository).save(user);
+        assertTrue(user.isEmailVerified());
     }
 
     @Test

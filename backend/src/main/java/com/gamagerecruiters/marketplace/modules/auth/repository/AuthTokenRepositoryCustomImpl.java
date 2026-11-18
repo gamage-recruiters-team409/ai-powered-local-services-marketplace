@@ -76,4 +76,17 @@ public class AuthTokenRepositoryCustomImpl implements AuthTokenRepositoryCustom 
         Update update = new Update().set("revokedAt", Instant.now());
         mongoTemplate.updateMulti(query, update, AuthToken.class);
     }
+
+    @Override
+    public Optional<AuthToken> findValidToken(String tokenHash, TokenType type, Instant now) {
+        Query query = new Query(
+                Criteria.where("tokenHash").is(tokenHash)
+                        .and("type").is(type)
+                        .and("usedAt").isNull()
+                        .and("revokedAt").isNull()
+                        .and("expiresAt").gt(now)
+        );
+        AuthToken token = mongoTemplate.findOne(query, AuthToken.class);
+        return Optional.ofNullable(token);
+    }
 }
