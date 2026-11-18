@@ -5,6 +5,10 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Objects;
 
+import org.springframework.stereotype.Component;
+
+
+
 /**
  * Calculates the platform commission for a service payment.
  *
@@ -18,6 +22,7 @@ import java.util.Objects;
  * payment records or communicate with a payment gateway.
  * </p>
  */
+@Component
 public class CommissionCalculator {
 
     // Default platform commission: 10% of the service price.

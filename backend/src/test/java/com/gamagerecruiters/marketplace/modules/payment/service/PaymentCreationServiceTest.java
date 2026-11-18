@@ -13,162 +13,240 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 
 /**
  * Unit tests for payment initialization, input validation,
- * and commission snapshot calculations.
+ * customer ownership snapshots, and commission calculations.
  *
  * <p>
  * These tests do not require MongoDB or a payment gateway.
- * They verify the payment data before persistence.
+ * They verify payment data before persistence.
+ * </p>
+ *
+ * <p>
+ * Customer identifiers used here represent values already verified
+ * by a trusted calling workflow. Booking ownership authorization
+ * is tested separately.
  * </p>
  */
 class PaymentCreationServiceTest {
 
-    private PaymentCreationService paymentCreationService;
+        private PaymentCreationService paymentCreationService;
 
-    @BeforeEach
-    void setUp() {
-        paymentCreationService = new PaymentCreationService(
-                new CommissionCalculator());
-    }
+        @BeforeEach
+        void setUp() {
+                paymentCreationService = new PaymentCreationService(
+                                new CommissionCalculator());
+        }
 
-    /**
-     * Verifies that valid details produce an initialized payment.
-     */
-    @Test
-    void shouldCreateValidPayment() {
-        Payment payment = paymentCreationService.createPayment(
-                "BOOK-001",
-                new BigDecimal("10000.00"),
-                "LKR",
-                new BigDecimal("0.10"));
+        /**
+         * Verifies that valid details produce an initialized payment.
+         */
+        @Test
+        void shouldCreateValidPayment() {
+                Payment payment = paymentCreationService.createPayment(
+                                "BOOK-001",
+                                "CUSTOMER-001",
+                                new BigDecimal("10000.00"),
+                                "LKR",
+                                new BigDecimal("0.10"));
 
-        assertEquals("BOOK-001", payment.getBookingId());
-        assertEquals(0, new BigDecimal("10000.00")
-                .compareTo(payment.getAmount()));
-        assertEquals("LKR", payment.getCurrency());
-        assertEquals(PaymentStatus.INITIATED, payment.getStatus());
-    }
+                assertEquals("BOOK-001", payment.getBookingId());
+                assertEquals("CUSTOMER-001", payment.getCustomerId());
+                assertEquals(0, new BigDecimal("10000.00")
+                                .compareTo(payment.getAmount()));
+                assertEquals("LKR", payment.getCurrency());
+                assertEquals(PaymentStatus.INITIATED, payment.getStatus());
+        }
 
-    /**
-     * Verifies that commission values are captured at creation time.
-     */
-    @Test
-    void shouldStoreCommissionSnapshot() {
-        Payment payment = paymentCreationService.createPayment(
-                "BOOK-002",
-                new BigDecimal("10000.00"),
-                "LKR",
-                new BigDecimal("0.15"));
+        /**
+         * Verifies that commission values are captured at creation time.
+         */
+        @Test
+        void shouldStoreCommissionSnapshot() {
+                Payment payment = paymentCreationService.createPayment(
+                                "BOOK-002",
+                                "CUSTOMER-001",
+                                new BigDecimal("10000.00"),
+                                "LKR",
+                                new BigDecimal("0.15"));
 
-        assertEquals(0, new BigDecimal("0.15")
-                .compareTo(payment.getCommissionRate()));
-        assertEquals(0, new BigDecimal("1500.00")
-                .compareTo(payment.getCommissionAmount()));
-    }
+                assertEquals(0, new BigDecimal("0.15")
+                                .compareTo(payment.getCommissionRate()));
+                assertEquals(0, new BigDecimal("1500.00")
+                                .compareTo(payment.getCommissionAmount()));
+        }
 
-    @Test
-    void shouldRejectZeroPaymentAmount() {
-        assertThrows(IllegalArgumentException.class,
-                () -> paymentCreationService.createPayment(
-                        "BOOK-003",
-                        BigDecimal.ZERO,
-                        "LKR",
-                        new BigDecimal("0.10")));
-    }
+        @Test
+        void shouldRejectZeroPaymentAmount() {
+                assertThrows(IllegalArgumentException.class,
+                                () -> paymentCreationService.createPayment(
+                                                "BOOK-003",
+                                                "CUSTOMER-001",
+                                                BigDecimal.ZERO,
+                                                "LKR",
+                                                new BigDecimal("0.10")));
+        }
 
-    @Test
-    void shouldRejectNegativePaymentAmount() {
-        assertThrows(IllegalArgumentException.class,
-                () -> paymentCreationService.createPayment(
-                        "BOOK-004",
-                        new BigDecimal("-100.00"),
-                        "LKR",
-                        new BigDecimal("0.10")));
-    }
+        @Test
+        void shouldRejectNegativePaymentAmount() {
+                assertThrows(IllegalArgumentException.class,
+                                () -> paymentCreationService.createPayment(
+                                                "BOOK-004",
+                                                "CUSTOMER-001",
+                                                new BigDecimal("-100.00"),
+                                                "LKR",
+                                                new BigDecimal("0.10")));
+        }
 
-    @Test
-    void shouldRejectExcessiveDecimalPlaces() {
-        assertThrows(IllegalArgumentException.class,
-                () -> paymentCreationService.createPayment(
-                        "BOOK-005",
-                        new BigDecimal("100.123"),
-                        "LKR",
-                        new BigDecimal("0.10")));
-    }
+        @Test
+        void shouldRejectExcessiveDecimalPlaces() {
+                assertThrows(IllegalArgumentException.class,
+                                () -> paymentCreationService.createPayment(
+                                                "BOOK-005",
+                                                "CUSTOMER-001",
+                                                new BigDecimal("100.123"),
+                                                "LKR",
+                                                new BigDecimal("0.10")));
+        }
 
-    @Test
-    void shouldRejectBlankBookingId() {
-        assertThrows(IllegalArgumentException.class,
-                () -> paymentCreationService.createPayment(
-                        " ",
-                        new BigDecimal("1000.00"),
-                        "LKR",
-                        new BigDecimal("0.10")));
-    }
+        @Test
+        void shouldRejectBlankBookingId() {
+                assertThrows(IllegalArgumentException.class,
+                                () -> paymentCreationService.createPayment(
+                                                " ",
+                                                "CUSTOMER-001",
+                                                new BigDecimal("1000.00"),
+                                                "LKR",
+                                                new BigDecimal("0.10")));
+        }
 
-    @Test
-    void shouldRejectInvalidCurrency() {
-        assertThrows(IllegalArgumentException.class,
-                () -> paymentCreationService.createPayment(
-                        "BOOK-006",
-                        new BigDecimal("1000.00"),
-                        "INVALID",
-                        new BigDecimal("0.10")));
-    }
+        @Test
+        void shouldRejectInvalidCurrency() {
+                assertThrows(IllegalArgumentException.class,
+                                () -> paymentCreationService.createPayment(
+                                                "BOOK-006",
+                                                "CUSTOMER-001",
+                                                new BigDecimal("1000.00"),
+                                                "INVALID",
+                                                new BigDecimal("0.10")));
+        }
 
-    @Test
-    void shouldNormalizeCurrencyCode() {
-        Payment payment = paymentCreationService.createPayment(
-                "BOOK-007",
-                new BigDecimal("1000.00"),
-                " lkr ",
-                new BigDecimal("0.10"));
+        @Test
+        void shouldNormalizeCurrencyCode() {
+                Payment payment = paymentCreationService.createPayment(
+                                "BOOK-007",
+                                "CUSTOMER-001",
+                                new BigDecimal("1000.00"),
+                                " lkr ",
+                                new BigDecimal("0.10"));
 
-        assertEquals("LKR", payment.getCurrency());
-    }
+                assertEquals("LKR", payment.getCurrency());
+        }
 
-    @Test
-    void shouldRejectInvalidCommissionRate() {
-        assertThrows(IllegalArgumentException.class,
-                () -> paymentCreationService.createPayment(
-                        "BOOK-008",
-                        new BigDecimal("1000.00"),
-                        "LKR",
-                        new BigDecimal("1.50")));
-    }
+        @Test
+        void shouldRejectInvalidCommissionRate() {
+                assertThrows(IllegalArgumentException.class,
+                                () -> paymentCreationService.createPayment(
+                                                "BOOK-008",
+                                                "CUSTOMER-001",
+                                                new BigDecimal("1000.00"),
+                                                "LKR",
+                                                new BigDecimal("1.50")));
+        }
 
-    @Test
-    void shouldInitializeRefundAmountToZero() {
-        Payment payment = paymentCreationService.createPayment(
-                "BOOK-009",
-                new BigDecimal("1000.00"),
-                "LKR",
-                new BigDecimal("0.10"));
+        @Test
+        void shouldInitializeRefundAmountToZero() {
+                Payment payment = paymentCreationService.createPayment(
+                                "BOOK-009",
+                                "CUSTOMER-001",
+                                new BigDecimal("1000.00"),
+                                "LKR",
+                                new BigDecimal("0.10"));
 
-        assertEquals(0, BigDecimal.ZERO
-                .compareTo(payment.getRefundedAmount()));
-    }
+                assertEquals(0, BigDecimal.ZERO
+                                .compareTo(payment.getRefundedAmount()));
+        }
 
-    @Test
-    void shouldInitializePaymentTimestamps() {
-        Payment payment = paymentCreationService.createPayment(
-                "BOOK-010",
-                new BigDecimal("1000.00"),
-                "LKR",
-                new BigDecimal("0.10"));
+        @Test
+        void shouldInitializePaymentTimestamps() {
+                Payment payment = paymentCreationService.createPayment(
+                                "BOOK-010",
+                                "CUSTOMER-001",
+                                new BigDecimal("1000.00"),
+                                "LKR",
+                                new BigDecimal("0.10"));
 
-        assertNotNull(payment.getCreatedAt());
-        assertNotNull(payment.getUpdatedAt());
-        assertEquals(payment.getCreatedAt(), payment.getUpdatedAt());
-    }
+                assertNotNull(payment.getCreatedAt());
+                assertNotNull(payment.getUpdatedAt());
+                assertEquals(payment.getCreatedAt(), payment.getUpdatedAt());
+        }
 
-    @Test
-    void shouldTrimBookingId() {
-        Payment payment = paymentCreationService.createPayment(
-                " BOOK-011 ",
-                new BigDecimal("1000.00"),
-                "LKR",
-                new BigDecimal("0.10"));
+        @Test
+        void shouldTrimBookingId() {
+                Payment payment = paymentCreationService.createPayment(
+                                " BOOK-011 ",
+                                "CUSTOMER-001",
+                                new BigDecimal("1000.00"),
+                                "LKR",
+                                new BigDecimal("0.10"));
 
-        assertEquals("BOOK-011", payment.getBookingId());
-    }
+                assertEquals("BOOK-011", payment.getBookingId());
+        }
+
+        /**
+         * Verifies that the verified customer ID is stored in the payment.
+         */
+        @Test
+        void shouldStoreCustomerIdSnapshot() {
+                Payment payment = paymentCreationService.createPayment(
+                                "BOOK-012",
+                                "CUSTOMER-001",
+                                new BigDecimal("1000.00"),
+                                "LKR",
+                                new BigDecimal("0.10"));
+
+                assertEquals("CUSTOMER-001", payment.getCustomerId());
+        }
+
+        /**
+         * Verifies that customer IDs are normalized before being stored.
+         */
+        @Test
+        void shouldTrimCustomerId() {
+                Payment payment = paymentCreationService.createPayment(
+                                "BOOK-013",
+                                " CUSTOMER-001 ",
+                                new BigDecimal("1000.00"),
+                                "LKR",
+                                new BigDecimal("0.10"));
+
+                assertEquals("CUSTOMER-001", payment.getCustomerId());
+        }
+
+        /**
+         * Ensures that a payment cannot be initialized with a blank
+         * customer identifier.
+         */
+        @Test
+        void shouldRejectBlankCustomerId() {
+                assertThrows(IllegalArgumentException.class,
+                                () -> paymentCreationService.createPayment(
+                                                "BOOK-014",
+                                                " ",
+                                                new BigDecimal("1000.00"),
+                                                "LKR",
+                                                new BigDecimal("0.10")));
+        }
+
+        /**
+         * Ensures that null customer identifiers are rejected.
+         */
+        @Test
+        void shouldRejectNullCustomerId() {
+                assertThrows(IllegalArgumentException.class,
+                                () -> paymentCreationService.createPayment(
+                                                "BOOK-015",
+                                                null,
+                                                new BigDecimal("1000.00"),
+                                                "LKR",
+                                                new BigDecimal("0.10")));
+        }
 }

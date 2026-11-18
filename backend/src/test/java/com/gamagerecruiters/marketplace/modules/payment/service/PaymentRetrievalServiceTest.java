@@ -19,6 +19,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+
+import org.mockito.ArgumentCaptor;
+
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 
@@ -186,6 +193,190 @@ class PaymentRetrievalServiceTest {
 
         assertEquals(HttpStatus.NOT_FOUND, exception.getStatus());
         verifyNoInteractions(authorizationService);
+    }
+
+
+    /**
+     * Verifies that customer payment history is retrieved using
+     * the authenticated customer's identifier.
+     */
+    @Test
+    void getPaymentsForCustomerReturnsCustomerScopedPage() {
+            Page<Payment> expectedPage = new PageImpl<>(List.of(payment()));
+
+            when(persistenceService.findPaymentsByCustomerId(
+                            org.mockito.ArgumentMatchers.eq(CUSTOMER_ID),
+                            org.mockito.ArgumentMatchers.any(Pageable.class)))
+                            .thenReturn(expectedPage);
+
+            Page<Payment> result = retrievalService.getPaymentsForCustomer(
+                            CUSTOMER_ID, 0, 10);
+
+            assertSame(expectedPage, result);
+
+            verify(persistenceService).findPaymentsByCustomerId(
+                            org.mockito.ArgumentMatchers.eq(CUSTOMER_ID),
+                            org.mockito.ArgumentMatchers.any(Pageable.class));
+
+            verifyNoInteractions(authorizationService);
+    }
+
+    /**
+     * Verifies that empty payment history is returned as
+     * an empty page rather than an error.
+     */
+    @Test
+    void getPaymentsForCustomerReturnsEmptyPage() {
+            Page<Payment> emptyPage = Page.empty();
+
+            when(persistenceService.findPaymentsByCustomerId(
+                            org.mockito.ArgumentMatchers.eq(CUSTOMER_ID),
+                            org.mockito.ArgumentMatchers.any(Pageable.class)))
+                            .thenReturn(emptyPage);
+
+            Page<Payment> result = retrievalService.getPaymentsForCustomer(
+                            CUSTOMER_ID, 0, 10);
+
+            assertTrue(result.isEmpty());
+    }
+
+    /**
+     * Ensures customer identifiers are normalized before
+     * accessing the persistence layer.
+     */
+    @Test
+    void getPaymentsForCustomerTrimsCustomerId() {
+            when(persistenceService.findPaymentsByCustomerId(
+                            org.mockito.ArgumentMatchers.eq(CUSTOMER_ID),
+                            org.mockito.ArgumentMatchers.any(Pageable.class)))
+                            .thenReturn(Page.empty());
+
+            retrievalService.getPaymentsForCustomer(
+                            "  " + CUSTOMER_ID + "  ", 0, 10);
+
+            verify(persistenceService).findPaymentsByCustomerId(
+                            org.mockito.ArgumentMatchers.eq(CUSTOMER_ID),
+                            org.mockito.ArgumentMatchers.any(Pageable.class));
+    }
+
+    /**
+     * Verifies that customer history is sorted newest first,
+     * with payment ID providing deterministic ordering
+     * when timestamps are equal.
+     */
+    @Test
+    void getPaymentsForCustomerUsesNewestFirstSorting() {
+            when(persistenceService.findPaymentsByCustomerId(
+                            org.mockito.ArgumentMatchers.eq(CUSTOMER_ID),
+                            org.mockito.ArgumentMatchers.any(Pageable.class)))
+                            .thenReturn(Page.empty());
+
+            retrievalService.getPaymentsForCustomer(
+                            CUSTOMER_ID, 2, 20);
+
+            ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+
+            verify(persistenceService).findPaymentsByCustomerId(
+                            org.mockito.ArgumentMatchers.eq(CUSTOMER_ID),
+                            captor.capture());
+
+            Pageable pageable = captor.getValue();
+
+            assertEquals(2, pageable.getPageNumber());
+            assertEquals(20, pageable.getPageSize());
+
+            Sort.Order createdAtOrder = pageable.getSort().getOrderFor("createdAt");
+
+            Sort.Order idOrder = pageable.getSort().getOrderFor("id");
+
+            assertEquals(
+                            Sort.Direction.DESC,
+                            createdAtOrder.getDirection());
+
+            assertEquals(
+                            Sort.Direction.DESC,
+                            idOrder.getDirection());
+    }
+
+    /**
+     * Rejects missing customer identity before querying MongoDB.
+     */
+    @Test
+    void getPaymentsForCustomerRejectsNullCustomerId() {
+            assertBadRequest(
+                            () -> retrievalService.getPaymentsForCustomer(
+                                            null, 0, 10));
+
+            verifyNoInteractions(
+                            persistenceService,
+                            authorizationService);
+    }
+
+    /**
+     * Rejects blank customer identity before querying MongoDB.
+     */
+    @Test
+    void getPaymentsForCustomerRejectsBlankCustomerId() {
+            assertBadRequest(
+                            () -> retrievalService.getPaymentsForCustomer(
+                                            "   ", 0, 10));
+
+            verifyNoInteractions(
+                            persistenceService,
+                            authorizationService);
+    }
+
+    /**
+     * Rejects negative page numbers to prevent invalid queries.
+     */
+    @Test
+    void getPaymentsForCustomerRejectsNegativePage() {
+            assertInvalidPagination(
+                            () -> retrievalService.getPaymentsForCustomer(
+                                            CUSTOMER_ID, -1, 10));
+
+            verifyNoInteractions(persistenceService);
+    }
+
+    /**
+     * Rejects zero page size to avoid invalid pagination.
+     */
+    @Test
+    void getPaymentsForCustomerRejectsZeroPageSize() {
+            assertInvalidPagination(
+                            () -> retrievalService.getPaymentsForCustomer(
+                                            CUSTOMER_ID, 0, 0));
+
+            verifyNoInteractions(persistenceService);
+    }
+
+    /**
+     * Rejects page sizes above the configured maximum of 100.
+     */
+    @Test
+    void getPaymentsForCustomerRejectsExcessivePageSize() {
+            assertInvalidPagination(
+                            () -> retrievalService.getPaymentsForCustomer(
+                                            CUSTOMER_ID, 0, 101));
+
+            verifyNoInteractions(persistenceService);
+    }
+
+    /**
+     * Verifies the standard pagination validation error.
+     */
+    private void assertInvalidPagination(Runnable action) {
+            ApiException exception = assertThrows(
+                            ApiException.class,
+                            action::run);
+
+            assertEquals(
+                            HttpStatus.BAD_REQUEST,
+                            exception.getStatus());
+
+            assertEquals(
+                            "INVALID_PAYMENT_PAGINATION",
+                            exception.getErrorCode());
     }
 
     @Test

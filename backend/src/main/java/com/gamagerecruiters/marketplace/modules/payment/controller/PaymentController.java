@@ -3,33 +3,40 @@ package com.gamagerecruiters.marketplace.modules.payment.controller;
 
 import java.util.List;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
+import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentPageResponse;
 import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentResponse;
 import com.gamagerecruiters.marketplace.modules.payment.service.PaymentRetrievalService;
-
-import org.springframework.http.HttpStatus;
 
 /**
  * REST endpoints for customer-authorized payment retrieval.
  *
  * <p>
  * Only authenticated users with the CUSTOMER role may access
- * these endpoints. Booking ownership is verified by
- * PaymentRetrievalService before payment data is returned.
+ * these endpoints. Individual payment and booking-based retrieval
+ * operations verify booking ownership before returning records.
  * </p>
  *
  * <p>
- * Payment entities are mapped to PaymentResponse DTOs to prevent
+ * The customer payment history endpoint uses the verified customer ID
+ * snapshot stored on payment records. This supports the WP01 Customer
+ * Payments List integration with database-level pagination.
+ * </p>
+ *
+ * <p>
+ * Payment entities are mapped to customer-facing DTOs to prevent
  * exposure of internal gateway references and commission details.
  * </p>
  */
@@ -51,7 +58,51 @@ public class PaymentController {
     }
 
     /**
+     * Retrieves paginated payment history for the authenticated customer.
+     *
+     * <p>
+     * Customer identity is obtained exclusively from the security
+     * context. The endpoint does not accept a customer ID supplied
+     * through request parameters or request bodies.
+     * </p>
+     *
+     * <p>
+     * Payments are ordered by creation time descending, followed
+     * by payment ID descending. Pagination uses zero-based page
+     * numbers and a maximum page size of 100.
+     * </p>
+     *
+     * <p>
+     * This endpoint supports the WP01 Customer Payments List.
+     * </p>
+     *
+     * @param page zero-based page number; defaults to 0
+     * @param size page size; defaults to 10
+     * @return customer-facing paginated payment history
+     */
+    @GetMapping("/me")
+    public ResponseEntity<PaymentPageResponse> getMyPayments(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+
+        String customerId = requireAuthenticatedCustomerId();
+
+        PaymentPageResponse response = PaymentPageResponse.from(
+                paymentRetrievalService.getPaymentsForCustomer(
+                        customerId,
+                        page,
+                        size));
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
      * Retrieves a single payment belonging to the authenticated customer.
+     *
+     * <p>
+     * Booking ownership is verified by the retrieval service.
+     * Missing or inaccessible payments return a generic 404.
+     * </p>
      *
      * @param paymentId payment identifier
      * @return customer-facing payment details
@@ -59,6 +110,7 @@ public class PaymentController {
     @GetMapping("/{paymentId}")
     public ResponseEntity<PaymentResponse> getPayment(
             @PathVariable String paymentId) {
+
         String customerId = requireAuthenticatedCustomerId();
 
         Payment payment = paymentRetrievalService.getPaymentForCustomer(
@@ -72,7 +124,7 @@ public class PaymentController {
      * Retrieves payment attempts for a booking owned by the customer.
      *
      * <p>
-     * Booking ownership is verified before any payment records
+     * Booking ownership is verified before payment records
      * are returned. An authorized booking without payment attempts
      * produces an empty list.
      * </p>
@@ -83,6 +135,7 @@ public class PaymentController {
     @GetMapping("/booking/{bookingId}")
     public ResponseEntity<List<PaymentResponse>> getPaymentsForBooking(
             @PathVariable String bookingId) {
+
         String customerId = requireAuthenticatedCustomerId();
 
         List<PaymentResponse> responses = paymentRetrievalService
@@ -115,6 +168,6 @@ public class PaymentController {
                     "Authentication is required to access payments");
         }
 
-        return customerId;
+        return customerId.trim();
     }
 }
