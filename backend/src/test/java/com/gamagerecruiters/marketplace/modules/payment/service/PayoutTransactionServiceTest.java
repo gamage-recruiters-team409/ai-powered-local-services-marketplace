@@ -17,10 +17,12 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
@@ -75,6 +77,34 @@ class PayoutTransactionServiceTest {
                 transactionManager,
                 Clock.fixed(NOW, ZoneOffset.UTC),
                 Duration.ofHours(72));
+    }
+
+    @Test
+    void reserveRejectsInsufficientEligibleEarnings() {
+        Payout payout = payoutRequest();
+
+        when(payoutRepository.findByRequestKey("payout-1"))
+                .thenReturn(Optional.empty());
+
+        when(payoutRepository.save(any(Payout.class)))
+                .thenAnswer(invocation -> {
+                    Payout saved = invocation.getArgument(0);
+                    ReflectionTestUtils.setField(saved, "id", "payout-db-1");
+                    return saved;
+                });
+
+        when(ledgerRepository.findByProviderIdOrderByCreatedAtDesc("provider-1"))
+                .thenReturn(List.of());
+
+        ApiException exception = assertThrows(
+                ApiException.class,
+                () -> service.reserve(payout));
+
+        assertEquals(HttpStatus.CONFLICT, exception.getStatus());
+        assertEquals("INSUFFICIENT_ELIGIBLE_EARNINGS",
+                exception.getErrorCode());
+        assertEquals("Insufficient eligible booking earnings for payout",
+                exception.getMessage());
     }
 
     @Test

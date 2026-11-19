@@ -11,10 +11,12 @@ import java.util.Map;
 import java.util.Objects;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
 import com.gamagerecruiters.marketplace.modules.completion.service.CompletionLookup;
@@ -205,7 +207,10 @@ public class PayoutTransactionService {
             }
 
             if (remaining.signum() != 0) {
-                throw new IllegalStateException("Insufficient eligible booking earnings for payout");
+                throw new ApiException(
+                        HttpStatus.CONFLICT,
+                        "INSUFFICIENT_ELIGIBLE_EARNINGS",
+                        "Insufficient eligible booking earnings for payout");
             }
 
             for (PayoutAllocation allocation : allocations) {
