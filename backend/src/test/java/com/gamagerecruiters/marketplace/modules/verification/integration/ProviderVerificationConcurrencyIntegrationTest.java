@@ -1,3 +1,4 @@
+
 package com.gamagerecruiters.marketplace.modules.verification.integration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -33,6 +34,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.MongoDBContainer;
 
+import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
@@ -141,6 +143,188 @@ class ProviderVerificationConcurrencyIntegrationTest {
 
         assertEquals(ProviderVerificationStatus.UNDER_REVIEW, stored.getStatus());
         assertEquals(VerificationDocumentStatus.SUBMITTED, storedDocument.getStatus());
+    }
+
+    // CATEGORY RE-VERIFICATION INTEGRATION TESTS
+
+    @Test
+    @DisplayName("Adding a category requests re-verification for an approved provider")
+    void categoryReverificationChangesApprovedVerification() {
+
+        List<String> submittedDocumentIds = List.of("document-1");
+
+        saveVerification(
+                ProviderVerificationStatus.APPROVED,
+                submittedDocumentIds
+        );
+
+        Instant reviewedAt =
+                Instant.parse("2026-11-17T10:00:00Z");
+
+        ProviderVerification approved = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        approved.setReviewedAt(reviewedAt);
+        approved.setReviewedByUserId("admin-1");
+        approved.setDecisionReason("Original approval");
+
+        verificationRepository.save(approved);
+
+        Instant requestedAt = Instant.now();
+
+        var result = atomicUpdates.requestCategoryReverification(
+                PROVIDER_ID,
+                requestedAt
+        );
+
+        assertTrue(
+                result.isPresent(),
+                "An approved provider should be moved to resubmission"
+        );
+
+        ProviderVerification stored = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(
+                ProviderVerificationStatus.RESUBMISSION_REQUESTED,
+                stored.getStatus()
+        );
+
+        assertEquals(
+                "A new service category was added. Please upload updated verification documents and resubmit.",
+                stored.getDecisionReason()
+        );
+
+        // The original Admin review information must be preserved.
+        assertEquals(reviewedAt, stored.getReviewedAt());
+        assertEquals("admin-1", stored.getReviewedByUserId());
+
+        // The previous submitted document snapshot must be preserved.
+        assertEquals(
+                submittedDocumentIds,
+                stored.getSubmittedDocumentIds()
+        );
+
+        // The workflow revision must increment exactly once.
+        assertEquals(1L, stored.getCoordinationRevision());
+    }
+
+    @Test
+    @DisplayName("Category addition is rejected while verification is submitted")
+    void categoryReverificationRejectsSubmittedVerification() {
+
+        List<String> submittedDocumentIds = List.of("document-1");
+
+        saveVerification(
+                ProviderVerificationStatus.SUBMITTED,
+                submittedDocumentIds
+        );
+
+        ProviderVerification beforeUpdate = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        Instant previousUpdatedAt = beforeUpdate.getUpdatedAt();
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> atomicUpdates.requestCategoryReverification(
+                        PROVIDER_ID,
+                        Instant.now()
+                )
+        );
+
+        assertEquals(
+                "PROVIDER_VERIFICATION_IN_PROGRESS",
+                exception.getErrorCode()
+        );
+
+        ProviderVerification stored = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(ProviderVerificationStatus.SUBMITTED, stored.getStatus());
+        assertEquals(submittedDocumentIds, stored.getSubmittedDocumentIds());
+        assertEquals(0L, stored.getCoordinationRevision());
+        assertEquals(previousUpdatedAt, stored.getUpdatedAt());
+    }
+
+    @Test
+    @DisplayName("Category addition is rejected while verification is under review")
+    void categoryReverificationRejectsUnderReviewVerification() {
+
+        List<String> submittedDocumentIds = List.of("document-1");
+
+        saveVerification(
+                ProviderVerificationStatus.UNDER_REVIEW,
+                submittedDocumentIds
+        );
+
+        ProviderVerification beforeUpdate = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        Instant previousUpdatedAt = beforeUpdate.getUpdatedAt();
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> atomicUpdates.requestCategoryReverification(
+                        PROVIDER_ID,
+                        Instant.now()
+                )
+        );
+
+        assertEquals(
+                "PROVIDER_VERIFICATION_IN_PROGRESS",
+                exception.getErrorCode()
+        );
+
+        ProviderVerification stored = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(ProviderVerificationStatus.UNDER_REVIEW, stored.getStatus());
+        assertEquals(submittedDocumentIds, stored.getSubmittedDocumentIds());
+        assertEquals(0L, stored.getCoordinationRevision());
+        assertEquals(previousUpdatedAt, stored.getUpdatedAt());
+    }
+
+    @Test
+    @DisplayName("Category addition preserves rejected status and invalidates stale submissions")
+    void categoryReverificationPreservesRejectedVerification() {
+
+        List<String> submittedDocumentIds = List.of("document-1");
+
+        saveVerification(
+                ProviderVerificationStatus.REJECTED,
+                submittedDocumentIds
+        );
+
+        ProviderVerification beforeUpdate = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        Instant previousUpdatedAt = beforeUpdate.getUpdatedAt();
+        String previousDecisionReason = beforeUpdate.getDecisionReason();
+
+        var result = atomicUpdates.requestCategoryReverification(
+                PROVIDER_ID,
+                Instant.now()
+        );
+
+        assertTrue(result.isPresent());
+
+        ProviderVerification stored = verificationRepository
+                .findByProviderId(PROVIDER_ID)
+                .orElseThrow();
+
+        assertEquals(ProviderVerificationStatus.REJECTED, stored.getStatus());
+        assertEquals(1L, stored.getCoordinationRevision());
+        assertEquals(submittedDocumentIds, stored.getSubmittedDocumentIds());
+        assertEquals(previousUpdatedAt, stored.getUpdatedAt());
+        assertEquals(previousDecisionReason, stored.getDecisionReason());
     }
 
     @Test

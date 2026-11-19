@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { FALLBACK_PROVIDER_IMAGE } from '../fixtures/providerImages.js';
 
 /**
@@ -6,7 +7,7 @@ import { FALLBACK_PROVIDER_IMAGE } from '../fixtures/providerImages.js';
  * Features photo, verification badge, rating, description, response metrics,
  * next availability, hourly pricing, comparison checkbox, and "View profile" CTA.
  */
-export function SearchResultCard({ item, isSelected = false, onSelect, onToggleComparison }) {
+export function SearchResultCard({ item, isSelected = false, onToggleComparison }) {
   const [isFavorited, setIsFavorited] = useState(false);
 
   if (!item) return null;
@@ -148,14 +149,13 @@ export function SearchResultCard({ item, isSelected = false, onSelect, onToggleC
             )}
           </div>
 
-          <button
-            type="button"
+          <Link
+            to={`/providers/${encodeURIComponent(id)}`}
             className="view-profile-btn"
-            onClick={(e) => onSelect?.(item, e.currentTarget)}
             aria-label={`View profile for ${name}`}
           >
             View profile
-          </button>
+          </Link>
         </div>
 
         {/* Comparison Checkbox */}
