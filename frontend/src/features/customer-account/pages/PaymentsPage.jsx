@@ -50,6 +50,9 @@ export function PaymentsPage() {
   const totalElements = result.data?.totalElements ?? 0;
   const errorMessage = result.error ? (result.error.message || 'Failed to load payments') : '';
 
+  const start = totalElements === 0 ? 0 : page * pageSize + 1;
+  const end = Math.min(page * pageSize + payments.length, totalElements);
+
   useEffect(() => {
     let cancelled = false;
     getMyPayments(page, pageSize)
@@ -261,6 +264,8 @@ export function PaymentsPage() {
               totalPages={totalPages}
               totalElements={totalElements}
               pageSize={pageSize}
+              start={start}
+              end={end}
               itemLabel="payments"
               onPageChange={(newPage) => setPage(newPage)}
             />

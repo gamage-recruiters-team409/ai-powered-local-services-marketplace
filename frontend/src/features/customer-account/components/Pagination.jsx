@@ -7,11 +7,13 @@ export function Pagination({
   pageSize = 10,
   itemLabel = 'items',
   onPageChange,
+  start: propStart,
+  end: propEnd,
 }) {
   if (totalElements === 0) return null;
 
-  const start = currentPage * pageSize + 1;
-  const end = Math.min((currentPage + 1) * pageSize, totalElements);
+  const start = propStart ?? (currentPage * pageSize + 1);
+  const end = propEnd ?? Math.min((currentPage + 1) * pageSize, totalElements);
 
   // Generate page numbers to show
   const pageNumbers = [];

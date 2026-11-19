@@ -49,7 +49,8 @@ describe('DeactivatePage', () => {
       </MemoryRouter>
     );
 
-    expect(screen.getByRole('heading', { name: /deactivate account/i })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: /deactivate account/i })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 2, name: /deactivate account/i })).toBeTruthy();
     expect(screen.getByText(/you will be logged out and will not be able to log in again/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: /deactivate my account/i })).toBeTruthy();
   });

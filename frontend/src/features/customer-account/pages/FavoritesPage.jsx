@@ -37,6 +37,9 @@ export function FavoritesPage() {
   const listingsUnavailable = result.listingsUnavailable;
   const errorMessage = result.error ? (result.error.message || 'Failed to load favorites') : '';
 
+  const start = totalElements === 0 ? 0 : page * pageSize + 1;
+  const end = Math.min(page * pageSize + favourites.length, totalElements);
+
   useEffect(() => {
     let cancelled = false;
     getFavourites(activeTab, page, pageSize)
@@ -324,6 +327,8 @@ export function FavoritesPage() {
               totalPages={totalPages}
               totalElements={totalElements}
               pageSize={pageSize}
+              start={start}
+              end={end}
               itemLabel="favorites"
               onPageChange={(newPage) => handlePageChange(newPage)}
             />
