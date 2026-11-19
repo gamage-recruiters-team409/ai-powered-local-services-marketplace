@@ -9,6 +9,8 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 @Document(collection = "provider_profiles")
 public class ProviderProfile {
 
@@ -28,12 +30,36 @@ public class ProviderProfile {
 
     private String city;
 
+    // Selected service-area districts from the shared Sri Lankan district catalog.
+    private List<String> serviceAreaDistricts = new ArrayList<>();
+
+    // Provider voluntary activity status.
+    // Existing MongoDB profiles without this field are treated as ACTIVE.
+    private ProviderProfileActivityStatus activityStatus =
+            ProviderProfileActivityStatus.ACTIVE;
+
     private Integer experienceYears;
 
+    // Public HTTPS URL used to display the profile image.
     private String profileImageUrl;
+
+    // Cloudinary public ID used to replace or delete the image.
+    private String profileImagePublicId;
 
     // Selected service category IDs from the Catalog module.
     private List<String> categoryIds = new ArrayList<>();
+
+    /*
+     * Provider payout details.
+     *
+     * The account number is stored only as AES-GCM ciphertext.
+     * These fields are deliberately excluded from direct JSON serialization.
+     */
+    private String payoutBankName;
+
+    private String payoutAccountHolderName;
+
+    private String payoutAccountNumberEncrypted;
 
     private Instant createdAt;
 
@@ -98,6 +124,33 @@ public class ProviderProfile {
         this.city = city;
     }
 
+    public List<String> getServiceAreaDistricts() {
+        return serviceAreaDistricts == null
+                ? List.of()
+                : List.copyOf(serviceAreaDistricts);
+    }
+
+    public void setServiceAreaDistricts(
+            List<String> serviceAreaDistricts
+    ) {
+        this.serviceAreaDistricts = serviceAreaDistricts == null
+                ? new ArrayList<>()
+                : new ArrayList<>(serviceAreaDistricts);
+    }
+
+    @JsonIgnore
+    public ProviderProfileActivityStatus getActivityStatus() {
+        return activityStatus == null
+                ? ProviderProfileActivityStatus.ACTIVE
+                : activityStatus;
+    }
+
+    public void setActivityStatus(
+            ProviderProfileActivityStatus activityStatus
+    ) {
+        this.activityStatus = activityStatus;
+    }
+
     public Integer getExperienceYears() {
         return experienceYears;
     }
@@ -114,14 +167,56 @@ public class ProviderProfile {
         this.profileImageUrl = profileImageUrl;
     }
 
+    public String getProfileImagePublicId() {
+        return profileImagePublicId;
+    }
+
+    public void setProfileImagePublicId(String profileImagePublicId) {
+        this.profileImagePublicId = profileImagePublicId;
+    }
+
     public List<String> getCategoryIds() {
-        return categoryIds == null ? List.of() : categoryIds;
+        return categoryIds == null
+                ? List.of()
+                : List.copyOf(categoryIds);
     }
 
     public void setCategoryIds(List<String> categoryIds) {
         this.categoryIds = categoryIds == null
                 ? new ArrayList<>()
                 : new ArrayList<>(categoryIds);
+    }
+
+    @JsonIgnore
+    public String getPayoutBankName() {
+        return payoutBankName;
+    }
+
+    public void setPayoutBankName(String payoutBankName) {
+        this.payoutBankName = payoutBankName;
+    }
+
+    @JsonIgnore
+    public String getPayoutAccountHolderName() {
+        return payoutAccountHolderName;
+    }
+
+    public void setPayoutAccountHolderName(
+            String payoutAccountHolderName
+    ) {
+        this.payoutAccountHolderName = payoutAccountHolderName;
+    }
+
+    @JsonIgnore
+    public String getPayoutAccountNumberEncrypted() {
+        return payoutAccountNumberEncrypted;
+    }
+
+    public void setPayoutAccountNumberEncrypted(
+            String payoutAccountNumberEncrypted
+    ) {
+        this.payoutAccountNumberEncrypted =
+                payoutAccountNumberEncrypted;
     }
 
     public Instant getCreatedAt() {

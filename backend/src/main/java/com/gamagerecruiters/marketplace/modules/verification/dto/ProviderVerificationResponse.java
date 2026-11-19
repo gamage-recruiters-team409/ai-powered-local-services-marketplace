@@ -1,3 +1,4 @@
+
 package com.gamagerecruiters.marketplace.modules.verification.dto;
 
 import java.time.Instant;
@@ -18,6 +19,11 @@ public class ProviderVerificationResponse {
 
     private final Instant updatedAt;
 
+    private final Instant expiredAt;
+
+    private final Instant gracePeriodEndsAt;
+
+    // Backward-compatible constructor for existing callers.
     public ProviderVerificationResponse(
             String id,
             ProviderVerificationStatus status,
@@ -26,12 +32,36 @@ public class ProviderVerificationResponse {
             String decisionReason,
             Instant updatedAt
     ) {
+        this(
+                id,
+                status,
+                submittedAt,
+                reviewedAt,
+                decisionReason,
+                updatedAt,
+                null,
+                null
+        );
+    }
+
+    public ProviderVerificationResponse(
+            String id,
+            ProviderVerificationStatus status,
+            Instant submittedAt,
+            Instant reviewedAt,
+            String decisionReason,
+            Instant updatedAt,
+            Instant expiredAt,
+            Instant gracePeriodEndsAt
+    ) {
         this.id = id;
         this.status = status;
         this.submittedAt = submittedAt;
         this.reviewedAt = reviewedAt;
         this.decisionReason = decisionReason;
         this.updatedAt = updatedAt;
+        this.expiredAt = expiredAt;
+        this.gracePeriodEndsAt = gracePeriodEndsAt;
     }
 
     public String getId() {
@@ -56,5 +86,13 @@ public class ProviderVerificationResponse {
 
     public Instant getUpdatedAt() {
         return updatedAt;
+    }
+
+    public Instant getExpiredAt() {
+        return expiredAt;
+    }
+
+    public Instant getGracePeriodEndsAt() {
+        return gracePeriodEndsAt;
     }
 }

@@ -2,9 +2,13 @@ package com.gamagerecruiters.marketplace.modules.provider.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -21,6 +25,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -30,7 +35,10 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.catalog.dto.CategoryResponse;
 import com.gamagerecruiters.marketplace.modules.catalog.service.CategoryService;
+import com.gamagerecruiters.marketplace.modules.customer.service.DistrictCatalog;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
+import com.gamagerecruiters.marketplace.modules.provider.filestorage.ProfileImageStorageService;
+import com.gamagerecruiters.marketplace.modules.provider.filestorage.StoredProfileImage;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderType;
 import com.gamagerecruiters.marketplace.modules.provider.dto.CreateProviderProfileRequest;
 import com.gamagerecruiters.marketplace.modules.provider.dto.ProviderProfileResponse;
@@ -51,8 +59,14 @@ class ProviderProfileServiceImplTest {
     private CategoryService categoryService;
 
     @Mock
+    private DistrictCatalog districtCatalog;
+
+    @Mock
     private ProviderVerificationReverificationService
             providerVerificationReverificationService;
+
+    @Mock
+    private ProfileImageStorageService profileImageStorageService;
 
     @InjectMocks
     private ProviderProfileServiceImpl providerProfileService;
@@ -74,6 +88,11 @@ class ProviderProfileServiceImplTest {
                 );
 
         SecurityContextHolder.getContext().setAuthentication(authentication);
+
+        // Existing profile tests use Colombo unless a test overrides the result.
+        lenient()
+                .when(districtCatalog.isValidDistrict(anyString()))
+                .thenReturn(true);
     }
 
     @AfterEach
@@ -170,6 +189,56 @@ class ProviderProfileServiceImplTest {
         );
 
         verify(providerProfileRepository)
+                .save(any(ProviderProfile.class));
+    }
+
+    @Test
+    void createMyProfile_shouldRejectInvalidDistrict() {
+
+        CreateProviderProfileRequest request = createProfileRequest();
+        request.setDistrict("InvalidDistrict");
+
+        when(providerProfileRepository.existsByUserId(USER_ID))
+                .thenReturn(false);
+
+        when(districtCatalog.isValidDistrict("InvalidDistrict"))
+                .thenReturn(false);
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> providerProfileService.createMyProfile(request)
+        );
+
+        assertEquals("INVALID_DISTRICT", exception.getErrorCode());
+
+        verify(providerProfileRepository, never())
+                .save(any(ProviderProfile.class));
+    }
+
+    @Test
+    void updateMyProfile_shouldRejectInvalidDistrict() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(districtCatalog.isValidDistrict("InvalidDistrict"))
+                .thenReturn(false);
+
+        UpdateProviderProfileRequest request =
+                new UpdateProviderProfileRequest();
+
+        request.setDistrict("InvalidDistrict");
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> providerProfileService.updateMyProfile(request)
+        );
+
+        assertEquals("INVALID_DISTRICT", exception.getErrorCode());
+
+        verify(providerProfileRepository, never())
                 .save(any(ProviderProfile.class));
     }
 
@@ -545,6 +614,194 @@ class ProviderProfileServiceImplTest {
 
         verify(providerVerificationReverificationService, never())
                 .requestCategoryReverification("profile-1");
+    }
+
+
+    // PROFILE IMAGE TESTS
+
+    @Test
+    void uploadMyProfileImage_shouldUploadAndSaveImageForCurrentProvider() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+        existingProfile.setProfileImageUrl(null);
+        existingProfile.setProfileImagePublicId(null);
+
+        MockMultipartFile file = profileImageFile();
+
+        StoredProfileImage storedImage = new StoredProfileImage(
+                "new-profile-image-id",
+                "https://res.cloudinary.com/demo/image/upload/new-profile-image.jpg"
+        );
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(profileImageStorageService.upload("profile-1", file))
+                .thenReturn(storedImage);
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ProviderProfileResponse response =
+                providerProfileService.uploadMyProfileImage(file);
+
+        assertEquals(storedImage.secureUrl(), response.getProfileImageUrl());
+        assertEquals(storedImage.secureUrl(), existingProfile.getProfileImageUrl());
+        assertEquals(
+                "new-profile-image-id",
+                existingProfile.getProfileImagePublicId()
+        );
+        assertNotNull(response.getUpdatedAt());
+
+        verify(profileImageStorageService).upload("profile-1", file);
+        verify(providerProfileRepository).save(existingProfile);
+        verify(profileImageStorageService, never()).delete(any());
+    }
+
+    @Test
+    void uploadMyProfileImage_shouldReplaceExistingImageAndDeleteOldImageAfterSave() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+        existingProfile.setProfileImagePublicId("old-profile-image-id");
+
+        MockMultipartFile file = profileImageFile();
+
+        StoredProfileImage storedImage = new StoredProfileImage(
+                "new-profile-image-id",
+                "https://res.cloudinary.com/demo/image/upload/replacement.jpg"
+        );
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(profileImageStorageService.upload("profile-1", file))
+                .thenReturn(storedImage);
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ProviderProfileResponse response =
+                providerProfileService.uploadMyProfileImage(file);
+
+        assertEquals(storedImage.secureUrl(), response.getProfileImageUrl());
+        assertEquals(
+                "new-profile-image-id",
+                existingProfile.getProfileImagePublicId()
+        );
+
+        var ordered = inOrder(
+                profileImageStorageService,
+                providerProfileRepository
+        );
+
+        ordered.verify(profileImageStorageService).upload("profile-1", file);
+        ordered.verify(providerProfileRepository).save(existingProfile);
+        ordered.verify(profileImageStorageService).delete("old-profile-image-id");
+    }
+
+    @Test
+    void uploadMyProfileImage_shouldDeleteNewImageWhenDatabaseSaveFails() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+        existingProfile.setProfileImagePublicId("old-profile-image-id");
+
+        MockMultipartFile file = profileImageFile();
+
+        StoredProfileImage storedImage = new StoredProfileImage(
+                "new-profile-image-id",
+                "https://res.cloudinary.com/demo/image/upload/new-profile-image.jpg"
+        );
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(profileImageStorageService.upload("profile-1", file))
+                .thenReturn(storedImage);
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenThrow(new IllegalStateException("Database save failed"));
+
+        assertThrows(
+                RuntimeException.class,
+                () -> providerProfileService.uploadMyProfileImage(file)
+        );
+
+        // The newly uploaded asset must be cleaned up if MongoDB persistence fails.
+        verify(profileImageStorageService).delete("new-profile-image-id");
+
+        // The previous image must not be deleted when the replacement is not saved.
+        verify(profileImageStorageService, never()).delete("old-profile-image-id");
+    }
+
+    @Test
+    void removeMyProfileImage_shouldClearImageReferencesAndDeleteStoredImage() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+        existingProfile.setProfileImagePublicId("old-profile-image-id");
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ProviderProfileResponse response =
+                providerProfileService.removeMyProfileImage();
+
+        assertNull(response.getProfileImageUrl());
+        assertNull(existingProfile.getProfileImageUrl());
+        assertNull(existingProfile.getProfileImagePublicId());
+        assertNotNull(response.getUpdatedAt());
+
+        var ordered = inOrder(
+                providerProfileRepository,
+                profileImageStorageService
+        );
+
+        ordered.verify(providerProfileRepository).save(existingProfile);
+        ordered.verify(profileImageStorageService).delete("old-profile-image-id");
+    }
+
+    @Test
+    void uploadMyProfileImage_shouldThrowWhenProfileDoesNotExist() {
+
+        MockMultipartFile file = profileImageFile();
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.empty());
+
+        assertThrows(
+                ResourceNotFoundException.class,
+                () -> providerProfileService.uploadMyProfileImage(file)
+        );
+
+        verify(profileImageStorageService, never()).upload(any(), any());
+        verify(providerProfileRepository, never()).save(any(ProviderProfile.class));
+    }
+
+    @Test
+    void removeMyProfileImage_shouldThrowWhenProfileDoesNotExist() {
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.empty());
+
+        assertThrows(
+                ResourceNotFoundException.class,
+                () -> providerProfileService.removeMyProfileImage()
+        );
+
+        verify(profileImageStorageService, never()).delete(any());
+        verify(providerProfileRepository, never()).save(any(ProviderProfile.class));
+    }
+
+    private MockMultipartFile profileImageFile() {
+
+        return new MockMultipartFile(
+                "file",
+                "provider-profile.png",
+                "image/png",
+                new byte[] {1, 2, 3, 4}
+        );
     }
 
     private CreateProviderProfileRequest createProfileRequest() {

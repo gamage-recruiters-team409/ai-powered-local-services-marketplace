@@ -1,3 +1,4 @@
+
 package com.gamagerecruiters.marketplace.modules.verification.domain;
 
 import java.time.Instant;
@@ -31,20 +32,21 @@ public class ProviderVerification {
 
     private Instant updatedAt;
 
-    // Exact document IDs included in the current submission.
     private List<String> submittedDocumentIds;
 
-    // Incremented whenever an upload reservation or workflow transition occurs.
-    // Used as a compare-and-set value when submitting a verification.
     private long coordinationRevision;
 
-    // Kept for compatibility with the existing atomic submission/review checks.
-    // It must always equal the number of active uploadReservations.
     private int inFlightUploadCount;
 
-    // Each upload has its own identity and lease. This allows safe release and
-    // recovery without accidentally releasing another upload's reservation.
     private List<UploadReservation> uploadReservations = new ArrayList<>();
+
+    // Verification expiry tracking.
+    private Instant expiredAt;
+
+    private Instant gracePeriodEndsAt;
+
+    // Documents that caused the latest expiry.
+    private List<String> expiredDocumentIds = new ArrayList<>();
 
     public ProviderVerification() {
     }
@@ -126,7 +128,9 @@ public class ProviderVerification {
     }
 
     public void setSubmittedDocumentIds(List<String> submittedDocumentIds) {
-        this.submittedDocumentIds = submittedDocumentIds;
+        this.submittedDocumentIds = submittedDocumentIds == null
+                ? null
+                : new ArrayList<>(submittedDocumentIds);
     }
 
     public long getCoordinationRevision() {
@@ -149,10 +153,42 @@ public class ProviderVerification {
         return uploadReservations;
     }
 
-    public void setUploadReservations(List<UploadReservation> uploadReservations) {
+    public void setUploadReservations(
+            List<UploadReservation> uploadReservations
+    ) {
         this.uploadReservations = uploadReservations == null
                 ? new ArrayList<>()
-                : uploadReservations;
+                : new ArrayList<>(uploadReservations);
+    }
+
+    public Instant getExpiredAt() {
+        return expiredAt;
+    }
+
+    public void setExpiredAt(Instant expiredAt) {
+        this.expiredAt = expiredAt;
+    }
+
+    public Instant getGracePeriodEndsAt() {
+        return gracePeriodEndsAt;
+    }
+
+    public void setGracePeriodEndsAt(Instant gracePeriodEndsAt) {
+        this.gracePeriodEndsAt = gracePeriodEndsAt;
+    }
+
+    public List<String> getExpiredDocumentIds() {
+        return expiredDocumentIds == null
+                ? List.of()
+                : List.copyOf(expiredDocumentIds);
+    }
+
+    public void setExpiredDocumentIds(
+            List<String> expiredDocumentIds
+    ) {
+        this.expiredDocumentIds = expiredDocumentIds == null
+                ? new ArrayList<>()
+                : new ArrayList<>(expiredDocumentIds);
     }
 
     public static class UploadReservation {
