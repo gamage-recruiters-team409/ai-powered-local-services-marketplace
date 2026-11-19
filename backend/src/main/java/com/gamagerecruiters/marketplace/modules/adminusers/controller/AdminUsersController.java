@@ -19,14 +19,19 @@ import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.admin.dto.AdminPageResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.domain.AdminUsersRules;
-import com.gamagerecruiters.marketplace.modules.adminusers.dto.AccountActionRequest;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AccountActionResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUserDetailResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUserRow;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUsersSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.adminusers.dto.ListingReviewRequest;
+import com.gamagerecruiters.marketplace.modules.adminusers.dto.ReactivateRequest;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.RegistrationsResponse;
+import com.gamagerecruiters.marketplace.modules.adminusers.dto.Section;
+import com.gamagerecruiters.marketplace.modules.adminusers.dto.SuspendRequest;
+import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.security.AdminUsersAccess;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUserAccountService;
+import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUserListingService;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUsersCsvExporter;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUsersQueryService;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
@@ -46,12 +51,14 @@ public class AdminUsersController {
     private final AdminUsersQueryService queryService;
     private final AdminUsersCsvExporter csvExporter;
     private final AdminUserAccountService accountService;
+    private final AdminUserListingService listingService;
 
     public AdminUsersController(AdminUsersQueryService queryService, AdminUsersCsvExporter csvExporter,
-                                AdminUserAccountService accountService) {
+                                AdminUserAccountService accountService, AdminUserListingService listingService) {
         this.queryService = queryService;
         this.csvExporter = csvExporter;
         this.accountService = accountService;
+        this.listingService = listingService;
     }
 
     @GetMapping
@@ -92,22 +99,38 @@ public class AdminUsersController {
 
     @GetMapping("/{id}")
     public ResponseEntity<AdminUserDetailResponse> detail(@PathVariable String id) {
-        return ResponseEntity.ok(queryService.detail(id));
+        return ResponseEntity.ok(queryService.detail(id, currentUserId(), CurrentUser.getRole()));
     }
 
     @PostMapping("/{id}/suspend")
     @PreAuthorize(AdminUsersAccess.ADMIN_AREA_EDIT)
     public ResponseEntity<AccountActionResponse> suspend(@PathVariable String id,
-                                                         @RequestBody AccountActionRequest request) {
-        return ResponseEntity.ok(accountService.suspend(currentUserId(), CurrentUser.getRole(), id, request.reason()));
+                                                         @RequestBody SuspendRequest request) {
+        return ResponseEntity.ok(accountService.suspend(currentUserId(), CurrentUser.getRole(), id,
+                request.reasonCode(), request.note()));
     }
 
     @PostMapping("/{id}/reactivate")
     @PreAuthorize(AdminUsersAccess.ADMIN_AREA_EDIT)
     public ResponseEntity<AccountActionResponse> reactivate(@PathVariable String id,
-                                                            @RequestBody AccountActionRequest request) {
-        return ResponseEntity.ok(accountService.reactivate(currentUserId(), CurrentUser.getRole(), id,
-                request.reason()));
+                                                            @RequestBody ReactivateRequest request) {
+        return ResponseEntity.ok(accountService.reactivate(currentUserId(), CurrentUser.getRole(), id, request.note()));
+    }
+
+    /** The review modal's listing. {@code available: false} when the listing source cannot provide it. */
+    @GetMapping("/{id}/listings/{listingId}")
+    public ResponseEntity<Section<ProviderListingPort.ListingDetail>> listing(@PathVariable String id,
+                                                                          @PathVariable String listingId) {
+        return ResponseEntity.ok(listingService.detail(id, listingId));
+    }
+
+    /** KEEP_HIDDEN or MAKE_VISIBLE with a note. 503 LISTING_ACTION_UNAVAILABLE until the listing module supports it. */
+    @PostMapping("/{id}/listings/{listingId}/review")
+    @PreAuthorize(AdminUsersAccess.ADMIN_AREA_EDIT)
+    public ResponseEntity<Void> reviewListing(@PathVariable String id, @PathVariable String listingId,
+                                              @RequestBody ListingReviewRequest request) {
+        listingService.review(currentUserId(), id, listingId, request.decision(), request.note());
+        return ResponseEntity.noContent().build();
     }
 
     private static String currentUserId() {

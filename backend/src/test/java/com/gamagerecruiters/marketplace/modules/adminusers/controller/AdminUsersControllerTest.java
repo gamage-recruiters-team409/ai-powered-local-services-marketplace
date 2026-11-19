@@ -43,6 +43,7 @@ import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUsersSummary
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.RegistrationsResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.Section;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUserAccountService;
+import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUserListingService;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUsersCsvExporter;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUsersQueryService;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
@@ -70,7 +71,11 @@ class AdminUsersControllerTest {
 
     private static final String BASE = "/api/v1/admin/users";
     private static final String ID = "65f1c0aa11bb22cc33a1b2c3";
-    private static final String REASON_BODY = "{\"reason\":\"Repeated no-shows reported by customers\"}";
+    private static final String SUSPEND_BODY =
+            "{\"reasonCode\":\"REPEATED_CANCELLATIONS\",\"note\":\"Repeated no-shows reported by customers\"}";
+    private static final String REACTIVATE_BODY = "{\"note\":\"Appeal accepted after reviewing bookings\"}";
+    private static final String REVIEW_BODY = "{\"decision\":\"MAKE_VISIBLE\",\"note\":\"Contact details were removed\"}";
+    private static final String LISTING_ID = "65f1c0aa11bb22cc33a1aaaa";
 
     @Autowired
     private MockMvc mockMvc;
@@ -85,6 +90,8 @@ class AdminUsersControllerTest {
     private AdminUsersCsvExporter csvExporter;
     @MockitoBean
     private AdminUserAccountService accountService;
+    @MockitoBean
+    private AdminUserListingService listingService;
 
     private String bearer(Role role) {
         String token = "token-" + role.name();
@@ -109,7 +116,7 @@ class AdminUsersControllerTest {
                         Section.notConnected(), Section.notConnected()),
                 Section.notConnected(), Section.notConnected(), Section.notConnected(), Section.notConnected(),
                 Section.notConnected(), Section.notConnected(), Section.notConnected(), Section.notConnected(),
-                Section.of(List.of()));
+                Section.of(List.of()), new AdminUserDetailResponse.Actions(true, false, true));
     }
 
     private void stubReads() {
@@ -122,7 +129,8 @@ class AdminUsersControllerTest {
                 Section.of(new AdminUsersSummaryResponse.Count(1, Section.notConnected()))));
         when(queryService.registrations(anyString(), any()))
                 .thenReturn(new RegistrationsResponse("WEEKS", false, Section.NOT_CONNECTED, null));
-        when(queryService.detail(ID)).thenReturn(detail());
+        when(queryService.detail(eq(ID), anyString(), any())).thenReturn(detail());
+        when(listingService.detail(ID, LISTING_ID)).thenReturn(Section.notConnected());
         when(csvExporter.export(anyString(), any(), any(), any())).thenReturn(new AdminUsersCsvExporter.Export(
                 "﻿id,name,email,role,joined,status\r\n".getBytes(StandardCharsets.UTF_8), "users-2026-11-19.csv",
                 0, 0, false));
@@ -138,11 +146,14 @@ class AdminUsersControllerTest {
         mockMvc.perform(get(BASE + "/registrations")).andExpect(status().isUnauthorized());
         mockMvc.perform(get(BASE + "/export.csv")).andExpect(status().isUnauthorized());
         mockMvc.perform(get(BASE + "/" + ID)).andExpect(status().isUnauthorized());
-        mockMvc.perform(post(BASE + "/" + ID + "/suspend").contentType(MediaType.APPLICATION_JSON).content(REASON_BODY))
+        mockMvc.perform(post(BASE + "/" + ID + "/suspend").contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
                 .andExpect(status().isUnauthorized());
-        mockMvc.perform(post(BASE + "/" + ID + "/reactivate").contentType(MediaType.APPLICATION_JSON).content(REASON_BODY))
+        mockMvc.perform(post(BASE + "/" + ID + "/reactivate").contentType(MediaType.APPLICATION_JSON).content(REACTIVATE_BODY))
                 .andExpect(status().isUnauthorized());
-        verifyNoInteractions(queryService, csvExporter, accountService);
+        mockMvc.perform(get(BASE + "/" + ID + "/listings/" + LISTING_ID)).andExpect(status().isUnauthorized());
+        mockMvc.perform(post(BASE + "/" + ID + "/listings/" + LISTING_ID + "/review")
+                .contentType(MediaType.APPLICATION_JSON).content(REVIEW_BODY)).andExpect(status().isUnauthorized());
+        verifyNoInteractions(queryService, csvExporter, accountService, listingService);
     }
 
     // ---------- reads ----------
@@ -186,7 +197,13 @@ class AdminUsersControllerTest {
                 .andExpect(jsonPath("$.profile.passwordHash").doesNotExist())
                 .andExpect(jsonPath("$.profile.password").doesNotExist())
                 .andExpect(jsonPath("$.profile.token").doesNotExist())
-                .andExpect(jsonPath("$.profile.failedLoginCount").doesNotExist());
+                .andExpect(jsonPath("$.profile.failedLoginCount").doesNotExist())
+                .andExpect(jsonPath("$.actions.canSuspend").value(true));
+        verify(queryService).detail(ID, actor, role);
+        mockMvc.perform(get(BASE + "/" + ID + "/listings/" + LISTING_ID).header("Authorization", auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(false))
+                .andExpect(jsonPath("$.reason").value("NOT_CONNECTED"));
     }
 
     @ParameterizedTest
@@ -202,7 +219,9 @@ class AdminUsersControllerTest {
         mockMvc.perform(get(BASE + "/registrations").header("Authorization", auth)).andExpect(status().isForbidden());
         mockMvc.perform(get(BASE + "/export.csv").header("Authorization", auth)).andExpect(status().isForbidden());
         mockMvc.perform(get(BASE + "/" + ID).header("Authorization", auth)).andExpect(status().isForbidden());
-        verifyNoInteractions(queryService, csvExporter, accountService);
+        mockMvc.perform(get(BASE + "/" + ID + "/listings/" + LISTING_ID).header("Authorization", auth))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(queryService, csvExporter, accountService, listingService);
     }
 
     // ---------- writes ----------
@@ -210,22 +229,28 @@ class AdminUsersControllerTest {
     @Test
     @DisplayName("suspend / reactivate: ADMIN -> 200, as the logged-in admin with its role")
     void adminCanWrite() throws Exception {
-        when(accountService.suspend(eq("user-ADMIN"), eq(Role.ADMIN), eq(ID), anyString())).thenReturn(
+        when(accountService.suspend(eq("user-ADMIN"), eq(Role.ADMIN), eq(ID), anyString(), anyString())).thenReturn(
                 new AccountActionResponse(ID, Role.PROVIDER, UserStatus.ACTIVE, UserStatus.SUSPENDED, true, "audit-1"));
         when(accountService.reactivate(eq("user-ADMIN"), eq(Role.ADMIN), eq(ID), anyString())).thenReturn(
                 new AccountActionResponse(ID, Role.PROVIDER, UserStatus.SUSPENDED, UserStatus.ACTIVE, true, "audit-2"));
         String auth = bearer(Role.ADMIN);
 
         mockMvc.perform(post(BASE + "/" + ID + "/suspend").header("Authorization", auth)
-                        .contentType(MediaType.APPLICATION_JSON).content(REASON_BODY))
+                        .contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("SUSPENDED"))
                 .andExpect(jsonPath("$.auditLogId").value("audit-1"));
-        verify(accountService).suspend("user-ADMIN", Role.ADMIN, ID, "Repeated no-shows reported by customers");
+        verify(accountService).suspend("user-ADMIN", Role.ADMIN, ID, "REPEATED_CANCELLATIONS",
+                "Repeated no-shows reported by customers");
         mockMvc.perform(post(BASE + "/" + ID + "/reactivate").header("Authorization", auth)
-                        .contentType(MediaType.APPLICATION_JSON).content(REASON_BODY))
+                        .contentType(MediaType.APPLICATION_JSON).content(REACTIVATE_BODY))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"));
+        verify(accountService).reactivate("user-ADMIN", Role.ADMIN, ID, "Appeal accepted after reviewing bookings");
+        mockMvc.perform(post(BASE + "/" + ID + "/listings/" + LISTING_ID + "/review").header("Authorization", auth)
+                        .contentType(MediaType.APPLICATION_JSON).content(REVIEW_BODY))
+                .andExpect(status().isNoContent());
+        verify(listingService).review("user-ADMIN", ID, LISTING_ID, "MAKE_VISIBLE", "Contact details were removed");
     }
 
     @ParameterizedTest
@@ -236,13 +261,16 @@ class AdminUsersControllerTest {
         String auth = bearer(role);
 
         mockMvc.perform(post(BASE + "/" + ID + "/suspend").header("Authorization", auth)
-                        .contentType(MediaType.APPLICATION_JSON).content(REASON_BODY))
+                        .contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
         mockMvc.perform(post(BASE + "/" + ID + "/reactivate").header("Authorization", auth)
-                        .contentType(MediaType.APPLICATION_JSON).content(REASON_BODY))
+                        .contentType(MediaType.APPLICATION_JSON).content(REACTIVATE_BODY))
                 .andExpect(status().isForbidden());
-        verifyNoInteractions(accountService);
+        mockMvc.perform(post(BASE + "/" + ID + "/listings/" + LISTING_ID + "/review").header("Authorization", auth)
+                        .contentType(MediaType.APPLICATION_JSON).content(REVIEW_BODY))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(accountService, listingService);
     }
 
     // ---------- error codes ----------
@@ -251,19 +279,25 @@ class AdminUsersControllerTest {
     @DisplayName("service errors keep their status and code: 503, 403, 404, 400; bad page / missing body -> 400")
     void errorCodes() throws Exception {
         String auth = bearer(Role.ADMIN);
-        when(accountService.suspend(anyString(), any(), eq("stub"), anyString())).thenThrow(new ApiException(
+        when(accountService.suspend(anyString(), any(), eq("stub"), anyString(), anyString())).thenThrow(new ApiException(
                 HttpStatus.SERVICE_UNAVAILABLE, "USER_ACCOUNT_ACTION_UNAVAILABLE", "x"));
-        when(accountService.suspend(anyString(), any(), eq("admin"), anyString())).thenThrow(new ApiException(
+        when(accountService.suspend(anyString(), any(), eq("admin"), anyString(), anyString())).thenThrow(new ApiException(
                 HttpStatus.FORBIDDEN, "USER_ACTION_NOT_ALLOWED", "x"));
-        when(queryService.detail("missing")).thenThrow(new com.gamagerecruiters.marketplace.common.exception
+        org.mockito.Mockito.doThrow(new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "LISTING_ACTION_UNAVAILABLE", "x"))
+                .when(listingService).review(anyString(), eq(ID), eq(LISTING_ID), anyString(), anyString());
+        when(queryService.detail(eq("missing"), anyString(), any())).thenThrow(new com.gamagerecruiters.marketplace.common.exception
                 .ResourceNotFoundException("USER_NOT_FOUND", "User not found"));
 
+        mockMvc.perform(post(BASE + "/" + ID + "/listings/" + LISTING_ID + "/review").header("Authorization", auth)
+                        .contentType(MediaType.APPLICATION_JSON).content(REVIEW_BODY))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("LISTING_ACTION_UNAVAILABLE"));
         mockMvc.perform(post(BASE + "/stub/suspend").header("Authorization", auth)
-                        .contentType(MediaType.APPLICATION_JSON).content(REASON_BODY))
+                        .contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.error").value("USER_ACCOUNT_ACTION_UNAVAILABLE"));
         mockMvc.perform(post(BASE + "/admin/suspend").header("Authorization", auth)
-                        .contentType(MediaType.APPLICATION_JSON).content(REASON_BODY))
+                        .contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("USER_ACTION_NOT_ALLOWED"));
         mockMvc.perform(get(BASE + "/missing").header("Authorization", auth))

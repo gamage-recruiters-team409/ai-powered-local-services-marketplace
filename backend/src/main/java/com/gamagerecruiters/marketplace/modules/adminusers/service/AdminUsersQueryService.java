@@ -9,8 +9,10 @@ import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -32,6 +34,7 @@ import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.admin.dto.AdminPageResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.domain.AdminUsersRules;
+import com.gamagerecruiters.marketplace.modules.adminusers.domain.SuspensionReason;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUserDetailResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUserRow;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUsersSummaryResponse;
@@ -249,7 +252,7 @@ public class AdminUsersQueryService {
 
     // ---------------------------------------------------------------- account details
 
-    public AdminUserDetailResponse detail(String userId) {
+    public AdminUserDetailResponse detail(String userId, String actorId, Role actorRole) {
         UserAccount user = findManaged(userId);
         String id = user.id();
         Role role = user.role();
@@ -275,7 +278,44 @@ public class AdminUsersQueryService {
                 provider ? section(id, "hiddenListings", () -> listings.hiddenListings(id, AdminUsersRules.FLAGGED_LISTINGS))
                         : Section.notApplicable(),
                 section(id, "queuedBookings", () -> bookings.queued(id, role, AdminUsersRules.QUEUED_BOOKINGS)),
-                section(id, "adminActions", () -> audit.recentForTarget(id, AdminUsersRules.ADMIN_ACTIONS)));
+                section(id, "adminActions", () -> audit.recentForTarget(id, AdminUsersRules.ADMIN_ACTIONS)
+                        .map(this::withActorNames)),
+                actions(user, actorId, actorRole));
+    }
+
+    /** ADMIN edits the ADMIN area; SUPER_ADMIN reads it only. Never on the admin's own account. */
+    static AdminUserDetailResponse.Actions actions(UserAccount user, String actorId, Role actorRole) {
+        boolean editor = actorRole == Role.ADMIN && actorId != null && !actorId.equals(user.id());
+        boolean suspendable = user.status() == UserStatus.ACTIVE || user.status() == UserStatus.PENDING_VERIFICATION
+                || user.status() == UserStatus.LOCKED;
+        return new AdminUserDetailResponse.Actions(
+                editor && suspendable,
+                editor && user.status() == UserStatus.SUSPENDED,
+                editor && user.role() == Role.PROVIDER);
+    }
+
+    /** Audit records with the admin's display name, and a suspension's reason code split from its note. */
+    private List<AdminUserDetailResponse.AdminActionView> withActorNames(List<AccountActionAuditPort.AdminAction> records) {
+        Map<String, String> names = new HashMap<>();
+        return records.stream().map(r -> {
+            String name = r.actorId() == null ? "" : names.computeIfAbsent(r.actorId(), this::displayName);
+            String actorName = name.isEmpty() ? null : name;
+            boolean suspension = r.toStatus() == UserStatus.SUSPENDED;
+            String action = suspension ? "SUSPENDED" : r.toStatus() == UserStatus.ACTIVE ? "REACTIVATED" : "STATUS_CHANGED";
+            String reasonCode = suspension ? SuspensionReason.codeOf(r.reason()).map(Enum::name).orElse(null) : null;
+            String note = suspension ? SuspensionReason.noteOf(r.reason()) : r.reason();
+            return new AdminUserDetailResponse.AdminActionView(r.auditLogId(), r.actorId(), actorName, action,
+                    r.fromStatus(), r.toStatus(), reasonCode, note, r.outcome(), r.createdAt());
+        }).toList();
+    }
+
+    /** The admin's name for the audit table; empty string when it cannot be read (stored as null). */
+    private String displayName(String userId) {
+        try {
+            return directory.findById(userId).map(UserAccount::displayName).orElse("");
+        } catch (RuntimeException e) {
+            return "";
+        }
     }
 
     /** A CUSTOMER or PROVIDER account, or 404 USER_NOT_FOUND (also for admin accounts and impossible ids). */

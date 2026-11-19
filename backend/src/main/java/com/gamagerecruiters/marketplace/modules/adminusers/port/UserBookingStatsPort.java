@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.adminusers.port;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -26,7 +27,9 @@ public interface UserBookingStatsPort {
     record Cancellations(long total, long last30Days, long cancelledByThisUser) {
     }
 
-    record QueuedBooking(String bookingId, String status, Instant scheduledStart, String counterpartyId) {
+    /** {@code counterparty}: the customer for a provider's booking, the provider for a customer's. */
+    record QueuedBooking(String bookingId, String serviceTitle, String status, Instant scheduledStart,
+                         String counterpartyId, String counterpartyName, BigDecimal amount, String currency) {
     }
 
     Optional<BookingTotals> totals(String userId, Role role);

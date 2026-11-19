@@ -3,7 +3,6 @@ package com.gamagerecruiters.marketplace.modules.adminusers.dto;
 import java.time.Instant;
 import java.util.List;
 
-import com.gamagerecruiters.marketplace.modules.adminusers.port.AccountActionAuditPort.AdminAction;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort.HiddenListings;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderProfilePort.ServiceArea;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderReviewStatsPort.Rating;
@@ -31,8 +30,25 @@ public record AdminUserDetailResponse(
         Section<DisputeStats> disputes,
         Section<HiddenListings> hiddenListings,
         Section<List<QueuedBooking>> queuedBookings,
-        Section<List<AdminAction>> adminActions
+        Section<List<AdminActionView>> adminActions,
+        Actions actions
 ) {
+
+    /**
+     * What the logged-in admin may do on this page, decided by the backend (the frontend has no user id): ADMIN only
+     * (SUPER_ADMIN is read-only), never on the admin's own account. The endpoints check every rule again.
+     */
+    public record Actions(boolean canSuspend, boolean canReactivate, boolean canReviewListings) {
+    }
+
+    /**
+     * One audit record. {@code action}: SUSPENDED, REACTIVATED or STATUS_CHANGED. {@code actorName} is null when the
+     * admin account cannot be read. {@code reasonCode} is set for suspensions; {@code note} is the admin's note.
+     */
+    public record AdminActionView(String auditLogId, String actorId, String actorName, String action,
+                                  UserStatus fromStatus, UserStatus toStatus, String reasonCode, String note,
+                                  String outcome, Instant createdAt) {
+    }
 
     public record Profile(
             String id,

@@ -239,17 +239,18 @@ class AdminUsersMongoIntegrationTest {
         user(PROVIDER, Role.PROVIDER, UserStatus.ACTIVE);
         loginAs(ADMIN, Role.ADMIN);
 
-        AccountActionResponse suspended = accountService.suspend(ADMIN, Role.ADMIN, PROVIDER, REASON);
+        AccountActionResponse suspended = accountService.suspend(ADMIN, Role.ADMIN, PROVIDER, "REPEATED_CANCELLATIONS",
+                REASON);
         assertThat(suspended.changed()).isTrue();
         assertThat(mongoTemplate.findById(PROVIDER, User.class).getStatus()).isEqualTo(UserStatus.SUSPENDED);
         AdminAuditLog record = mongoTemplate.findById(suspended.auditLogId(), AdminAuditLog.class);
         assertThat(record.getOutcome()).isEqualTo(AuditOutcome.SUCCESS);
         assertThat(record.getActorId()).isEqualTo(ADMIN);
-        assertThat(record.getReason()).isEqualTo(REASON);
+        assertThat(record.getReason()).isEqualTo("REPEATED_CANCELLATIONS: " + REASON);
         assertThat(record.getFromStatus()).isEqualTo(UserStatus.ACTIVE);
         assertThat(record.getToStatus()).isEqualTo(UserStatus.SUSPENDED);
 
-        AccountActionResponse again = accountService.suspend(ADMIN, Role.ADMIN, PROVIDER, REASON);
+        AccountActionResponse again = accountService.suspend(ADMIN, Role.ADMIN, PROVIDER, "REPEATED_CANCELLATIONS", REASON);
         assertThat(again.changed()).isFalse();
         assertThat(mongoTemplate.count(Query.query(Criteria.where("targetUserId").is(PROVIDER)), AdminAuditLog.class))
                 .isEqualTo(1);
@@ -259,11 +260,17 @@ class AdminUsersMongoIntegrationTest {
         assertThat(reactivated.status()).isEqualTo(UserStatus.ACTIVE);
         assertThat(mongoTemplate.findById(PROVIDER, User.class).getStatus()).isEqualTo(UserStatus.ACTIVE);
 
-        AdminUserDetailResponse detail = queryService.detail(PROVIDER);
+        AdminUserDetailResponse detail = queryService.detail(PROVIDER, ADMIN, Role.ADMIN);
         assertThat(detail.adminActions().available()).isTrue();
         assertThat(detail.adminActions().data()).hasSize(2);
         assertThat(detail.adminActions().data().get(0).toStatus()).isEqualTo(UserStatus.ACTIVE);
-        assertThat(detail.adminActions().data().get(1).reason()).isEqualTo(REASON);
+        assertThat(detail.adminActions().data().get(0).action()).isEqualTo("REACTIVATED");
+        assertThat(detail.adminActions().data().get(1).action()).isEqualTo("SUSPENDED");
+        assertThat(detail.adminActions().data().get(1).reasonCode()).isEqualTo("REPEATED_CANCELLATIONS");
+        assertThat(detail.adminActions().data().get(1).note()).isEqualTo(REASON);
+        assertThat(detail.adminActions().data().get(1).actorName()).as("admin name resolved").isEqualTo("User 0009");
+        assertThat(detail.actions().canSuspend()).isTrue();
+        assertThat(detail.actions().canReactivate()).isFalse();
         assertThat(detail.disputes().data().lifetime()).isZero();
         assertThat(detail.bookingStats().available()).as("booking stats are a stub").isFalse();
     }

@@ -78,7 +78,7 @@ class AuthUserDirectoryAdapterTest {
     void detailHasNoSecurityFields() throws Exception {
         when(userInternalService.getById(ID)).thenReturn(userWithSecrets());
 
-        String body = json.writeValueAsString(queryService.detail(ID));
+        String body = json.writeValueAsString(queryService.detail(ID, "admin-1", Role.ADMIN));
 
         assertThat(body).contains("\"email\":\"nimal@example.test\"").contains("\"emailVerified\":true");
         assertThat(body).doesNotContain(HASH).doesNotContainIgnoringCase("password")
