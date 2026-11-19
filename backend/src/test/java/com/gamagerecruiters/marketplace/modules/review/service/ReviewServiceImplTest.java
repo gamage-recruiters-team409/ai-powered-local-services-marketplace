@@ -517,13 +517,13 @@ class ReviewServiceImplTest {
         }
 
         @Test
-        @DisplayName("Provider's own list includes the customer's name (S11); unknown users have no name")
+        @DisplayName("Provider's own list (S11) asks for PUBLISHED reviews only and includes the customer's name")
         void providerListHasCustomerNames() {
             Review first = review(NOW);
             Review second = review(NOW);
             second.setId("rev-2");
             second.setCustomerId("cust-unknown");
-            when(reviewRepository.findByProviderId(eq(PROVIDER), any(Pageable.class)))
+            when(reviewRepository.findByProviderIdAndStatus(eq(PROVIDER), eq(ReviewStatus.PUBLISHED), any(Pageable.class)))
                     .thenReturn(new PageImpl<>(List.of(first, second)));
             when(people.namesOf(List.of(CUSTOMER, "cust-unknown"))).thenReturn(Map.of(CUSTOMER, "Amaya Perera"));
 

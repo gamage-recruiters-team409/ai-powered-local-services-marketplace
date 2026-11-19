@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -22,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
@@ -36,7 +39,10 @@ import com.gamagerecruiters.marketplace.modules.completion.dto.ReportNoShowReque
 import com.gamagerecruiters.marketplace.modules.completion.dto.ServiceCompletionResponse;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
 
@@ -176,5 +182,66 @@ class CompletionDisputeLinkTest {
                 .thenThrow(new ResourceConflictException("DISPUTE_ELIGIBILITY_UNAVAILABLE", "Not yet"));
         assertNull(new Wp09CompletionDisputes(failing).openDispute(BOOKING, CUSTOMER, Role.CUSTOMER,
                 DisputeCategory.OTHER, "Something else"));
+    }
+
+    @Test
+    @DisplayName("Raise issue: the dispute ID write fails after commit -> request still succeeds with the dispute ID; one case only")
+    void raiseIssueWhenDisputeLinkWriteFails() {
+        stubRaiseIssue();
+        when(atomicUpdates.recordDisputeId(BOOKING, "dsp-1", NOW))
+                .thenThrow(new DataAccessResourceFailureException("Simulated MongoDB outage"));
+
+        ServiceCompletionResponse response = service.raiseIssue(BOOKING, CUSTOMER,
+                new RaiseIssueRequest("The balcony was not cleaned", IssueType.POOR_QUALITY));
+
+        assertEquals("dsp-1", response.disputeId());
+        assertEquals(NOW, response.issueRaisedAt());
+        assertEquals(1, calls.size());
+        verify(bookingFacade, times(1)).markDisputed(BOOKING, CUSTOMER, "CUSTOMER_ISSUE: The balcony was not cleaned");
+    }
+
+    @Test
+    @DisplayName("Raise issue: a link already stored by someone else -> response still carries the dispute ID")
+    void raiseIssueWhenLinkAlreadyStored() {
+        stubRaiseIssue();
+        when(atomicUpdates.recordDisputeId(BOOKING, "dsp-1", NOW)).thenReturn(Optional.empty());
+
+        ServiceCompletionResponse response = service.raiseIssue(BOOKING, CUSTOMER,
+                new RaiseIssueRequest("The balcony was not cleaned"));
+
+        assertEquals("dsp-1", response.disputeId());
+    }
+
+    private static DisputeSummaryResponse summary(String id, String bookingId) {
+        return new DisputeSummaryResponse(id, bookingId, CUSTOMER, PROVIDER, Role.CUSTOMER, DisputeCategory.OTHER,
+                DisputeStatus.OPEN, null, null, NOW, NOW);
+    }
+
+    @Test
+    @DisplayName("WP09 lookup: finds the booking's case through the party's dispute list (read-only), across pages")
+    void wp09LookupFindsExistingCase() {
+        DisputeService disputeService = mock(DisputeService.class);
+        when(disputeService.getMyDisputes(CUSTOMER, 0, Wp09CompletionDisputes.LOOKUP_PAGE_SIZE))
+                .thenReturn(new DisputePageResponse<>(List.of(summary("dsp-x", "other-booking")), 0, 50, 51, 2));
+        when(disputeService.getMyDisputes(CUSTOMER, 1, Wp09CompletionDisputes.LOOKUP_PAGE_SIZE))
+                .thenReturn(new DisputePageResponse<>(List.of(summary("dsp-7", BOOKING)), 1, 50, 51, 2));
+
+        assertEquals(Optional.of("dsp-7"), new Wp09CompletionDisputes(disputeService).findDisputeId(BOOKING, CUSTOMER));
+        verify(disputeService, never()).raiseDispute(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("WP09 lookup: no case, or WP09 unavailable -> empty (nothing is opened)")
+    void wp09LookupEmpty() {
+        DisputeService none = mock(DisputeService.class);
+        when(none.getMyDisputes(CUSTOMER, 0, Wp09CompletionDisputes.LOOKUP_PAGE_SIZE))
+                .thenReturn(new DisputePageResponse<>(List.of(), 0, 50, 0, 0));
+        assertEquals(Optional.empty(), new Wp09CompletionDisputes(none).findDisputeId(BOOKING, CUSTOMER));
+
+        DisputeService failing = mock(DisputeService.class);
+        when(failing.getMyDisputes(any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenThrow(new DataAccessResourceFailureException("down"));
+        assertEquals(Optional.empty(), new Wp09CompletionDisputes(failing).findDisputeId(BOOKING, CUSTOMER));
+        verify(failing, never()).raiseDispute(any(), any(), any());
     }
 }

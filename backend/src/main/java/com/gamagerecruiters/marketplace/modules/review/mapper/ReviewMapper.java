@@ -61,7 +61,8 @@ public final class ReviewMapper {
                 review.isEdited(),
                 toReplyResponse(review.getProviderReply()),
                 removalReason(review),
-                review.getCreatedAt()
+                review.getCreatedAt(),
+                review.getModerationRevision()
         );
     }
 

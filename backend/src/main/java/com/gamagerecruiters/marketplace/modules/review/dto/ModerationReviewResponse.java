@@ -6,7 +6,10 @@ import java.util.List;
 import com.gamagerecruiters.marketplace.modules.review.domain.ModerationFlag;
 import com.gamagerecruiters.marketplace.modules.review.domain.ReviewStatus;
 
-/** A review as the moderator sees it (S14 queue row, S15 detail). */
+/**
+ * A review as the moderator sees it (S14 queue row, S15 detail).
+ * moderationRevision: send it back with a publish/remove decision (optimistic concurrency).
+ */
 public record ModerationReviewResponse(
         String id,
         String bookingId,
@@ -23,6 +26,7 @@ public record ModerationReviewResponse(
         boolean edited,
         ProviderReplyResponse providerReply,
         String removalReason,
-        Instant createdAt
+        Instant createdAt,
+        long moderationRevision
 ) {
 }

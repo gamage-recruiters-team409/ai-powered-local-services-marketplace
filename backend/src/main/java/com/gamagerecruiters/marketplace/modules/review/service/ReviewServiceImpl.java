@@ -52,7 +52,8 @@ import com.gamagerecruiters.marketplace.modules.review.repository.ReviewReposito
  * - edits and replies are atomic conditional updates (ReviewAtomicUpdates), so concurrent
  *   requests cannot overwrite each other; a lost race gets 409 instead of a silent overwrite;
  * - the provider has one reply per published review and can edit it;
- * - public lists and the rating summary use PUBLISHED reviews only, newest first.
+ * - public lists, the provider's own list (S11) and the rating summary use PUBLISHED reviews only, newest first;
+ *   held (AWAITING_MODERATION) and REMOVED reviews are visible only to their author and to moderators.
  */
 @Service
 public class ReviewServiceImpl implements ReviewService {
@@ -197,7 +198,12 @@ public class ReviewServiceImpl implements ReviewService {
 
     @Override
     public ReviewPageResponse getProviderOwnReviews(String providerId, int page, int size) {
-        org.springframework.data.domain.Page<Review> reviews = reviewRepository.findByProviderId(providerId, pageable(page, size));
+        // Visibility policy (FR-REV-003): the provider sees only PUBLISHED reviews. A review held by the automated
+        // checks (AWAITING_MODERATION) may contain contact details or links, and a REMOVED review was hidden by a
+        // moderator, so neither is returned to the provider. The customer still sees their own reviews in any
+        // status (getMyReviews) and moderators see everything through the moderation endpoints.
+        org.springframework.data.domain.Page<Review> reviews =
+                reviewRepository.findByProviderIdAndStatus(providerId, ReviewStatus.PUBLISHED, pageable(page, size));
         // S11 shows who wrote each review
         Map<String, String> names = people.namesOf(reviews.getContent().stream().map(Review::getCustomerId).toList());
         return ReviewPageResponse.from(reviews.map(r -> ReviewMapper.toResponse(r, names.get(r.getCustomerId()))));

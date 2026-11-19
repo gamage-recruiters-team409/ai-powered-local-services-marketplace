@@ -13,6 +13,9 @@ import org.springframework.data.mongodb.core.mapping.Document;
  * <p>Moderation (FR-REV-003): {@code moderationFlags} holds what the automated checks found (empty = clean),
  * {@code openReportCount} the number of open user reports, {@code removalReason}/{@code statusReason} the
  * moderator's reason for a removal, and {@code moderationHistory} every decision (append-only).
+ * {@code moderationRevision} goes up by one on every change a moderator decides on (a decision, a new user report,
+ * a customer edit); a decision is accepted only for the revision the moderator saw (optimistic concurrency).
+ * Reviews stored before this field existed read as revision 0.
  */
 @Document(collection = "reviews")
 public class Review {
@@ -36,6 +39,7 @@ public class Review {
     private int openReportCount;
     private RemovalReason removalReason;
     private List<ModerationEntry> moderationHistory = new ArrayList<>();
+    private long moderationRevision;
 
     public Review() {
     }
@@ -182,5 +186,13 @@ public class Review {
 
     public void setModerationHistory(List<ModerationEntry> moderationHistory) {
         this.moderationHistory = moderationHistory;
+    }
+
+    public long getModerationRevision() {
+        return moderationRevision;
+    }
+
+    public void setModerationRevision(long moderationRevision) {
+        this.moderationRevision = moderationRevision;
     }
 }

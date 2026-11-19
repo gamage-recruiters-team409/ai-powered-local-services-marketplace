@@ -42,6 +42,7 @@ import com.gamagerecruiters.marketplace.modules.review.domain.ReportStatus;
 import com.gamagerecruiters.marketplace.modules.review.domain.ReviewStatus;
 import com.gamagerecruiters.marketplace.modules.review.dto.ModerationPageResponse;
 import com.gamagerecruiters.marketplace.modules.review.dto.ModerationReviewResponse;
+import com.gamagerecruiters.marketplace.modules.review.dto.PublishReviewRequest;
 import com.gamagerecruiters.marketplace.modules.review.dto.ReviewReportResponse;
 import com.gamagerecruiters.marketplace.modules.review.moderation.ModerationQueueFilter;
 import com.gamagerecruiters.marketplace.modules.review.moderation.ReviewModerationService;
@@ -60,7 +61,7 @@ import com.gamagerecruiters.marketplace.modules.review.moderation.ReviewModerati
 class ReviewModerationControllerTest {
 
     private static final String QUEUE = "/api/v1/admin/reviews";
-    private static final String REMOVE_BODY = "{\"reasonCode\":\"CONTACT_DETAILS\",\"note\":\"Phone number in text\"}";
+    private static final String REMOVE_BODY = "{\"reasonCode\":\"CONTACT_DETAILS\",\"note\":\"Phone number in text\",\"revision\":0}";
     private static final String REPORT_BODY = "{\"reason\":\"SPAM\",\"details\":\"Advert for another company\"}";
 
     @Autowired
@@ -93,7 +94,7 @@ class ReviewModerationControllerTest {
 
     private static ModerationReviewResponse review(ReviewStatus status) {
         return new ModerationReviewResponse("rev-1", "booking-1", "listing-1", "prov-1", "Kamal", "cust-1", "Amaya",
-                2, "Call 0771234567", status, List.of(), 0, false, null, null, Instant.parse("2026-11-18T05:00:00Z"));
+                2, "Call 0771234567", status, List.of(), 0, false, null, null, Instant.parse("2026-11-18T05:00:00Z"), 1L);
     }
 
     @Test
@@ -114,6 +115,7 @@ class ReviewModerationControllerTest {
         mockMvc.perform(get(QUEUE).header("Authorization", bearer(Role.MODERATOR)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].customerName").value("Amaya"))
+                .andExpect(jsonPath("$.content[0].moderationRevision").value(1))
                 .andExpect(jsonPath("$.totalElements").value(1));
     }
 
@@ -168,13 +170,19 @@ class ReviewModerationControllerTest {
     }
 
     @Test
-    @DisplayName("MODERATOR publishes without a body (note is optional)")
-    void publishWithoutBody() throws Exception {
-        when(moderationService.publish(eq("user-MODERATOR"), eq("rev-1"), any())).thenReturn(review(ReviewStatus.PUBLISHED));
+    @DisplayName("MODERATOR publishes with the revision they saw (note is optional); a negative revision gets 400")
+    void publishWithRevision() throws Exception {
+        when(moderationService.publish(eq("user-MODERATOR"), eq("rev-1"), eq(new PublishReviewRequest(null, 3L))))
+                .thenReturn(review(ReviewStatus.PUBLISHED));
+        String auth = bearer(Role.MODERATOR);
 
-        mockMvc.perform(post(QUEUE + "/rev-1/publish").header("Authorization", bearer(Role.MODERATOR)))
+        mockMvc.perform(post(QUEUE + "/rev-1/publish").header("Authorization", auth)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"revision\":3}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PUBLISHED"));
+        mockMvc.perform(post(QUEUE + "/rev-1/publish").header("Authorization", auth)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"revision\":-1}"))
+                .andExpect(status().isBadRequest());
     }
 
     @ParameterizedTest

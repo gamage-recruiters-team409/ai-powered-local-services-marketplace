@@ -1,6 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.review.service;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -15,6 +16,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
+import com.gamagerecruiters.marketplace.modules.review.domain.Review;
 import com.gamagerecruiters.marketplace.modules.review.domain.ReviewRatingStats;
 import com.gamagerecruiters.marketplace.modules.review.domain.ReviewRatingStats.SubjectType;
 import com.gamagerecruiters.marketplace.modules.review.dto.RatingAggregate;
@@ -27,13 +29,22 @@ import com.gamagerecruiters.marketplace.modules.review.dto.RatingAggregate;
  * run at the same time the one that read later always wins and a slow, older result can never overwrite
  * a newer one. Recomputing from the reviews (instead of +1/-1 counters) also repairs any earlier drift.
  *
- * <p>A failed recompute is logged and does not fail the user's request: the review itself is already saved,
- * and the next recompute (or the first read through {@link ReviewRatingFacade}) stores the correct values.
+ * <p>Recovery (failed recomputes): a failed recompute is logged and does not fail the user's request, because the
+ * review itself is already saved. The stored aggregate is never trusted blindly: every read through
+ * {@link ReviewRatingFacade} checks the reviews themselves (the source of truth) for a change made after the
+ * aggregate was computed ({@code review.updatedAt > computedAt - margin}). If there is one, the aggregate is stale
+ * and is recomputed and stored before it is returned. So the invalidation is durable without any extra write
+ * (an extra "mark stale" write could fail in the same outage): it is the saved review change itself. The
+ * margin also covers a change whose transaction committed just after a recompute had started.
+ * If that recompute fails too, the last stored values are returned and the next read tries again.
  */
 @Service
 public class ReviewRatingStatsService implements ReviewRatingFacade {
 
     private static final Logger log = LoggerFactory.getLogger(ReviewRatingStatsService.class);
+
+    /** A review change this close to (or after) the stored computedAt makes the aggregate stale. */
+    static final Duration RECENT_CHANGE_MARGIN = Duration.ofMinutes(1);
 
     private final MongoTemplate mongoTemplate;
     private final ReviewRatingQuery ratingQuery;
@@ -75,8 +86,28 @@ public class ReviewRatingStatsService implements ReviewRatingFacade {
         if (stored == null) {
             // First read (e.g. reviews written before this feature): compute, store and return
             stored = recomputeNow(type, subjectId);
+        } else if (isStale(type, subjectId, stored)) {
+            // A review changed after this aggregate was computed (e.g. its recompute failed): repair it now
+            try {
+                stored = recomputeNow(type, subjectId);
+                log.info("event=REVIEW_RATING_RECOVERED subjectType={} subjectId={}", type, subjectId);
+            } catch (RuntimeException ex) {
+                log.warn("event=REVIEW_RATING_RECOVERY_FAILED subjectType={} subjectId={} cause={}",
+                        type, subjectId, ex.getClass().getSimpleName());
+            }
         }
         return new RatingAggregate(subjectId, stored.getRatingAvg(), stored.getRatingCount());
+    }
+
+    /** True when any review of the subject was changed after (or just before) the stored computedAt. */
+    boolean isStale(SubjectType type, String subjectId, ReviewRatingStats stored) {
+        if (stored.getComputedAt() == null) {
+            return true;
+        }
+        String field = type == SubjectType.PROVIDER ? "providerId" : "listingId";
+        Query changedSince = new Query(Criteria.where(field).is(subjectId)
+                .and("updatedAt").gt(stored.getComputedAt().minus(RECENT_CHANGE_MARGIN)));
+        return mongoTemplate.exists(changedSince, Review.class);
     }
 
     private void recomputeSafely(SubjectType type, String subjectId) {

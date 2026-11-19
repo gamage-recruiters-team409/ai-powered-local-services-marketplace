@@ -199,9 +199,33 @@ public class ServiceCompletionServiceImpl implements ServiceCompletionService {
         if (disputeId == null) {
             return raised;
         }
-        return atomicUpdates.recordDisputeId(bookingId, disputeId, clock.instant())
-                .map(ServiceCompletionMapper::toResponse)
-                .orElse(raised);
+        return linkDispute(raised, disputeId);
+    }
+
+    /**
+     * Stores the dispute ID on the completion. The issue, the booking change and the WP09 case are already
+     * committed at this point, so a failure here must not turn the request into an error (a retry would be
+     * rejected because the booking is no longer COMPLETION_PENDING). The response still carries the dispute ID,
+     * and {@link CompletionDisputeLinkReconciler} stores the missing link later by looking the case up in WP09
+     * (read-only, so no second dispute is opened).
+     */
+    private ServiceCompletionResponse linkDispute(ServiceCompletionResponse raised, String disputeId) {
+        String bookingId = raised.bookingId();
+        try {
+            return atomicUpdates.recordDisputeId(bookingId, disputeId, clock.instant())
+                    .map(ServiceCompletionMapper::toResponse)
+                    .orElseGet(() -> withDisputeId(raised, disputeId));
+        } catch (RuntimeException ex) {
+            log.warn("event=COMPLETION_DISPUTE_LINK_PENDING bookingId={} disputeId={} cause={}",
+                    bookingId, disputeId, ex.getClass().getSimpleName());
+            return withDisputeId(raised, disputeId);
+        }
+    }
+
+    private static ServiceCompletionResponse withDisputeId(ServiceCompletionResponse response, String disputeId) {
+        return new ServiceCompletionResponse(response.id(), response.bookingId(), response.startedAt(),
+                response.completionNote(), response.photoUrls(), response.markedCompletedAt(), response.confirmedAt(),
+                response.confirmationType(), response.issueRaisedAt(), disputeId);
     }
 
     /** Agreed with WP09: DIFFERENT_SERVICE has no own category yet and is sent as OTHER. */

@@ -15,8 +15,10 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
@@ -51,7 +53,9 @@ import com.gamagerecruiters.marketplace.modules.review.service.ReviewTransaction
  *   <li>Queue: reviews held by the automated checks (AWAITING_MODERATION) and published reviews with open
  *       reports, oldest first.</li>
  *   <li>Decision: publish a held review, keep a reported review (reports dismissed), or remove a review with a
- *       reason. Each decision is one conditional update (two moderators cannot both decide), is recorded in the
+ *       reason. The moderator sends the review's {@code moderationRevision} they saw; each decision is one
+ *       conditional update on that revision (two decisions based on the same state cannot both succeed, also when
+ *       the status does not change, e.g. dismissing reports), is recorded in the
  *       review's moderation history (BR-014), closes the open reports in the same transaction, and recalculates
  *       the stored ratings (FR-REV-004). Providers can never delete reviews (BR-012).</li>
  * </ul>
@@ -162,6 +166,7 @@ public class ReviewModerationService {
 
     /** Publishes a held review, or keeps a reported published review and closes its reports. */
     public ModerationReviewResponse publish(String moderatorId, String reviewId, PublishReviewRequest request) {
+        long revision = requireRevision(request == null ? null : request.revision());
         Review review = findReview(reviewId);
         ReviewStatus status = review.getStatus();
         ModerationAction action;
@@ -183,13 +188,14 @@ public class ReviewModerationService {
         ModerationEntry entry = ModerationEntry.of(action, status, ReviewStatus.PUBLISHED, moderatorId, now);
         entry.setNote(trimToNull(request == null ? null : request.note()));
 
-        Review decided = decide(reviewId, status, requireReports, ReviewStatus.PUBLISHED, null, entry, action,
+        Review decided = decide(review, revision, requireReports, ReviewStatus.PUBLISHED, null, entry, action,
                 moderatorId, now);
         return toModerationResponses(List.of(decided)).get(0);
     }
 
     /** Removes a held or published review with a reason that is shown to the customer. */
     public ModerationReviewResponse remove(String moderatorId, String reviewId, RemoveReviewRequest request) {
+        long revision = requireRevision(request.revision());
         Review review = findReview(reviewId);
         ReviewStatus status = review.getStatus();
         if (status == ReviewStatus.REMOVED) {
@@ -201,19 +207,25 @@ public class ReviewModerationService {
         entry.setReasonCode(request.reasonCode());
         entry.setNote(trimToNull(request.note()));
 
-        Review decided = decide(reviewId, status, false, ReviewStatus.REMOVED, request.reasonCode(), entry,
+        Review decided = decide(review, revision, false, ReviewStatus.REMOVED, request.reasonCode(), entry,
                 ModerationAction.REMOVED, moderatorId, now);
         return toModerationResponses(List.of(decided)).get(0);
     }
 
-    private Review decide(String reviewId, ReviewStatus expectedStatus, boolean requireReports, ReviewStatus newStatus,
+    private Review decide(Review review, long revision, boolean requireReports, ReviewStatus newStatus,
                           RemovalReason removalReason,
                           ModerationEntry entry, ModerationAction resolution, String moderatorId, Instant now) {
+        String reviewId = review.getId();
+        ReviewStatus expectedStatus = review.getStatus();
+        if (review.getModerationRevision() != revision) {
+            // Already outdated before trying: the moderator decided on a state that has changed since
+            throw staleRevision();
+        }
         Review decided = transactions.inTransaction(() -> {
-            Review updated = reviewUpdates.applyModerationDecision(reviewId, expectedStatus, requireReports, newStatus,
-                            removalReason, entry, now)
-                    .orElseThrow(() -> new ResourceConflictException("REVIEW_UPDATE_CONFLICT",
-                            "This review was changed by another request at the same time. Please reload it and try again"));
+            // Same check inside the conditional update, so a decision committed meanwhile also makes this one fail
+            Review updated = reviewUpdates.applyModerationDecision(reviewId, revision, expectedStatus, requireReports,
+                            newStatus, removalReason, entry, now)
+                    .orElseThrow(ReviewModerationService::staleRevision);
             resolveOpenReports(reviewId, resolution, moderatorId, now);
             return updated;
         });
@@ -266,6 +278,19 @@ public class ReviewModerationService {
     private Review findReview(String reviewId) {
         return reviewRepository.findById(reviewId)
                 .orElseThrow(() -> new ResourceNotFoundException("REVIEW_NOT_FOUND", "Review not found"));
+    }
+
+    private static long requireRevision(Long revision) {
+        if (revision == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "MODERATION_REVISION_REQUIRED",
+                    "Send the review's moderationRevision with the decision");
+        }
+        return revision;
+    }
+
+    private static ResourceConflictException staleRevision() {
+        return new ResourceConflictException("REVIEW_UPDATE_CONFLICT",
+                "This review was changed by another request at the same time. Please reload it and try again");
     }
 
     private static ResourceConflictException notPublished() {

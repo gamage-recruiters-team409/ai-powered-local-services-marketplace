@@ -1,5 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.completion.service;
 
+import java.util.Optional;
+
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 
@@ -14,6 +16,16 @@ public interface CompletionDisputes {
      *         is already saved; the reason is logged)
      */
     String openDispute(String bookingId, String actorId, Role actorRole, DisputeCategory category, String description);
+
+    /**
+     * Read-only: finds the ID of the dispute case that already exists for the booking, as seen by one of its
+     * parties. Used to repair a missing dispute link without opening a second case.
+     *
+     * @return the dispute ID, or empty when there is none or it cannot be read now
+     */
+    default Optional<String> findDisputeId(String bookingId, String partyId) {
+        return Optional.empty();
+    }
 
     /** No dispute cases (unit tests that do not cover the dispute link). */
     static CompletionDisputes none() {
