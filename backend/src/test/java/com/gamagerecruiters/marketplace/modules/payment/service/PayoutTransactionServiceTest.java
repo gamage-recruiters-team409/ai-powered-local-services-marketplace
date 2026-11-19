@@ -8,7 +8,10 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 
@@ -35,6 +38,8 @@ import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutAllocat
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutRepository;
 
 class PayoutTransactionServiceTest {
+
+    private static final Instant NOW = Instant.parse("2026-11-19T12:00:00Z");
 
     private PayoutRepository payoutRepository;
     private PayoutAllocationRepository allocationRepository;
@@ -66,7 +71,10 @@ class PayoutTransactionServiceTest {
         service = new PayoutTransactionService(
                 payoutRepository, allocationRepository, ledgerRepository,
                 earningsLedgerService, allocationCalculator, snapshotService,
-                holdRepository, bookingFacade, completionLookup, transactionManager);
+                holdRepository, bookingFacade, completionLookup,
+                transactionManager,
+                Clock.fixed(NOW, ZoneOffset.UTC),
+                Duration.ofHours(72));
     }
 
     @Test
@@ -135,28 +143,59 @@ class PayoutTransactionServiceTest {
     }
 
     @Test
-    void reserveFailsClosedWhenPayoutMaturityContractIsUnresolved() {
-        Payout payout = payoutRequest();
-
-        when(payoutRepository.findByRequestKey("payout-1")).thenReturn(Optional.empty());
-        when(payoutRepository.save(any(Payout.class))).thenAnswer(invocation -> {
-            Payout saved = invocation.getArgument(0);
-            ReflectionTestUtils.setField(saved, "id", "payout-db-1");
-            return saved;
-        });
-        when(ledgerRepository.findByProviderIdOrderByCreatedAtDesc("provider-1"))
-                .thenReturn(List.of(ledgerEntry()));
-        when(snapshotService.getSnapshot("booking-1")).thenReturn(snapshot());
-        when(bookingFacade.getBookingParticipants("booking-1")).thenReturn(participants());
-        when(completionLookup.findConfirmedAt("booking-1"))
-                .thenReturn(Optional.of(Instant.parse("2026-11-11T10:00:00Z")));
-        when(holdRepository.findByBookingId("booking-1")).thenReturn(List.of());
+    void customerConfirmedPayoutIsRejectedBefore72HourBoundary() {
+        Payout payout = arrangeSuccessfulReservationInputs(NOW.minus(Duration.ofHours(71)));
 
         IllegalStateException exception = assertThrows(
                 IllegalStateException.class, () -> service.reserve(payout));
 
         assertEquals(
-                "Payout blocked: approved 72-hour payout maturity contract is unresolved for booking booking-1",
+                "Payout blocked: earnings mature only at or after "
+                        + NOW.minus(Duration.ofHours(71)).plus(Duration.ofHours(72))
+                        + " for booking booking-1",
+                exception.getMessage());
+    }
+
+    @Test
+    void customerConfirmedPayoutIsAllowedExactlyAt72HourBoundary() {
+        Payout payout = arrangeSuccessfulReservationInputs(NOW.minus(Duration.ofHours(72)));
+
+        Payout result = service.reserve(payout);
+
+        assertEquals("payout-db-1", result.getId());
+        verify(allocationRepository).save(any(PayoutAllocation.class));
+    }
+
+    @Test
+    void autoConfirmedPayoutIsAllowedAfter72HourBoundary() {
+        Payout payout = arrangeSuccessfulReservationInputs(NOW.minus(Duration.ofHours(73)));
+
+        Payout result = service.reserve(payout);
+
+        assertEquals("payout-db-1", result.getId());
+        verify(earningsLedgerService).appendEvent(any(EarningsLedgerEntry.class));
+    }
+
+    @Test
+    void reserveRejectsMissingCompletionConfirmationTimestamp() {
+        Payout payout = arrangeBaseReservationMocks();
+        when(completionLookup.findConfirmedAt("booking-1")).thenReturn(Optional.empty());
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class, () -> service.reserve(payout));
+
+        assertEquals("Payout allocation lacks verified completion evidence", exception.getMessage());
+    }
+
+    @Test
+    void reserveRejectsFutureCompletionConfirmationTimestamp() {
+        Payout payout = arrangeSuccessfulReservationInputs(NOW.plus(Duration.ofMinutes(1)));
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class, () -> service.reserve(payout));
+
+        assertEquals(
+                "Payout blocked: completion confirmation is in the future for booking booking-1",
                 exception.getMessage());
     }
 
@@ -193,5 +232,30 @@ class PayoutTransactionServiceTest {
                 BookingStatus.COMPLETED,
                 Instant.parse("2026-11-10T10:00:00Z"),
                 Instant.parse("2026-11-10T11:00:00Z"));
+    }
+
+    private Payout arrangeSuccessfulReservationInputs(Instant confirmedAt) {
+        Payout payout = arrangeBaseReservationMocks();
+        when(completionLookup.findConfirmedAt("booking-1"))
+                .thenReturn(Optional.of(confirmedAt));
+        when(allocationCalculator.calculateAvailable(any()))
+                .thenReturn(new BigDecimal("5000.00"));
+        return payout;
+    }
+
+    private Payout arrangeBaseReservationMocks() {
+        Payout payout = payoutRequest();
+        when(payoutRepository.findByRequestKey("payout-1")).thenReturn(Optional.empty());
+        when(payoutRepository.save(any(Payout.class))).thenAnswer(invocation -> {
+            Payout saved = invocation.getArgument(0);
+            ReflectionTestUtils.setField(saved, "id", "payout-db-1");
+            return saved;
+        });
+        when(ledgerRepository.findByProviderIdOrderByCreatedAtDesc("provider-1"))
+                .thenReturn(List.of(ledgerEntry()));
+        when(snapshotService.getSnapshot("booking-1")).thenReturn(snapshot());
+        when(bookingFacade.getBookingParticipants("booking-1")).thenReturn(participants());
+        when(holdRepository.findByBookingId("booking-1")).thenReturn(List.of());
+        return payout;
     }
 }

@@ -1,6 +1,8 @@
 package com.gamagerecruiters.marketplace.modules.payment.service;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -8,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -41,7 +44,10 @@ public class PayoutTransactionService {
     private final BookingFacade bookingFacade;
     private final CompletionLookup completionLookup;
     private final TransactionTemplate transactionTemplate;
+    private final Clock clock;
+    private final Duration payoutMaturityDuration;
 
+    @Autowired
     public PayoutTransactionService(
             PayoutRepository payoutRepository,
             PayoutAllocationRepository allocationRepository,
@@ -53,6 +59,25 @@ public class PayoutTransactionService {
             BookingFacade bookingFacade,
             CompletionLookup completionLookup,
             PlatformTransactionManager transactionManager) {
+        this(payoutRepository, allocationRepository, ledgerRepository,
+                earningsLedgerService, allocationCalculator, snapshotService,
+                holdRepository, bookingFacade, completionLookup,
+                transactionManager, Clock.systemUTC(), Duration.ofHours(72));
+    }
+
+    PayoutTransactionService(
+            PayoutRepository payoutRepository,
+            PayoutAllocationRepository allocationRepository,
+            EarningsLedgerRepository ledgerRepository,
+            EarningsLedgerService earningsLedgerService,
+            BookingPayoutAllocationCalculator allocationCalculator,
+            BookingFinancialSnapshotService snapshotService,
+            DisputePayoutHoldRepository holdRepository,
+            BookingFacade bookingFacade,
+            CompletionLookup completionLookup,
+            PlatformTransactionManager transactionManager,
+            Clock clock,
+            Duration payoutMaturityDuration) {
 
         this.payoutRepository = Objects.requireNonNull(payoutRepository);
         this.allocationRepository = Objects.requireNonNull(allocationRepository);
@@ -65,6 +90,8 @@ public class PayoutTransactionService {
         this.completionLookup = Objects.requireNonNull(completionLookup);
         this.transactionTemplate = new TransactionTemplate(
                 Objects.requireNonNull(transactionManager));
+        this.clock = Objects.requireNonNull(clock);
+        this.payoutMaturityDuration = Objects.requireNonNull(payoutMaturityDuration);
     }
 
     /**
@@ -154,12 +181,13 @@ public class PayoutTransactionService {
                     throw new IllegalStateException("Payout allocation booking is not completed and eligible");
                 }
 
-                if (completionLookup.findConfirmedAt(bookingId).isEmpty()) {
+                var confirmedAt = completionLookup.findConfirmedAt(bookingId);
+                if (confirmedAt.isEmpty()) {
                     throw new IllegalStateException("Payout allocation lacks verified completion evidence");
                 }
 
                 requireNoActiveDisputeHold(bookingId);
-                requireApprovedPayoutMaturity(bookingId);
+                requireApprovedPayoutMaturity(bookingId, confirmedAt.get());
 
                 BigDecimal available = allocationCalculator.calculateAvailable(groups.get(key));
                 if (available.signum() <= 0) {
@@ -297,10 +325,22 @@ public class PayoutTransactionService {
         }
     }
 
-    private void requireApprovedPayoutMaturity(String bookingId) {
-        throw new IllegalStateException(
-                "Payout blocked: approved 72-hour payout maturity contract is unresolved for booking "
-                        + bookingId);
+    private void requireApprovedPayoutMaturity(String bookingId, Instant confirmedAt) {
+        Objects.requireNonNull(confirmedAt, "Completion confirmation timestamp is required");
+
+        Instant now = clock.instant();
+        if (confirmedAt.isAfter(now)) {
+            throw new IllegalStateException(
+                    "Payout blocked: completion confirmation is in the future for booking "
+                            + bookingId);
+        }
+
+        Instant maturityBoundary = confirmedAt.plus(payoutMaturityDuration);
+        if (now.isBefore(maturityBoundary)) {
+            throw new IllegalStateException(
+                    "Payout blocked: earnings mature only at or after "
+                            + maturityBoundary + " for booking " + bookingId);
+        }
     }
 
     private EarningsLedgerEntry payoutEvent(
