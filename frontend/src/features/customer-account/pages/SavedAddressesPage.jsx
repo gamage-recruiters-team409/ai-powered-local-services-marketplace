@@ -15,6 +15,15 @@ import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import styles from '../customerAccount.module.css';
 
+function formatLocation(city, district) {
+  const c = city?.trim();
+  const d = district?.trim();
+  if (c && d && c.toLowerCase() !== d.toLowerCase()) {
+    return `${c}, ${d}`;
+  }
+  return c || d || '';
+}
+
 export function SavedAddressesPage() {
   const toast = useToast();
   const [reloadKey, setReloadKey] = useState(0);
@@ -216,7 +225,7 @@ export function SavedAddressesPage() {
                       )}
                     </div>
                     <p className={styles.addressCity}>
-                      {addr.city || addr.district}
+                      {formatLocation(addr.city, addr.district)}
                     </p>
                   </div>
                 </div>

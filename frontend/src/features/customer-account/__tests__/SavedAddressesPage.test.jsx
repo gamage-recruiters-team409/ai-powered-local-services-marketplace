@@ -35,8 +35,10 @@ const sampleAddresses = [
     id: 'addr-2',
     label: 'Work',
     addressLine1: '128 Kandy Road, Dalugama',
+    addressLine2: 'Apt 4',
     city: 'Kelaniya',
     district: 'Gampaha',
+    postalCode: '11600',
     isDefault: false,
   },
 ];
@@ -68,6 +70,10 @@ describe('SavedAddressesPage', () => {
 
     expect(screen.getByText('Default')).toBeTruthy();
     expect(screen.getByRole('button', { name: /set as default/i })).toBeTruthy();
+
+    // Check city and district rendering: shows "Colombo" when matching, "Kelaniya, Gampaha" when differing
+    expect(screen.getByText('Colombo')).toBeTruthy();
+    expect(screen.getByText('Kelaniya, Gampaha')).toBeTruthy();
   });
 
   it('renders empty state when there are no addresses', async () => {
@@ -84,7 +90,7 @@ describe('SavedAddressesPage', () => {
     });
   });
 
-  it('opens add modal, validates inputs, and creates a new address', async () => {
+  it('opens add modal, validates inputs (including city requirement and min-length), and creates a new address', async () => {
     customerAccountApi.createAddress.mockResolvedValueOnce({
       id: 'addr-3',
       label: 'Office',
@@ -112,28 +118,185 @@ describe('SavedAddressesPage', () => {
 
     const labelInput = screen.getByPlaceholderText(/e.g. home, work/i);
     const lineInput = screen.getByPlaceholderText(/e.g. 45\/2, alfred house gardens/i);
+    const cityInput = screen.getByPlaceholderText(/e.g. colombo, kelaniya/i);
     const districtSelect = screen.getByRole('combobox');
     const saveBtn = screen.getByRole('button', { name: /^save$/i });
 
-    // Submit without input -> validation
+    // Submit without input -> label required
     fireEvent.click(saveBtn);
     expect(screen.getByText(/label is required/i)).toBeTruthy();
 
-    // Fill in form
+    // Fill label, submit -> address line required
     fireEvent.change(labelInput, { target: { value: 'Office' } });
-    fireEvent.change(lineInput, { target: { value: '74 Temple Road' } });
-    fireEvent.change(districtSelect, { target: { value: 'Colombo' } });
+    fireEvent.click(saveBtn);
+    expect(screen.getByText(/address line is required/i)).toBeTruthy();
 
+    // Fill address line, submit -> city required
+    fireEvent.change(lineInput, { target: { value: '74 Temple Road' } });
+    fireEvent.click(saveBtn);
+    expect(screen.getByText(/city is required/i)).toBeTruthy();
+
+    // City too short (< 2 chars) -> city min length validation
+    fireEvent.change(cityInput, { target: { value: 'D' } });
+    fireEvent.click(saveBtn);
+    expect(screen.getByText(/city must be at least 2 characters/i)).toBeTruthy();
+
+    // Fill valid city, submit -> district required
+    fireEvent.change(cityInput, { target: { value: 'Dehiwala-Mount Lavinia' } });
+    fireEvent.click(saveBtn);
+    expect(screen.getByText(/please select a district/i)).toBeTruthy();
+
+    // Select district and submit
+    fireEvent.change(districtSelect, { target: { value: 'Colombo' } });
     fireEvent.click(saveBtn);
 
     await waitFor(() => {
       expect(customerAccountApi.createAddress).toHaveBeenCalledWith({
         label: 'Office',
         addressLine1: '74 Temple Road',
-        city: 'Colombo',
+        city: 'Dehiwala-Mount Lavinia',
         district: 'Colombo',
       });
       expect(mockToast.success).toHaveBeenCalledWith('Address added successfully');
+    });
+  });
+
+  it('edits address with city and district and preserves original fields when only label changes', async () => {
+    customerAccountApi.updateAddress.mockResolvedValueOnce({
+      id: 'addr-2',
+      label: 'Work Office',
+      addressLine1: '128 Kandy Road, Dalugama',
+      addressLine2: 'Apt 4',
+      city: 'Kelaniya',
+      district: 'Gampaha',
+      postalCode: '11600',
+      isDefault: false,
+    });
+
+    render(
+      <MemoryRouter>
+        <SavedAddressesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/128 Kandy Road, Dalugama/i)).toBeTruthy();
+    });
+
+    // Click edit on addr-2 (Work)
+    const editWorkBtn = screen.getByRole('button', { name: /edit work/i });
+    fireEvent.click(editWorkBtn);
+
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: /edit address/i })).toBeTruthy();
+
+    const labelInput = screen.getByDisplayValue('Work');
+    const cityInput = screen.getByDisplayValue('Kelaniya');
+    const districtSelect = screen.getByRole('combobox');
+    expect(cityInput).toBeTruthy();
+    expect(districtSelect.value).toBe('Gampaha');
+
+    // Change ONLY the label
+    fireEvent.change(labelInput, { target: { value: 'Work Office' } });
+
+    const saveBtn = screen.getByRole('button', { name: /^save$/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(customerAccountApi.updateAddress).toHaveBeenCalledWith('addr-2', {
+        label: 'Work Office',
+        addressLine1: '128 Kandy Road, Dalugama',
+        city: 'Kelaniya',
+        district: 'Gampaha',
+        addressLine2: 'Apt 4',
+        postalCode: '11600',
+        isDefault: false,
+      });
+      expect(mockToast.success).toHaveBeenCalledWith('Address updated successfully');
+    });
+  });
+
+  it('edits address changing city only, preserving district and original fields', async () => {
+    customerAccountApi.updateAddress.mockResolvedValueOnce({
+      id: 'addr-2',
+      label: 'Work',
+      addressLine1: '128 Kandy Road, Dalugama',
+      addressLine2: 'Apt 4',
+      city: 'Peliyagoda',
+      district: 'Gampaha',
+      postalCode: '11600',
+      isDefault: false,
+    });
+
+    render(
+      <MemoryRouter>
+        <SavedAddressesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/128 Kandy Road, Dalugama/i)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /edit work/i }));
+
+    const cityInput = screen.getByDisplayValue('Kelaniya');
+    fireEvent.change(cityInput, { target: { value: 'Peliyagoda' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(customerAccountApi.updateAddress).toHaveBeenCalledWith('addr-2', {
+        label: 'Work',
+        addressLine1: '128 Kandy Road, Dalugama',
+        city: 'Peliyagoda',
+        district: 'Gampaha',
+        addressLine2: 'Apt 4',
+        postalCode: '11600',
+        isDefault: false,
+      });
+    });
+  });
+
+  it('edits address changing district only, preserving city and original fields', async () => {
+    customerAccountApi.updateAddress.mockResolvedValueOnce({
+      id: 'addr-2',
+      label: 'Work',
+      addressLine1: '128 Kandy Road, Dalugama',
+      addressLine2: 'Apt 4',
+      city: 'Kelaniya',
+      district: 'Colombo',
+      postalCode: '11600',
+      isDefault: false,
+    });
+
+    render(
+      <MemoryRouter>
+        <SavedAddressesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/128 Kandy Road, Dalugama/i)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /edit work/i }));
+
+    const districtSelect = screen.getByRole('combobox');
+    fireEvent.change(districtSelect, { target: { value: 'Colombo' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(customerAccountApi.updateAddress).toHaveBeenCalledWith('addr-2', {
+        label: 'Work',
+        addressLine1: '128 Kandy Road, Dalugama',
+        city: 'Kelaniya',
+        district: 'Colombo',
+        addressLine2: 'Apt 4',
+        postalCode: '11600',
+        isDefault: false,
+      });
     });
   });
 

@@ -12,6 +12,7 @@ export function AddressModal({
 }) {
   const [label, setLabel] = useState(initialData?.label ?? '');
   const [addressLine1, setAddressLine1] = useState(initialData?.addressLine1 ?? '');
+  const [city, setCity] = useState(initialData?.city ?? '');
   const [district, setDistrict] = useState(initialData?.district ?? '');
   const [validationError, setValidationError] = useState('');
 
@@ -21,6 +22,7 @@ export function AddressModal({
     e.preventDefault();
     const trimmedLabel = label.trim();
     const trimmedLine = addressLine1.trim();
+    const trimmedCity = city.trim();
     const trimmedDistrict = district.trim();
 
     if (!trimmedLabel) {
@@ -39,18 +41,40 @@ export function AddressModal({
       setValidationError('Address line must be 100 characters or fewer.');
       return;
     }
+    if (!trimmedCity) {
+      setValidationError('City is required.');
+      return;
+    }
+    if (trimmedCity.length < 2) {
+      setValidationError('City must be at least 2 characters.');
+      return;
+    }
+    if (trimmedCity.length > 60) {
+      setValidationError('City must be 60 characters or fewer.');
+      return;
+    }
     if (!trimmedDistrict) {
-      setValidationError('Please select a City / District.');
+      setValidationError('Please select a district.');
       return;
     }
 
     setValidationError('');
-    onSave({
+    const payload = {
       label: trimmedLabel,
       addressLine1: trimmedLine,
-      city: trimmedDistrict,
+      city: trimmedCity,
       district: trimmedDistrict,
-    });
+    };
+    if (initialData?.addressLine2 !== undefined) {
+      payload.addressLine2 = initialData.addressLine2;
+    }
+    if (initialData?.postalCode !== undefined) {
+      payload.postalCode = initialData.postalCode;
+    }
+    if (initialData?.isDefault !== undefined) {
+      payload.isDefault = initialData.isDefault;
+    }
+    onSave(payload);
   };
 
   const isEdit = Boolean(initialData?.id);
@@ -115,8 +139,25 @@ export function AddressModal({
           </div>
 
           <div className={styles.formGroup}>
+            <label htmlFor="address-city" className={styles.label}>
+              City <span style={{ color: '#dc2626' }}>*</span>
+            </label>
+            <input
+              id="address-city"
+              type="text"
+              minLength={2}
+              maxLength={60}
+              className={styles.input}
+              placeholder="e.g. Colombo, Kelaniya"
+              value={city}
+              onChange={(e) => setCity(e.target.value)}
+              disabled={saving}
+            />
+          </div>
+
+          <div className={styles.formGroup}>
             <label htmlFor="address-district" className={styles.label}>
-              City / District <span style={{ color: '#dc2626' }}>*</span>
+              District <span style={{ color: '#dc2626' }}>*</span>
             </label>
             <select
               id="address-district"
@@ -125,7 +166,7 @@ export function AddressModal({
               onChange={(e) => setDistrict(e.target.value)}
               disabled={saving}
             >
-              <option value="">Select city / district</option>
+              <option value="">Select district</option>
               {provinces.map((prov) => (
                 <optgroup key={prov.name} label={`${prov.name} Province`}>
                   {prov.districts.map((d) => (
