@@ -1,6 +1,9 @@
+
 package com.gamagerecruiters.marketplace.modules.provider.domain;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
@@ -28,6 +31,9 @@ public class ProviderProfile {
     private Integer experienceYears;
 
     private String profileImageUrl;
+
+    // Selected service category IDs from the Catalog module.
+    private List<String> categoryIds = new ArrayList<>();
 
     private Instant createdAt;
 
@@ -106,6 +112,16 @@ public class ProviderProfile {
 
     public void setProfileImageUrl(String profileImageUrl) {
         this.profileImageUrl = profileImageUrl;
+    }
+
+    public List<String> getCategoryIds() {
+        return categoryIds == null ? List.of() : categoryIds;
+    }
+
+    public void setCategoryIds(List<String> categoryIds) {
+        this.categoryIds = categoryIds == null
+                ? new ArrayList<>()
+                : new ArrayList<>(categoryIds);
     }
 
     public Instant getCreatedAt() {

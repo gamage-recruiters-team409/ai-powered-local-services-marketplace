@@ -1,4 +1,7 @@
+
 package com.gamagerecruiters.marketplace.modules.provider.dto;
+
+import java.util.List;
 
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderType;
 
@@ -32,6 +35,9 @@ public class UpdateProviderProfileRequest {
 
     @Size(max = 500, message = "Profile image URL is too long")
     private String profileImageUrl;
+
+    // Null means no category update.
+    private List<String> categoryIds;
 
     public ProviderType getProviderType() {
         return providerType;
@@ -87,5 +93,13 @@ public class UpdateProviderProfileRequest {
 
     public void setProfileImageUrl(String profileImageUrl) {
         this.profileImageUrl = profileImageUrl;
+    }
+
+    public List<String> getCategoryIds() {
+        return categoryIds;
+    }
+
+    public void setCategoryIds(List<String> categoryIds) {
+        this.categoryIds = categoryIds;
     }
 }
