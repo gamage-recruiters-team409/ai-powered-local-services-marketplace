@@ -84,4 +84,11 @@ describe('CustomerSidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Log out' }))
     expect(onLogout).toHaveBeenCalledTimes(1)
   })
+
+  it('gives every sidebar link a tooltip title for the tablet icon rail', () => {
+    renderSidebar()
+
+    expect(screen.getByRole('link', { name: 'My Bookings' }).getAttribute('title')).toBe('My Bookings')
+    expect(screen.getByRole('button', { name: 'Log out' }).getAttribute('title')).toBe('Log out')
+  })
 })

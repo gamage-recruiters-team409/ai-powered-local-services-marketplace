@@ -72,6 +72,19 @@ export function CustomerProfileMenu({
     menuItems[nextIndex]?.focus()
   }
 
+  /** Keyboard users tabbing out of the menu: close it without moving focus back. */
+  const handleBlur = (event) => {
+    if (!open) {
+      return
+    }
+
+    const next = event.relatedTarget
+
+    if (next && !rootRef.current?.contains(next)) {
+      setOpen(false)
+    }
+  }
+
   const handleLogout = () => {
     setOpen(false)
 
@@ -81,7 +94,7 @@ export function CustomerProfileMenu({
   }
 
   return (
-    <div className={styles.profileMenuRoot} ref={rootRef}>
+    <div className={styles.profileMenuRoot} ref={rootRef} onBlur={handleBlur}>
       <button
         ref={buttonRef}
         type="button"
