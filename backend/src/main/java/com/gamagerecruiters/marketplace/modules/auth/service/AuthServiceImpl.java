@@ -39,6 +39,7 @@ public class AuthServiceImpl implements AuthService {
     private final AuthTokenRepository authTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokenService;
+    private final EmailTokenService emailTokenService;
 
     private final boolean requireEmailVerification;
     private final int maxFailedLogins;
@@ -50,6 +51,7 @@ public class AuthServiceImpl implements AuthService {
             AuthTokenRepository authTokenRepository,
             PasswordEncoder passwordEncoder,
             TokenService tokenService,
+            EmailTokenService emailTokenService,
             @Value("${app.auth.require-email-verification:true}") boolean requireEmailVerification,
             @Value("${app.auth.max-failed-logins:5}") int maxFailedLogins,
             @Value("${app.auth.lock-duration-minutes:15}") int lockDurationMinutes,
@@ -59,6 +61,7 @@ public class AuthServiceImpl implements AuthService {
         this.authTokenRepository = authTokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
+        this.emailTokenService = emailTokenService;
         this.requireEmailVerification = requireEmailVerification;
         this.maxFailedLogins = maxFailedLogins;
         this.lockDurationMinutes = lockDurationMinutes;
@@ -110,6 +113,14 @@ public class AuthServiceImpl implements AuthService {
         user.setCreatedAt(Instant.now());
 
         User saved = userRepository.save(user);
+
+        if (requireEmailVerification) {
+            try {
+                emailTokenService.sendVerificationEmail(saved);
+            } catch (Exception ex) {
+                // Registration MUST succeed even if email sending fails or throws
+            }
+        }
 
         return new RegisterResponse(
                 saved.getId(),

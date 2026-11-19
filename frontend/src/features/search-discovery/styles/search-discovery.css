@@ -878,6 +878,9 @@
 }
 
 .view-profile-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 10px 22px;
   background-color: #0f766e;
   color: #ffffff;
@@ -885,6 +888,8 @@
   border-radius: 8px;
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.2;
+  text-decoration: none;
   cursor: pointer;
   transition: background-color 0.15s, transform 0.1s;
   font-family: inherit;
@@ -896,6 +901,11 @@
 
 .view-profile-btn:active {
   transform: scale(0.98);
+}
+
+.view-profile-btn:focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 2px;
 }
 
 /* Compare Row */

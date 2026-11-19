@@ -12,6 +12,12 @@ The marketplace backend implements an in-memory fixed-window rate limiter (`Rate
 | `login-account` | `POST /api/v1/auth/login` | Normalized email (`trim().toLowerCase(Locale.ROOT)`) | 10 requests | 15 minutes | `app.rate-limit.login-account.max-requests`<br>`app.rate-limit.login-account.window-minutes` |
 | `register` | `POST /api/v1/auth/register` | Client IP (`request.getRemoteAddr()`) | 10 requests | 60 minutes | `app.rate-limit.register.max-requests`<br>`app.rate-limit.register.window-minutes` |
 | `sensitive` | `POST /api/v1/auth/change-password`<br>`PUT /api/v1/customers/me/password`<br>`POST /api/v1/customers/me/deactivate` | Authenticated user ID (`CurrentUser.getUserId()`) | 5 requests | 15 minutes | `app.rate-limit.sensitive.max-requests`<br>`app.rate-limit.sensitive.window-minutes` |
+| `forgot-password-ip` | `POST /api/v1/auth/forgot-password` | Client IP (`request.getRemoteAddr()`) | 10 requests | 60 minutes | `app.rate-limit.forgot-password-ip.max-requests`<br>`app.rate-limit.forgot-password-ip.window-minutes` |
+| `forgot-password-email` | `POST /api/v1/auth/forgot-password` | Normalized email (`trim().toLowerCase(Locale.ROOT)`) | 3 requests | 60 minutes | `app.rate-limit.forgot-password-email.max-requests`<br>`app.rate-limit.forgot-password-email.window-minutes` |
+| `resend-verification-ip` | `POST /api/v1/auth/resend-verification` | Client IP (`request.getRemoteAddr()`) | 10 requests | 60 minutes | `app.rate-limit.resend-verification-ip.max-requests`<br>`app.rate-limit.resend-verification-ip.window-minutes` |
+| `resend-verification-email` | `POST /api/v1/auth/resend-verification` | Normalized email (`trim().toLowerCase(Locale.ROOT)`) | 3 requests | 60 minutes | `app.rate-limit.resend-verification-email.max-requests`<br>`app.rate-limit.resend-verification-email.window-minutes` |
+| `verify-email` | `POST /api/v1/auth/verify-email` | Client IP (`request.getRemoteAddr()`) | 30 requests | 15 minutes | `app.rate-limit.verify-email.max-requests`<br>`app.rate-limit.verify-email.window-minutes` |
+| `reset-password` | `POST /api/v1/auth/reset-password` | Client IP (`request.getRemoteAddr()`) | 20 requests | 15 minutes | `app.rate-limit.reset-password.max-requests`<br>`app.rate-limit.reset-password.window-minutes` |
 
 Master switch: `app.rate-limit.enabled=${RATE_LIMIT_ENABLED:true}`  
 Key capacity per bucket: `app.rate-limit.max-tracked-keys=${RATE_LIMIT_MAX_TRACKED_KEYS:10000}`
