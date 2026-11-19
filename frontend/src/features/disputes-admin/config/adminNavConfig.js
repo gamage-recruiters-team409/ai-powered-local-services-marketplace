@@ -1,3 +1,5 @@
+import { lazy } from 'react'
+
 import { ADMIN_ROLES } from './adminAreas'
 
 /**
@@ -14,6 +16,8 @@ import { ADMIN_ROLES } from './adminAreas'
  *   icon        icon name from shared/layouts/admin/Icon.jsx (not needed inside a group)
  *   description subtitle on the placeholder page
  *   page        optional lazy(() => import('...')); until set, a placeholder page is shown
+ *   nested      optional true when the page has its own sub-routes (e.g. 'announcements/new'); the route becomes
+ *               'path/*' and the sidebar link stays active on every sub-route
  *
  * Who can open it is decided by GET /api/v1/admin/access (canEdit/canView), never here.
  */
@@ -41,7 +45,7 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
   { id: 'admin.late-cases', area: ADMIN, section: 'Operations', label: 'Late cases', path: 'late-cases', icon: 'calendar', description: 'Problems reported after the 72-hour window' },
   { id: 'admin.repeat-cancellations', area: ADMIN, section: 'Operations', label: 'Repeat cancellations', path: 'repeat-cancellations', icon: 'xCircle', description: 'Warnings and suspensions for repeat cancellations' },
   { id: 'admin.categories', area: ADMIN, section: 'Management', label: 'Categories', path: 'categories', icon: 'grid', description: 'Service categories and commission' },
-  { id: 'admin.announcements', area: ADMIN, section: 'Management', label: 'Announcements', path: 'announcements', icon: 'message', description: 'Platform announcements' },
+  { id: 'admin.announcements', area: ADMIN, section: 'Management', label: 'Announcements', path: 'announcements', icon: 'message', description: 'Platform announcements', nested: true, page: lazy(() => import('../../admin-announcements/pages/AnnouncementsSection')) },
   { id: 'admin.audit-log', area: ADMIN, section: 'Management', label: 'Audit log', path: 'audit-log', icon: 'fileText', description: 'Record of administrative actions' },
   { id: 'admin.provider-analytics', area: ADMIN, section: 'Insights', label: 'Provider analytics', path: 'provider-analytics', icon: 'barChart', description: 'Provider performance' },
   { id: 'admin.reports', area: ADMIN, section: 'Insights', label: 'Reports', path: 'reports', icon: 'reports', description: 'Operational reports' },
