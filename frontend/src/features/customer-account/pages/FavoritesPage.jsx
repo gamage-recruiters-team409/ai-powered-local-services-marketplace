@@ -315,6 +315,7 @@ export function FavoritesPage() {
                           type="button"
                           className={styles.btnSecondary}
                           disabled
+                          aria-disabled="true"
                           title="Not available yet"
                           style={{ width: '100%', marginTop: 'auto' }}
                         >
@@ -324,8 +325,9 @@ export function FavoritesPage() {
                         <button
                           type="button"
                           className={styles.btnPrimary}
-                          disabled={isInactive}
-                          title={isInactive ? 'This listing is inactive' : 'Not available yet'}
+                          disabled
+                          aria-disabled="true"
+                          title={isInactive ? 'This listing is inactive' : 'Booking is not available yet'}
                           style={{ width: '100%', marginTop: 'auto' }}
                         >
                           Book now

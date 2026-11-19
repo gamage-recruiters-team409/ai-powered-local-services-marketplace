@@ -128,7 +128,10 @@ describe('FavoritesPage', () => {
       expect(screen.getByText('Split AC Servicing and Gas Refill')).toBeTruthy();
       expect(screen.getByText(/by nuwan perera/i)).toBeTruthy();
       expect(screen.getByText('AC Repair')).toBeTruthy();
-      expect(screen.getByRole('button', { name: /book now/i })).toBeTruthy();
+      const bookBtn = screen.getByRole('button', { name: /book now/i });
+      expect(bookBtn).toBeTruthy();
+      expect(bookBtn.hasAttribute('disabled')).toBe(true);
+      expect(bookBtn.getAttribute('title')).toBe('Booking is not available yet');
     });
   });
 
@@ -461,5 +464,119 @@ describe('FavoritesPage', () => {
       expect(screen.getByText(/no favorites yet/i)).toBeTruthy();
       expect(screen.getByRole('link', { name: /browse services/i }).getAttribute('href')).toBe('/search');
     });
+  });
+
+  it('disables Book now button on active listings with explanatory title and clicking does nothing', async () => {
+    favouritesApi.getFavourites.mockImplementation((type) => {
+      if (type === 'LISTING') {
+        return Promise.resolve({
+          content: [
+            {
+              favouriteId: 'fav-active',
+              type: 'LISTING',
+              targetId: 'list-active',
+              name: 'Deep House Cleaning Service',
+              subtitle: 'Clean Co',
+              category: 'Cleaning',
+              rating: 4.8,
+              city: 'Colombo',
+              priceFrom: 4500,
+              currency: 'LKR',
+              inactive: false,
+              imageUrl: null,
+            },
+          ],
+          page: 0,
+          size: 6,
+          totalElements: 1,
+          totalPages: 1,
+        });
+      }
+      return Promise.resolve(sampleProviders);
+    });
+
+    render(
+      <MemoryRouter>
+        <FavoritesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Nuwan Perera - AC Solutions')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: /listings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Deep House Cleaning Service')).toBeTruthy();
+    });
+
+    const bookBtn = screen.getByRole('button', { name: /book now/i });
+    expect(bookBtn).toBeTruthy();
+    expect(bookBtn.hasAttribute('disabled')).toBe(true);
+    expect(bookBtn.getAttribute('aria-disabled')).toBe('true');
+    expect(bookBtn.getAttribute('title')).toBe('Booking is not available yet');
+
+    // Clicking disabled button does not trigger errors or change page state
+    fireEvent.click(bookBtn);
+    expect(screen.getByText('Deep House Cleaning Service')).toBeTruthy();
+  });
+
+  it('disables Book now button on inactive listings with inactive title', async () => {
+    favouritesApi.getFavourites.mockImplementation((type) => {
+      if (type === 'LISTING') {
+        return Promise.resolve({
+          content: [
+            {
+              favouriteId: 'fav-inactive',
+              type: 'LISTING',
+              targetId: 'list-inactive',
+              name: 'Old Garden Care Package',
+              subtitle: 'Old Provider',
+              category: 'Gardening',
+              rating: 3.9,
+              city: 'Kandy',
+              priceFrom: 2000,
+              currency: 'LKR',
+              inactive: true,
+              imageUrl: null,
+            },
+          ],
+          page: 0,
+          size: 6,
+          totalElements: 1,
+          totalPages: 1,
+        });
+      }
+      return Promise.resolve(sampleProviders);
+    });
+
+    render(
+      <MemoryRouter>
+        <FavoritesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Nuwan Perera - AC Solutions')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: /listings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Old Garden Care Package')).toBeTruthy();
+    });
+
+    // Check Inactive badge
+    expect(screen.getByText('Inactive')).toBeTruthy();
+
+    const bookBtn = screen.getByRole('button', { name: /book now/i });
+    expect(bookBtn).toBeTruthy();
+    expect(bookBtn.hasAttribute('disabled')).toBe(true);
+    expect(bookBtn.getAttribute('aria-disabled')).toBe('true');
+    expect(bookBtn.getAttribute('title')).toBe('This listing is inactive');
+
+    fireEvent.click(bookBtn);
+    expect(screen.getByText('Old Garden Care Package')).toBeTruthy();
   });
 });
