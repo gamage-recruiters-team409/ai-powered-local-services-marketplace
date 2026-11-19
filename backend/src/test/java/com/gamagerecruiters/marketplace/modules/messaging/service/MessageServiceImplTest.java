@@ -43,9 +43,11 @@ import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.Conversation;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.Message;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.MessageStatus;
+import com.gamagerecruiters.marketplace.modules.messaging.domain.FlagSource;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
+import com.gamagerecruiters.marketplace.modules.admin.service.AdminAccessPolicyService;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -66,12 +68,16 @@ class MessageServiceImplTest {
     @Mock
     private MessageRepository messageRepository;
 
+    @Mock
+    private AdminAccessPolicyService adminAccessPolicyService;
+
     private MessageServiceImpl service;
     private BookingParticipants participants;
 
     @BeforeEach
     void setUp() {
-        service = new MessageServiceImpl(bookingFacade, conversationRepository, messageRepository);
+        service = new MessageServiceImpl(
+                bookingFacade, conversationRepository, messageRepository, adminAccessPolicyService);
         participants = participants(BookingStatus.PENDING_PROVIDER, null);
         when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenAnswer(invocation -> participants);
         when(conversationRepository.findByChatKey(anyString())).thenReturn(Optional.empty());
@@ -389,6 +395,314 @@ class MessageServiceImplTest {
                 .satisfies(error -> assertThat(((ApiException) error).getErrorCode()).isEqualTo("INVALID_PAGINATION"));
     }
 
+    @Test
+    void participantCheckUsesBookingParticipants() {
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        conversation.setCustomerId(CUSTOMER_ID);
+        conversation.setProviderId(PROVIDER_ID);
+        when(conversationRepository.findById("conversation-1")).thenReturn(Optional.of(conversation));
+
+        assertThat(service.isParticipant("conversation-1", CUSTOMER_ID)).isTrue();
+        assertThat(service.isParticipant("conversation-1", PROVIDER_ID)).isTrue();
+        assertThat(service.isParticipant("conversation-1", "stranger")).isFalse();
+        assertThat(service.isParticipant("missing", CUSTOMER_ID)).isFalse();
+    }
+
+    @Test
+    void mediatorHistoryReturnsHiddenBodyForModeration() {
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Message hidden = message("message-1", "conversation-1", "unsafe content", MessageStatus.HIDDEN);
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(hidden)));
+
+        var response = service.getChatHistoryForMediator(BOOKING_ID, 0, 20).content().get(0);
+
+        assertThat(response.body()).isEqualTo("unsafe content");
+        assertThat(response.status()).isEqualTo(MessageStatus.HIDDEN);
+    }
+
+    @Test
+    void flagMessagePersistsFlag() {
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(messageRepository.save(message)).thenReturn(message);
+
+        service.flagMessage("message-1", FlagSource.USER_REPORT);
+        service.flagMessage("message-1", FlagSource.AI);
+
+        assertThat(message.isFlagged()).isTrue();
+        assertThat(message.getFlagSource()).isEqualTo(FlagSource.USER_REPORT);
+        assertThat(message.getFlaggedAt()).isNotNull();
+        verify(messageRepository).save(message);
+    }
+
+    @Test
+    void hideMessageRequiresReasonAndStoresItWithoutDeletingMessage() {
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        loginAs(CUSTOMER_ID);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(messageRepository.save(message)).thenReturn(message);
+
+        var response = service.hideMessage("message-1", CUSTOMER_ID, "  policy violation  ");
+
+        assertThat(message.getStatus()).isEqualTo(MessageStatus.HIDDEN);
+        assertThat(message.getHideReason()).isEqualTo("policy violation");
+        assertThat(message.getHiddenBy()).isEqualTo(CUSTOMER_ID);
+        assertThat(message.getHiddenAt()).isNotNull();
+        assertThat(response.body()).isEqualTo("hello");
+        verify(messageRepository, never()).delete(any(Message.class));
+        verify(messageRepository).save(message);
+    }
+
+    @Test
+    void hideMessageRejectsBlankReason() {
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        loginAs(CUSTOMER_ID);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+
+        assertThatThrownBy(() -> service.hideMessage("message-1", CUSTOMER_ID, "  "))
+                .isInstanceOf(ApiException.class)
+                .satisfies(error -> assertThat(((ApiException) error).getErrorCode())
+                        .isEqualTo("HIDE_REASON_REQUIRED"));
+        verify(messageRepository, never()).save(any(Message.class));
+    }
+
+    @Test
+    void clearFlagPersistsUnflaggedMessage() {
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        message.setFlagged(true);
+        message.setFlagSource(FlagSource.AI);
+        message.setFlaggedAt(CREATED_AT);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(messageRepository.save(message)).thenReturn(message);
+
+        service.clearFlag("message-1");
+
+        assertThat(message.isFlagged()).isFalse();
+        assertThat(message.getFlagSource()).isNull();
+        assertThat(message.getFlaggedAt()).isNull();
+        assertThat(message.getStatus()).isEqualTo(MessageStatus.VISIBLE);
+        verify(messageRepository).save(message);
+    }
+
+    @Test
+    void isMessageParticipantReturnsTrueForCustomerAndProvider() {
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        conversation.setCustomerId(CUSTOMER_ID);
+        conversation.setProviderId(PROVIDER_ID);
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(conversationRepository.findById("conversation-1")).thenReturn(Optional.of(conversation));
+
+        assertThat(service.isMessageParticipant("message-1", CUSTOMER_ID)).isTrue();
+        assertThat(service.isMessageParticipant("message-1", PROVIDER_ID)).isTrue();
+        assertThat(service.isMessageParticipant("message-1", "stranger")).isFalse();
+    }
+
+    @Test
+    void isMessageParticipantReturnsFalseForMissingMessageOrConversation() {
+        when(messageRepository.findById("missing")).thenReturn(Optional.empty());
+        Message message = message("message-1", "missing-conversation", "hello", MessageStatus.VISIBLE);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(conversationRepository.findById("missing-conversation")).thenReturn(Optional.empty());
+
+        assertThat(service.isMessageParticipant("missing", CUSTOMER_ID)).isFalse();
+        assertThat(service.isMessageParticipant("message-1", CUSTOMER_ID)).isFalse();
+    }
+
+    @Test
+    void hideMessageRejectsModeratorIdentityMismatch() {
+        loginAs(CUSTOMER_ID);
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+
+        assertThatThrownBy(() -> service.hideMessage("message-1", "other-moderator", "Policy violation"))
+                .isInstanceOf(AccessDeniedException.class);
+        verify(messageRepository, never()).save(any(Message.class));
+    }
+
+    @Test
+    void hideMessageKeepsFirstReasonWhenAlreadyHidden() {
+        loginAs(CUSTOMER_ID);
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.HIDDEN);
+        message.setHideReason("First reason");
+        message.setHiddenBy("first-moderator");
+        message.setHiddenAt(CREATED_AT);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+
+        var response = service.hideMessage("message-1", CUSTOMER_ID, "Second reason");
+
+        assertThat(response.hideReason()).isEqualTo("First reason");
+        assertThat(response.hiddenBy()).isEqualTo("first-moderator");
+        assertThat(response.hiddenAt()).isEqualTo(CREATED_AT);
+        verify(messageRepository, never()).save(any(Message.class));
+    }
+
+    @Test
+    void hideMessageRejectsReasonOver500Characters() {
+        loginAs(CUSTOMER_ID);
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+
+        assertThatThrownBy(() -> service.hideMessage("message-1", CUSTOMER_ID, "x".repeat(501)))
+                .isInstanceOf(ApiException.class)
+                .satisfies(error -> assertThat(((ApiException) error).getErrorCode())
+                        .isEqualTo("HIDE_REASON_TOO_LONG"));
+        verify(messageRepository, never()).save(any(Message.class));
+    }
+
+    @Test
+    void clearFlagDoesNotUnhideMessage() {
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.HIDDEN);
+        message.setFlagged(true);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(messageRepository.save(message)).thenReturn(message);
+
+        service.clearFlag("message-1");
+
+        assertThat(message.getStatus()).isEqualTo(MessageStatus.HIDDEN);
+        assertThat(message.isFlagged()).isFalse();
+    }
+
+    @Test
+    void getChatHistoryParticipantOkAndHiddenBodyIsNull() {
+        participants = participants(BookingStatus.CONFIRMED, null);
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Message hidden = message("message-1", "conversation-1", "secret", MessageStatus.HIDDEN);
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(hidden)));
+
+        var response = service.getChatHistory(BOOKING_ID, 0, 20).content().get(0);
+
+        assertThat(response.body()).isNull();
+    }
+
+    @Test
+    void getChatHistoryStrangerIsDenied() {
+        loginAs("stranger");
+
+        assertThatThrownBy(() -> service.getChatHistory(BOOKING_ID, 0, 20))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void getChatHistoryForMediatorReturnsEmptyPageWithoutConversation() {
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.empty());
+
+        var response = service.getChatHistoryForMediator(BOOKING_ID, 0, 20);
+
+        assertThat(response.content()).isEmpty();
+        assertThat(response.totalElements()).isZero();
+    }
+
+    @Test
+    void getChatHistoryMasksPhoneUntilBookingIsConfirmed() {
+        participants = participants(BookingStatus.PENDING_PROVIDER, null);
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Message message = message("message-1", "conversation-1", "Call 0771234567", MessageStatus.VISIBLE);
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(message)));
+
+        var masked = service.getChatHistory(BOOKING_ID, 0, 20).content().get(0);
+        participants = participants(BookingStatus.CONFIRMED, null);
+        var visible = service.getChatHistory(BOOKING_ID, 0, 20).content().get(0);
+
+        assertThat(masked.body()).isEqualTo("Call [contact hidden]");
+        assertThat(visible.body()).isEqualTo("Call 0771234567");
+    }
+
+    @Test
+    void superAdminChatHistoryGetsMaskedPhoneText() {
+        loginAs("super-admin");
+        UserPrincipal superAdmin = new UserPrincipal("super-admin", "super@test.local", Role.SUPER_ADMIN);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(superAdmin, null, superAdmin.getAuthorities()));
+        when(adminAccessPolicyService.canViewArea(any(), eq(Role.ADMIN))).thenReturn(true);
+        participants = participants(BookingStatus.PENDING_PROVIDER, null);
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Message message = message("message-1", "conversation-1", "Call 0771234567", MessageStatus.VISIBLE);
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(message)));
+
+        var response = service.getChatHistory(BOOKING_ID, 0, 20).content().get(0);
+
+        assertThat(response.body()).isEqualTo("Call [contact hidden]");
+    }
+
+    @Test
+    void unauthenticatedGetChatHistoryIsRejectedBeforeBookingLookup() {
+        SecurityContextHolder.clearContext();
+
+        assertThatThrownBy(() -> service.getChatHistory(BOOKING_ID, 0, 20))
+                .isInstanceOf(ApiException.class)
+                .satisfies(error -> assertThat(((ApiException) error).getErrorCode()).isEqualTo("UNAUTHORIZED"));
+        verify(bookingFacade, never()).getBookingParticipants(anyString());
+    }
+
+    @Test
+    void listMessagesSinceCallsRepositoryWithOneHundredPageSize() {
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findByConversationIdAndCreatedAtAfterOrderByCreatedAtAsc(
+                anyString(), any(Instant.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        service.listMessagesSince(BOOKING_ID, Instant.parse("2026-11-19T10:00:00Z"));
+
+        ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+        verify(messageRepository).findByConversationIdAndCreatedAtAfterOrderByCreatedAtAsc(
+                eq("conversation-1"), eq(Instant.parse("2026-11-19T10:00:00Z")), captor.capture());
+        assertThat(captor.getValue().getPageSize()).isEqualTo(100);
+    }
+
+    @Test
+    void flagMessageThrowsConflictWhenSaveHasOptimisticLockFailure() {
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(messageRepository.save(message)).thenThrow(new OptimisticLockingFailureException("lost update"));
+
+        assertConflict(() -> service.flagMessage("message-1", FlagSource.USER_REPORT));
+    }
+
+    @Test
+    void hideMessageThrowsConflictWhenSaveHasOptimisticLockFailure() {
+        loginAs(CUSTOMER_ID);
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(messageRepository.save(message)).thenThrow(new OptimisticLockingFailureException("lost update"));
+
+        assertConflict(() -> service.hideMessage("message-1", CUSTOMER_ID, "Policy violation"));
+    }
+
+    @Test
+    void clearFlagThrowsConflictWhenSaveHasOptimisticLockFailure() {
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(messageRepository.save(message)).thenThrow(new OptimisticLockingFailureException("lost update"));
+
+        assertConflict(() -> service.clearFlag("message-1"));
+    }
+
+    @Test
+    void mediatorHistoryUsesConversationLookupAtMostOnceForMultipleMessages() {
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Message first = message("message-1", "conversation-1", "first", MessageStatus.VISIBLE);
+        Message second = message("message-2", "conversation-1", "second", MessageStatus.HIDDEN);
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(conversationRepository.findById("conversation-1")).thenReturn(Optional.of(conversation));
+        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(first, second)));
+
+        var response = service.getChatHistoryForMediator(BOOKING_ID, 0, 20);
+
+        assertThat(response.content()).hasSize(2);
+        verify(conversationRepository, never()).findById(anyString());
+    }
+
     private static BookingParticipants participants(BookingStatus status, String seriesId) {
         return new BookingParticipants(BOOKING_ID, seriesId, "listing-1", CUSTOMER_ID, PROVIDER_ID,
                 status, null, null);
@@ -421,5 +735,15 @@ class MessageServiceImplTest {
     private static void assertUnauthorized(ApiException exception) {
         assertThat(exception.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(exception.getErrorCode()).isEqualTo("UNAUTHORIZED");
+    }
+
+    private static void assertConflict(org.assertj.core.api.ThrowableAssert.ThrowingCallable action) {
+        assertThatThrownBy(action)
+                .isInstanceOf(ApiException.class)
+                .satisfies(error -> {
+                    ApiException exception = (ApiException) error;
+                    assertThat(exception.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(exception.getErrorCode()).isEqualTo("MESSAGE_UPDATE_CONFLICT");
+                });
     }
 }
