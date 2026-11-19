@@ -2,14 +2,22 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../features/search-discovery/services/searchAdapter', () => ({
-  fetchSearchResults: vi.fn().mockResolvedValue({
-    isLive: false,
-    isFixture: false,
-    results: [],
-    totalCount: 0,
-  }),
-}));
+vi.mock(
+  '../features/search-discovery/services/searchAdapter',
+  async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return {
+      ...actual,
+      fetchSearchResults: vi.fn().mockResolvedValue({
+        isLive: false,
+        isFixture: false,
+        results: [],
+        totalCount: 0,
+      }),
+    };
+  },
+);
 
 import { router } from './router.jsx';
 
@@ -26,6 +34,10 @@ describe('shared application router definitions', () => {
 
   it('mounts search at /search', () => {
     expect(paths).toContain('/search');
+  });
+
+  it('mounts public provider profiles at /providers/:providerId', () => {
+    expect(paths).toContain('/providers/:providerId');
   });
 
   it('preserves administrative routes', () => {
