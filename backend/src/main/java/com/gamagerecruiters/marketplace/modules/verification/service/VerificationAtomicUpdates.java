@@ -20,6 +20,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.mongodb.client.result.UpdateResult;
 
+import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification;
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification.UploadReservation;
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerificationStatus;
@@ -522,6 +523,130 @@ public class VerificationAtomicUpdates {
         );
 
         return Optional.ofNullable(updated);
+    }
+
+    /**
+     * Coordinates category changes with the provider verification workflow.
+     *
+     * - APPROVED providers are moved to RESUBMISSION_REQUESTED.
+     * - SUBMITTED and UNDER_REVIEW providers cannot change categories while
+     *   an Admin review is in progress.
+     * - SUBMITTABLE statuses retain their current status, but their workflow
+     *   revision is incremented so an older submission cannot be committed.
+     * - Other statuses retain the existing behaviour and are not modified.
+     *
+     * Existing Admin review metadata and the submitted document snapshot are
+     * preserved. EXPIRED records also retain updatedAt because that timestamp
+     * is used by the existing expired-document validation workflow.
+     */
+    public Optional<ProviderVerification> requestCategoryReverification(
+            String providerId,
+            Instant now
+    ) {
+        // Retry when the verification status changes concurrently between
+        // the conditional update and the subsequent status check.
+        for (int attempt = 0; attempt < 3; attempt++) {
+
+            // An approved decision must not cover a category added later.
+            Query approvedQuery = new Query(
+                    new Criteria().andOperator(
+                            Criteria.where("providerId").is(providerId),
+                            Criteria.where("status")
+                                    .is(ProviderVerificationStatus.APPROVED)
+                    )
+            );
+
+            Update approvedUpdate = new Update()
+                    .set(
+                            "status",
+                            ProviderVerificationStatus.RESUBMISSION_REQUESTED
+                    )
+                    .set(
+                            "decisionReason",
+                            "A new service category was added. Please upload updated verification documents and resubmit."
+                    )
+                    .set("updatedAt", now)
+                    .inc("coordinationRevision", 1);
+
+            ProviderVerification approvedUpdated = mongoTemplate.findAndModify(
+                    approvedQuery,
+                    approvedUpdate,
+                    FindAndModifyOptions.options().returnNew(true),
+                    ProviderVerification.class
+            );
+
+            if (approvedUpdated != null) {
+                return Optional.of(approvedUpdated);
+            }
+
+            // For statuses that can be submitted, increment the revision
+            // atomically. This prevents a submission using an older category
+            // selection from succeeding after the category change.
+            //
+            // Do not update updatedAt here: EXPIRED verification uses it
+            // when checking whether uploaded documents are newer than expiry.
+            Query submittableQuery = new Query(
+                    new Criteria().andOperator(
+                            Criteria.where("providerId").is(providerId),
+                            Criteria.where("status").in(SUBMITTABLE_STATUSES)
+                    )
+            );
+
+            Update revisionUpdate = new Update()
+                    .inc("coordinationRevision", 1);
+
+            ProviderVerification submittableUpdated = mongoTemplate.findAndModify(
+                    submittableQuery,
+                    revisionUpdate,
+                    FindAndModifyOptions.options().returnNew(true),
+                    ProviderVerification.class
+            );
+
+            if (submittableUpdated != null) {
+                return Optional.of(submittableUpdated);
+            }
+
+            // Neither conditional update matched. Read the latest status
+            // to distinguish an in-progress review from a concurrent change.
+            Optional<ProviderVerification> latest =
+                    providerVerificationRepository.findByProviderId(providerId);
+
+            if (latest.isEmpty()) {
+                // A provider may not have a verification record yet.
+                return Optional.empty();
+            }
+
+            ProviderVerificationStatus currentStatus =
+                    latest.get().getStatus();
+
+            if (currentStatus == ProviderVerificationStatus.SUBMITTED
+                    || currentStatus == ProviderVerificationStatus.UNDER_REVIEW) {
+                throw new ResourceConflictException(
+                        "PROVIDER_VERIFICATION_IN_PROGRESS",
+                        "You cannot add a new service category while your verification is submitted or under review. Please wait until the current review is complete."
+                );
+            }
+
+            // The status may have changed to APPROVED or to a submittable
+            // status after the conditional updates. Retry so the appropriate
+            // atomic update can be applied to the latest state.
+            if (currentStatus == ProviderVerificationStatus.APPROVED
+                    || (currentStatus != null
+                    && SUBMITTABLE_STATUSES.contains(currentStatus))) {
+                continue;
+            }
+
+            // Preserve the existing behaviour for statuses outside the
+            // approved, in-progress and submittable workflow states.
+            return Optional.empty();
+        }
+
+        // Repeated concurrent status changes should fail safely rather than
+        // allow a category update against an uncertain verification state.
+        throw new ResourceConflictException(
+                "PROVIDER_VERIFICATION_CHANGED",
+                "Your verification status changed while updating categories. Refresh your profile and try again."
+        );
     }
 
     /**

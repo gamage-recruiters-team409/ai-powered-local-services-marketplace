@@ -21,6 +21,18 @@ import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.support.MongoRepositoryFactory;
 
+import static org.mockito.Mockito.*;
+
+import java.util.Optional;
+
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
+import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
+import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
+import com.gamagerecruiters.marketplace.modules.completion.service.CompletionLookup;
+import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
+import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
+import com.gamagerecruiters.marketplace.modules.payment.service.EarningsLifecycleService;
+import com.gamagerecruiters.marketplace.modules.payment.service.PaymentPersistenceService;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEntry;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEventType;
 import com.gamagerecruiters.marketplace.modules.payment.domain.ProviderEarningsState;
@@ -348,6 +360,170 @@ class EarningsLedgerMongoIntegrationTest {
 
             return false;
         }
+    }
+
+    /**
+     * PR #37: Verified completion must create one pending earnings event
+     * and update the provider balance exactly once, including on retries.
+     */
+    @Test
+    void verifiedCompletionPersistsPendingEarningsAndProviderStateAtomically() {
+        withLedger((ledgerService, ledgerRepository, template) -> {
+
+            Payment payment = new Payment();
+            payment.setId("payment-001");
+            payment.setBookingId("booking-001");
+            payment.setCustomerId("customer-001");
+            payment.setAmount(new BigDecimal("1000.00"));
+            payment.setCommissionAmount(new BigDecimal("150.00"));
+            payment.setCurrency("LKR");
+            payment.setStatus(PaymentStatus.CAPTURED);
+
+            PaymentPersistenceService paymentService =
+                    mock(PaymentPersistenceService.class);
+
+            when(paymentService.findPaymentById("payment-001"))
+                    .thenReturn(Optional.of(payment));
+
+            BookingFacade bookingFacade = mock(BookingFacade.class);
+
+            when(bookingFacade.getBookingParticipants("booking-001"))
+                    .thenReturn(new BookingParticipants(
+                            "booking-001",
+                            null,
+                            "listing-001",
+                            "customer-001",
+                            "provider-001",
+                            BookingStatus.COMPLETED,
+                            null,
+                            null));
+
+            CompletionLookup completionLookup = mock(CompletionLookup.class);
+
+            when(completionLookup.findConfirmedAt("booking-001"))
+                    .thenReturn(Optional.of(
+                            Instant.parse("2026-11-18T10:00:00Z")));
+
+            EarningsLifecycleService lifecycleService =
+                    new EarningsLifecycleService(
+                            paymentService,
+                            bookingFacade,
+                            completionLookup,
+                            ledgerService);
+
+            EarningsLedgerEntry first =
+                    lifecycleService.recordPendingEarnings("payment-001");
+
+            assertEquals(EarningsLedgerEventType.EARNING_PENDING,
+                    first.getEventType());
+            assertEquals("earning-pending:payment-001", first.getEventKey());
+            assertEquals(0, new BigDecimal("850.00")
+                    .compareTo(first.getAmount()));
+
+            assertEquals(1, ledgerRepository.count());
+
+            ProviderEarningsState state = template.findById(
+                    new ProviderEarningsState("provider-001", "LKR").getId(),
+                    ProviderEarningsState.class);
+
+            assertNotNull(state);
+            assertEquals(0, new BigDecimal("850.00")
+                    .compareTo(state.getPending()));
+            assertEquals(0, BigDecimal.ZERO
+                    .compareTo(state.getAvailable()));
+            assertEquals(1L, state.getLastSequenceNumber());
+
+            // Reprocessing must reuse the committed event and balance.
+            EarningsLedgerEntry retry =
+                    lifecycleService.recordPendingEarnings("payment-001");
+
+            assertEquals(first.getId(), retry.getId());
+            assertEquals(1, ledgerRepository.count());
+
+            ProviderEarningsState stateAfterRetry = template.findById(
+                    new ProviderEarningsState("provider-001", "LKR").getId(),
+                    ProviderEarningsState.class);
+
+            assertNotNull(stateAfterRetry);
+            assertEquals(0, new BigDecimal("850.00")
+                    .compareTo(stateAfterRetry.getPending()));
+            assertEquals(1L, stateAfterRetry.getLastSequenceNumber());
+        });
+    }
+
+    /**
+     * PR #37: A later booking dispute must recover the previously
+     * committed pending event without changing financial balances.
+     */
+    @Test
+    void disputedBookingRecoversCommittedPendingEarningsWithoutDuplicate() {
+        withLedger((ledgerService, ledgerRepository, template) -> {
+
+            Payment payment = new Payment();
+            payment.setId("payment-001");
+            payment.setBookingId("booking-001");
+            payment.setCustomerId("customer-001");
+            payment.setAmount(new BigDecimal("1000.00"));
+            payment.setCommissionAmount(new BigDecimal("150.00"));
+            payment.setCurrency("LKR");
+            payment.setStatus(PaymentStatus.CAPTURED);
+
+            PaymentPersistenceService paymentService =
+                    mock(PaymentPersistenceService.class);
+
+            when(paymentService.findPaymentById("payment-001"))
+                    .thenReturn(Optional.of(payment));
+
+            BookingFacade bookingFacade = mock(BookingFacade.class);
+
+            when(bookingFacade.getBookingParticipants("booking-001"))
+                    .thenReturn(
+                            new BookingParticipants(
+                                    "booking-001", null, "listing-001",
+                                    "customer-001", "provider-001",
+                                    BookingStatus.COMPLETED, null, null),
+                            new BookingParticipants(
+                                    "booking-001", null, "listing-001",
+                                    "customer-001", "provider-001",
+                                    BookingStatus.DISPUTED, null, null));
+
+            CompletionLookup completionLookup = mock(CompletionLookup.class);
+
+            when(completionLookup.findConfirmedAt("booking-001"))
+                    .thenReturn(Optional.of(
+                            Instant.parse("2026-11-18T10:00:00Z")));
+
+            EarningsLifecycleService lifecycleService =
+                    new EarningsLifecycleService(
+                            paymentService,
+                            bookingFacade,
+                            completionLookup,
+                            ledgerService);
+
+            EarningsLedgerEntry first =
+                    lifecycleService.recordPendingEarnings("payment-001");
+
+            assertEquals(1, ledgerRepository.count());
+
+            EarningsLedgerEntry recovered =
+                    lifecycleService.recordPendingEarnings("payment-001");
+
+            assertEquals(first.getId(), recovered.getId());
+            assertEquals(first.getSequenceNumber(),
+                    recovered.getSequenceNumber());
+            assertEquals(1, ledgerRepository.count());
+
+            ProviderEarningsState state = template.findById(
+                    new ProviderEarningsState("provider-001", "LKR").getId(),
+                    ProviderEarningsState.class);
+
+            assertNotNull(state);
+            assertEquals(0, new BigDecimal("850.00")
+                    .compareTo(state.getPending()));
+            assertEquals(0, BigDecimal.ZERO
+                    .compareTo(state.getAvailable()));
+            assertEquals(1L, state.getLastSequenceNumber());
+        });
     }
 
     /**

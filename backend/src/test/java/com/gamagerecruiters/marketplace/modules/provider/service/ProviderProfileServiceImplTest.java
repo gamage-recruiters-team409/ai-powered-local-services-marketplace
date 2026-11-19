@@ -4,11 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.AfterEach;
@@ -26,12 +28,15 @@ import com.gamagerecruiters.marketplace.common.exception.ResourceConflictExcepti
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
+import com.gamagerecruiters.marketplace.modules.catalog.dto.CategoryResponse;
+import com.gamagerecruiters.marketplace.modules.catalog.service.CategoryService;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderType;
 import com.gamagerecruiters.marketplace.modules.provider.dto.CreateProviderProfileRequest;
 import com.gamagerecruiters.marketplace.modules.provider.dto.ProviderProfileResponse;
 import com.gamagerecruiters.marketplace.modules.provider.dto.UpdateProviderProfileRequest;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
+import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationReverificationService;
 
 @ExtendWith(MockitoExtension.class)
 class ProviderProfileServiceImplTest {
@@ -42,11 +47,19 @@ class ProviderProfileServiceImplTest {
     @Mock
     private ProviderProfileRepository providerProfileRepository;
 
+    @Mock
+    private CategoryService categoryService;
+
+    @Mock
+    private ProviderVerificationReverificationService
+            providerVerificationReverificationService;
+
     @InjectMocks
     private ProviderProfileServiceImpl providerProfileService;
 
     @BeforeEach
     void setUpSecurityContext() {
+
         UserPrincipal principal = new UserPrincipal(
                 USER_ID,
                 EMAIL,
@@ -70,6 +83,7 @@ class ProviderProfileServiceImplTest {
 
     @Test
     void createMyProfile_shouldCreateProfileForCurrentProvider() {
+
         CreateProviderProfileRequest request = createProfileRequest();
 
         when(providerProfileRepository.existsByUserId(USER_ID))
@@ -94,13 +108,19 @@ class ProviderProfileServiceImplTest {
         assertEquals("Colombo", response.getDistrict());
         assertEquals("Colombo", response.getCity());
         assertEquals(2, response.getExperienceYears());
+        assertEquals(List.of(), response.getCategoryIds());
 
         verify(providerProfileRepository)
                 .save(any(ProviderProfile.class));
+
+        // Creating a profile must not trigger re-verification.
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification("profile-1");
     }
 
     @Test
     void createMyProfile_shouldRejectDuplicateProfileDetectedByPreCheck() {
+
         CreateProviderProfileRequest request = createProfileRequest();
 
         when(providerProfileRepository.existsByUserId(USER_ID))
@@ -122,14 +142,12 @@ class ProviderProfileServiceImplTest {
 
     @Test
     void createMyProfile_shouldReturnConflictWhenMongoUniqueIndexRejectsConcurrentDuplicate() {
+
         CreateProviderProfileRequest request = createProfileRequest();
 
         /*
-         * Simulates the race condition:
-         *
-         * Request A and Request B both pass existsByUserId().
-         * Request A inserts first.
-         * MongoDB's unique userId index rejects Request B.
+         * Simulates two concurrent requests attempting to create
+         * a profile for the same authenticated provider.
          */
         when(providerProfileRepository.existsByUserId(USER_ID))
                 .thenReturn(false);
@@ -157,6 +175,7 @@ class ProviderProfileServiceImplTest {
 
     @Test
     void getMyProfile_shouldReturnCurrentProvidersProfile() {
+
         ProviderProfile profile = createExistingProfile();
 
         when(providerProfileRepository.findByUserId(USER_ID))
@@ -172,6 +191,7 @@ class ProviderProfileServiceImplTest {
 
     @Test
     void getMyProfile_shouldThrowWhenProfileDoesNotExist() {
+
         when(providerProfileRepository.findByUserId(USER_ID))
                 .thenReturn(Optional.empty());
 
@@ -183,6 +203,7 @@ class ProviderProfileServiceImplTest {
 
     @Test
     void updateMyProfile_shouldUpdateOnlyProvidedFields() {
+
         ProviderProfile existingProfile = createExistingProfile();
 
         when(providerProfileRepository.findByUserId(USER_ID))
@@ -207,29 +228,327 @@ class ProviderProfileServiceImplTest {
 
         assertEquals(3, response.getExperienceYears());
 
-        // Omitted fields must remain unchanged.
-        assertEquals(
-                "Hiba Services",
-                response.getDisplayName()
-        );
+        // Existing fields must remain unchanged.
+        assertEquals("Hiba Services", response.getDisplayName());
+        assertEquals("Colombo", response.getDistrict());
+        assertEquals("Colombo", response.getCity());
 
+        // Existing categories must also remain unchanged.
         assertEquals(
-                "Colombo",
-                response.getDistrict()
-        );
-
-        assertEquals(
-                "Colombo",
-                response.getCity()
+                List.of("existing-category"),
+                response.getCategoryIds()
         );
 
         assertNotNull(response.getUpdatedAt());
 
         verify(providerProfileRepository)
                 .save(existingProfile);
+
+        // Non-category profile updates must not trigger re-verification.
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification("profile-1");
+    }
+
+    // CATEGORY TESTS
+
+    @Test
+    void createMyProfile_shouldSaveSelectedCategories() {
+
+        CreateProviderProfileRequest request = createProfileRequest();
+
+        request.setCategoryIds(
+                List.of("category-1", "category-2")
+        );
+
+        when(providerProfileRepository.existsByUserId(USER_ID))
+                .thenReturn(false);
+
+        when(categoryService.getCategoryById("category-1"))
+                .thenReturn(activeCategory("category-1"));
+
+        when(categoryService.getCategoryById("category-2"))
+                .thenReturn(activeCategory("category-2"));
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> {
+                    ProviderProfile profile = invocation.getArgument(0);
+                    profile.setId("profile-1");
+                    return profile;
+                });
+
+        ProviderProfileResponse response =
+                providerProfileService.createMyProfile(request);
+
+        assertEquals(
+                List.of("category-1", "category-2"),
+                response.getCategoryIds()
+        );
+
+        verify(categoryService).getCategoryById("category-1");
+        verify(categoryService).getCategoryById("category-2");
+
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification("profile-1");
+    }
+
+    @Test
+    void createMyProfile_shouldRejectInactiveCategory() {
+
+        CreateProviderProfileRequest request = createProfileRequest();
+
+        request.setCategoryIds(
+                List.of("inactive-category")
+        );
+
+        when(providerProfileRepository.existsByUserId(USER_ID))
+                .thenReturn(false);
+
+        when(categoryService.getCategoryById("inactive-category"))
+                .thenReturn(category("inactive-category", false));
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> providerProfileService.createMyProfile(request)
+        );
+
+        assertEquals(
+                "PROVIDER_CATEGORY_INACTIVE",
+                exception.getErrorCode()
+        );
+
+        verify(providerProfileRepository, never())
+                .save(any(ProviderProfile.class));
+    }
+
+    @Test
+    void createMyProfile_shouldRejectDuplicateCategories() {
+
+        CreateProviderProfileRequest request = createProfileRequest();
+
+        request.setCategoryIds(
+                List.of("category-1", "category-1")
+        );
+
+        when(providerProfileRepository.existsByUserId(USER_ID))
+                .thenReturn(false);
+
+        when(categoryService.getCategoryById("category-1"))
+                .thenReturn(activeCategory("category-1"));
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> providerProfileService.createMyProfile(request)
+        );
+
+        assertEquals(
+                "PROVIDER_CATEGORY_DUPLICATE",
+                exception.getErrorCode()
+        );
+
+        verify(providerProfileRepository, never())
+                .save(any(ProviderProfile.class));
+    }
+
+    @Test
+    void updateMyProfile_shouldUpdateSelectedCategories() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(categoryService.getCategoryById("category-3"))
+                .thenReturn(activeCategory("category-3"));
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        UpdateProviderProfileRequest request =
+                new UpdateProviderProfileRequest();
+
+        request.setCategoryIds(
+                List.of("category-3")
+        );
+
+        ProviderProfileResponse response =
+                providerProfileService.updateMyProfile(request);
+
+        assertEquals(
+                List.of("category-3"),
+                response.getCategoryIds()
+        );
+
+        verify(categoryService)
+                .getCategoryById("category-3");
+
+        verify(providerProfileRepository)
+                .save(existingProfile);
+
+        // The new category must request re-verification.
+        verify(providerVerificationReverificationService)
+                .requestCategoryReverification("profile-1");
+    }
+
+    @Test
+    void updateMyProfile_shouldRequestReverificationWhenNewCategoryIsAdded() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(categoryService.getCategoryById("existing-category"))
+                .thenReturn(activeCategory("existing-category"));
+
+        when(categoryService.getCategoryById("category-2"))
+                .thenReturn(activeCategory("category-2"));
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        UpdateProviderProfileRequest request =
+                new UpdateProviderProfileRequest();
+
+        request.setCategoryIds(
+                List.of("existing-category", "category-2")
+        );
+
+        ProviderProfileResponse response =
+                providerProfileService.updateMyProfile(request);
+
+        assertEquals(
+                List.of("existing-category", "category-2"),
+                response.getCategoryIds()
+        );
+
+        verify(providerVerificationReverificationService)
+                .requestCategoryReverification("profile-1");
+    }
+
+    @Test
+    void updateMyProfile_shouldNotSaveCategoriesWhenVerificationIsInProgress() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+
+        existingProfile.setCategoryIds(
+                List.of("existing-category")
+        );
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(categoryService.getCategoryById("existing-category"))
+                .thenReturn(activeCategory("existing-category"));
+
+        when(categoryService.getCategoryById("category-2"))
+                .thenReturn(activeCategory("category-2"));
+
+        doThrow(new ResourceConflictException(
+                "PROVIDER_VERIFICATION_IN_PROGRESS",
+                "You cannot add a new service category while your verification is submitted or under review."
+        )).when(providerVerificationReverificationService)
+                .requestCategoryReverification("profile-1");
+
+        UpdateProviderProfileRequest request =
+                new UpdateProviderProfileRequest();
+
+        request.setCategoryIds(
+                List.of("existing-category", "category-2")
+        );
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> providerProfileService.updateMyProfile(request)
+        );
+
+        assertEquals(
+                "PROVIDER_VERIFICATION_IN_PROGRESS",
+                exception.getErrorCode()
+        );
+
+        // The original category selection must remain unchanged.
+        assertEquals(
+                List.of("existing-category"),
+                existingProfile.getCategoryIds()
+        );
+
+        // A rejected category update must never persist the profile.
+        verify(providerProfileRepository, never())
+                .save(any(ProviderProfile.class));
+    }
+
+    @Test
+    void updateMyProfile_shouldNotRequestReverificationWhenCategoriesAreUnchanged() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(categoryService.getCategoryById("existing-category"))
+                .thenReturn(activeCategory("existing-category"));
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        UpdateProviderProfileRequest request =
+                new UpdateProviderProfileRequest();
+
+        request.setCategoryIds(
+                List.of("existing-category")
+        );
+
+        ProviderProfileResponse response =
+                providerProfileService.updateMyProfile(request);
+
+        assertEquals(
+                List.of("existing-category"),
+                response.getCategoryIds()
+        );
+
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification("profile-1");
+    }
+
+    @Test
+    void updateMyProfile_shouldNotRequestReverificationWhenCategoryIsRemoved() {
+
+        ProviderProfile existingProfile = createExistingProfile();
+
+        existingProfile.setCategoryIds(
+                List.of("existing-category", "category-2")
+        );
+
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        when(categoryService.getCategoryById("existing-category"))
+                .thenReturn(activeCategory("existing-category"));
+
+        when(providerProfileRepository.save(any(ProviderProfile.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        UpdateProviderProfileRequest request =
+                new UpdateProviderProfileRequest();
+
+        request.setCategoryIds(
+                List.of("existing-category")
+        );
+
+        ProviderProfileResponse response =
+                providerProfileService.updateMyProfile(request);
+
+        assertEquals(
+                List.of("existing-category"),
+                response.getCategoryIds()
+        );
+
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification("profile-1");
     }
 
     private CreateProviderProfileRequest createProfileRequest() {
+
         CreateProviderProfileRequest request =
                 new CreateProviderProfileRequest();
 
@@ -247,6 +566,7 @@ class ProviderProfileServiceImplTest {
     }
 
     private ProviderProfile createExistingProfile() {
+
         ProviderProfile profile = new ProviderProfile();
 
         profile.setId("profile-1");
@@ -260,9 +580,37 @@ class ProviderProfileServiceImplTest {
         profile.setProfileImageUrl(
                 "https://example.com/profile.jpg"
         );
+
+        profile.setCategoryIds(
+                List.of("existing-category")
+        );
+
         profile.setCreatedAt(Instant.now());
         profile.setUpdatedAt(Instant.now());
 
         return profile;
+    }
+
+    private CategoryResponse activeCategory(String id) {
+        return category(id, true);
+    }
+
+    private CategoryResponse category(
+            String id,
+            boolean active
+    ) {
+
+        return new CategoryResponse(
+                id,
+                "Test Category",
+                "test-category-" + id,
+                null,
+                null,
+                null,
+                null,
+                active,
+                null,
+                null
+        );
     }
 }
