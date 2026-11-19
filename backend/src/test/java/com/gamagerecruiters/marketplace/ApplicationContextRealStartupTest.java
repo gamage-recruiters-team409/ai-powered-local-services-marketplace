@@ -31,21 +31,25 @@ import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepos
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
-import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
+import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
+import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
+import com.gamagerecruiters.marketplace.modules.listing.service.CatalogCategoryLookupAdapter;
+import com.gamagerecruiters.marketplace.modules.listing.service.ProviderVerificationLookupAdapter;
+import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
+import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.DisputePayoutHoldRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
-import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutAllocationRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
 import com.gamagerecruiters.marketplace.modules.payment.service.DisputePayoutHoldAdapter;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
-import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
-import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.VerificationDocumentRepository;
+import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationFacade;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -100,6 +104,9 @@ class ApplicationContextRealStartupTest {
         private DisputePayoutHoldRepository disputePayoutHoldRepository;
 
         @MockitoBean
+        private ListingRepository listingRepository;
+
+        @MockitoBean
         private ConversationRepository conversationRepository;
 
         @MockitoBean
@@ -130,7 +137,6 @@ class ApplicationContextRealStartupTest {
         @Test
         @DisplayName("Verify real Spring context loads without circular dependencies and key security beans exist")
         void contextLoadsAndKeySecurityBeansExist() {
-
                 assertNotNull(
                                 applicationContext.getBean(PasswordEncoder.class),
                                 "PasswordEncoder bean must exist");
@@ -151,6 +157,18 @@ class ApplicationContextRealStartupTest {
                                 applicationContext.getBean(BookingOpenBookingsChecker.class),
                                 "BookingOpenBookingsChecker bean must exist");
 
+                assertNotNull(
+                                applicationContext.getBean(CatalogCategoryLookupAdapter.class),
+                                "CatalogCategoryLookupAdapter bean must exist");
+
+                assertNotNull(
+                                applicationContext.getBean(ProviderVerificationFacade.class),
+                                "ProviderVerificationFacade bean must exist");
+
+                assertNotNull(
+                                applicationContext.getBean(ProviderVerificationLookupAdapter.class),
+                                "ProviderVerificationLookupAdapter bean must exist");
+
                 assertInstanceOf(
                                 DisputePayoutHoldAdapter.class,
                                 applicationContext.getBean(PayoutHoldPort.class),
@@ -160,7 +178,6 @@ class ApplicationContextRealStartupTest {
         @Test
         @DisplayName("RateLimitService bean uses real default properties (5 requests per 15 minutes for sensitive)")
         void rateLimitServiceUsesDefaultSensitiveProperties() {
-
                 RateLimitService rateLimiter = applicationContext.getBean(RateLimitService.class);
 
                 assertNotNull(

@@ -67,7 +67,7 @@ export function SearchResultsPage() {
   // effect runs even when the query and filters are unchanged.
   const [searchNonce, setSearchNonce] = useState(0);
 
-  // Milestone Notice Modal
+  // Selection limit notice modal
   const [modalState, setModalState] = useState({
     isOpen: false,
     title: '',
@@ -203,17 +203,6 @@ export function SearchResultsPage() {
     }
   };
 
-  const handleViewProfile = (provider, triggerEl) => {
-    modalTriggerRef.current = triggerEl ?? null;
-    setModalState({
-      isOpen: true,
-      badgeText: 'MILESTONE BOUNDARY',
-      title: `Provider Profile: ${provider.name}`,
-      message:
-        'The individual provider profile screen is scheduled for an upcoming milestone. Detailed credentials, services catalog, and booking availability will be available once that module is integrated.',
-    });
-  };
-
   const handleCompareClick = (triggerEl) => {
     if (selectedProviders.length < 2) {
       return;
@@ -311,7 +300,6 @@ export function SearchResultsPage() {
                         item={item}
                         isSelected={selectedProviders.some((p) => p.id === item.id)}
                         onToggleComparison={handleToggleComparison}
-                        onSelect={handleViewProfile}
                       />
                     ))}
                   </div>
@@ -372,7 +360,7 @@ export function SearchResultsPage() {
         />
       )}
 
-      {/* Explicit Milestone Limitation Modal */}
+      {/* Selection limit notice */}
       <FeaturePendingModal
         isOpen={modalState.isOpen}
         title={modalState.title}
