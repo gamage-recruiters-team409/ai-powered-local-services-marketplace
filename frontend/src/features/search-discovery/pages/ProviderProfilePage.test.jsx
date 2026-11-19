@@ -124,6 +124,166 @@ describe('ProviderProfilePage provider summary', () => {
   });
 });
 
+describe('ProviderProfilePage rating display', () => {
+  async function renderRating(rating, reviewCount = 10) {
+    fetchProviderProfile.mockResolvedValueOnce(
+      fixtureResponse({ ...maya, rating, reviewCount }),
+    );
+    renderProfile();
+
+    await screen.findByRole('heading', {
+      level: 1,
+      name: "Maya's Home Care",
+    });
+
+    return screen.getByTestId('provider-rating-stars');
+  }
+
+  function getStarStates(stars) {
+    return within(stars)
+      .getAllByTestId('provider-rating-star')
+      .map((star) => star.dataset.state);
+  }
+
+  it('reflects low ratings without showing five filled stars', async () => {
+    const stars = await renderRating(2);
+
+    expect(stars.dataset.rating).toBe('2');
+    expect(getStarStates(stars)).toEqual([
+      'full',
+      'full',
+      'empty',
+      'empty',
+      'empty',
+    ]);
+  });
+
+  it('renders a partial star for intermediate ratings', async () => {
+    const stars = await renderRating(3.5);
+
+    expect(getStarStates(stars)).toEqual([
+      'full',
+      'full',
+      'full',
+      'partial',
+      'empty',
+    ]);
+    expect(
+      within(stars).getAllByTestId('provider-rating-star')[3].dataset
+        .fillPercent,
+    ).toBe('50');
+  });
+
+  it('renders a partial final star for high ratings', async () => {
+    const stars = await renderRating(4.9, 128);
+
+    expect(getStarStates(stars)).toEqual([
+      'full',
+      'full',
+      'full',
+      'full',
+      'partial',
+    ]);
+    expect(
+      within(stars).getAllByTestId('provider-rating-star')[4].dataset
+        .fillPercent,
+    ).toBe('90');
+  });
+
+  it('renders empty stars for a zero-review rating', async () => {
+    const stars = await renderRating(0, 0);
+
+    expect(getStarStates(stars)).toEqual([
+      'empty',
+      'empty',
+      'empty',
+      'empty',
+      'empty',
+    ]);
+    expect(screen.getByText('No reviews yet')).toBeTruthy();
+  });
+});
+
+describe('ProviderProfilePage service presentation', () => {
+  it('shows provider-level details once and package fallbacks when service data is absent', async () => {
+    fetchProviderProfile.mockResolvedValueOnce(fixtureResponse(brightNest));
+    renderProfile('/providers/prv-002?tab=services');
+
+    const panel = await screen.findByRole('region', {
+      name: 'Services & packages',
+    });
+
+    expect(
+      within(panel).getAllByText('From $40/hr · 2-hour minimum'),
+    ).toHaveLength(1);
+    expect(within(panel).getAllByText('Supplies & equipment')).toHaveLength(1);
+    expect(
+      within(panel).getAllByText('Package price not provided'),
+    ).toHaveLength(2);
+    expect(
+      within(panel).getAllByText('Package description not provided.'),
+    ).toHaveLength(2);
+    expect(
+      within(panel).getAllByText('Package-specific inclusions not provided.'),
+    ).toHaveLength(2);
+  });
+
+  it('renders package-specific details only when supplied', async () => {
+    const providerWithPackages = {
+      ...brightNest,
+      serviceTypes: [
+        {
+          type: 'standard',
+          label: 'Standard clean',
+          description: 'Standard package description.',
+          pricing: {
+            hourlyRate: 38,
+            minimumHours: 2,
+            currency: '$',
+            unit: 'hr',
+          },
+          inclusions: ['Eco supplies'],
+        },
+        {
+          type: 'deep',
+          label: 'Deep clean',
+          description: 'Deep package description.',
+          inclusions: ['Heavy-duty equipment', 'Supplies'],
+        },
+      ],
+    };
+
+    fetchProviderProfile.mockResolvedValueOnce(
+      fixtureResponse(providerWithPackages),
+    );
+    renderProfile('/providers/prv-002?tab=services');
+
+    const panel = await screen.findByRole('region', {
+      name: 'Services & packages',
+    });
+
+    expect(within(panel).getByText('Standard clean')).toBeTruthy();
+    expect(within(panel).getByText('Deep clean')).toBeTruthy();
+    expect(
+      within(panel).getByText('Standard package description.'),
+    ).toBeTruthy();
+    expect(within(panel).getByText('Deep package description.')).toBeTruthy();
+    expect(
+      within(panel).getByText('From $38/hr · 2-hour minimum'),
+    ).toBeTruthy();
+    expect(within(panel).getByText('Package includes: Eco supplies')).toBeTruthy();
+    expect(
+      within(panel).getByText('Package includes: Heavy-duty equipment, Supplies'),
+    ).toBeTruthy();
+    expect(
+      within(panel).getAllByText('Package price not provided'),
+    ).toHaveLength(1);
+    expect(
+      within(panel).queryAllByText('Package-specific inclusions not provided.'),
+    ).toHaveLength(0);
+  });
+});
+
 describe('ProviderProfilePage tabs', () => {
   it('switches between URL-synced services, reviews, and availability views', async () => {
     const user = userEvent.setup();

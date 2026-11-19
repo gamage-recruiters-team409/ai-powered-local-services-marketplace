@@ -5,30 +5,98 @@ const PROFILE_TAB_ALIASES = {
   slots: 'availability',
 };
 
-const SERVICE_TYPE_DETAILS = {
-  standard: {
-    label: 'Standard home clean',
-    description: 'Kitchen, bathrooms, floors and surface dusting.',
-  },
-  deep: {
-    label: 'Deep clean',
-    description: 'A detailed reset for baseboards, fixtures and hard-to-reach areas.',
-  },
-  moveout: {
-    label: 'Move-out clean',
-    description: 'Empty-home cleaning with cabinet interiors and appliance surfaces.',
-  },
-  recurring: {
-    label: 'Recurring clean',
-    description: 'Regular cleans with a preferred time slot and consistent care.',
-  },
+const SERVICE_TYPE_LABELS = {
+  standard: 'Standard home clean',
+  deep: 'Deep clean',
+  moveout: 'Move-out clean',
+  recurring: 'Recurring clean',
 };
+
+function getTrimmedString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
 
 function toTitleCase(value = '') {
   return value
     .replace(/[-_]+/g, ' ')
     .replace(/\b\w/g, (character) => character.toUpperCase())
     .trim();
+}
+
+function normalizeServiceEntry(entry) {
+  if (typeof entry === 'string') {
+    const key = entry.trim().toLowerCase();
+
+    if (!key) {
+      return null;
+    }
+
+    return {
+      key,
+      label: SERVICE_TYPE_LABELS[key] ?? toTitleCase(key),
+      description: null,
+      pricing: null,
+      inclusions: null,
+      isFallback: false,
+    };
+  }
+
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  const rawKey =
+    entry.type ?? entry.key ?? entry.id ?? entry.slug ?? entry.name ?? entry.label;
+  const key = String(rawKey ?? '').trim().toLowerCase();
+
+  if (!key) {
+    return null;
+  }
+
+  const label =
+    getTrimmedString(entry.label) ||
+    getTrimmedString(entry.name) ||
+    SERVICE_TYPE_LABELS[key] ||
+    toTitleCase(key);
+
+  return {
+    key,
+    label: label || 'Service',
+    description: getTrimmedString(entry.description) || null,
+    pricing:
+      entry.pricing && typeof entry.pricing === 'object' ? entry.pricing : null,
+    inclusions: Array.isArray(entry.inclusions)
+      ? entry.inclusions.filter(Boolean)
+      : null,
+    isFallback: false,
+  };
+}
+
+export function getRatingStarStates(rating) {
+  if (typeof rating !== 'number' || !Number.isFinite(rating)) {
+    return [];
+  }
+
+  const normalized = Math.min(5, Math.max(0, rating));
+
+  return Array.from({ length: 5 }, (_, index) => {
+    const fillPercent = Math.round(
+      Math.min(1, Math.max(0, normalized - index)) * 100,
+    );
+
+    let state = 'empty';
+
+    if (fillPercent === 100) {
+      state = 'full';
+    } else if (fillPercent > 0) {
+      state = 'partial';
+    }
+
+    return {
+      state,
+      fillPercent,
+    };
+  });
 }
 
 export function normalizeProfileTab(value) {
@@ -44,46 +112,36 @@ export function normalizeProfileTab(value) {
 
 export function getProviderServiceOptions(provider = {}) {
   const serviceTypes = Array.isArray(provider.serviceTypes)
-    ? provider.serviceTypes.filter((type) => typeof type === 'string' && type.trim())
+    ? provider.serviceTypes
     : [];
-
-  if (serviceTypes.length === 0) {
-    const fallbackLabel = provider.category?.trim() || 'Home service';
-
-    return [
-      {
-        key: 'category',
-        label: fallbackLabel,
-        description:
-          provider.description?.trim() || 'Service details are not provided.',
-      },
-    ];
-  }
-
   const seen = new Set();
+  const services = [];
 
-  return serviceTypes.reduce((services, type) => {
-    const key = type.trim().toLowerCase();
+  serviceTypes.forEach((entry) => {
+    const service = normalizeServiceEntry(entry);
 
-    if (seen.has(key)) {
-      return services;
+    if (!service || seen.has(service.key)) {
+      return;
     }
 
-    seen.add(key);
+    seen.add(service.key);
+    services.push(service);
+  });
 
-    const details = SERVICE_TYPE_DETAILS[key];
-
-    services.push({
-      key,
-      label: details?.label ?? toTitleCase(key),
-      description:
-        details?.description ||
-        provider.description?.trim() ||
-        'Service details are not provided.',
-    });
-
+  if (services.length > 0) {
     return services;
-  }, []);
+  }
+
+  return [
+    {
+      key: 'category',
+      label: getTrimmedString(provider.category) || 'Home service',
+      description: null,
+      pricing: null,
+      inclusions: null,
+      isFallback: true,
+    },
+  ];
 }
 
 export function getProviderReviewState(provider = {}) {

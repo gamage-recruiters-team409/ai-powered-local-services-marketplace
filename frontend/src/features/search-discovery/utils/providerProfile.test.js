@@ -4,6 +4,7 @@ import {
   getProviderAvailabilityState,
   getProviderReviewState,
   getProviderServiceOptions,
+  getRatingStarStates,
   normalizeProfileTab,
 } from './providerProfile.js';
 
@@ -23,30 +24,126 @@ describe('normalizeProfileTab', () => {
 });
 
 describe('getProviderServiceOptions', () => {
-  it('maps known service types to readable packages', () => {
+  it('maps known service types to readable labels without inventing package details', () => {
     const services = getProviderServiceOptions({
       serviceTypes: ['standard', 'deep'],
       description: 'Provider description',
+      pricing: {
+        hourlyRate: 40,
+        minimumHours: 2,
+        currency: '$',
+        unit: 'hr',
+      },
+      inclusions: ['Supplies & equipment'],
     });
 
     expect(services.map((service) => service.label)).toEqual([
       'Standard home clean',
       'Deep clean',
     ]);
-    expect(services[1].description).toMatch(/baseboards/i);
+    expect(services[0]).toMatchObject({
+      description: null,
+      pricing: null,
+      inclusions: null,
+      isFallback: false,
+    });
+    expect(services[1]).toMatchObject({
+      description: null,
+      pricing: null,
+      inclusions: null,
+      isFallback: false,
+    });
   });
 
-  it('falls back to the provider category when service types are absent', () => {
+  it('preserves supplied package-specific pricing, descriptions, and inclusions', () => {
+    const services = getProviderServiceOptions({
+      serviceTypes: [
+        {
+          type: 'standard',
+          label: 'Standard clean',
+          description: 'Standard package description',
+          pricing: {
+            hourlyRate: 38,
+            minimumHours: 2,
+            currency: '$',
+            unit: 'hr',
+          },
+          inclusions: ['Eco supplies'],
+        },
+        {
+          type: 'deep',
+          name: 'Deep clean',
+          description: 'Deep package description',
+          pricing: {
+            hourlyRate: 60,
+            minimumHours: 3,
+            currency: '$',
+            unit: 'hr',
+          },
+          inclusions: ['Heavy-duty equipment', 'Supplies'],
+        },
+      ],
+    });
+
+    expect(services).toHaveLength(2);
+    expect(services[0]).toMatchObject({
+      label: 'Standard clean',
+      description: 'Standard package description',
+      inclusions: ['Eco supplies'],
+    });
+    expect(services[0].pricing).toMatchObject({ hourlyRate: 38 });
+    expect(services[1]).toMatchObject({
+      label: 'Deep clean',
+      description: 'Deep package description',
+      inclusions: ['Heavy-duty equipment', 'Supplies'],
+    });
+    expect(services[1].pricing).toMatchObject({ hourlyRate: 60 });
+  });
+
+  it('does not copy provider-level details into services without package data', () => {
+    const services = getProviderServiceOptions({
+      serviceTypes: ['standard', 'deep'],
+      description: 'Provider description',
+      pricing: {
+        hourlyRate: 40,
+        minimumHours: 2,
+        currency: '$',
+        unit: 'hr',
+      },
+      inclusions: ['Supplies & equipment'],
+    });
+
+    expect(
+      services.every(
+        (service) =>
+          service.description === null &&
+          service.pricing === null &&
+          service.inclusions === null,
+      ),
+    ).toBe(true);
+  });
+
+  it('falls back to the provider category without reusing provider details', () => {
     const services = getProviderServiceOptions({
       category: 'Move-out cleaning',
       description: 'Turnaround care',
+      pricing: {
+        hourlyRate: 55,
+        minimumHours: 3,
+        currency: '$',
+        unit: 'hr',
+      },
+      inclusions: ['Heavy-duty equipment'],
     });
 
     expect(services).toEqual([
       {
         key: 'category',
         label: 'Move-out cleaning',
-        description: 'Turnaround care',
+        description: null,
+        pricing: null,
+        inclusions: null,
+        isFallback: true,
       },
     ]);
   });
@@ -58,7 +155,67 @@ describe('getProviderServiceOptions', () => {
     });
 
     expect(services).toHaveLength(1);
-    expect(services[0].label).toBe('Window Clean');
+    expect(services[0]).toMatchObject({
+      key: 'window_clean',
+      label: 'Window Clean',
+      description: null,
+      pricing: null,
+      inclusions: null,
+    });
+  });
+});
+
+describe('getRatingStarStates', () => {
+  it('renders empty stars for a zero-review rating', () => {
+    expect(getRatingStarStates(0).map((star) => star.state)).toEqual([
+      'empty',
+      'empty',
+      'empty',
+      'empty',
+      'empty',
+    ]);
+  });
+
+  it('reflects low ratings without overstating them', () => {
+    expect(getRatingStarStates(2).map((star) => star.state)).toEqual([
+      'full',
+      'full',
+      'empty',
+      'empty',
+      'empty',
+    ]);
+  });
+
+  it('uses a partial star for intermediate ratings', () => {
+    const stars = getRatingStarStates(3.5);
+
+    expect(stars.map((star) => star.state)).toEqual([
+      'full',
+      'full',
+      'full',
+      'partial',
+      'empty',
+    ]);
+    expect(stars[3].fillPercent).toBe(50);
+  });
+
+  it('uses a partial star for high ratings that are not rounded up', () => {
+    const stars = getRatingStarStates(4.9);
+
+    expect(stars.map((star) => star.state)).toEqual([
+      'full',
+      'full',
+      'full',
+      'full',
+      'partial',
+    ]);
+    expect(stars[4].fillPercent).toBe(90);
+  });
+
+  it('returns no stars when a numeric rating is unavailable', () => {
+    expect(getRatingStarStates()).toEqual([]);
+    expect(getRatingStarStates(null)).toEqual([]);
+    expect(getRatingStarStates(Number.NaN)).toEqual([]);
   });
 });
 

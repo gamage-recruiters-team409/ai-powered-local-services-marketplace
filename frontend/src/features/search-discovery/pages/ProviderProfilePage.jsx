@@ -15,6 +15,7 @@ import {
 } from '../services/providerProfileAdapter.js';
 import { HIGH_RATING_THRESHOLD } from '../services/searchAdapter.js';
 import {
+  NOT_PROVIDED,
   formatCancellationPolicy,
   formatDistanceArea,
   formatInclusions,
@@ -30,6 +31,7 @@ import {
   getProviderAvailabilityState,
   getProviderReviewState,
   getProviderServiceOptions,
+  getRatingStarStates,
   normalizeProfileTab,
 } from '../utils/providerProfile.js';
 import '../styles/search-discovery.css';
@@ -48,6 +50,43 @@ const MESSAGE_PENDING_ACTION = {
   message:
     'Direct messaging will be connected in a later milestone. For now, review the provider details and request booking when it becomes available.',
 };
+
+function RatingStars({ rating }) {
+  const stars = getRatingStarStates(rating);
+
+  if (stars.length === 0) {
+    return null;
+  }
+
+  return (
+    <span
+      className="provider-profile-rating-stars"
+      data-testid="provider-rating-stars"
+      data-rating={rating}
+      aria-hidden="true"
+    >
+      {stars.map((star, index) => (
+        <span
+          key={index}
+          className="provider-profile-star"
+          data-testid="provider-rating-star"
+          data-state={star.state}
+          data-fill-percent={star.fillPercent}
+        >
+          <span className="provider-profile-star-empty">★</span>
+          {star.fillPercent > 0 && (
+            <span
+              className="provider-profile-star-fill"
+              style={{ width: `${star.fillPercent}%` }}
+            >
+              ★
+            </span>
+          )}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 function ProfileHeader({ provider }) {
   const handleImageError = (event) => {
@@ -153,12 +192,7 @@ function ProfileHeader({ provider }) {
               <span className="provider-profile-rating-score">
                 {formatRating(provider.rating)}
               </span>
-              <span
-                className="provider-profile-rating-stars"
-                aria-hidden="true"
-              >
-                ★★★★★
-              </span>
+              <RatingStars rating={provider.rating} />
               <span className="provider-profile-rating-count">
                 {formatReviewCount(provider.reviewCount)}
               </span>
@@ -361,7 +395,8 @@ function OverviewPanel({
 }
 
 function ServicesPanel({ provider, serviceOptions, onBook }) {
-  const inclusions = formatInclusions(provider.inclusions);
+  const providerPrice = formatPrice(provider.pricing);
+  const providerInclusions = formatInclusions(provider.inclusions);
 
   return (
     <section
@@ -375,43 +410,84 @@ function ServicesPanel({ provider, serviceOptions, onBook }) {
         Services &amp; packages
       </h2>
       <p className="provider-profile-panel-intro">
-        Choose the care your home needs. Starting rates are indicative and
-        final details are confirmed before booking.
+        Choose the care your home needs. Provider-level rates are shown
+        separately from package-specific details.
       </p>
 
-      <div className="provider-profile-service-list">
-        {serviceOptions.map((service) => (
-          <article
-            key={service.key}
-            className="provider-profile-service-card"
-          >
-            <div className="provider-profile-service-copy">
-              <h3>{service.label}</h3>
-              <p>{service.description}</p>
-              <p className="provider-profile-service-includes">
-                Includes: {inclusions}
-              </p>
-            </div>
-
-            <div className="provider-profile-service-action">
-              <span className="provider-profile-service-price">
-                {formatPrice(provider.pricing)}
-              </span>
-              <button
-                type="button"
-                className="provider-profile-secondary-btn"
-                onClick={onBook}
-              >
-                Request {service.label}
-              </button>
-            </div>
-          </article>
-        ))}
+      <div className="provider-profile-provider-summary">
+        <div>
+          <span className="provider-profile-kicker">
+            Provider starting rate
+          </span>
+          <strong>{providerPrice}</strong>
+        </div>
+        <div>
+          <span className="provider-profile-kicker">
+            Provider-level inclusions
+          </span>
+          <span>{providerInclusions}</span>
+        </div>
       </div>
 
       <p className="provider-profile-panel-footnote">
-        Starting rates are indicative. Final pricing is confirmed before
-        booking.
+        Package-specific prices and inclusions are shown only when supplied by
+        the provider.
+      </p>
+
+      <div className="provider-profile-service-list">
+        {serviceOptions.map((service) => {
+          const servicePrice = formatPrice(service.pricing);
+          const serviceInclusions = formatInclusions(service.inclusions);
+          const hasServicePrice = servicePrice !== NOT_PROVIDED;
+          const hasServiceInclusions = serviceInclusions !== NOT_PROVIDED;
+
+          return (
+            <article
+              key={service.key}
+              className="provider-profile-service-card"
+            >
+              <div className="provider-profile-service-copy">
+                <h3>{service.label}</h3>
+                {service.description ? (
+                  <p>{service.description}</p>
+                ) : (
+                  <p className="provider-profile-service-unavailable">
+                    Package description not provided.
+                  </p>
+                )}
+                {hasServiceInclusions ? (
+                  <p className="provider-profile-service-includes">
+                    Package includes: {serviceInclusions}
+                  </p>
+                ) : (
+                  <p className="provider-profile-service-unavailable">
+                    Package-specific inclusions not provided.
+                  </p>
+                )}
+              </div>
+
+              <div className="provider-profile-service-action">
+                <span className="provider-profile-service-price">
+                  {hasServicePrice
+                    ? servicePrice
+                    : 'Package price not provided'}
+                </span>
+                <button
+                  type="button"
+                  className="provider-profile-secondary-btn"
+                  onClick={onBook}
+                >
+                  Request {service.label}
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      <p className="provider-profile-panel-footnote">
+        Provider starting rates are indicative. Package-specific details are
+        confirmed before booking.
       </p>
     </section>
   );
