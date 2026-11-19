@@ -105,7 +105,7 @@ describe('ProfilePage', () => {
     expect(customerAccountApi.updateProfile).not.toHaveBeenCalled();
   });
 
-  it('saves updated profile successfully and shows success toast', async () => {
+  it('saves updated profile successfully, updates input from server response, and shows success toast', async () => {
     customerAccountApi.updateProfile.mockResolvedValueOnce({
       id: 'cust-1',
       fullName: 'Nimal P. Updated',
@@ -139,9 +139,59 @@ describe('ProfilePage', () => {
       });
       expect(mockToast.success).toHaveBeenCalledWith('Profile updated successfully');
     });
+
+    // Name and phone fields show the updated fullName and phone from the server response
+    expect(screen.getByDisplayValue('Nimal P. Updated')).toBeTruthy();
+    expect(screen.getByDisplayValue('+94779999999')).toBeTruthy();
   });
 
-  it('resets form when Cancel button is clicked', async () => {
+  it('restores newly saved profile values when Cancel is clicked after a successful save', async () => {
+    customerAccountApi.updateProfile.mockResolvedValueOnce({
+      id: 'cust-1',
+      fullName: 'Saved Name Two',
+      email: 'nimal@email.com',
+      phone: '+94778888888',
+      emailVerified: true,
+    });
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Nimal Perera')).toBeTruthy();
+    });
+
+    const nameInput = screen.getByDisplayValue('Nimal Perera');
+    const phoneInput = screen.getByDisplayValue('+94 77 123 4567');
+    const saveBtn = screen.getByRole('button', { name: /save changes/i });
+
+    // Save new values
+    fireEvent.change(nameInput, { target: { value: 'Saved Name Two' } });
+    fireEvent.change(phoneInput, { target: { value: '0778888888' } });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Saved Name Two')).toBeTruthy();
+    });
+
+    // Now edit fields again without saving
+    fireEvent.change(nameInput, { target: { value: 'Unsaved Draft Name' } });
+    fireEvent.change(phoneInput, { target: { value: '0771111111' } });
+    expect(screen.getByDisplayValue('Unsaved Draft Name')).toBeTruthy();
+
+    // Click cancel
+    const cancelBtn = screen.getByRole('button', { name: /cancel/i });
+    fireEvent.click(cancelBtn);
+
+    // Should restore the newly saved values, not the initial load values
+    expect(screen.getByDisplayValue('Saved Name Two')).toBeTruthy();
+    expect(screen.getByDisplayValue('+94778888888')).toBeTruthy();
+  });
+
+  it('restores loaded values when Cancel is clicked before any save', async () => {
     render(
       <MemoryRouter>
         <ProfilePage />

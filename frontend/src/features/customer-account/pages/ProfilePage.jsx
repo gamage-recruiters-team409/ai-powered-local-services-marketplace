@@ -94,7 +94,7 @@ export function ProfilePage() {
         phone: phone.trim(),
       });
       setProfile(updated);
-      setFullName(updated.name || '');
+      setFullName(updated.fullName || '');
       setPhone(updated.phone || '');
       toast.success('Profile updated successfully');
     } catch (err) {
