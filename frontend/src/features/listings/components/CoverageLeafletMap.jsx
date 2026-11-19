@@ -2,14 +2,8 @@ import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
+import { SRI_LANKA_BOUNDS } from '../services/sriLankaZones'
 import styles from '../styles/providerListings.module.css'
-
-const SRI_LANKA_BOUNDS = {
-  minLat: 5.85,
-  maxLat: 9.9,
-  minLng: 79.5,
-  maxLng: 81.95,
-}
 
 function getZoomForRadius(radiusKm) {
   if (radiusKm <= 5) return 13
@@ -51,9 +45,16 @@ export function CoverageLeafletMap({
     if (!container || mapRef.current) return undefined
 
     try {
+      const mapBounds = L.latLngBounds(
+        [SRI_LANKA_BOUNDS.minLat - 0.35, SRI_LANKA_BOUNDS.minLng - 0.35],
+        [SRI_LANKA_BOUNDS.maxLat + 0.35, SRI_LANKA_BOUNDS.maxLng + 0.35],
+      )
       const mapInstance = L.map(container, {
         center: [latitude, longitude],
         zoom: getZoomForRadius(radiusKm),
+        minZoom: 7,
+        maxBounds: mapBounds,
+        maxBoundsViscosity: 0.75,
         scrollWheelZoom: false,
         zoomControl: true,
       })

@@ -5,8 +5,11 @@ import { SkeletonCard, useToast } from '../../../shared/components/feedback'
 import {
   DEFAULT_PORTFOLIO_THUMBNAILS,
   extractListingApiError,
+  extractListingErrorCode,
+  formatModerationFeedback,
   getMyListings,
   getMyListingsSummary,
+  isListingRequestCanceled,
   updateListingStatus,
 } from '../services/listingService'
 import styles from '../styles/providerListings.module.css'
@@ -60,6 +63,7 @@ export function ProviderListingsDashboardPage() {
 
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
+  const [verificationNotice, setVerificationNotice] = useState('')
   const [usingFallback, setUsingFallback] = useState(false)
 
   const [pauseTarget, setPauseTarget] = useState(null)
@@ -78,6 +82,8 @@ export function ProviderListingsDashboardPage() {
     let active = true
 
     async function fetchListings() {
+      setLoading(true)
+      setErrorMessage('')
       try {
         const isInactiveTab = activeTab === 'INACTIVE'
         const statusParam = isInactiveTab ? 'ALL' : activeTab
@@ -104,7 +110,7 @@ export function ProviderListingsDashboardPage() {
         setTotalPages(Math.max(1, listRes.pageData.totalPages || 1))
         setUsingFallback(Boolean(listRes.isFallback || summaryRes.isFallback))
       } catch (error) {
-        if (!active || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
+        if (!active || isListingRequestCanceled(error)) {
           return
         }
         setErrorMessage(extractListingApiError(error, 'Failed to load service listings.'))
@@ -131,9 +137,12 @@ export function ProviderListingsDashboardPage() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [actionBusy])
 
-  const totalInquiries = useMemo(
-    () => listings.reduce((sum, item) => sum + Number(item.inquiryCount ?? 5), 0),
-    [listings],
+  const needsAttentionCount = useMemo(
+    () =>
+      Number(summary.flaggedCount || 0) +
+      Number(summary.rejectedCount || 0) +
+      Number(summary.categoryInactiveCount || 0),
+    [summary],
   )
 
   const filterTabs = useMemo(
@@ -142,6 +151,8 @@ export function ProviderListingsDashboardPage() {
       { id: 'ACTIVE', label: `Active (${summary.activeCount})` },
       { id: 'PAUSED', label: `Paused (${summary.pausedCount})` },
       { id: 'DRAFT', label: `Drafts (${summary.draftCount})` },
+      { id: 'FLAGGED', label: `Flagged (${summary.flaggedCount})` },
+      { id: 'REJECTED', label: `Rejected (${summary.rejectedCount})` },
       { id: 'ARCHIVED', label: `Archive (${summary.archivedCount})` },
       { id: 'INACTIVE', label: `Inactive (${summary.categoryInactiveCount})` },
     ],
@@ -179,12 +190,29 @@ export function ProviderListingsDashboardPage() {
 
   const handleResumeListing = async (listing) => {
     setActionBusy(true)
+    setVerificationNotice('')
     try {
-      await updateListingStatus(listing.id, { status: 'ACTIVE', reason: 'Reactivated by provider' })
-      toast.success(`"${listing.title}" is now active and bookable.`, { title: 'Listing Activated' })
+      const updatedRes = await updateListingStatus(listing.id, {
+        status: 'ACTIVE',
+        reason: listing.status === 'DRAFT' ? 'Published by provider from dashboard' : 'Reactivated by provider',
+      })
+      const nextStatus = updatedRes?.listing?.status || 'ACTIVE'
+      if (nextStatus === 'FLAGGED') {
+        toast.warning(
+          `"${listing.title}" was sent for moderator review because it appears to contain contact details or external links.`,
+          { title: 'Listing Under Review' },
+        )
+      } else {
+        toast.success(`"${listing.title}" is now active and bookable.`, { title: 'Listing Activated' })
+      }
       triggerReload()
     } catch (error) {
-      toast.error(extractListingApiError(error, 'Unable to reactivate listing.'), { title: 'Action Failed' })
+      const code = extractListingErrorCode(error)
+      const msg = extractListingApiError(error, 'Unable to activate listing.')
+      if (code === 'PROVIDER_NOT_VERIFIED' || code === 'PROVIDER_VERIFICATION_UNAVAILABLE') {
+        setVerificationNotice(msg)
+      }
+      toast.error(msg, { title: 'Activation Blocked' })
     } finally {
       setActionBusy(false)
     }
@@ -220,10 +248,9 @@ export function ProviderListingsDashboardPage() {
         <div>
           <div className={styles.headerTitleRow}>
             <h1 className={styles.pageTitle}>My Service Listings</h1>
-            <span className={styles.countPill}>{summary.totalListings} Listings</span>
             {usingFallback && (
-              <span className={styles.fallbackBadge} title="Backend PR #30 API unavailable locally; using local session store">
-                Local Session Preview
+              <span className={styles.fallbackBadge} title="Explicit DEV fixture mode active">
+                Fixture Mode Preview
               </span>
             )}
           </div>
@@ -242,7 +269,7 @@ export function ProviderListingsDashboardPage() {
         </button>
       </div>
 
-      {/* 4 KPI Summary Cards */}
+      {/* 4 KPI Summary Cards (100% Backend-Backed Metrics) */}
       <div className={styles.kpiGrid} aria-label="Listing summary metrics">
         <div className={styles.kpiCard}>
           <div className={styles.kpiTopRow}>
@@ -251,7 +278,7 @@ export function ProviderListingsDashboardPage() {
           </div>
           <div className={styles.kpiValueRow}>
             <span className={styles.kpiValue}>{summary.totalListings}</span>
-            <span className={styles.kpiMetaEmerald}>100% Verified NIC</span>
+            <span className={styles.kpiMetaMuted}>{summary.archivedCount} Archived</span>
           </div>
         </div>
 
@@ -281,12 +308,21 @@ export function ProviderListingsDashboardPage() {
 
         <div className={styles.kpiCard}>
           <div className={styles.kpiTopRow}>
-            <span className={styles.kpiLabel}>TOTAL INQUIRIES</span>
-            <span className={`${styles.kpiIconBox} ${styles.kpiIconEmerald}`} aria-hidden="true">💬</span>
+            <span className={styles.kpiLabel}>MODERATION &amp; POLICY</span>
+            <span
+              className={`${styles.kpiIconBox} ${
+                needsAttentionCount > 0 ? styles.kpiIconAmber : styles.kpiIconEmerald
+              }`}
+              aria-hidden="true"
+            >
+              🛡
+            </span>
           </div>
           <div className={styles.kpiValueRow}>
-            <span className={styles.kpiValue}>{totalInquiries}</span>
-            <span className={styles.kpiMetaEmerald}>↗ +14% this month</span>
+            <span className={styles.kpiValue}>{needsAttentionCount}</span>
+            <span className={styles.kpiMetaMuted}>
+              {summary.flaggedCount} Flagged · {summary.rejectedCount} Rejected · {summary.categoryInactiveCount} Inactive
+            </span>
           </div>
         </div>
       </div>
@@ -335,7 +371,7 @@ export function ProviderListingsDashboardPage() {
                 setPage(0)
               }}
             >
-              <option value="newest">Date Created (Newest)</option>
+              <option value="newest">Date Updated (Newest)</option>
               <option value="price_asc">Price: Low to High</option>
               <option value="price_desc">Price: High to Low</option>
               <option value="rating_desc">Rating: Highest</option>
@@ -363,6 +399,23 @@ export function ProviderListingsDashboardPage() {
         </div>
       </div>
 
+      {/* Account Verification Gate Notice */}
+      {verificationNotice && (
+        <div className={styles.policyWarningBanner} role="alert">
+          <span>
+            🛡 <strong>Account Verification Required:</strong> {verificationNotice} You can save and edit drafts
+            anytime, and publish once your account is verified.
+          </span>
+          <button
+            type="button"
+            className={styles.outlineBtn}
+            onClick={() => navigate('/provider/verification')}
+          >
+            Go to Verification →
+          </button>
+        </div>
+      )}
+
       {/* Error State */}
       {errorMessage && (
         <div className={styles.policyWarningBanner} role="alert">
@@ -383,13 +436,13 @@ export function ProviderListingsDashboardPage() {
       )}
 
       {/* Empty State */}
-      {!loading && listings.length === 0 && (
+      {!loading && !errorMessage && listings.length === 0 && (
         <div className={styles.emptyCard}>
           <div className={styles.emptyIconCircle} aria-hidden="true">🔍</div>
           <h2 className={styles.emptyTitle}>No service listings found</h2>
           <p className={styles.emptyText}>
-            We couldn&apos;t find any approved services matching your active filters or radius. Try widening your
-            location or clearing filters.
+            We couldn&apos;t find any services matching your active filters. Try clearing filters or create a new
+            service listing.
           </p>
           <button type="button" className={styles.outlineBtn} onClick={handleResetFilters}>
             ↻ Reset All Filters
@@ -404,6 +457,8 @@ export function ProviderListingsDashboardPage() {
             const categoryInactive = listing.categoryActive === false
             const isArchived = listing.status === 'ARCHIVED'
             const isPaused = listing.status === 'PAUSED'
+            const isDraft = listing.status === 'DRAFT'
+            const isFlaggedOrRejected = listing.status === 'FLAGGED' || listing.status === 'REJECTED'
             const badge = STATUS_BADGE_MAP[listing.status] || STATUS_BADGE_MAP.ACTIVE
             const unitLabel = listing.pricingModel === 'HOURLY' ? '/ hr' : '/ fixed'
             const imageSrc = listing.coverImageUrl || listing.images?.[0] || DEFAULT_PORTFOLIO_THUMBNAILS.plumbing
@@ -447,7 +502,24 @@ export function ProviderListingsDashboardPage() {
 
                   {categoryInactive && (
                     <div className={styles.policyCalloutBox}>
-                      ⚠ Public bookings temporarily disabled by admin policy.
+                      ⚠ Public bookings temporarily disabled by admin policy. Click Edit to assign an active category.
+                    </div>
+                  )}
+
+                  {isFlaggedOrRejected && (
+                    <div
+                      className={`${styles.policyCalloutBox} ${
+                        listing.status === 'REJECTED' ? styles.policyCalloutRejected : ''
+                      }`}
+                    >
+                      <strong className={styles.policyCalloutTitle}>
+                        {listing.status === 'REJECTED'
+                          ? '🛡 Rejected by Moderator'
+                          : '🛡 Under Moderator Review'}
+                      </strong>
+                      <span>
+                        {formatModerationFeedback(listing.moderationReason, listing.moderationFlags)}
+                      </span>
                     </div>
                   )}
 
@@ -458,35 +530,54 @@ export function ProviderListingsDashboardPage() {
                     </span>
                   </div>
 
-                  <div className={styles.cardActionsRow}>
+                  <div
+                    className={`${styles.cardActionsRow} ${
+                      isFlaggedOrRejected ? styles.cardActionsRowTwo : ''
+                    }`}
+                  >
                     <button
                       type="button"
                       className={styles.cardActionBtn}
-                      disabled={categoryInactive || isArchived || actionBusy}
+                      disabled={isArchived || actionBusy}
                       onClick={() => navigate(`/provider/listings/${listing.id}/edit`)}
                     >
                       Edit
                     </button>
 
-                    {isPaused ? (
-                      <button
-                        type="button"
-                        className={styles.cardActionBtn}
-                        disabled={categoryInactive || isArchived || actionBusy}
-                        onClick={() => handleResumeListing(listing)}
-                      >
-                        Resume
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className={styles.cardActionBtn}
-                        disabled={categoryInactive || isArchived || listing.status === 'DRAFT' || actionBusy}
-                        onClick={() => setPauseTarget(listing)}
-                      >
-                        Pause
-                      </button>
-                    )}
+                    {!isFlaggedOrRejected &&
+                      (isPaused ? (
+                        <button
+                          type="button"
+                          className={styles.cardActionBtn}
+                          disabled={categoryInactive || isArchived || actionBusy}
+                          onClick={() => handleResumeListing(listing)}
+                        >
+                          Resume
+                        </button>
+                      ) : isDraft ? (
+                        <button
+                          type="button"
+                          className={styles.cardActionBtn}
+                          disabled={categoryInactive || isArchived || actionBusy}
+                          onClick={() => handleResumeListing(listing)}
+                        >
+                          Publish
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className={styles.cardActionBtn}
+                          disabled={
+                            categoryInactive ||
+                            isArchived ||
+                            listing.status !== 'ACTIVE' ||
+                            actionBusy
+                          }
+                          onClick={() => setPauseTarget(listing)}
+                        >
+                          Pause
+                        </button>
+                      ))}
 
                     <button
                       type="button"
@@ -514,7 +605,7 @@ export function ProviderListingsDashboardPage() {
                   <th>SERVICE NAME &amp; CATEGORY</th>
                   <th>PRICE &amp; BILLING MODEL</th>
                   <th>ADD-ONS &amp; RATING</th>
-                  <th>INQUIRIES &amp; VIEWS</th>
+                  <th>LOCATION &amp; DELIVERY</th>
                   <th>STATUS</th>
                   <th>ACTIONS</th>
                 </tr>
@@ -524,6 +615,7 @@ export function ProviderListingsDashboardPage() {
                   const categoryInactive = listing.categoryActive === false
                   const isArchived = listing.status === 'ARCHIVED'
                   const isPaused = listing.status === 'PAUSED'
+                  const isDraft = listing.status === 'DRAFT'
                   const badge = STATUS_BADGE_MAP[listing.status] || STATUS_BADGE_MAP.ACTIVE
                   const imageSrc = listing.coverImageUrl || listing.images?.[0] || DEFAULT_PORTFOLIO_THUMBNAILS.plumbing
 
@@ -561,8 +653,11 @@ export function ProviderListingsDashboardPage() {
                         <div className={styles.fieldHelper}>{listing.activeAddOnCount ?? 0} active add-ons</div>
                       </td>
                       <td>
-                        <div>{listing.inquiryCount ?? 5} inquiries</div>
-                        <div className={styles.fieldHelper}>{listing.viewCount ?? 42} views</div>
+                        <div>{listing.district || 'Colombo'}</div>
+                        <div className={styles.fieldHelper}>
+                          {listing.baseCity || listing.district} ·{' '}
+                          {listing.executionModel === 'WORKSHOP' ? 'Workshop' : 'On-Site'}
+                        </div>
                       </td>
                       <td>
                         {categoryInactive ? (
@@ -582,7 +677,7 @@ export function ProviderListingsDashboardPage() {
                             className={styles.iconActionBtn}
                             title="Edit listing"
                             aria-label={`Edit ${listing.title}`}
-                            disabled={categoryInactive || isArchived || actionBusy}
+                            disabled={isArchived || actionBusy}
                             onClick={() => navigate(`/provider/listings/${listing.id}/edit`)}
                           >
                             ✎
@@ -590,12 +685,19 @@ export function ProviderListingsDashboardPage() {
                           <button
                             type="button"
                             className={styles.iconActionBtn}
-                            title={isPaused ? 'Resume listing' : 'Pause listing'}
-                            aria-label={`${isPaused ? 'Resume' : 'Pause'} ${listing.title}`}
-                            disabled={categoryInactive || isArchived || listing.status === 'DRAFT' || actionBusy}
-                            onClick={() => (isPaused ? handleResumeListing(listing) : setPauseTarget(listing))}
+                            title={isPaused || isDraft ? 'Activate listing' : 'Pause listing'}
+                            aria-label={`${isPaused || isDraft ? 'Resume' : 'Pause'} ${listing.title}`}
+                            disabled={
+                              categoryInactive ||
+                              isArchived ||
+                              (!isPaused && !isDraft && listing.status !== 'ACTIVE') ||
+                              actionBusy
+                            }
+                            onClick={() =>
+                              isPaused || isDraft ? handleResumeListing(listing) : setPauseTarget(listing)
+                            }
                           >
-                            {isPaused ? '▶' : '❚❚'}
+                            {isPaused || isDraft ? '▶' : '❚❚'}
                           </button>
                           <button
                             type="button"
@@ -681,8 +783,9 @@ export function ProviderListingsDashboardPage() {
             </div>
 
             <p className={styles.modalBodyText}>
-              Temporarily hides this service from customer discovery. Use this when you are fully booked or away.
-              You can reactivate anytime with one click.
+              Temporarily disables new customer bookings for this service while keeping it visible as paused in
+              customer favourites. Use this when you are fully booked or away. You can reactivate anytime with one
+              click.
             </p>
 
             <div className={styles.modalFooter}>

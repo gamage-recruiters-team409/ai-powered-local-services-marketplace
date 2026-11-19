@@ -4,21 +4,30 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useToast } from '../../../shared/components/feedback'
 import { CoverageLeafletMap } from '../components/CoverageLeafletMap'
 import {
-  AI_SUGGESTION_CHIPS,
   createListing,
   DEFAULT_PORTFOLIO_THUMBNAILS,
   DURATION_OPTIONS,
   extractListingApiError,
+  extractListingErrorCode,
   FALLBACK_CATEGORIES,
   findNearestSriLankaDistrict,
-  generateAiDescriptionSuggestion,
+  formatModerationFeedback,
   getDistrictLocations,
   getListingById,
   getPublicCategories,
+  isListingRequestCanceled,
   screenListingContent,
   SRI_LANKA_PROVINCES_FALLBACK,
   updateListing,
 } from '../services/listingService'
+import {
+  findNearestSriLankaZone,
+  getZonesWithinRadius,
+  isWithinSriLankaBounds,
+  MAX_SERVICE_AREAS,
+  mergeRadiusZones,
+  SRI_LANKA_ZONES,
+} from '../services/sriLankaZones'
 import styles from '../styles/providerListings.module.css'
 
 const STEP_LABELS = [
@@ -88,7 +97,7 @@ function createInitialFormState() {
     baseCity: 'Colombo 05 (Havelock Town)',
     location: { longitude: 79.8612, latitude: 6.9271 },
     coverageRadiusKm: 15,
-    serviceAreas: ['Colombo 01-15', 'Dehiwala', 'Mount Lavinia'],
+    serviceAreas: getZonesWithinRadius(6.9271, 79.8612, 15, { fallbackLabel: 'Colombo' }),
     description: '',
     pricingModel: 'FIXED',
     basePrice: '2800',
@@ -138,11 +147,16 @@ export function CreateEditListingWizardPage() {
   const [loadingInit, setLoadingInit] = useState(true)
   const [submittingMode, setSubmittingMode] = useState('') // '' | 'draft' | 'publish'
   const [errors, setErrors] = useState({})
+  const [verificationBlockedMsg, setVerificationBlockedMsg] = useState('')
+  const [editingListingMeta, setEditingListingMeta] = useState(null)
   const [gpsStatus, setGpsStatus] = useState('Default center: Colombo (6.9271° N, 79.8612° E)')
 
-  // Zone chip input
+  // Zone chip input & hybrid map radius auto-sync
   const [showZoneInput, setShowZoneInput] = useState(false)
   const [newZoneText, setNewZoneText] = useState('')
+  const [autoSyncZones, setAutoSyncZones] = useState(true)
+  const [manualZones, setManualZones] = useState([])
+  const [excludedAutoZones, setExcludedAutoZones] = useState([])
 
   // Add-On inline form
   const [showAddOnEditor, setShowAddOnEditor] = useState(false)
@@ -167,12 +181,18 @@ export function CreateEditListingWizardPage() {
       setLoadingInit(true)
       try {
         const [catRes, geoRes] = await Promise.all([
-          getPublicCategories(controller.signal),
+          getPublicCategories(controller.signal).catch((err) => {
+            if (isListingRequestCanceled(err)) throw err
+            return { categories: FALLBACK_CATEGORIES, isFallback: true }
+          }),
           getDistrictLocations(controller.signal),
         ])
         if (!active) return
 
-        const loadedCats = catRes.categories || FALLBACK_CATEGORIES
+        const loadedCats =
+          Array.isArray(catRes.categories) && catRes.categories.length > 0
+            ? catRes.categories
+            : FALLBACK_CATEGORIES
         const loadedProvinces = geoRes.provinces || SRI_LANKA_PROVINCES_FALLBACK
         setCategories(loadedCats)
         setProvinces(loadedProvinces)
@@ -180,16 +200,36 @@ export function CreateEditListingWizardPage() {
         if (isEditMode && listingId) {
           const { listing } = await getListingById(listingId, controller.signal)
           if (!active) return
+          setEditingListingMeta({
+            status: listing.status || '',
+            moderationReason: listing.moderationReason || '',
+            moderationFlags: Array.isArray(listing.moderationFlags) ? listing.moderationFlags : [],
+          })
           const catPair = findPrimaryAndSub(loadedCats, listing.categoryId)
           const mappedPhotos = (listing.images || []).map((imgUrl, idx) => ({
             id: `existing-photo-${idx}`,
             name: `portfolio_${idx + 1}.jpg`,
-            httpsUrl: imgUrl.startsWith('https://')
+            httpsUrl: imgUrl.startsWith('https://') || imgUrl.startsWith('http://')
               ? imgUrl
               : `https://cdn.localserve.lk/listings/${listing.id}-photo-${idx + 1}.jpg`,
             previewUrl: imgUrl,
           }))
 
+          const savedLoc = listing.location || { longitude: 79.8612, latitude: 6.9271 }
+          const savedRadius = Number(listing.coverageRadiusKm ?? 15)
+          const savedAreas = Array.isArray(listing.serviceAreas) ? listing.serviceAreas : []
+          const baselineAutoSet = new Set(
+            getZonesWithinRadius(savedLoc.latitude, savedLoc.longitude, savedRadius, {
+              maxZones: SRI_LANKA_ZONES.length,
+              fallbackLabel: listing.baseCity || listing.district || 'Colombo',
+            }).map((zone) => zone.toLowerCase()),
+          )
+          const preservedCustomZones = savedAreas.filter(
+            (area) => !baselineAutoSet.has(String(area).trim().toLowerCase()),
+          )
+
+          setManualZones(preservedCustomZones)
+          setExcludedAutoZones([])
           setForm({
             title: listing.title || '',
             primaryCategoryId: catPair.primaryCategoryId,
@@ -197,9 +237,9 @@ export function CreateEditListingWizardPage() {
             executionModel: listing.executionModel || 'ON_SITE',
             district: listing.district || 'Colombo',
             baseCity: listing.baseCity || listing.district || '',
-            location: listing.location || { longitude: 79.8612, latitude: 6.9271 },
-            coverageRadiusKm: Number(listing.coverageRadiusKm ?? 15),
-            serviceAreas: Array.isArray(listing.serviceAreas) ? listing.serviceAreas : [],
+            location: savedLoc,
+            coverageRadiusKm: savedRadius,
+            serviceAreas: savedAreas,
             description: listing.description || '',
             pricingModel: listing.pricingModel === 'HOURLY' ? 'HOURLY' : 'FIXED',
             basePrice: String(listing.basePrice ?? '2800'),
@@ -207,9 +247,30 @@ export function CreateEditListingWizardPage() {
             addOns: Array.isArray(listing.addOns) ? listing.addOns : [],
             photos: mappedPhotos.length > 0 ? mappedPhotos : createInitialFormState().photos,
           })
+        } else {
+          setEditingListingMeta(null)
+          setManualZones([])
+          setExcludedAutoZones([])
+          // Ensure create mode binds to the first active backend category instead of stale fallback IDs
+          const firstActiveRoot = loadedCats.find((c) => c.active !== false) || loadedCats[0]
+          const firstActiveSub =
+            firstActiveRoot?.children?.find((sub) => sub.active !== false) || null
+          if (firstActiveRoot) {
+            setForm((prev) => {
+              const rootStillExists = loadedCats.some((c) => c.id === prev.primaryCategoryId)
+              if (rootStillExists) {
+                return prev
+              }
+              return {
+                ...prev,
+                primaryCategoryId: firstActiveRoot.id,
+                subcategoryId: firstActiveSub?.id || '',
+              }
+            })
+          }
         }
       } catch (error) {
-        if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
+        if (isListingRequestCanceled(error)) {
           return
         }
         toast.error(extractListingApiError(error, 'Failed to initialize listing form.'), {
@@ -259,6 +320,56 @@ export function CreateEditListingWizardPage() {
     [provinces],
   )
 
+  const manualZoneKeySet = useMemo(
+    () => new Set(manualZones.map((zone) => zone.toLowerCase())),
+    [manualZones],
+  )
+
+  const zoneSyncPreview = useMemo(() => {
+    const lat = form.location?.latitude ?? 6.9271
+    const lng = form.location?.longitude ?? 79.8612
+    const autoZones = getZonesWithinRadius(lat, lng, form.coverageRadiusKm, {
+      maxZones: SRI_LANKA_ZONES.length,
+      fallbackLabel: form.baseCity || form.district,
+    })
+    return mergeRadiusZones({
+      autoZones,
+      manualZones,
+      excludedAutoZones,
+      maxZones: MAX_SERVICE_AREAS,
+    })
+  }, [
+    form.location,
+    form.coverageRadiusKm,
+    form.baseCity,
+    form.district,
+    manualZones,
+    excludedAutoZones,
+  ])
+
+  const applyGeoZoneSync = useCallback(
+    (
+      nextLocation,
+      nextRadiusKm,
+      nextFallbackLabel,
+      { nextManual = manualZones, nextExcluded = excludedAutoZones } = {},
+    ) => {
+      const lat = nextLocation?.latitude ?? 6.9271
+      const lng = nextLocation?.longitude ?? 79.8612
+      const autoZones = getZonesWithinRadius(lat, lng, nextRadiusKm, {
+        maxZones: SRI_LANKA_ZONES.length,
+        fallbackLabel: nextFallbackLabel,
+      })
+      return mergeRadiusZones({
+        autoZones,
+        manualZones: nextManual,
+        excludedAutoZones: nextExcluded,
+        maxZones: MAX_SERVICE_AREAS,
+      }).serviceAreas
+    },
+    [manualZones, excludedAutoZones],
+  )
+
   const updateField = useCallback((field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }))
     setErrors((prev) => {
@@ -283,6 +394,8 @@ export function CreateEditListingWizardPage() {
 
         if (!effectiveCategoryId) {
           nextErrors.categoryId = 'Select a category for your listing.'
+        } else if (selectedPrimaryCategory && selectedPrimaryCategory.active === false) {
+          nextErrors.categoryId = 'Selected primary category is currently inactive. Choose an active category.'
         } else if (selectedSubcategory && selectedSubcategory.active === false) {
           nextErrors.categoryId = 'Selected subcategory is currently inactive. Choose an active category.'
         }
@@ -291,8 +404,16 @@ export function CreateEditListingWizardPage() {
           nextErrors.district = 'District is required.'
         }
 
-        if (form.description.trim().length < 20) {
-          nextErrors.description = 'Detailed service scope must be at least 20 characters to publish.'
+        if (!form.baseCity || !form.baseCity.trim()) {
+          nextErrors.baseCity = 'Dispatch neighbourhood / base city is required when publishing.'
+        }
+
+        if (!Array.isArray(form.serviceAreas) || form.serviceAreas.length === 0) {
+          nextErrors.serviceAreas = 'Add at least 1 covered city or zone before publishing.'
+        }
+
+        if (form.description.trim().length < 50) {
+          nextErrors.description = 'Detailed service scope must be at least 50 characters to publish.'
         }
       }
 
@@ -315,19 +436,40 @@ export function CreateEditListingWizardPage() {
       setErrors(nextErrors)
       return Object.keys(nextErrors).length === 0
     },
-    [effectiveCategoryId, form, selectedSubcategory],
+    [effectiveCategoryId, form, selectedPrimaryCategory, selectedSubcategory],
   )
 
   const handleDistrictChange = (districtName) => {
     const matched = flatDistricts.find((item) => item.name === districtName)
-    setForm((prev) => ({
-      ...prev,
-      district: districtName,
-      baseCity: prev.baseCity || districtName,
-      location: matched
+    if (autoSyncZones) {
+      setExcludedAutoZones([])
+    }
+    setForm((prev) => {
+      const nextLocation = matched
         ? { longitude: matched.longitude, latitude: matched.latitude }
-        : prev.location,
-    }))
+        : prev.location
+      const nextBaseCity = prev.baseCity || districtName
+      const nextAreas = autoSyncZones
+        ? applyGeoZoneSync(nextLocation, prev.coverageRadiusKm, districtName, {
+            nextExcluded: [],
+          })
+        : prev.serviceAreas
+      return {
+        ...prev,
+        district: districtName,
+        baseCity: nextBaseCity,
+        location: nextLocation,
+        serviceAreas: nextAreas,
+      }
+    })
+    if (autoSyncZones) {
+      setErrors((prev) => {
+        if (!prev.serviceAreas) return prev
+        const next = { ...prev }
+        delete next.serviceAreas
+        return next
+      })
+    }
     if (matched) {
       setGpsStatus(`Selected ${matched.name} (${matched.latitude.toFixed(4)}° N, ${matched.longitude.toFixed(4)}° E)`)
     }
@@ -345,15 +487,45 @@ export function CreateEditListingWizardPage() {
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords
+        if (!isWithinSriLankaBounds(latitude, longitude)) {
+          setGpsStatus(
+            `Detected GPS (${latitude.toFixed(4)}° N, ${longitude.toFixed(4)}° E) is outside Sri Lanka (VPN or desktop IP location detected). Please select your district or click on the map to pin your location.`,
+          )
+          toast.warning(
+            'Browser GPS returned coordinates outside Sri Lanka (likely a VPN or IP-based location). Please select your district or click directly on the map.',
+            { title: 'Location Outside Sri Lanka' },
+          )
+          return
+        }
+
         const nearest = findNearestSriLankaDistrict(latitude, longitude, provinces)
+        const nearestZone = findNearestSriLankaZone(latitude, longitude)
+        const resolvedBaseCity = nearestZone?.name || nearest.name
+        const nextLocation = { longitude, latitude }
+        if (autoSyncZones) {
+          setExcludedAutoZones([])
+        }
         setForm((prev) => ({
           ...prev,
           district: nearest.name,
-          baseCity: nearest.name,
-          location: { longitude, latitude },
+          baseCity: resolvedBaseCity,
+          location: nextLocation,
+          serviceAreas: autoSyncZones
+            ? applyGeoZoneSync(nextLocation, prev.coverageRadiusKm, resolvedBaseCity, {
+                nextExcluded: [],
+              })
+            : prev.serviceAreas,
         }))
+        if (autoSyncZones) {
+          setErrors((prev) => {
+            if (!prev.serviceAreas) return prev
+            const next = { ...prev }
+            delete next.serviceAreas
+            return next
+          })
+        }
         setGpsStatus(
-          `Auto-detected via Browser GPS -> ${nearest.name} (${latitude.toFixed(4)}° N, ${longitude.toFixed(4)}° E)`,
+          `Auto-detected via Browser GPS -> ${resolvedBaseCity}, ${nearest.name} (${latitude.toFixed(4)}° N, ${longitude.toFixed(4)}° E)`,
         )
       },
       () => {
@@ -361,44 +533,129 @@ export function CreateEditListingWizardPage() {
         handleDistrictChange(fallbackDist.name)
         setGpsStatus(`Location permission denied; defaulted to ${fallbackDist.name} District.`)
       },
-      { timeout: 5000 },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
+    )
+  }
+
+  const handleCoverageRadiusChange = (nextRadiusKm) => {
+    const numericRadius = Number(nextRadiusKm)
+    setForm((prev) => {
+      const nextAreas = autoSyncZones
+        ? applyGeoZoneSync(prev.location, numericRadius, prev.baseCity || prev.district)
+        : prev.serviceAreas
+      return {
+        ...prev,
+        coverageRadiusKm: numericRadius,
+        serviceAreas: nextAreas,
+      }
+    })
+    if (autoSyncZones) {
+      setErrors((prev) => {
+        if (!prev.serviceAreas) return prev
+        const next = { ...prev }
+        delete next.serviceAreas
+        return next
+      })
+    }
+  }
+
+  const handleMapCoordinateChange = (coords) => {
+    setForm((prev) => {
+      const nextAreas = autoSyncZones
+        ? applyGeoZoneSync(coords, prev.coverageRadiusKm, prev.baseCity || prev.district)
+        : prev.serviceAreas
+      return {
+        ...prev,
+        location: coords,
+        serviceAreas: nextAreas,
+      }
+    })
+    if (autoSyncZones) {
+      setErrors((prev) => {
+        if (!prev.serviceAreas) return prev
+        const next = { ...prev }
+        delete next.serviceAreas
+        return next
+      })
+    }
+    setGpsStatus(
+      `Pinned on map: ${coords.latitude.toFixed(4)}° N, ${coords.longitude.toFixed(4)}° E`,
     )
   }
 
   const handleAddZone = () => {
     const cleaned = newZoneText.trim()
     if (!cleaned) return
-    if (form.serviceAreas.length >= 20) {
-      toast.warning('Maximum 20 covered zones allowed.', { title: 'Limit Reached' })
+    if (form.serviceAreas.length >= MAX_SERVICE_AREAS) {
+      toast.warning(`Maximum ${MAX_SERVICE_AREAS} covered zones allowed.`, { title: 'Limit Reached' })
       return
     }
-    if (!form.serviceAreas.some((area) => area.toLowerCase() === cleaned.toLowerCase())) {
+    const cleanedKey = cleaned.toLowerCase()
+    if (!form.serviceAreas.some((area) => area.toLowerCase() === cleanedKey)) {
       updateField('serviceAreas', [...form.serviceAreas, cleaned])
     }
+    setManualZones((prev) =>
+      prev.some((zone) => zone.toLowerCase() === cleanedKey) ? prev : [...prev, cleaned],
+    )
+    setExcludedAutoZones((prev) => prev.filter((zone) => zone.toLowerCase() !== cleanedKey))
     setNewZoneText('')
     setShowZoneInput(false)
   }
 
-  const handleAiSuggestDescription = () => {
-    const suggestion = generateAiDescriptionSuggestion({
-      title: form.title,
-      categoryName: selectedPrimaryCategory?.name,
-      subcategoryName: selectedSubcategory?.name,
-      executionModel: form.executionModel,
-      district: form.district,
-      coverageRadiusKm: form.coverageRadiusKm,
-    })
-    updateField('description', suggestion)
-    toast.info('Advisory AI description inserted. Review and customize before publishing (BR-016).', {
-      title: 'AI-003 Suggestion Applied',
-    })
+  const handleRemoveZone = (areaToRemove) => {
+    const removeKey = String(areaToRemove || '').trim().toLowerCase()
+    updateField(
+      'serviceAreas',
+      form.serviceAreas.filter((item) => item.toLowerCase() !== removeKey),
+    )
+    const isManual = manualZones.some((zone) => zone.toLowerCase() === removeKey)
+    if (isManual) {
+      setManualZones((prev) => prev.filter((zone) => zone.toLowerCase() !== removeKey))
+    } else {
+      setExcludedAutoZones((prev) =>
+        prev.some((zone) => zone.toLowerCase() === removeKey) ? prev : [...prev, areaToRemove],
+      )
+    }
   }
 
-  const handleAppendChipToDescription = (chipText) => {
-    const current = form.description.trim()
-    if (current.toLowerCase().includes(chipText.toLowerCase())) return
-    const next = current ? `${current} Includes ${chipText}.` : `${chipText} included.`
-    updateField('description', next)
+  const handleToggleAutoSyncZones = (checked) => {
+    setAutoSyncZones(checked)
+    if (checked) {
+      setForm((prev) => ({
+        ...prev,
+        serviceAreas: applyGeoZoneSync(
+          prev.location,
+          prev.coverageRadiusKm,
+          prev.baseCity || prev.district,
+        ),
+      }))
+      setErrors((prev) => {
+        if (!prev.serviceAreas) return prev
+        const next = { ...prev }
+        delete next.serviceAreas
+        return next
+      })
+    }
+  }
+
+  const handleResetSyncZones = () => {
+    setAutoSyncZones(true)
+    setExcludedAutoZones([])
+    setForm((prev) => ({
+      ...prev,
+      serviceAreas: applyGeoZoneSync(
+        prev.location,
+        prev.coverageRadiusKm,
+        prev.baseCity || prev.district,
+        { nextExcluded: [] },
+      ),
+    }))
+    setErrors((prev) => {
+      if (!prev.serviceAreas) return prev
+      const next = { ...prev }
+      delete next.serviceAreas
+      return next
+    })
   }
 
   const handleOpenAddOnEditor = (existing = null) => {
@@ -488,7 +745,11 @@ export function CreateEditListingWizardPage() {
         toast.error(`"${file.name}" exceeds the 5 MB image limit.`, { title: 'Upload Failed' })
         continue
       }
-      const slugSafe = file.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
+      const rawSlug = file.name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-')
+      const hasValidExt = /\.(jpg|jpeg|png|webp)$/i.test(rawSlug)
+      const extFromMime =
+        file.type === 'image/png' ? '.png' : file.type === 'image/webp' ? '.webp' : '.jpg'
+      const slugSafe = hasValidExt ? rawSlug : `${rawSlug}${extFromMime}`
       const objectUrl =
         typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
           ? URL.createObjectURL(file)
@@ -514,8 +775,12 @@ export function CreateEditListingWizardPage() {
       toast.error('Maximum 8 images allowed per listing.', { title: 'Upload Limit Reached' })
       return
     }
-    if (!/^https:\/\/.+/i.test(trimmed)) {
-      setUploadNotice('Image URL must begin with https:// (FR-LIST-004).')
+    if (!/^https?:\/\/.+/i.test(trimmed)) {
+      setUploadNotice('Please enter a valid image link starting with https://.')
+      return
+    }
+    if (!/\.(jpg|jpeg|png|webp)(\?.*)?$/i.test(trimmed)) {
+      setUploadNotice('Image link must end in .jpg, .jpeg, .png, or .webp.')
       return
     }
     updateField('photos', [
@@ -575,6 +840,7 @@ export function CreateEditListingWizardPage() {
   }
 
   const handleSubmitListing = async (saveAsDraft) => {
+    setVerificationBlockedMsg('')
     if (!saveAsDraft) {
       const s1 = validateStep(1)
       if (!s1) {
@@ -604,17 +870,30 @@ export function CreateEditListingWizardPage() {
       if (saveAsDraft) {
         toast.success(`"${saved.title}" saved as a private draft.`, { title: 'Draft Saved' })
       } else if (saved.status === 'FLAGGED') {
-        toast.warning(
-          'Submitted for admin review due to contact/link keyword policy (FR-LIST-006).',
-          { title: 'Listing Flagged' },
-        )
+        const hasPolicyFlags = Array.isArray(saved.moderationFlags) && saved.moderationFlags.length > 0
+        if (hasPolicyFlags) {
+          toast.warning(
+            'Your listing was sent for moderator review because it appears to contain contact details or external links.',
+            { title: 'Listing Under Review' },
+          )
+        } else {
+          toast.info(
+            `"${saved.title}" was updated and resubmitted to the moderator review queue.`,
+            { title: 'Resubmitted for Review' },
+          )
+        }
       } else {
         toast.success(`"${saved.title}" is now live in the marketplace.`, { title: 'Listing Published' })
       }
 
       navigate('/provider/listings')
     } catch (error) {
-      toast.error(extractListingApiError(error, 'Failed to save service listing.'), {
+      const code = extractListingErrorCode(error)
+      const msg = extractListingApiError(error, 'Failed to save service listing.')
+      if (!saveAsDraft && (code === 'PROVIDER_NOT_VERIFIED' || code === 'PROVIDER_VERIFICATION_UNAVAILABLE')) {
+        setVerificationBlockedMsg(msg)
+      }
+      toast.error(msg, {
         title: 'Submission Failed',
       })
     } finally {
@@ -627,6 +906,12 @@ export function CreateEditListingWizardPage() {
       setStep((prev) => Math.min(4, prev + 1))
     }
   }
+
+  const canSaveAsDraft =
+    !isEditMode || !editingListingMeta?.status || editingListingMeta.status === 'DRAFT'
+  const isModeratedEdit =
+    isEditMode &&
+    (editingListingMeta?.status === 'FLAGGED' || editingListingMeta?.status === 'REJECTED')
 
   const selectedDurationLabel =
     DURATION_OPTIONS.find((opt) => opt.value === Number(form.durationMin))?.label ||
@@ -659,14 +944,16 @@ export function CreateEditListingWizardPage() {
             {isEditMode ? 'Edit Service Listing' : 'Create Service Listing'}
           </h1>
 
-          <button
-            type="button"
-            className={styles.outlineBtn}
-            disabled={Boolean(submittingMode)}
-            onClick={() => handleSubmitListing(true)}
-          >
-            {submittingMode === 'draft' ? 'Saving Draft...' : 'Save Draft'}
-          </button>
+          {canSaveAsDraft && (
+            <button
+              type="button"
+              className={styles.outlineBtn}
+              disabled={Boolean(submittingMode)}
+              onClick={() => handleSubmitListing(true)}
+            >
+              {submittingMode === 'draft' ? 'Saving Draft...' : 'Save Draft'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -717,16 +1004,72 @@ export function CreateEditListingWizardPage() {
         })}
       </nav>
 
-      {/* STEP 1: BASIC DETAILS & GEOGRAPHY (Unified High-Fi Card) */}
+      {/* Moderation Feedback Banner when editing FLAGGED or REJECTED listings */}
+      {isModeratedEdit && (
+        <div className={styles.policyWarningBanner} role="alert">
+          <div className={styles.moderationBannerBody}>
+            <span>
+              🛡{' '}
+              <strong>
+                {editingListingMeta.status === 'REJECTED'
+                  ? 'Rejected by Moderator:'
+                  : 'Under Moderator Review:'}
+              </strong>{' '}
+              {formatModerationFeedback(
+                editingListingMeta.moderationReason,
+                editingListingMeta.moderationFlags,
+              )}
+            </span>
+            <span className={styles.moderationBannerHint}>
+              Fix the issue below and save your changes to send this listing back for review.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Provider Verification Gate Notice */}
+      {verificationBlockedMsg && (
+        <div className={styles.policyWarningBanner} role="alert">
+          <span>
+            🛡 <strong>Account Verification Required:</strong> {verificationBlockedMsg}
+            {canSaveAsDraft
+              ? ' You can save this listing as a Draft now and publish once your account is verified.'
+              : ' Complete your account verification before reactivating this listing.'}
+          </span>
+          <div className={styles.controlsGroup}>
+            {canSaveAsDraft && (
+              <button
+                type="button"
+                className={styles.outlineBtn}
+                disabled={Boolean(submittingMode)}
+                onClick={() => handleSubmitListing(true)}
+              >
+                Save as Draft Instead
+              </button>
+            )}
+            <button
+              type="button"
+              className={styles.primaryBtn}
+              onClick={() => navigate('/provider/verification')}
+            >
+              Go to Verification →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 1: BASIC DETAILS & GEOGRAPHY (2-Column Desktop Grid) */}
       {step === 1 && (
-        <section className={styles.sectionCard}>
-          <div className={styles.unifiedSubsection}>
-            <div className={styles.sectionTitleHeader}>
-              <div className={styles.sectionTitleLeft}>
-                <span className={styles.sectionNumBadge}>01</span>
-                <h2 className={styles.sectionHeading}>Taxonomy &amp; Service Title</h2>
-              </div>
-            </div>
+        <>
+          <div className={styles.wizardStepGrid}>
+            <div className={styles.wizardStackCol}>
+              <section className={styles.sectionCard}>
+                <div className={styles.sectionTitleHeader}>
+                  <div className={styles.sectionTitleLeft}>
+                    <span className={styles.sectionNumBadge}>01</span>
+                    <h2 className={styles.sectionHeading}>Taxonomy &amp; Service Title</h2>
+                  </div>
+                </div>
 
             <div className={styles.fieldGroup}>
               <div className={styles.fieldLabelRow}>
@@ -799,14 +1142,70 @@ export function CreateEditListingWizardPage() {
               </div>
             </div>
             {errors.categoryId && <p className={styles.fieldErrorText}>{errors.categoryId}</p>}
-          </div>
+              </section>
 
-          <div className={`${styles.unifiedSubsection} ${styles.unifiedSubsectionDivider}`}>
-            <div className={styles.sectionTitleHeader}>
-              <div className={styles.sectionTitleLeft}>
-                <span className={styles.sectionNumBadge}>02</span>
-                <h2 className={styles.sectionHeading}>Fulfillment &amp; Coverage Radius</h2>
-              </div>
+              <section className={styles.sectionCard}>
+                <div className={styles.sectionTitleHeader}>
+                  <div className={styles.sectionTitleLeft}>
+                    <span className={styles.sectionNumBadge}>03</span>
+                    <h2 className={styles.sectionHeading}>Scope &amp; Deliverables</h2>
+                  </div>
+                  {/* Integration slot for WP01 AI-003 (Kalana) Listing Description Assistant */}
+                  <button
+                    type="button"
+                    className={styles.aiSuggestBtn}
+                    disabled
+                    title="AI Description Assistant — coming soon"
+                  >
+                    ⚡ + AI Suggest Description
+                  </button>
+                </div>
+
+                {screeningResult.flagged && (
+                  <div className={styles.policyWarningBanner} role="alert">
+                    <span>
+                      🛡 Platform Policy: {screeningResult.reasons[0]}
+                    </span>
+                    <button
+                      type="button"
+                      className={styles.dangerBtn}
+                      onClick={() => descriptionRef.current?.focus()}
+                    >
+                      Review text
+                    </button>
+                  </div>
+                )}
+
+                <div className={styles.fieldGroup}>
+                  <div className={styles.fieldLabelRow}>
+                    <label htmlFor="listing-description" className={styles.fieldLabel}>
+                      Detailed Service Scope *
+                    </label>
+                    <span className={styles.charCounter}>
+                      {form.description.length} / 3,000 characters (min 50 to publish)
+                    </span>
+                  </div>
+                  <textarea
+                    id="listing-description"
+                    ref={descriptionRef}
+                    rows={5}
+                    maxLength={3000}
+                    className={`${styles.textareaInput} ${errors.description ? styles.inputError : ''}`}
+                    placeholder="Describe inspection steps, tools used, safety guarantees, and what is included..."
+                    value={form.description}
+                    onChange={(event) => updateField('description', event.target.value)}
+                  />
+                  {errors.description && <p className={styles.fieldErrorText}>{errors.description}</p>}
+                </div>
+              </section>
+            </div>
+
+            <section className={styles.sectionCard}>
+              <div className={styles.sectionTitleHeader}>
+                <div className={styles.sectionTitleLeft}>
+                  <span className={styles.sectionNumBadge}>02</span>
+                  <h2 className={styles.sectionHeading}>Fulfillment &amp; Coverage Radius</h2>
+                </div>
             </div>
 
             <div className={styles.fieldGroup}>
@@ -881,72 +1280,18 @@ export function CreateEditListingWizardPage() {
 
             <div className={styles.fieldGroup}>
               <label htmlFor="base-city-input" className={styles.fieldLabel}>
-                Dispatch Neighbourhood / Base City
+                Dispatch Neighbourhood / Base City *
               </label>
               <input
                 id="base-city-input"
                 type="text"
                 maxLength={100}
-                className={styles.textInput}
+                className={`${styles.textInput} ${errors.baseCity ? styles.inputError : ''}`}
                 placeholder="e.g. Colombo 05 (Havelock Town)"
                 value={form.baseCity}
                 onChange={(event) => updateField('baseCity', event.target.value)}
               />
-            </div>
-
-            <div className={styles.fieldGroup}>
-              <span className={styles.fieldLabel}>Covered Cities &amp; Zones</span>
-              <div className={styles.zonesList}>
-                {form.serviceAreas.map((area) => (
-                  <span key={area} className={styles.zoneChip}>
-                    ✓ {area}
-                    <button
-                      type="button"
-                      className={styles.zoneRemoveBtn}
-                      aria-label={`Remove ${area}`}
-                      onClick={() =>
-                        updateField(
-                          'serviceAreas',
-                          form.serviceAreas.filter((item) => item !== area),
-                        )
-                      }
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-
-                {showZoneInput ? (
-                  <div className={styles.controlsGroup}>
-                    <input
-                      type="text"
-                      className={styles.textInput}
-                      style={{ width: 170, padding: '6px 10px' }}
-                      placeholder="Enter suburb..."
-                      aria-label="New service area name"
-                      value={newZoneText}
-                      onChange={(event) => setNewZoneText(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault()
-                          handleAddZone()
-                        }
-                      }}
-                    />
-                    <button type="button" className={styles.outlineBtn} onClick={handleAddZone}>
-                      Add
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className={styles.dashedChipBtn}
-                    onClick={() => setShowZoneInput(true)}
-                  >
-                    + Add City
-                  </button>
-                )}
-              </div>
+              {errors.baseCity && <p className={styles.fieldErrorText}>{errors.baseCity}</p>}
             </div>
 
             <div className={styles.fieldGroup}>
@@ -967,7 +1312,7 @@ export function CreateEditListingWizardPage() {
                   background: `linear-gradient(to right, #0f766e 0%, #0f766e ${(form.coverageRadiusKm / 50) * 100}%, #e2e8f0 ${(form.coverageRadiusKm / 50) * 100}%, #e2e8f0 100%)`,
                 }}
                 value={form.coverageRadiusKm}
-                onChange={(event) => updateField('coverageRadiusKm', Number(event.target.value))}
+                onChange={(event) => handleCoverageRadiusChange(event.target.value)}
               />
               <div className={styles.fieldLabelRow}>
                 <span className={styles.fieldHelper}>0 Km</span>
@@ -980,81 +1325,110 @@ export function CreateEditListingWizardPage() {
                 longitude={form.location?.longitude ?? 79.8612}
                 radiusKm={form.coverageRadiusKm}
                 districtLabel={form.baseCity || form.district}
-                onCoordinateChange={(coords) => {
-                  updateField('location', coords)
-                  setGpsStatus(
-                    `Pinned on map: ${coords.latitude.toFixed(4)}° N, ${coords.longitude.toFixed(4)}° E`,
-                  )
-                }}
+                onCoordinateChange={handleMapCoordinateChange}
               />
             </div>
-          </div>
-
-          <div className={`${styles.unifiedSubsection} ${styles.unifiedSubsectionDivider}`}>
-            <div className={styles.sectionTitleHeader}>
-              <div className={styles.sectionTitleLeft}>
-                <span className={styles.sectionNumBadge}>03</span>
-                <h2 className={styles.sectionHeading}>Scope &amp; Deliverables</h2>
-              </div>
-              <button
-                type="button"
-                className={styles.aiSuggestBtn}
-                onClick={handleAiSuggestDescription}
-              >
-                ⚡ + AI Suggest Description
-              </button>
-            </div>
-
-            {screeningResult.flagged && (
-              <div className={styles.policyWarningBanner} role="alert">
-                <span>
-                  🛡 Platform Policy: {screeningResult.reasons[0]}
-                </span>
-                <button
-                  type="button"
-                  className={styles.dangerBtn}
-                  onClick={() => descriptionRef.current?.focus()}
-                >
-                  Review text
-                </button>
-              </div>
-            )}
 
             <div className={styles.fieldGroup}>
-              <div className={styles.fieldLabelRow}>
-                <label htmlFor="listing-description" className={styles.fieldLabel}>
-                  Detailed Service Scope *
-                </label>
-                <span className={styles.charCounter}>{form.description.length} / 3,000 characters</span>
-              </div>
-              <textarea
-                id="listing-description"
-                ref={descriptionRef}
-                rows={5}
-                maxLength={3000}
-                className={`${styles.textareaInput} ${errors.description ? styles.inputError : ''}`}
-                placeholder="Describe inspection steps, tools used, safety guarantees, and what is included..."
-                value={form.description}
-                onChange={(event) => updateField('description', event.target.value)}
-              />
-              {errors.description && <p className={styles.fieldErrorText}>{errors.description}</p>}
-
-              <div className={styles.suggestionChipsRow}>
-                {AI_SUGGESTION_CHIPS.map((chip) => (
+              <div className={styles.zoneHeaderRow}>
+                <span className={styles.fieldLabel}>
+                  Covered Cities &amp; Zones * ({form.serviceAreas.length}/{MAX_SERVICE_AREAS})
+                </span>
+                <div className={styles.zoneHeaderActions}>
+                  <label className={styles.autoSyncToggle}>
+                    <input
+                      type="checkbox"
+                      checked={autoSyncZones}
+                      onChange={(event) => handleToggleAutoSyncZones(event.target.checked)}
+                    />
+                    <span>Auto-sync with radius</span>
+                  </label>
                   <button
-                    key={chip}
                     type="button"
-                    className={styles.suggestionChipBtn}
-                    onClick={() => handleAppendChipToDescription(chip)}
+                    className={styles.zoneSyncBtn}
+                    onClick={handleResetSyncZones}
+                    aria-label="Sync zones from map"
+                    title="Re-sync covered zones from current map pin & radius"
                   >
-                    + {chip}
+                    ↺ Sync
                   </button>
-                ))}
+                </div>
               </div>
+
+              <div className={styles.zonesList}>
+                {form.serviceAreas.map((area) => {
+                  const isManual = manualZoneKeySet.has(area.toLowerCase())
+                  return (
+                    <span
+                      key={area}
+                      className={`${styles.zoneChip} ${isManual ? styles.zoneChipManual : ''}`}
+                      title={
+                        isManual
+                          ? 'Manually added zone (preserved when radius changes)'
+                          : 'Auto-matched from map radius (click × to exclude)'
+                      }
+                    >
+                      {isManual ? '★' : '✓'} {area}
+                      <button
+                        type="button"
+                        className={styles.zoneRemoveBtn}
+                        aria-label={`Remove ${area}`}
+                        onClick={() => handleRemoveZone(area)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  )
+                })}
+
+                {showZoneInput ? (
+                  <div className={styles.controlsGroup}>
+                    <input
+                      type="text"
+                      className={styles.textInput}
+                      style={{ width: 170, padding: '6px 10px' }}
+                      placeholder="Enter suburb..."
+                      aria-label="New service area name"
+                      value={newZoneText}
+                      onChange={(event) => setNewZoneText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          handleAddZone()
+                        } else if (event.key === 'Escape') {
+                          setShowZoneInput(false)
+                          setNewZoneText('')
+                        }
+                      }}
+                    />
+                    <button type="button" className={styles.outlineBtn} onClick={handleAddZone}>
+                      Add
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.dashedChipBtn}
+                    onClick={() => setShowZoneInput(true)}
+                  >
+                    + Add City
+                  </button>
+                )}
+              </div>
+
+              <p className={styles.fieldHelper}>
+                {autoSyncZones
+                  ? zoneSyncPreview.truncatedCount > 0
+                    ? `Showing nearest ${MAX_SERVICE_AREAS} zones (+${zoneSyncPreview.truncatedCount} more within ${form.coverageRadiusKm} Km). Manually added cities stay pinned.`
+                    : `Auto-synced within ${form.coverageRadiusKm} Km of map pin. Click × to exclude any zone or + Add City for custom ones.`
+                  : 'Manual mode enabled — dragging the map or radius slider will not alter your selected zones.'}
+              </p>
+              {errors.serviceAreas && <p className={styles.fieldErrorText}>{errors.serviceAreas}</p>}
             </div>
+            </section>
           </div>
 
-          <div className={`${styles.wizardFooterBar} ${styles.unifiedSubsectionDivider}`}>
+          <div className={styles.wizardFooterBar}>
             <button
               type="button"
               className={styles.outlineBtn}
@@ -1066,7 +1440,7 @@ export function CreateEditListingWizardPage() {
               Continue To Pricing &amp; Add-Ons →
             </button>
           </div>
-        </section>
+        </>
       )}
 
       {/* STEP 2: PRICING & ADD-ONS */}
@@ -1074,12 +1448,13 @@ export function CreateEditListingWizardPage() {
         <>
           <div className={styles.infoBanner}>
             <span>
-              ℹ <strong>Price Snapshot:</strong> Editing price or duration applies only to prospective bookings.
-              Existing active bookings retain their original rates (FR-LIST-005).
+              ℹ <strong>Price Changes:</strong> Updating your price or duration only applies to new bookings.
+              Existing confirmed bookings keep their original rate.
             </span>
           </div>
 
-          <section className={styles.sectionCard}>
+          <div className={styles.wizardStepGrid}>
+            <section className={styles.sectionCard}>
             <div className={styles.sectionTitleHeader}>
               <div className={styles.sectionTitleLeft}>
                 <span className={styles.sectionNumBadge}>01</span>
@@ -1311,7 +1686,8 @@ export function CreateEditListingWizardPage() {
                 + Add Another Extra / Add-On Package
               </button>
             )}
-          </section>
+            </section>
+          </div>
 
           <div className={styles.wizardFooterBar}>
             <div className={styles.controlsGroup}>
@@ -1336,7 +1712,8 @@ export function CreateEditListingWizardPage() {
       {/* STEP 3: PORTFOLIO MEDIA */}
       {step === 3 && (
         <>
-          <section className={styles.sectionCard}>
+          <div className={styles.wizardMediaGrid}>
+            <section className={styles.sectionCard}>
             <div className={styles.sectionTitleHeader}>
               <div className={styles.sectionTitleLeft}>
                 <span className={styles.sectionNumBadge}>01</span>
@@ -1409,7 +1786,7 @@ export function CreateEditListingWizardPage() {
               <span className={styles.countPill}>{MAX_IMAGES - form.photos.length} Slots Remaining</span>
             </div>
 
-            <div className={styles.photoGrid}>
+            <div className={styles.photoGridCompact}>
               {form.photos.map((photo, index) => {
                 const isCover = index === 0
                 return (
@@ -1466,7 +1843,8 @@ export function CreateEditListingWizardPage() {
                 />
               </div>
             </div>
-          </section>
+            </section>
+          </div>
 
           <div className={styles.wizardFooterBar}>
             <div className={styles.controlsGroup}>
@@ -1491,7 +1869,8 @@ export function CreateEditListingWizardPage() {
       {/* STEP 4: REVIEW & PUBLISH */}
       {step === 4 && (
         <>
-          <section className={styles.sectionCard}>
+          <div className={styles.wizardStepGrid}>
+            <section className={styles.sectionCard}>
             <div className={styles.sectionTitleHeader}>
               <div className={styles.sectionTitleLeft}>
                 <span className={styles.sectionNumBadge}>01</span>
@@ -1545,14 +1924,15 @@ export function CreateEditListingWizardPage() {
             {screeningResult.flagged && (
               <div className={styles.policyWarningBanner}>
                 <span>
-                  ⚠ Content screening detected contact/link text — publishing will route this listing to Admin
-                  Moderation (FLAGGED) for approval.
+                  ⚠ Contact details or external links detected — remove them to publish immediately, otherwise
+                  your listing will wait for moderator approval.
                 </span>
               </div>
             )}
-          </section>
+            </section>
 
-          <section className={styles.sectionCard}>
+            <div className={styles.wizardStackCol}>
+              <section className={styles.sectionCard}>
             <div className={styles.sectionTitleHeader}>
               <div className={styles.sectionTitleLeft}>
                 <span className={styles.sectionNumBadge}>02</span>
@@ -1617,7 +1997,7 @@ export function CreateEditListingWizardPage() {
               </button>
             </div>
 
-            <div className={styles.photoGrid}>
+            <div className={styles.photoGridCompact}>
               {form.photos.map((photo, index) => (
                 <div key={photo.id} className={styles.photoCard}>
                   <div className={styles.photoPreviewWrap}>
@@ -1640,7 +2020,9 @@ export function CreateEditListingWizardPage() {
             <p className={styles.fieldHelper}>
               Upload quota: <strong>{form.photos.length} of 8</strong> media slots used.
             </p>
-          </section>
+              </section>
+            </div>
+          </div>
 
           <div className={styles.wizardFooterBar}>
             <div className={styles.controlsGroup}>
@@ -1662,10 +2044,14 @@ export function CreateEditListingWizardPage() {
               onClick={() => handleSubmitListing(false)}
             >
               {submittingMode === 'publish'
-                ? 'Publishing Listing...'
-                : isEditMode
-                  ? 'Save Changes & Publish →'
-                  : 'Publish Service Listing →'}
+                ? isModeratedEdit
+                  ? 'Resubmitting...'
+                  : 'Publishing Listing...'
+                : isModeratedEdit
+                  ? 'Save Fixes & Resubmit for Review →'
+                  : isEditMode
+                    ? 'Save Changes & Publish →'
+                    : 'Publish Service Listing →'}
             </button>
           </div>
         </>

@@ -1,30 +1,70 @@
-import axios from 'axios'
+import apiClient from '../../../shared/services/apiClient'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
 const LOCAL_STORAGE_KEY = 'wp03.providerListings.v1'
 
-export const listingHttp = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 15000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-})
+/**
+ * Shared WP01 Axios client with automatic Bearer token injection and single-flight /auth/refresh.
+ * Exported as `listingHttp` for backwards-compatible test spying.
+ */
+export const listingHttp = apiClient
 
-listingHttp.interceptors.request.use((config) => {
-  try {
-    const token =
-      window.sessionStorage?.getItem('dev.accessToken') ||
-      window.localStorage?.getItem('accessToken') ||
-      window.localStorage?.getItem('token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
+/**
+ * Opt-in DEV fixture mode (disabled by default so live backend APIs and errors are used).
+ * Enable only when explicitly testing offline with VITE_LISTING_FIXTURE_MODE=true.
+ */
+export function isListingFixtureMode() {
+  return (
+    import.meta.env.DEV === true &&
+    String(import.meta.env.VITE_LISTING_FIXTURE_MODE ?? '').toLowerCase() === 'true'
+  )
+}
+
+export function isListingRequestCanceled(error) {
+  const raw = error?.originalError || error
+  return (
+    raw?.name === 'CanceledError' ||
+    raw?.name === 'AbortError' ||
+    raw?.code === 'ERR_CANCELED' ||
+    error?.name === 'CanceledError' ||
+    error?.code === 'ERR_CANCELED'
+  )
+}
+
+export function extractListingErrorCode(error) {
+  return (
+    error?.code ||
+    error?.response?.data?.error ||
+    error?.originalError?.response?.data?.error ||
+    ''
+  )
+}
+
+export function extractListingErrorStatus(error) {
+  return (
+    error?.status ??
+    error?.response?.status ??
+    error?.originalError?.response?.status ??
+    null
+  )
+}
+
+export function extractListingApiError(error, fallbackMessage = 'Request failed') {
+  const fieldErrors =
+    error?.fieldErrors ||
+    error?.response?.data?.fieldErrors ||
+    error?.originalError?.response?.data?.fieldErrors
+  if (Array.isArray(fieldErrors) && fieldErrors.length > 0) {
+    const first = fieldErrors[0]
+    if (first?.message) {
+      return first.message
     }
-  } catch {
-    // Storage access unavailable
   }
-  return config
-})
+  const message =
+    error?.response?.data?.message ||
+    error?.originalError?.response?.data?.message ||
+    error?.message
+  return message || fallbackMessage
+}
 
 export const DURATION_OPTIONS = Object.freeze([
   { label: '30 Mins', value: 30 },
@@ -33,14 +73,6 @@ export const DURATION_OPTIONS = Object.freeze([
   { label: '2 - 3 Hours', value: 150 },
   { label: 'Half Day (4 Hours)', value: 240 },
   { label: 'Full Day (8 Hours)', value: 480 },
-])
-
-export const AI_SUGGESTION_CHIPS = Object.freeze([
-  '30-Day Workmanship Warranty',
-  'NVQ-4 Certified Technician',
-  'Thermal & Pressure Diagnostic',
-  'Upfront Transparent Quotation',
-  'Post-Job Clean-up Included',
 ])
 
 export const FALLBACK_CATEGORIES = Object.freeze([
@@ -214,8 +246,8 @@ function createSeedListings() {
       location: { longitude: 79.8612, latitude: 6.9271 },
       coverageRadiusKm: 15,
       serviceAreas: ['Colombo 01-15', 'Dehiwala', 'Mount Lavinia', 'Battaramulla'],
-      images: [DEFAULT_PORTFOLIO_THUMBNAILS.plumbing],
-      coverImageUrl: DEFAULT_PORTFOLIO_THUMBNAILS.plumbing,
+      images: ['https://cdn.localserve.lk/listings/lst-1001-cover.jpg'],
+      coverImageUrl: 'https://cdn.localserve.lk/listings/lst-1001-cover.jpg',
       addOns: [
         {
           addOnId: 'ao-1',
@@ -241,8 +273,6 @@ function createSeedListings() {
       moderationFlags: [],
       ratingAvg: 4.9,
       ratingCount: 34,
-      inquiryCount: 14,
-      viewCount: 248,
       createdAt: '2026-11-16T08:15:00Z',
       updatedAt: '2026-11-18T09:10:00Z',
     },
@@ -265,8 +295,8 @@ function createSeedListings() {
       location: { longitude: 79.8891, latitude: 6.8649 },
       coverageRadiusKm: 20,
       serviceAreas: ['Nugegoda', 'Maharagama', 'Kotte'],
-      images: [DEFAULT_PORTFOLIO_THUMBNAILS.electrical],
-      coverImageUrl: DEFAULT_PORTFOLIO_THUMBNAILS.electrical,
+      images: ['https://cdn.localserve.lk/listings/lst-1002-cover.jpg'],
+      coverImageUrl: 'https://cdn.localserve.lk/listings/lst-1002-cover.jpg',
       addOns: [
         {
           addOnId: 'ao-3',
@@ -276,24 +306,14 @@ function createSeedListings() {
           extraDurationMin: 45,
           active: true,
         },
-        {
-          addOnId: 'ao-4',
-          title: 'Full Earthing Resistance Test',
-          description: 'Digital clamp meter verification of ground rod impedance.',
-          extraPrice: 950,
-          extraDurationMin: 20,
-          active: true,
-        },
       ],
       status: 'ACTIVE',
       availableForBooking: true,
       categoryActive: true,
-      activeAddOnCount: 2,
+      activeAddOnCount: 1,
       moderationFlags: [],
       ratingAvg: 4.9,
       ratingCount: 29,
-      inquiryCount: 9,
-      viewCount: 194,
       createdAt: '2026-11-15T11:20:00Z',
       updatedAt: '2026-11-18T08:30:00Z',
     },
@@ -316,27 +336,16 @@ function createSeedListings() {
       location: { longitude: 79.8919, latitude: 6.9892 },
       coverageRadiusKm: 18,
       serviceAreas: ['Wattala', 'Kelaniya', 'Negombo Road'],
-      images: [DEFAULT_PORTFOLIO_THUMBNAILS.hvac],
-      coverImageUrl: DEFAULT_PORTFOLIO_THUMBNAILS.hvac,
-      addOns: [
-        {
-          addOnId: 'ao-5',
-          title: 'Antibacterial Coil Coating',
-          description: 'Anti-fungal protective mist for evaporator fins.',
-          extraPrice: 850,
-          extraDurationMin: 15,
-          active: true,
-        },
-      ],
+      images: ['https://cdn.localserve.lk/listings/lst-1003-cover.jpg'],
+      coverImageUrl: 'https://cdn.localserve.lk/listings/lst-1003-cover.jpg',
+      addOns: [],
       status: 'ACTIVE',
       availableForBooking: true,
       categoryActive: true,
-      activeAddOnCount: 1,
+      activeAddOnCount: 0,
       moderationFlags: [],
       ratingAvg: 4.8,
       ratingCount: 18,
-      inquiryCount: 5,
-      viewCount: 162,
       createdAt: '2026-11-14T14:00:00Z',
       updatedAt: '2026-11-17T16:40:00Z',
     },
@@ -359,8 +368,8 @@ function createSeedListings() {
       location: { longitude: 79.8654, latitude: 6.8511 },
       coverageRadiusKm: 12,
       serviceAreas: ['Dehiwala', 'Wellawatte', 'Ratmalana'],
-      images: [DEFAULT_PORTFOLIO_THUMBNAILS.cleaning],
-      coverImageUrl: DEFAULT_PORTFOLIO_THUMBNAILS.cleaning,
+      images: ['https://cdn.localserve.lk/listings/lst-1004-cover.jpg'],
+      coverImageUrl: 'https://cdn.localserve.lk/listings/lst-1004-cover.jpg',
       addOns: [],
       status: 'PAUSED',
       availableForBooking: false,
@@ -369,8 +378,6 @@ function createSeedListings() {
       moderationFlags: [],
       ratingAvg: 4.7,
       ratingCount: 11,
-      inquiryCount: 0,
-      viewCount: 86,
       createdAt: '2026-11-12T09:10:00Z',
       updatedAt: '2026-11-17T12:15:00Z',
     },
@@ -393,27 +400,16 @@ function createSeedListings() {
       location: { longitude: 79.8653, latitude: 6.9125 },
       coverageRadiusKm: 15,
       serviceAreas: ['Colombo 03', 'Colombo 07', 'Borella'],
-      images: [DEFAULT_PORTFOLIO_THUMBNAILS.plumbing],
-      coverImageUrl: DEFAULT_PORTFOLIO_THUMBNAILS.plumbing,
-      addOns: [
-        {
-          addOnId: 'ao-6',
-          title: 'Grease Trap Enzyme Treatment',
-          description: 'Bio-safe enzyme dosing to prevent recurring grease buildup.',
-          extraPrice: 1100,
-          extraDurationMin: 15,
-          active: true,
-        },
-      ],
+      images: ['https://cdn.localserve.lk/listings/lst-1005-cover.jpg'],
+      coverImageUrl: 'https://cdn.localserve.lk/listings/lst-1005-cover.jpg',
+      addOns: [],
       status: 'ACTIVE',
       availableForBooking: false,
       categoryActive: false,
-      activeAddOnCount: 1,
+      activeAddOnCount: 0,
       moderationFlags: [],
       ratingAvg: 4.7,
       ratingCount: 15,
-      inquiryCount: 0,
-      viewCount: 42,
       createdAt: '2026-11-11T15:00:00Z',
       updatedAt: '2026-11-16T10:05:00Z',
     },
@@ -451,11 +447,15 @@ export function resetLocalListingsDemoStore() {
   return seeded
 }
 
-function shouldFallbackToLocal(error) {
-  if (!error) return false
-  if (!error.response) return true
-  const status = error.response.status
-  return status === 404 || status === 401 || status === 502 || status === 503
+function sortListingsItems(items, sortBy = 'newest') {
+  const copy = [...items]
+  copy.sort((a, b) => {
+    if (sortBy === 'price_asc') return Number(a.basePrice || 0) - Number(b.basePrice || 0)
+    if (sortBy === 'price_desc') return Number(b.basePrice || 0) - Number(a.basePrice || 0)
+    if (sortBy === 'rating_desc') return Number(b.ratingAvg || 0) - Number(a.ratingAvg || 0)
+    return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime()
+  })
+  return copy
 }
 
 /**
@@ -514,6 +514,61 @@ export function screenListingContent({ title = '', description = '', addOns = []
   }
 }
 
+function ensureSentencePunctuation(text) {
+  const trimmed = String(text || '').trim()
+  if (!trimmed) return ''
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`
+}
+
+function isFlagCoveredByReason(reasonLower, flagLower) {
+  if (!reasonLower) return false
+  if (reasonLower.includes(flagLower) || flagLower.includes(reasonLower)) {
+    return true
+  }
+  const overlapTopics = [
+    /\bphone\b/,
+    /\be-?mail\b/,
+    /\b(link|url|whatsapp|website)\b/,
+  ]
+  return overlapTopics.some((pattern) => pattern.test(reasonLower) && pattern.test(flagLower))
+}
+
+/**
+ * Strips raw backend enum prefixes (e.g. PHONE_NUMBER_DETECTED:) and deduplicates
+ * moderator reason + flags into clear, user-friendly guidance.
+ */
+export function formatModerationFeedback(moderationReason, moderationFlags) {
+  const cleanReason = String(moderationReason || '')
+    .replace(/^[A-Z0-9_]+:\s*/, '')
+    .trim()
+  const reasonLower = cleanReason.toLowerCase()
+
+  const seen = new Set(reasonLower ? [reasonLower] : [])
+  const cleanedFlags = []
+
+  for (const rawFlag of moderationFlags || []) {
+    const cleaned = String(rawFlag || '')
+      .replace(/^[A-Z0-9_]+:\s*/, '')
+      .trim()
+    if (!cleaned) continue
+    const flagLower = cleaned.toLowerCase()
+    if (seen.has(flagLower) || isFlagCoveredByReason(reasonLower, flagLower)) {
+      continue
+    }
+    seen.add(flagLower)
+    cleanedFlags.push(cleaned)
+  }
+
+  const parts = [cleanReason, ...cleanedFlags]
+    .filter(Boolean)
+    .map(ensureSentencePunctuation)
+
+  if (parts.length === 0) {
+    return 'Please remove any phone numbers, emails, or external links from your listing.'
+  }
+  return parts.join(' ')
+}
+
 export function findNearestSriLankaDistrict(latitude, longitude, provinces = SRI_LANKA_PROVINCES_FALLBACK) {
   let best = provinces[0].districts[0]
   let bestDistSq = Number.POSITIVE_INFINITY
@@ -529,30 +584,6 @@ export function findNearestSriLankaDistrict(latitude, longitude, provinces = SRI
     })
   })
   return best
-}
-
-/**
- * Advisory AI-003 Listing Description Assistant (BR-016: never persisted without explicit provider review).
- */
-export function generateAiDescriptionSuggestion({
-  title = '',
-  categoryName = '',
-  subcategoryName = '',
-  executionModel = 'ON_SITE',
-  district = 'Colombo',
-  coverageRadiusKm = 15,
-} = {}) {
-  const serviceLabel = title.trim() || subcategoryName || categoryName || 'Professional Local Service'
-  const deliveryClause =
-    executionModel === 'WORKSHOP'
-      ? `Service completed at our equipped ${district} workshop bay with bench-tested diagnostics and careful handling.`
-      : `Full on-site inspection and execution across ${district} and surrounding zones within a ${coverageRadiusKm} km radius.`
-
-  return (
-    `${serviceLabel} delivered with certified diagnostics, clean tool setup, and itemized scope verification before work begins. ` +
-    `${deliveryClause} ` +
-    `Includes safety seal checks, tidy post-job cleanup, and an upfront LKR quotation aligned with platform escrow standards.`
-  )
 }
 
 function buildLocalSummary(listings) {
@@ -608,33 +639,25 @@ function resolveCategoryMetadata(categoryId, categories = FALLBACK_CATEGORIES) {
 }
 
 export async function getPublicCategories(signal) {
-  try {
-    const response = await listingHttp.get('/categories', { signal })
-    if (Array.isArray(response.data) && response.data.length > 0) {
-      return { categories: response.data, isFallback: false }
-    }
-  } catch (error) {
-    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
-      throw error
-    }
-    if (!shouldFallbackToLocal(error)) {
-      throw error
-    }
+  if (isListingFixtureMode()) {
+    return { categories: FALLBACK_CATEGORIES, isFallback: true }
   }
-  return { categories: FALLBACK_CATEGORIES, isFallback: true }
+  const response = await listingHttp.get('/categories', { signal })
+  const list = Array.isArray(response?.data) ? response.data : []
+  return { categories: list, isFallback: false }
 }
 
 export async function getDistrictLocations(signal) {
+  if (isListingFixtureMode()) {
+    return { provinces: SRI_LANKA_PROVINCES_FALLBACK, isFallback: true }
+  }
   try {
     const response = await listingHttp.get('/listings/locations/districts', { signal })
-    if (Array.isArray(response.data) && response.data.length > 0) {
+    if (Array.isArray(response?.data) && response.data.length > 0) {
       return { provinces: response.data, isFallback: false }
     }
   } catch (error) {
-    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
-      throw error
-    }
-    if (!shouldFallbackToLocal(error)) {
+    if (isListingRequestCanceled(error)) {
       throw error
     }
   }
@@ -642,62 +665,19 @@ export async function getDistrictLocations(signal) {
 }
 
 export async function getMyListingsSummary(signal) {
-  try {
-    const response = await listingHttp.get('/listings/me/summary', { signal })
-    return { summary: response.data, isFallback: false }
-  } catch (error) {
-    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
-      throw error
-    }
-    if (!shouldFallbackToLocal(error)) {
-      throw error
-    }
+  if (isListingFixtureMode()) {
     const items = readLocalListings()
     return { summary: buildLocalSummary(items), isFallback: true }
   }
+  const response = await listingHttp.get('/listings/me/summary', { signal })
+  return { summary: response.data, isFallback: false }
 }
 
 export async function getMyListings(
   { status = 'ALL', search = '', page = 0, size = 8, sortBy = 'newest', categoryInactiveOnly = false } = {},
   signal,
 ) {
-  try {
-    const params = { page, size }
-    if (status && status !== 'ALL' && !categoryInactiveOnly) {
-      params.status = status
-    }
-    if (search.trim()) {
-      params.search = search.trim()
-    }
-    if (sortBy === 'price_asc') params.sort = 'basePrice,asc'
-    else if (sortBy === 'price_desc') params.sort = 'basePrice,desc'
-    else if (sortBy === 'rating_desc') params.sort = 'ratingAvg,desc'
-    else params.sort = 'createdAt,desc'
-
-    const response = await listingHttp.get('/listings/me', { params, signal })
-    const rawContent = Array.isArray(response.data?.content) ? response.data.content : []
-    const content = categoryInactiveOnly
-      ? rawContent.filter((item) => item.categoryActive === false)
-      : rawContent
-
-    return {
-      pageData: {
-        content,
-        totalElements: categoryInactiveOnly ? content.length : (response.data?.totalElements ?? content.length),
-        totalPages: Math.max(1, response.data?.totalPages ?? 1),
-        number: response.data?.number ?? page,
-        size: response.data?.size ?? size,
-      },
-      isFallback: false,
-    }
-  } catch (error) {
-    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
-      throw error
-    }
-    if (!shouldFallbackToLocal(error)) {
-      throw error
-    }
-
+  if (isListingFixtureMode()) {
     let filtered = [...readLocalListings()]
     if (categoryInactiveOnly) {
       filtered = filtered.filter((item) => item.categoryActive === false)
@@ -716,13 +696,7 @@ export async function getMyListings(
       )
     }
 
-    filtered.sort((a, b) => {
-      if (sortBy === 'price_asc') return Number(a.basePrice || 0) - Number(b.basePrice || 0)
-      if (sortBy === 'price_desc') return Number(b.basePrice || 0) - Number(a.basePrice || 0)
-      if (sortBy === 'rating_desc') return Number(b.ratingAvg || 0) - Number(a.ratingAvg || 0)
-      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    })
-
+    filtered = sortListingsItems(filtered, sortBy)
     const totalElements = filtered.length
     const totalPages = Math.max(1, Math.ceil(totalElements / size))
     const safePage = Math.min(page, totalPages - 1)
@@ -739,38 +713,57 @@ export async function getMyListings(
       isFallback: true,
     }
   }
+
+  const params = { page, size }
+  if (status && status !== 'ALL' && !categoryInactiveOnly) {
+    params.status = status
+  }
+  if (search.trim()) {
+    params.search = search.trim()
+  }
+  if (sortBy === 'price_asc') params.sort = 'basePrice,asc'
+  else if (sortBy === 'price_desc') params.sort = 'basePrice,desc'
+  else if (sortBy === 'rating_desc') params.sort = 'ratingAvg,desc'
+  else params.sort = 'updatedAt,desc'
+
+  const response = await listingHttp.get('/listings/me', { params, signal })
+  const rawContent = Array.isArray(response?.data?.content) ? response.data.content : []
+  const filteredContent = categoryInactiveOnly
+    ? rawContent.filter((item) => item.categoryActive === false)
+    : rawContent
+  const content = sortBy === 'newest' ? filteredContent : sortListingsItems(filteredContent, sortBy)
+
+  return {
+    pageData: {
+      content,
+      totalElements: categoryInactiveOnly
+        ? content.length
+        : (response?.data?.totalElements ?? content.length),
+      totalPages: Math.max(1, response?.data?.totalPages ?? 1),
+      number: response?.data?.number ?? page,
+      size: response?.data?.size ?? size,
+    },
+    isFallback: false,
+  }
 }
 
 export async function getListingById(id, signal) {
-  try {
-    const response = await listingHttp.get(`/listings/${id}`, { signal })
-    return { listing: response.data, isFallback: false }
-  } catch (error) {
-    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
-      throw error
-    }
-    if (!shouldFallbackToLocal(error)) {
-      throw error
-    }
+  if (isListingFixtureMode()) {
     const found = readLocalListings().find((item) => item.id === id)
     if (!found) {
       const notFoundError = new Error('Listing not found')
-      notFoundError.response = { status: 404, data: { message: 'Listing not found' } }
+      notFoundError.status = 404
+      notFoundError.code = 'LISTING_NOT_FOUND'
       throw notFoundError
     }
     return { listing: found, isFallback: true }
   }
+  const response = await listingHttp.get(`/listings/${id}`, { signal })
+  return { listing: response.data, isFallback: false }
 }
 
 export async function createListing(payload, categories = FALLBACK_CATEGORIES) {
-  try {
-    const response = await listingHttp.post('/listings', payload)
-    return { listing: response.data, isFallback: false }
-  } catch (error) {
-    if (!shouldFallbackToLocal(error)) {
-      throw error
-    }
-
+  if (isListingFixtureMode()) {
     const screening = screenListingContent({
       title: payload.title,
       description: payload.description,
@@ -797,8 +790,14 @@ export async function createListing(payload, categories = FALLBACK_CATEGORIES) {
       location: payload.location || { longitude: 79.8612, latitude: 6.9271 },
       coverageRadiusKm: Number(payload.coverageRadiusKm ?? 15),
       serviceAreas: Array.isArray(payload.serviceAreas) ? payload.serviceAreas : [],
-      images: Array.isArray(payload.images) && payload.images.length > 0 ? payload.images : [DEFAULT_PORTFOLIO_THUMBNAILS.plumbing],
-      coverImageUrl: payload.coverImageUrl || payload.images?.[0] || DEFAULT_PORTFOLIO_THUMBNAILS.plumbing,
+      images:
+        Array.isArray(payload.images) && payload.images.length > 0
+          ? payload.images
+          : ['https://cdn.localserve.lk/listings/default-cover-plumbing.jpg'],
+      coverImageUrl:
+        payload.coverImageUrl ||
+        payload.images?.[0] ||
+        'https://cdn.localserve.lk/listings/default-cover-plumbing.jpg',
       addOns: Array.isArray(payload.addOns) ? payload.addOns : [],
       status: nextStatus,
       availableForBooking: nextStatus === 'ACTIVE' && catMeta.categoryActive,
@@ -807,8 +806,6 @@ export async function createListing(payload, categories = FALLBACK_CATEGORIES) {
       moderationFlags: screening.reasons,
       ratingAvg: 0,
       ratingCount: 0,
-      inquiryCount: 0,
-      viewCount: 0,
       createdAt: now,
       updatedAt: now,
     }
@@ -816,17 +813,13 @@ export async function createListing(payload, categories = FALLBACK_CATEGORIES) {
     writeLocalListings([newListing, ...existing])
     return { listing: newListing, isFallback: true }
   }
+
+  const response = await listingHttp.post('/listings', payload)
+  return { listing: response.data, isFallback: false }
 }
 
 export async function updateListing(id, payload, categories = FALLBACK_CATEGORIES) {
-  try {
-    const response = await listingHttp.put(`/listings/${id}`, payload)
-    return { listing: response.data, isFallback: false }
-  } catch (error) {
-    if (!shouldFallbackToLocal(error)) {
-      throw error
-    }
-
+  if (isListingFixtureMode()) {
     const screening = screenListingContent({
       title: payload.title,
       description: payload.description,
@@ -837,7 +830,10 @@ export async function updateListing(id, payload, categories = FALLBACK_CATEGORIE
     const existing = readLocalListings()
     const index = existing.findIndex((item) => item.id === id)
     if (index === -1) {
-      throw error
+      const notFoundError = new Error('Listing not found')
+      notFoundError.status = 404
+      notFoundError.code = 'LISTING_NOT_FOUND'
+      throw notFoundError
     }
 
     const current = existing[index]
@@ -869,21 +865,20 @@ export async function updateListing(id, payload, categories = FALLBACK_CATEGORIE
     writeLocalListings(nextList)
     return { listing: updated, isFallback: true }
   }
+
+  const response = await listingHttp.put(`/listings/${id}`, payload)
+  return { listing: response.data, isFallback: false }
 }
 
 export async function updateListingStatus(id, { status, reason } = {}) {
-  try {
-    const response = await listingHttp.patch(`/listings/${id}/status`, { status, reason })
-    return { listing: response.data, isFallback: false }
-  } catch (error) {
-    if (!shouldFallbackToLocal(error)) {
-      throw error
-    }
-
+  if (isListingFixtureMode()) {
     const existing = readLocalListings()
     const index = existing.findIndex((item) => item.id === id)
     if (index === -1) {
-      throw error
+      const notFoundError = new Error('Listing not found')
+      notFoundError.status = 404
+      notFoundError.code = 'LISTING_NOT_FOUND'
+      throw notFoundError
     }
     const current = existing[index]
     const updated = {
@@ -897,13 +892,7 @@ export async function updateListingStatus(id, { status, reason } = {}) {
     writeLocalListings(nextList)
     return { listing: updated, isFallback: true }
   }
-}
 
-export function extractListingApiError(error, fallbackMessage = 'Request failed') {
-  const data = error?.response?.data
-  if (data?.fieldErrors?.length > 0) {
-    const first = data.fieldErrors[0]
-    return first.message || data.message || fallbackMessage
-  }
-  return data?.message || error?.message || fallbackMessage
+  const response = await listingHttp.patch(`/listings/${id}/status`, { status, reason })
+  return { listing: response.data, isFallback: false }
 }

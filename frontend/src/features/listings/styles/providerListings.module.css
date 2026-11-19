@@ -1,8 +1,76 @@
 /* WP03 Provider Service Listings Dashboard & 4-Step Wizard Styles */
 
+@keyframes wp03FadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes wp03FadeScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes wp03SlideDownFade {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes wp03PopIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes wp03BackdropFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes wp03ModalScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
 .pageContainer {
-  max-width: 1280px;
-  margin: 0 auto;
+  max-width: 1440px;
+  margin: 0;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -89,6 +157,10 @@
   box-shadow: 0 4px 12px rgba(15, 118, 110, 0.22);
 }
 
+.primaryBtn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
 .primaryBtn:disabled {
   opacity: 0.65;
   cursor: not-allowed;
@@ -108,12 +180,16 @@
   font-size: 13.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
 
 .outlineBtn:hover:not(:disabled) {
   background: #f8fafc;
   border-color: #94a3b8;
+}
+
+.outlineBtn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .outlineBtn:disabled {
@@ -198,6 +274,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  animation: wp03FadeSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .kpiTopRow {
@@ -422,11 +500,13 @@
   display: flex;
   flex-direction: column;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
-  transition: box-shadow 0.15s ease, transform 0.15s ease;
+  transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+  animation: wp03FadeSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .listingCard:hover {
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.07);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.09);
 }
 
 .listingCardInactive {
@@ -445,6 +525,11 @@
   height: 100%;
   object-fit: cover;
   display: block;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.listingCard:hover .cardImage {
+  transform: scale(1.03);
 }
 
 .cardImageDimmed {
@@ -564,6 +649,19 @@
   color: #92400e;
   font-size: 12px;
   line-height: 1.4;
+  animation: wp03SlideDownFade 0.18s ease-out both;
+}
+
+.policyCalloutRejected {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.policyCalloutTitle {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 2px;
 }
 
 .cardMetaRow {
@@ -599,8 +697,16 @@
   border-top: 1px solid #f1f5f9;
 }
 
+.cardActionsRowTwo {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .cardActionBtn {
-  padding: 6px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 6px 10px;
   border-radius: 8px;
   border: 1px solid #cbd5e1;
   background: #ffffff;
@@ -609,12 +715,17 @@
   font-weight: 600;
   cursor: pointer;
   text-align: center;
-  transition: background-color 0.15s ease;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
 }
 
 .cardActionBtn:hover:not(:disabled) {
   background: #f8fafc;
   border-color: #94a3b8;
+}
+
+.cardActionBtn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .cardActionBtn:disabled {
@@ -624,12 +735,26 @@
   cursor: not-allowed;
 }
 
+.cardActionBtnPrimary {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #ffffff;
+}
+
+.cardActionBtn.cardActionBtnPrimary:hover:not(:disabled) {
+  background: #115e59;
+  border-color: #115e59;
+  color: #ffffff;
+  box-shadow: 0 4px 10px rgba(15, 118, 110, 0.24);
+}
+
 /* List / Table View */
 .tableCard {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 14px;
   overflow: hidden;
+  animation: wp03FadeSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .tableScroll {
@@ -770,6 +895,7 @@
   display: grid;
   place-items: center;
   padding: 16px;
+  animation: wp03BackdropFadeIn 0.16s ease-out both;
 }
 
 .modalDialog {
@@ -783,6 +909,7 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  animation: wp03ModalScaleIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .modalHeader {
@@ -874,12 +1001,12 @@
 
 /* 4-Step Wizard Layout */
 .wizardWrap {
-  max-width: 940px;
-  margin: 0 auto;
+  max-width: 1440px;
+  margin: 0;
   width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
 .breadcrumb {
@@ -900,7 +1027,7 @@
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 14px;
-  padding: 20px 28px;
+  padding: 14px 24px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0;
@@ -962,6 +1089,10 @@
   display: block;
 }
 
+.stepRingSvg circle {
+  transition: stroke-dashoffset 0.35s ease;
+}
+
 .stepRingValue {
   position: absolute;
   inset: 0;
@@ -981,6 +1112,7 @@
   display: grid;
   place-items: center;
   box-shadow: 0 2px 6px rgba(15, 118, 110, 0.28);
+  animation: wp03PopIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .stepLabel {
@@ -1006,11 +1138,33 @@
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 14px;
-  padding: 24px 28px;
+  padding: 20px 22px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  animation: wp03FadeSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.wizardStepGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.wizardMediaGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.wizardStackCol {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
 }
 
 .unifiedSubsection {
@@ -1228,7 +1382,16 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
+}
+
+.choiceCard:hover {
+  border-color: #94a3b8;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+}
+
+.choiceCard:active {
+  transform: scale(0.99);
 }
 
 .choiceCardSelected {
@@ -1282,6 +1445,58 @@
   align-items: center;
 }
 
+.districtRow > button {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.zoneHeaderRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.zoneHeaderActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.autoSyncToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  user-select: none;
+}
+
+.autoSyncToggle input {
+  accent-color: #0f766e;
+  cursor: pointer;
+}
+
+.zoneSyncBtn {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f766e;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.zoneSyncBtn:hover {
+  background: #f0fdfa;
+  border-color: #0f766e;
+}
+
 .zonesList {
   display: flex;
   flex-wrap: wrap;
@@ -1300,6 +1515,13 @@
   border: 1px solid #99f6e4;
   font-size: 12.5px;
   font-weight: 600;
+  animation: wp03FadeScaleIn 0.18s ease-out both;
+}
+
+.zoneChipManual {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
 }
 
 .zoneRemoveBtn {
@@ -1309,6 +1531,10 @@
   cursor: pointer;
   font-weight: 700;
   padding: 0 2px;
+}
+
+.zoneChipManual .zoneRemoveBtn {
+  color: #1d4ed8;
 }
 
 .dashedChipBtn {
@@ -1367,7 +1593,7 @@
 /* Real Leaflet.js Map Frame */
 .leafletMapFrame {
   position: relative;
-  height: 270px;
+  height: 220px;
   border-radius: 12px;
   border: 1px solid #cbd5e1;
   background: #e2e8f0;
@@ -1430,32 +1656,20 @@
   font-size: 12.5px;
   font-weight: 700;
   cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
 }
 
-.aiSuggestBtn:hover {
+.aiSuggestBtn:hover:not(:disabled) {
   background: #ccfbf1;
 }
 
-.suggestionChipsRow {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.aiSuggestBtn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
-.suggestionChipBtn {
-  padding: 5px 10px;
-  border-radius: 999px;
-  border: 1px dashed #cbd5e1;
-  background: #f8fafc;
-  color: #334155;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.suggestionChipBtn:hover {
-  border-color: #0f766e;
-  color: #0f766e;
+.aiSuggestBtn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .infoBanner {
@@ -1469,6 +1683,7 @@
   border: 1px solid #bfdbfe;
   color: #1e40af;
   font-size: 13px;
+  animation: wp03SlideDownFade 0.18s ease-out both;
 }
 
 .policyWarningBanner {
@@ -1484,6 +1699,19 @@
   color: #dc2626;
   font-size: 13px;
   font-weight: 600;
+  animation: wp03SlideDownFade 0.18s ease-out both;
+}
+
+.moderationBannerBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.moderationBannerHint {
+  font-size: 12.5px;
+  font-weight: 500;
+  opacity: 0.9;
 }
 
 .addOnCard {
@@ -1496,6 +1724,7 @@
   justify-content: space-between;
   gap: 12px;
   background: #ffffff;
+  animation: wp03FadeScaleIn 0.18s ease-out both;
 }
 
 .addOnLeftGroup {
@@ -1580,6 +1809,12 @@
   gap: 14px;
 }
 
+.photoGridCompact {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .photoCard {
   border: 1px solid #e2e8f0;
   border-radius: 12px;
@@ -1587,6 +1822,8 @@
   background: #ffffff;
   display: flex;
   flex-direction: column;
+  animation: wp03FadeScaleIn 0.18s ease-out both;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .photoCardCover {
@@ -1727,8 +1964,14 @@
 /* Responsive Breakpoints */
 @media (max-width: 1100px) {
   .kpiGrid,
-  .cardsGrid {
+  .cardsGrid,
+  .photoGridCompact {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wizardStepGrid,
+  .wizardMediaGrid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1739,6 +1982,7 @@
   .fieldGridTwo,
   .choiceCardsGrid,
   .photoGrid,
+  .photoGridCompact,
   .reviewSummaryGrid {
     grid-template-columns: 1fr;
   }
@@ -1754,5 +1998,36 @@
 
   .searchInput {
     width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kpiCard,
+  .listingCard,
+  .tableCard,
+  .policyCalloutBox,
+  .modalBackdrop,
+  .modalDialog,
+  .stepCircleDone,
+  .sectionCard,
+  .zoneChip,
+  .infoBanner,
+  .policyWarningBanner,
+  .addOnCard,
+  .photoCard {
+    animation: none !important;
+  }
+
+  .primaryBtn,
+  .outlineBtn,
+  .kpiCard,
+  .listingCard,
+  .cardImage,
+  .cardActionBtn,
+  .stepRingSvg circle,
+  .choiceCard,
+  .aiSuggestBtn,
+  .photoCard {
+    transition: none !important;
   }
 }
