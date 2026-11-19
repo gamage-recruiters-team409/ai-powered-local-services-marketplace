@@ -516,6 +516,15 @@
   min-width: 0;
 }
 
+.navBadge {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.navBadge:empty {
+  display: none;
+}
+
 .sidebarDivider {
   height: 1px;
   margin: 10px 0 10px 12px;
@@ -756,6 +765,85 @@
 
   .footerStart {
     gap: 20px;
+  }
+}
+
+/* ---------- Tablet: account sidebar becomes an icon rail ---------- */
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .sidebar {
+    width: 76px;
+  }
+
+  .sidebarInner {
+    align-items: center;
+    padding: 16px 0;
+  }
+
+  .sidebarIdentity {
+    justify-content: center;
+    margin: 0 0 8px;
+    padding: 0 0 14px;
+  }
+
+  .sidebarIdentity .identityText,
+  .sidebar .sectionTitle,
+  .sidebar .navLabel {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .sidebarAvatar {
+    width: 40px;
+    height: 40px;
+    font-size: 14px;
+  }
+
+  .sidebarNav {
+    width: 100%;
+    align-items: center;
+  }
+
+  .navSection {
+    margin-top: 4px;
+  }
+
+  .sidebar .navList {
+    align-items: center;
+  }
+
+  .sidebar .navLink {
+    width: 48px;
+    min-height: 48px;
+    justify-content: center;
+    margin-left: 0;
+    padding: 12px;
+  }
+
+  .sidebar .navLinkActive::before {
+    left: -14px;
+  }
+
+  .sidebar .navBadge {
+    position: absolute;
+    top: 2px;
+    right: 0;
+  }
+
+  .navBadge .countBadge {
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    font-size: 10px;
+  }
+
+  .sidebarDivider {
+    width: 40px;
+    margin: 10px auto;
   }
 }
 
