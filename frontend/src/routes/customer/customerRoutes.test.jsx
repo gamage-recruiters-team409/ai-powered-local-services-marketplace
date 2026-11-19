@@ -23,6 +23,7 @@ vi.mock('../../features/customer-account/services/customerAccountApi', () => ({
   getDistricts: vi.fn().mockResolvedValue([]),
 }))
 
+import { ToastProvider } from '../../shared/components/feedback'
 import { customerRoutes, CUSTOMER_ACCOUNT_ROUTES, CUSTOMER_PAGE_ROUTES } from './customerRoutes'
 
 function signedIn({ role = 'CUSTOMER', mustChangePassword = false } = {}) {
@@ -46,7 +47,11 @@ function renderAt(path) {
     ],
     { initialEntries: [path] },
   )
-  render(<RouterProvider router={router} />)
+  render(
+    <ToastProvider>
+      <RouterProvider router={router} />
+    </ToastProvider>,
+  )
   return router
 }
 

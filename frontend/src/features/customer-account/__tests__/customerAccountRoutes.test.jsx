@@ -50,15 +50,7 @@ vi.mock('../services/favouritesApi', () => ({
   removeFavourite: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock('../../../shared/components/feedback/useToast', () => ({
-  useToast: () => ({
-    success: vi.fn(),
-    error: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-  }),
-}));
-
+import { ToastProvider } from '../../../shared/components/feedback';
 import { customerAccountRoutes } from '../routes/customerAccountRoutes';
 import { customerRoutes } from '../../../routes/customer/customerRoutes';
 import {
@@ -89,7 +81,11 @@ function renderCustomerRoute(path) {
     ],
     { initialEntries: [path] }
   );
-  render(<RouterProvider router={router} />);
+  render(
+    <ToastProvider>
+      <RouterProvider router={router} />
+    </ToastProvider>
+  );
   return router;
 }
 
