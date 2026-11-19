@@ -116,10 +116,10 @@ describe('SavedAddressesPage', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
     expect(screen.getByRole('heading', { name: /add address/i })).toBeTruthy();
 
-    const labelInput = screen.getByPlaceholderText(/e.g. home, work/i);
-    const lineInput = screen.getByPlaceholderText(/e.g. 45\/2, alfred house gardens/i);
-    const cityInput = screen.getByPlaceholderText(/e.g. colombo, kelaniya/i);
-    const districtSelect = screen.getByRole('combobox');
+    const labelInput = screen.getByLabelText(/^label/i);
+    const lineInput = screen.getByLabelText(/^address line/i);
+    const cityInput = screen.getByLabelText(/^city/i);
+    const districtSelect = screen.getByLabelText(/^district/i);
     const saveBtn = screen.getByRole('button', { name: /^save$/i });
 
     // Submit without input -> label required
@@ -190,9 +190,9 @@ describe('SavedAddressesPage', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
     expect(screen.getByRole('heading', { name: /edit address/i })).toBeTruthy();
 
-    const labelInput = screen.getByDisplayValue('Work');
-    const cityInput = screen.getByDisplayValue('Kelaniya');
-    const districtSelect = screen.getByRole('combobox');
+    const labelInput = screen.getByLabelText(/^label/i);
+    const cityInput = screen.getByLabelText(/^city/i);
+    const districtSelect = screen.getByLabelText(/^district/i);
     expect(cityInput).toBeTruthy();
     expect(districtSelect.value).toBe('Gampaha');
 
@@ -240,7 +240,7 @@ describe('SavedAddressesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /edit work/i }));
 
-    const cityInput = screen.getByDisplayValue('Kelaniya');
+    const cityInput = screen.getByLabelText(/^city/i);
     fireEvent.change(cityInput, { target: { value: 'Peliyagoda' } });
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -282,7 +282,7 @@ describe('SavedAddressesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /edit work/i }));
 
-    const districtSelect = screen.getByRole('combobox');
+    const districtSelect = screen.getByLabelText(/^district/i);
     fireEvent.change(districtSelect, { target: { value: 'Colombo' } });
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
@@ -370,14 +370,83 @@ describe('SavedAddressesPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /\+ add address/i }));
 
-    fireEvent.change(screen.getByPlaceholderText(/e.g. home, work/i), { target: { value: 'Extra' } });
-    fireEvent.change(screen.getByPlaceholderText(/e.g. 45\/2, alfred house gardens/i), { target: { value: 'Line 1' } });
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Colombo' } });
+    fireEvent.change(screen.getByLabelText(/^label/i), { target: { value: 'Extra' } });
+    fireEvent.change(screen.getByLabelText(/^address line/i), { target: { value: 'Line 1' } });
+    fireEvent.change(screen.getByLabelText(/^city/i), { target: { value: 'Colombo' } });
+    fireEvent.change(screen.getByLabelText(/^district/i), { target: { value: 'Colombo' } });
 
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => {
+      expect(customerAccountApi.createAddress).toHaveBeenCalledWith({
+        label: 'Extra',
+        addressLine1: 'Line 1',
+        city: 'Colombo',
+        district: 'Colombo',
+      });
       expect(screen.getByText(/maximum number of saved addresses \(10\) reached/i)).toBeTruthy();
+    });
+  });
+
+  it('handles 409 CONCURRENT_MODIFICATION error on address save by showing error toast and closing modal', async () => {
+    const error = new Error('Concurrent modification detected');
+    error.code = 'CONCURRENT_MODIFICATION';
+    customerAccountApi.createAddress.mockRejectedValueOnce(error);
+
+    render(
+      <MemoryRouter>
+        <SavedAddressesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/No. 45\/2, Alfred House Gardens/i)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /\+ add address/i }));
+
+    fireEvent.change(screen.getByLabelText(/^label/i), { target: { value: 'Branch' } });
+    fireEvent.change(screen.getByLabelText(/^address line/i), { target: { value: '10 Galle Road' } });
+    fireEvent.change(screen.getByLabelText(/^city/i), { target: { value: 'Colombo' } });
+    fireEvent.change(screen.getByLabelText(/^district/i), { target: { value: 'Colombo' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(customerAccountApi.createAddress).toHaveBeenCalledWith({
+        label: 'Branch',
+        addressLine1: '10 Galle Road',
+        city: 'Colombo',
+        district: 'Colombo',
+      });
+      expect(mockToast.error).toHaveBeenCalledWith('Address was modified by another action. Reloading list.');
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+  });
+
+  it('handles 409 CONCURRENT_MODIFICATION error when setting default address', async () => {
+    const error = new Error('Concurrent modification detected');
+    error.code = 'CONCURRENT_MODIFICATION';
+    customerAccountApi.setDefaultAddress.mockRejectedValueOnce(error);
+
+    render(
+      <MemoryRouter>
+        <SavedAddressesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/128 Kandy Road, Dalugama/i)).toBeTruthy();
+    });
+
+    const setDefaultBtn = screen.getByRole('button', { name: /set as default/i });
+    fireEvent.click(setDefaultBtn);
+
+    await waitFor(() => {
+      expect(customerAccountApi.setDefaultAddress).toHaveBeenCalledWith('addr-2');
+      expect(mockToast.error).toHaveBeenCalledWith(
+        'Unable to set default address due to a concurrent update. Reloading list.'
+      );
     });
   });
 });
