@@ -36,6 +36,10 @@ public class SecurityConfig {
             ApiPaths.API_V1 + "/auth/register",
             ApiPaths.API_V1 + "/auth/login",
             ApiPaths.API_V1 + "/auth/refresh",
+            ApiPaths.API_V1 + "/auth/verify-email",
+            ApiPaths.API_V1 + "/auth/resend-verification",
+            ApiPaths.API_V1 + "/auth/forgot-password",
+            ApiPaths.API_V1 + "/auth/reset-password",
             ApiPaths.API_V1 + "/categories/**"
     };
 

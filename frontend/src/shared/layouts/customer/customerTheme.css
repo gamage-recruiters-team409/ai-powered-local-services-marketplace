@@ -1,0 +1,55 @@
+.customerTheme {
+  /* LocalServe colour foundation (shared with the provider layout) */
+  --cus-color-primary: #0f766e;
+  --cus-color-primary-hover: #115e59;
+  --cus-color-primary-light: #ccfbf1;
+  --cus-color-primary-50: #f0fdfa;
+  --cus-color-primary-border: #99f6e4;
+  --cus-avatar-gradient: linear-gradient(135deg, #99f6e4 0%, #0f766e 100%);
+
+  --cus-color-accent: #f59e0b;
+  --cus-color-badge-text: #0f172a;
+
+  --cus-color-bg: #f8fafc;
+  --cus-color-surface: #ffffff;
+  --cus-color-heading: #0f172a;
+  --cus-color-text: #475569;
+  --cus-color-muted: #94a3b8;
+  --cus-color-border: #e2e8f0;
+  --cus-color-danger: #dc2626;
+  --cus-color-danger-50: #fef2f2;
+  --cus-color-focus: #0f766e;
+
+  /* Layout */
+  --cus-header-height: 72px;
+  --cus-mobile-header-height: 60px;
+  --cus-sidebar-width: 280px;
+  --cus-content-max-width: 1200px;
+  --cus-bottom-nav-height: 66px;
+
+  --cus-radius-sm: 8px;
+  --cus-radius-md: 10px;
+  --cus-radius-lg: 12px;
+  --cus-shadow-header: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --cus-shadow-menu: 0 10px 24px rgba(15, 23, 42, 0.12);
+
+  /* Typography: Poppins headings, Inter body (system fallback) */
+  --cus-font-body: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --cus-font-heading: Poppins, Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  font-family: var(--cus-font-body);
+  color-scheme: light;
+}
+
+.customerTheme *,
+.customerTheme *::before,
+.customerTheme *::after {
+  font-family: inherit;
+}
+
+.customerTheme button,
+.customerTheme input,
+.customerTheme select,
+.customerTheme textarea {
+  font: inherit;
+}
