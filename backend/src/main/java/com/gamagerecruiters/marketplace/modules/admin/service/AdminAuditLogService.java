@@ -26,6 +26,8 @@ import com.gamagerecruiters.marketplace.modules.admin.dto.AdminAuditLogResponse;
 import com.gamagerecruiters.marketplace.modules.admin.dto.AdminPageResponse;
 import com.gamagerecruiters.marketplace.modules.admin.repository.AdminAuditLogRepository;
 import com.gamagerecruiters.marketplace.modules.admin.security.SuperAdminAccess;
+import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.security.Roles;
 
 /**
  * Owns the admin audit log. Records are inserted as PENDING and their outcome is set exactly once.
@@ -170,6 +172,30 @@ public class AdminAuditLogService {
                 () -> mongoTemplate.count(new Query(criteria), AdminAuditLog.class));
         return AdminPageResponse.from(result.map(AdminAuditLogResponse::from));
     }
+
+    /** The ADMIN area (ADMIN; SUPER_ADMIN read-only), same policy as the admin users screens. */
+    static final String ADMIN_AREA_VIEW =
+            "@" + AdminAccessPolicyService.BEAN_NAME + ".canViewArea(authentication, '" + Roles.ADMIN + "')";
+
+    /**
+     * Status changes (suspend / reactivate) recorded for ONE customer or provider account, newest first, for the
+     * admin users account page. Narrower than {@link #search}, which stays SUPER_ADMIN only: only
+     * ADMIN_STATUS_CHANGED records whose target is that CUSTOMER or PROVIDER account are returned.
+     */
+    @PreAuthorize(ADMIN_AREA_VIEW)
+    public List<AdminAuditLog> recentStatusChangesForTarget(String targetUserId, int limit) {
+        if (!hasText(targetUserId) || limit < 1 || limit > MAX_PAGE_SIZE) {
+            return List.of();
+        }
+        Query query = Query.query(Criteria.where(AdminAuditLog.FIELD_TARGET_USER_ID).is(targetUserId.strip())
+                        .and(AdminAuditLog.FIELD_ACTION).is(AdminAuditAction.ADMIN_STATUS_CHANGED)
+                        .and(FIELD_TARGET_ROLE).in(Role.CUSTOMER, Role.PROVIDER))
+                .with(Sort.by(Sort.Direction.DESC, AdminAuditLog.FIELD_CREATED_AT, AdminAuditLog.FIELD_ID))
+                .limit(limit);
+        return mongoTemplate.find(query, AdminAuditLog.class);
+    }
+
+    private static final String FIELD_TARGET_ROLE = "targetRole";
 
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
