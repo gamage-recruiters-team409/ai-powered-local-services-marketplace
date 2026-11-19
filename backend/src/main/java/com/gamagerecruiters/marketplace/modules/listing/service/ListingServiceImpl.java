@@ -460,6 +460,8 @@ public class ListingServiceImpl implements ListingService {
             );
         }
 
+        providerEligibilityChecker.assertEligibleToManageListing(listing.getProviderId(), true);
+
         CategorySnapshot category = resolveActiveCategoryHierarchy(listing.getCategoryId());
         BigDecimal commissionRate = category.commissionRate() != null
                 ? category.commissionRate()
@@ -512,15 +514,24 @@ public class ListingServiceImpl implements ListingService {
 
         List<ServiceListing> hiddenListings =
                 listingRepository.findByProviderIdAndHiddenByProviderSuspensionTrue(providerId);
+        if (hiddenListings.isEmpty() || !isProviderEligibleForPublication(providerId)) {
+            return;
+        }
+
+        List<ServiceListing> restoredListings = new ArrayList<>();
         for (ServiceListing listing : hiddenListings) {
+            if (!listing.isHiddenByProviderSuspension()) {
+                continue;
+            }
             listing.setHiddenByProviderSuspension(false);
             if (listing.getStatus() == ListingStatus.PAUSED) {
                 listing.setStatus(ListingStatus.ACTIVE);
             }
             listing.setUpdatedAt(now);
+            restoredListings.add(listing);
         }
-        if (!hiddenListings.isEmpty()) {
-            listingRepository.saveAll(hiddenListings);
+        if (!restoredListings.isEmpty()) {
+            listingRepository.saveAll(restoredListings);
         }
     }
 
@@ -979,6 +990,18 @@ public class ListingServiceImpl implements ListingService {
             selected.add(listingMapper.toAddOnItemResponse(item));
         }
         return selected;
+    }
+
+    private boolean isProviderEligibleForPublication(String providerUserId) {
+        if (providerUserId == null || providerUserId.isBlank() || providerEligibilityChecker == null) {
+            return false;
+        }
+        try {
+            providerEligibilityChecker.assertEligibleToManageListing(providerUserId, true);
+            return true;
+        } catch (RuntimeException ex) {
+            return false;
+        }
     }
 
     /**

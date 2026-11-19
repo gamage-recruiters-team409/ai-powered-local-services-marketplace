@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -18,6 +20,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -40,10 +44,13 @@ import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.domain.User;
+import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitExceededException;
 import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitService;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
+import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 import com.gamagerecruiters.marketplace.modules.customer.service.DistrictCatalog;
 import com.gamagerecruiters.marketplace.modules.listing.domain.AddOnItem;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ExecutionModel;
@@ -64,6 +71,12 @@ import com.gamagerecruiters.marketplace.modules.listing.dto.UpdateListingStatusR
 import com.gamagerecruiters.marketplace.modules.listing.mapper.ListingMapper;
 import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
 import com.gamagerecruiters.marketplace.modules.listing.service.CategoryLookupPort.CategorySnapshot;
+import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
+import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
+import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification;
+import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerificationStatus;
+import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
+import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationFacadeImpl;
 
 @ExtendWith(MockitoExtension.class)
 class ListingServiceImplTest {
@@ -1013,5 +1026,192 @@ class ListingServiceImplTest {
         } finally {
             SecurityContextHolder.clearContext();
         }
+    }
+
+    @Test
+    @DisplayName("Finding #1: unsuspension keeps suspension-hidden listings PAUSED and hidden when provider is unverified, inactive, or verification lookup fails")
+    void unsuspensionPreventsReactivationWhenProviderIneligibleAndPreservesVisibilityRules() {
+        ServiceListing hiddenPaused = persistedListing("susp-hidden", ListingStatus.PAUSED);
+        hiddenPaused.setHiddenByProviderSuspension(true);
+        ServiceListing ordinaryPaused = persistedListing("ord-paused", ListingStatus.PAUSED);
+
+        when(listingRepository.findByProviderIdAndHiddenByProviderSuspensionTrue(PROVIDER_ID))
+                .thenReturn(List.of(hiddenPaused));
+        when(listingRepository.findById("susp-hidden")).thenReturn(Optional.of(hiddenPaused));
+        when(listingRepository.findById("ord-paused")).thenReturn(Optional.of(ordinaryPaused));
+        when(listingRepository.findAllById(any())).thenReturn(List.of(hiddenPaused, ordinaryPaused));
+        stubActiveCategoryHierarchy();
+
+        for (ApiException failure : List.of(
+                new ApiException(HttpStatus.FORBIDDEN, "PROVIDER_NOT_VERIFIED", "Verification rejected"),
+                new ApiException(HttpStatus.FORBIDDEN, "PROVIDER_ACCOUNT_INACTIVE", "Account inactive"),
+                new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PROVIDER_VERIFICATION_UNAVAILABLE", "Facade outage")
+        )) {
+            doThrow(failure).when(providerEligibilityChecker).assertEligibleToManageListing(PROVIDER_ID, true);
+
+            listingService.updateProviderSuspensionVisibility(PROVIDER_ID, false);
+
+            assertThat(hiddenPaused.getStatus()).isEqualTo(ListingStatus.PAUSED);
+            assertThat(hiddenPaused.isHiddenByProviderSuspension()).isTrue();
+            assertThat(ordinaryPaused.getStatus()).isEqualTo(ListingStatus.PAUSED);
+            assertThat(ordinaryPaused.isHiddenByProviderSuspension()).isFalse();
+        }
+        verify(listingRepository, never()).saveAll(any());
+
+        try {
+            SecurityContextHolder.clearContext();
+            assertThatThrownBy(() -> listingService.getListingById("susp-hidden"))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            assertThatThrownBy(() -> listingService.getListingForViewer("susp-hidden", "cust-1", Role.CUSTOMER))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            assertThat(listingService.getListingsByIds(List.of("susp-hidden", "ord-paused")))
+                    .extracting(ListingResponse::id)
+                    .containsExactly("ord-paused");
+            assertThatThrownBy(() -> listingService.getListingPriceSnapshot("susp-hidden", List.of()))
+                    .isInstanceOf(ResourceConflictException.class)
+                    .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo("LISTING_NOT_BOOKABLE"));
+
+            ListingResponse ordinaryPublic = listingService.getListingById("ord-paused");
+            assertThat(ordinaryPublic.status()).isEqualTo(ListingStatus.PAUSED);
+            assertThat(ordinaryPublic.availableForBooking()).isFalse();
+
+            assertThat(listingService.getListingForViewer("susp-hidden", PROVIDER_ID, Role.PROVIDER).status())
+                    .isEqualTo(ListingStatus.PAUSED);
+            assertThat(listingService.getListingForViewer("susp-hidden", MODERATOR_ID, Role.MODERATOR).status())
+                    .isEqualTo(ListingStatus.PAUSED);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
+
+    @Test
+    @DisplayName("Finding #2: price snapshot rejects ACTIVE listing when provider verification is non-approved, account is inactive, or WP02 lookup fails")
+    void priceSnapshotBlocksIneligibleOrUnavailableProviders() {
+        ServiceListing active = persistedListing("active-1", ListingStatus.ACTIVE);
+        when(listingRepository.findById("active-1")).thenReturn(Optional.of(active));
+
+        doThrow(new ApiException(HttpStatus.FORBIDDEN, "PROVIDER_NOT_VERIFIED", "Verification revoked"))
+                .when(providerEligibilityChecker).assertEligibleToManageListing(PROVIDER_ID, true);
+        assertThatThrownBy(() -> listingService.getListingPriceSnapshot("active-1", List.of()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> {
+                    ApiException apiEx = (ApiException) ex;
+                    assertThat(apiEx.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(apiEx.getErrorCode()).isEqualTo("PROVIDER_NOT_VERIFIED");
+                });
+
+        doThrow(new ApiException(HttpStatus.FORBIDDEN, "PROVIDER_ACCOUNT_INACTIVE", "Provider suspended"))
+                .when(providerEligibilityChecker).assertEligibleToManageListing(PROVIDER_ID, true);
+        assertThatThrownBy(() -> listingService.getListingPriceSnapshot("active-1", List.of()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> {
+                    ApiException apiEx = (ApiException) ex;
+                    assertThat(apiEx.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                    assertThat(apiEx.getErrorCode()).isEqualTo("PROVIDER_ACCOUNT_INACTIVE");
+                });
+
+        doThrow(new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PROVIDER_VERIFICATION_UNAVAILABLE", "WP02 lookup failed"))
+                .when(providerEligibilityChecker).assertEligibleToManageListing(PROVIDER_ID, true);
+        assertThatThrownBy(() -> listingService.getListingPriceSnapshot("active-1", List.of()))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> {
+                    ApiException apiEx = (ApiException) ex;
+                    assertThat(apiEx.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(apiEx.getErrorCode()).isEqualTo("PROVIDER_VERIFICATION_UNAVAILABLE");
+                });
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = ProviderVerificationStatus.class,
+            names = {"NOT_SUBMITTED", "SUBMITTED", "UNDER_REVIEW", "REJECTED", "RESUBMISSION_REQUESTED", "SUSPENDED", "EXPIRED"}
+    )
+    @DisplayName("End-to-end WP02 facade blocks unsuspension reactivation and price snapshots for non-APPROVED statuses while allowing APPROVED")
+    void endToEndWp02FacadeEnforcesEligibilityOnUnsuspensionAndPriceSnapshot(ProviderVerificationStatus nonApprovedStatus) {
+        UserInternalService userInternalService = mock(UserInternalService.class);
+        ProviderProfileRepository profileRepo = mock(ProviderProfileRepository.class);
+        ProviderVerificationRepository verificationRepo = mock(ProviderVerificationRepository.class);
+
+        ProviderVerificationFacadeImpl realFacade = new ProviderVerificationFacadeImpl(profileRepo, verificationRepo);
+        ProviderVerificationLookupAdapter realAdapter = new ProviderVerificationLookupAdapter(realFacade);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<ProviderVerificationPort> verificationPortProvider = mock(ObjectProvider.class);
+        when(verificationPortProvider.getIfAvailable()).thenReturn(realAdapter);
+        ProviderEligibilityChecker realEligibilityChecker =
+                new ProviderEligibilityCheckerImpl(userInternalService, verificationPortProvider);
+
+        ListingServiceImpl realChainListingService = new ListingServiceImpl(
+                listingRepository,
+                new ListingMapper(),
+                new ListingMediaValidator(),
+                new ListingContentScreeningService(),
+                realEligibilityChecker,
+                new SriLankaDistrictGeoService(districtCatalog),
+                categoryLookupPortProvider,
+                rateLimitServiceProvider
+        );
+
+        User activeUser = new User();
+        activeUser.setId(PROVIDER_ID);
+        activeUser.setRole(Role.PROVIDER);
+        activeUser.setStatus(UserStatus.ACTIVE);
+        when(userInternalService.getById(PROVIDER_ID)).thenReturn(activeUser);
+
+        ProviderProfile profile = mock(ProviderProfile.class);
+        when(profile.getId()).thenReturn("profile-1");
+        when(profileRepo.findByUserId(PROVIDER_ID)).thenReturn(Optional.of(profile));
+
+        ProviderVerification verification = new ProviderVerification();
+        verification.setStatus(nonApprovedStatus);
+        when(verificationRepo.findByProviderId("profile-1")).thenReturn(Optional.of(verification));
+
+        ServiceListing hiddenPaused = persistedListing("susp-e2e", ListingStatus.PAUSED);
+        hiddenPaused.setHiddenByProviderSuspension(true);
+        when(listingRepository.findByProviderIdAndHiddenByProviderSuspensionTrue(PROVIDER_ID))
+                .thenReturn(List.of(hiddenPaused));
+
+        ServiceListing activeListing = persistedListing("active-e2e", ListingStatus.ACTIVE);
+        activeListing.setPricingModel(PricingModel.HOURLY);
+        when(listingRepository.findById("active-e2e")).thenReturn(Optional.of(activeListing));
+        stubActiveCategoryHierarchy();
+
+        // 1. Non-APPROVED status blocks unsuspension reactivation and price snapshot
+        realChainListingService.updateProviderSuspensionVisibility(PROVIDER_ID, false);
+        assertThat(hiddenPaused.getStatus()).isEqualTo(ListingStatus.PAUSED);
+        assertThat(hiddenPaused.isHiddenByProviderSuspension()).isTrue();
+        verify(listingRepository, never()).saveAll(any());
+
+        assertThatThrownBy(() -> realChainListingService.getListingPriceSnapshot("active-e2e", List.of("addon-rush")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo("PROVIDER_NOT_VERIFIED"));
+
+        // 2. Temporary WP02 outage fails closed across both paths
+        when(verificationRepo.findByProviderId("profile-1")).thenThrow(new IllegalStateException("WP02 DB outage"));
+        realChainListingService.updateProviderSuspensionVisibility(PROVIDER_ID, false);
+        assertThat(hiddenPaused.getStatus()).isEqualTo(ListingStatus.PAUSED);
+        assertThat(hiddenPaused.isHiddenByProviderSuspension()).isTrue();
+
+        assertThatThrownBy(() -> realChainListingService.getListingPriceSnapshot("active-e2e", List.of("addon-rush")))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> {
+                    ApiException apiEx = (ApiException) ex;
+                    assertThat(apiEx.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(apiEx.getErrorCode()).isEqualTo("PROVIDER_VERIFICATION_UNAVAILABLE");
+                });
+
+        // 3. Once APPROVED and ACTIVE, unsuspension restores ACTIVE and HOURLY price snapshot succeeds
+        verification.setStatus(ProviderVerificationStatus.APPROVED);
+        doReturn(Optional.of(verification)).when(verificationRepo).findByProviderId("profile-1");
+
+        realChainListingService.updateProviderSuspensionVisibility(PROVIDER_ID, false);
+        assertThat(hiddenPaused.getStatus()).isEqualTo(ListingStatus.ACTIVE);
+        assertThat(hiddenPaused.isHiddenByProviderSuspension()).isFalse();
+        verify(listingRepository).saveAll(List.of(hiddenPaused));
+
+        PriceSnapshotResponse snapshot = realChainListingService.getListingPriceSnapshot("active-e2e", List.of("addon-rush"));
+        assertThat(snapshot.pricingModel()).isEqualTo(PricingModel.HOURLY);
+        assertThat(snapshot.totalPrice()).isEqualByComparingTo("4500.00");
+        assertThat(snapshot.totalDurationMin()).isEqualTo(120);
+        assertThat(snapshot.commissionRate()).isEqualByComparingTo("0.12");
     }
 }

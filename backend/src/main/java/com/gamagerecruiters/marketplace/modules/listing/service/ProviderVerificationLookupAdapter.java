@@ -1,7 +1,9 @@
 package com.gamagerecruiters.marketplace.modules.listing.service;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationFacade;
 
@@ -28,6 +30,14 @@ public class ProviderVerificationLookupAdapter implements ProviderVerificationPo
             return providerVerificationFacade.isApprovedProvider(providerUserId.trim());
         } catch (ResourceNotFoundException ex) {
             return false;
+        } catch (ApiException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new ApiException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "PROVIDER_VERIFICATION_UNAVAILABLE",
+                    "Provider verification lookup failed; listings cannot be published"
+            );
         }
     }
 }

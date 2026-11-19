@@ -64,7 +64,9 @@ public interface ListingService {
     ListingResponse moderateListing(String moderatorUserId, String id, ListingModerationRequest request);
 
     /**
-     * Captures a read-only price, duration, and category commission snapshot for booking creation (FR-LIST-005).
+     * Captures a read-only price, duration, and category commission snapshot for booking creation (FR-LIST-005)
+     * after verifying listing status, active category hierarchy, and live provider eligibility ({@code ACTIVE} account
+     * and WP02 {@code APPROVED} verification).
      * Both {@code FIXED} and {@code HOURLY} listings treat {@code basePrice} as covering the listing's
      * configured {@code baseDurationMin}, returning {@code totalPrice = basePrice + sum(selectedAddOns.extraPrice)}
      * and {@code totalDurationMin = baseDurationMin + sum(selectedAddOns.extraDurationMin)} unless a variable
@@ -72,6 +74,13 @@ public interface ListingService {
      */
     PriceSnapshotResponse getListingPriceSnapshot(String listingId, List<String> selectedAddOnIds);
 
+    /**
+     * Cascades provider suspension/recovery visibility across listings (BR-010).
+     * When {@code suspended} is {@code true}, {@code ACTIVE} listings become {@code PAUSED} with
+     * {@code hiddenByProviderSuspension = true}. When {@code suspended} is {@code false}, previously
+     * suspension-hidden listings are restored to {@code ACTIVE} only if the provider is currently eligible
+     * ({@code ACTIVE} account and WP02 {@code APPROVED} verification); otherwise they remain {@code PAUSED} and hidden.
+     */
     void updateProviderSuspensionVisibility(String providerId, boolean suspended);
 
     void updateListingRatingStats(String listingId, double ratingAvg, int ratingCount);

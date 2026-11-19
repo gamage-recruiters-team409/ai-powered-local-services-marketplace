@@ -128,6 +128,24 @@ class ProviderVerificationLookupAdapterTest {
     }
 
     @Test
+    @DisplayName("Fails closed with 503 PROVIDER_VERIFICATION_UNAVAILABLE on temporary WP02 lookup failures without mutating SecurityContext")
+    void failsClosedWith503WhenFacadeThrowsUnexpectedRuntimeException() {
+        SecurityContext moderatorContext = authenticateAs("moderator-1", Role.MODERATOR);
+        when(providerVerificationFacade.isApprovedProvider("prov-outage"))
+                .thenThrow(new IllegalStateException("MongoDB connection timeout"));
+
+        assertThatThrownBy(() -> adapter.isProviderVerified("prov-outage"))
+                .isInstanceOf(ApiException.class)
+                .satisfies(ex -> {
+                    ApiException apiEx = (ApiException) ex;
+                    assertThat(apiEx.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(apiEx.getErrorCode()).isEqualTo("PROVIDER_VERIFICATION_UNAVAILABLE");
+                });
+        assertThat(SecurityContextHolder.getContext()).isSameAs(moderatorContext);
+        assertThat(CurrentUser.getUserId()).isEqualTo("moderator-1");
+    }
+
+    @Test
     @DisplayName("End-to-end WP02 ProviderVerificationFacadeImpl + WP03 eligibility allows APPROVED provider and fails closed when verification is missing")
     void realFacadeIntegrationApprovedAllowedAndMissingBlocked() {
         UserInternalService userInternalService = mock(UserInternalService.class);
