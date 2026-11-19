@@ -153,6 +153,28 @@ public class EarningsLedgerService {
     }
 
     /**
+     * Finds an already committed event without creating a new ledger entry.
+     *
+     * <p>
+     * Supports idempotent lifecycle recovery after booking status changes.
+     * Existing financial data must match the requested event.
+     * </p>
+     *
+     * @param requested expected financial event details
+     * @return matching committed event, if present
+     * @throws IllegalStateException if existing financial data differs
+     */
+    public Optional<EarningsLedgerEntry> findMatchingCommittedEvent(
+            EarningsLedgerEntry requested) {
+
+        Objects.requireNonNull(requested, "Requested ledger entry is required");
+        requested.validate();
+
+        return repository.findByEventKey(requested.getEventKey())
+                .map(recorded -> requireMatchingEvent(recorded, requested));
+    }
+
+    /**
      * Returns the provider's ledger history in newest-first order.
      *
      * <p>

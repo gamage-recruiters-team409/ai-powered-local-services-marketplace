@@ -10,6 +10,7 @@ function SidebarLink({ item }) {
     <NavLink
       to={item.to}
       end={item.end}
+      title={item.label}
       className={({ isActive }) =>
         cx(
           styles.navLink,
@@ -20,7 +21,9 @@ function SidebarLink({ item }) {
     >
       <CustomerIcon name={item.icon} size={22} className={styles.navIcon} />
       <span className={styles.navLabel}>{item.label}</span>
-      <CustomerNavItemBadge item={item} />
+      <span className={styles.navBadge}>
+        <CustomerNavItemBadge item={item} />
+      </span>
     </NavLink>
   )
 }
@@ -88,6 +91,7 @@ export function CustomerSidebar({
               <button
                 type="button"
                 className={styles.navLink}
+                title="Log out"
                 onClick={onLogout}
               >
                 <CustomerIcon name="logout" size={22} className={styles.navIcon} />

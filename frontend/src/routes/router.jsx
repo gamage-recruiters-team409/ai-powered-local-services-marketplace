@@ -4,6 +4,7 @@ import { disputeRoutes } from '../features/disputes/routes/disputeRoutes'
 import { adminRoutes } from '../features/disputes-admin/routes/adminRoutes'
 import { authRoutes } from '../features/auth'
 import SearchResultsPage from '../features/search-discovery/pages/SearchResultsPage'
+import { customerRoutes } from './customer/customerRoutes'
 import { NotFoundPage } from './NotFoundPage'
 
 /**
@@ -17,5 +18,7 @@ export const router = createBrowserRouter([
   { path: '/search', element: <SearchResultsPage /> },
   // WP09 – Dispute screens for customers and providers
   ...disputeRoutes,
+  // WP05 – Customer area (Customer Common Layout + customer guards)
+  customerRoutes,
   { path: '*', element: <NotFoundPage /> },
 ])
