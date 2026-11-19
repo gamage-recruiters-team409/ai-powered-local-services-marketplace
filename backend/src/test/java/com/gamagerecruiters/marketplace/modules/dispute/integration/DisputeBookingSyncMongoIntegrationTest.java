@@ -97,6 +97,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
 @TestPropertySource(properties = {
         // The test drives the reconciler itself; no background runs, and records are eligible immediately.
         "app.dispute.booking-sync.enabled=false",
+        "app.dispute.finalizer.enabled=false",
         "app.dispute.booking-sync.min-age=PT0S",
         "app.dispute.booking-sync.delete-after=PT15M"
 })

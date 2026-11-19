@@ -85,6 +85,11 @@ public class TokenServiceImpl implements TokenService {
 
     @Override
     public String generateRefreshToken() {
+        return generateOpaqueToken();
+    }
+
+    @Override
+    public String generateOpaqueToken() {
         byte[] randomBytes = new byte[32]; // 256 bits
         secureRandom.nextBytes(randomBytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes);

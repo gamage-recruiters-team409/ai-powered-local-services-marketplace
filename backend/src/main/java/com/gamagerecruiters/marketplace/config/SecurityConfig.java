@@ -6,6 +6,7 @@ import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -36,6 +37,10 @@ public class SecurityConfig {
             ApiPaths.API_V1 + "/auth/register",
             ApiPaths.API_V1 + "/auth/login",
             ApiPaths.API_V1 + "/auth/refresh",
+            ApiPaths.API_V1 + "/auth/verify-email",
+            ApiPaths.API_V1 + "/auth/resend-verification",
+            ApiPaths.API_V1 + "/auth/forgot-password",
+            ApiPaths.API_V1 + "/auth/reset-password",
             ApiPaths.API_V1 + "/categories/**"
     };
 
@@ -71,6 +76,17 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
+                        // Protect provider-scoped listing routes before the public GET /listings/* rule.
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                ApiPaths.API_V1 + "/listings/me",
+                                ApiPaths.API_V1 + "/listings/me/summary"
+                        ).authenticated()
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                ApiPaths.API_V1 + "/listings/locations/districts",
+                                ApiPaths.API_V1 + "/listings/*"
+                        ).permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
