@@ -48,7 +48,7 @@ describe('CustomerHeader profile menu', () => {
     expect(within(menu).getByText('nimal@example.com')).toBeTruthy()
 
     const items = within(menu).getAllByRole('menuitem').map((item) => item.textContent)
-    expect(items).toEqual(['My Bookings', 'Help & Support', 'Log out'])
+    expect(items).toEqual(['My Bookings', 'Settings', 'Help & Support', 'Log out'])
   })
 
   it('calls onLogout and closes the menu', () => {
@@ -95,5 +95,39 @@ describe('CustomerHeader profile menu', () => {
     fireEvent.keyDown(menu, { key: 'ArrowUp' })
     fireEvent.keyDown(menu, { key: 'ArrowUp' })
     expect(document.activeElement).toBe(items[items.length - 1])
+  })
+
+  it('closes when keyboard focus moves outside the menu', () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <CustomerHeader
+          brand={CUSTOMER_BRAND}
+          user={user}
+          links={CUSTOMER_HEADER_LINKS}
+          profileMenuItems={CUSTOMER_PROFILE_MENU_ITEMS}
+          onLogout={vi.fn()}
+        />
+        <button type="button">Outside</button>
+      </MemoryRouter>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Account menu for Nimal Perera' }))
+    const menu = screen.getByRole('menu')
+    const lastItem = within(menu).getAllByRole('menuitem').at(-1)
+
+    fireEvent.blur(lastItem, { relatedTarget: screen.getByRole('button', { name: 'Outside' }) })
+
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('stays open while focus moves between its own items', () => {
+    renderHeader()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Account menu for Nimal Perera' }))
+    const items = within(screen.getByRole('menu')).getAllByRole('menuitem')
+
+    fireEvent.blur(items[0], { relatedTarget: items[1] })
+
+    expect(screen.getByRole('menu')).toBeTruthy()
   })
 })

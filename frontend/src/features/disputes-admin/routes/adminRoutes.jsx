@@ -27,7 +27,7 @@ function areaRoute(area) {
       ...getAreaEntries(area).map((entry) =>
         entry.path === ''
           ? { index: true, element: renderEntry(entry) }
-          : { path: entry.path, element: renderEntry(entry) },
+          : { path: entry.nested ? `${entry.path}/*` : entry.path, element: renderEntry(entry) },
       ),
       { path: '*', element: <AdminNotFoundPage /> },
     ],

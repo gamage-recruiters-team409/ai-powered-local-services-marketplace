@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 
 // jsdom does not implement the native <dialog> methods used by the shared Modal.
 // Provide minimal behaviour so focus-management can be exercised in tests.
@@ -51,6 +52,14 @@ const fixtureResponse = {
   totalCount: 1,
 };
 
+function renderSearchPage() {
+  return render(
+    <MemoryRouter initialEntries={['/search']}>
+      <SearchResultsPage />
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
   fetchSearchResults.mockResolvedValue(fixtureResponse);
 });
@@ -63,7 +72,7 @@ afterEach(() => {
 describe('SearchResultsPage search lifecycle', () => {
   it('re-runs the request when an unchanged search is submitted again', async () => {
     const user = userEvent.setup();
-    const { container } = render(<SearchResultsPage />);
+    const { container } = renderSearchPage();
 
     await screen.findByText("Maya's Home Care");
     expect(fetchSearchResults).toHaveBeenCalledTimes(1);
@@ -81,7 +90,7 @@ describe('SearchResultsPage search lifecycle', () => {
       .mockResolvedValueOnce(fixtureResponse);
 
     const user = userEvent.setup();
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     await screen.findByText('Unable to Load Providers');
     await user.click(screen.getByRole('button', { name: 'Retry Search' }));
@@ -92,7 +101,7 @@ describe('SearchResultsPage search lifecycle', () => {
 
   it('re-runs the request when a visible filter changes', async () => {
     const user = userEvent.setup();
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     await screen.findByText("Maya's Home Care");
 
@@ -109,7 +118,7 @@ describe('SearchResultsPage search lifecycle', () => {
       .mockRejectedValueOnce(new Error('Network Error'));
 
     const user = userEvent.setup();
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     await screen.findByText("Maya's Home Care");
 
@@ -123,7 +132,7 @@ describe('SearchResultsPage search lifecycle', () => {
 describe('SearchResultsPage clear all and reset', () => {
   it('Clear all removes every restriction instead of excluding providers', async () => {
     const user = userEvent.setup();
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     await screen.findByText("Maya's Home Care");
 
@@ -145,7 +154,7 @@ describe('SearchResultsPage clear all and reset', () => {
 
   it('Reset restores the default filters', async () => {
     const user = userEvent.setup();
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     await screen.findByText("Maya's Home Care");
 
@@ -163,18 +172,30 @@ describe('SearchResultsPage clear all and reset', () => {
 
 describe('SearchResultsPage fixture labelling', () => {
   it('labels demo results when fixtures are served', async () => {
-    render(<SearchResultsPage />);
+    renderSearchPage();
     const notice = await screen.findByRole('status');
     expect(notice.textContent).toMatch(/demo mode/i);
   });
 
   it('falls back to a placeholder when a provider image fails to load', async () => {
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     const image = await screen.findByAltText(/maya's home care service presentation/i);
     fireEvent.error(image);
 
     expect(image.src).toMatch(/^data:image\/svg\+xml/);
+  });
+});
+
+describe('SearchResultsPage profile navigation', () => {
+  it('links each result to the matching provider profile ID', async () => {
+    renderSearchPage();
+
+    const profileLink = await screen.findByRole('link', {
+      name: "View profile for Maya's Home Care",
+    });
+
+    expect(profileLink.getAttribute('href')).toBe('/providers/prv-001');
   });
 });
 
@@ -250,7 +271,7 @@ describe('SearchResultsPage provider comparison', () => {
 
   async function openComparisonModal() {
     const user = userEvent.setup();
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     const compareButton = await screen.findByRole('button', { name: /compare \(2\)/i });
     await user.click(compareButton);
@@ -325,7 +346,7 @@ describe('SearchResultsPage provider comparison', () => {
       totalCount: 1,
     });
 
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     const compareButton = await screen.findByRole('button', { name: /compare \(1\)/i });
 
@@ -337,7 +358,7 @@ describe('SearchResultsPage provider comparison', () => {
     fetchSearchResults.mockResolvedValue(threeProviderResponse);
 
     const user = userEvent.setup();
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     await user.click(await screen.findByRole('button', { name: /compare \(3\)/i }));
     const dialog = await screen.findByRole('dialog', { name: 'Compare your shortlist' });
@@ -457,7 +478,7 @@ describe('SearchResultsPage provider comparison', () => {
     });
 
     const user = userEvent.setup();
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     await user.click(await screen.findByRole('button', { name: /compare \(2\)/i }));
     const dialog = await screen.findByRole('dialog', { name: 'Compare your shortlist' });
@@ -505,7 +526,7 @@ describe('SearchResultsPage provider comparison', () => {
     });
 
     const user = userEvent.setup();
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     await user.click(await screen.findByRole('button', { name: /compare \(2\)/i }));
     const dialog = await screen.findByRole('dialog', { name: 'Compare your shortlist' });
@@ -517,7 +538,7 @@ describe('SearchResultsPage provider comparison', () => {
     fetchSearchResults.mockResolvedValue(threeProviderResponse);
 
     const user = userEvent.setup();
-    render(<SearchResultsPage />);
+    renderSearchPage();
 
     await screen.findByTestId('provider-card-prv-004');
 
