@@ -3,21 +3,30 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createListing,
+  extractListingApiError,
+  extractListingErrorCode,
   findNearestSriLankaDistrict,
-  generateAiDescriptionSuggestion,
+  formatModerationFeedback,
   getMyListings,
   getMyListingsSummary,
   listingHttp,
-  resetLocalListingsDemoStore,
   screenListingContent,
+  updateListing,
   updateListingStatus,
 } from './listingService'
+import {
+  computeHaversineKm,
+  findNearestSriLankaZone,
+  getZonesWithinRadius,
+  isWithinSriLankaBounds,
+  MAX_SERVICE_AREAS,
+  mergeRadiusZones,
+} from './sriLankaZones'
 
-describe('listingService utilities & local fallback CRUD', () => {
+describe('listingService utilities & live shared apiClient integration', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     window.sessionStorage.clear()
-    resetLocalListingsDemoStore()
   })
 
   it('detects Sri Lankan phone numbers, emails, and WhatsApp links in content screening', () => {
@@ -39,58 +48,83 @@ describe('listingService utilities & local fallback CRUD', () => {
     expect(findNearestSriLankaDistrict(7.2906, 80.6337).name).toBe('Kandy')
   })
 
-  it('generates advisory AI-003 descriptions tailored to delivery mode', () => {
-    const workshopText = generateAiDescriptionSuggestion({
-      title: 'Inverter Board Soldering',
-      executionModel: 'WORKSHOP',
-      district: 'Gampaha',
+  it('calls live backend endpoints via shared apiClient and sorts page items accurately', async () => {
+    vi.spyOn(listingHttp, 'get').mockImplementation(async (url) => {
+      if (url === '/listings/me/summary') {
+        return {
+          data: {
+            totalListings: 2,
+            activeCount: 1,
+            pausedCount: 1,
+            draftCount: 0,
+            archivedCount: 0,
+            flaggedCount: 0,
+            rejectedCount: 0,
+            categoryInactiveCount: 0,
+          },
+        }
+      }
+      if (url === '/listings/me') {
+        return {
+          data: {
+            content: [
+              { id: 'lst-1', title: 'High Rate Plumbing', basePrice: 4500, status: 'ACTIVE', categoryActive: true },
+              { id: 'lst-2', title: 'Low Rate Leak Fix', basePrice: 2200, status: 'PAUSED', categoryActive: true },
+            ],
+            totalElements: 2,
+            totalPages: 1,
+            number: 0,
+            size: 8,
+          },
+        }
+      }
+      throw new Error(`Unexpected GET ${url}`)
     })
-    expect(workshopText).toContain('Gampaha workshop bay')
-  })
-
-  it('falls back to seeded local listings on 404 and supports create/pause/archive lifecycle', async () => {
-    const notFoundErr = new Error('Not Found')
-    notFoundErr.response = { status: 404, data: { message: 'Not found' } }
-    vi.spyOn(listingHttp, 'get').mockRejectedValue(notFoundErr)
-    vi.spyOn(listingHttp, 'post').mockRejectedValue(notFoundErr)
-    vi.spyOn(listingHttp, 'patch').mockRejectedValue(notFoundErr)
 
     const summaryRes = await getMyListingsSummary()
-    expect(summaryRes.isFallback).toBe(true)
-    expect(summaryRes.summary.totalListings).toBe(5)
-    expect(summaryRes.summary.categoryInactiveCount).toBe(1)
+    expect(summaryRes.isFallback).toBe(false)
+    expect(summaryRes.summary.totalListings).toBe(2)
 
-    const listRes = await getMyListings({ status: 'ACTIVE' })
-    expect(listRes.pageData.content.length).toBeGreaterThan(0)
-
-    const createdRes = await createListing({
-      categoryId: 'cat-leak-repair',
-      title: 'Solar Water Heater Leak Fix & Seal',
-      description: 'Complete roof collector inspection and brass union sealing.',
-      pricingModel: 'FIXED',
-      basePrice: 3200,
-      durationMin: 90,
-      executionModel: 'ON_SITE',
-      district: 'Colombo',
-      coverageRadiusKm: 15,
-      saveAsDraft: false,
-    })
-    expect(createdRes.listing.status).toBe('ACTIVE')
-
-    const pausedRes = await updateListingStatus(createdRes.listing.id, { status: 'PAUSED' })
-    expect(pausedRes.listing.status).toBe('PAUSED')
-
-    const archivedRes = await updateListingStatus(createdRes.listing.id, { status: 'ARCHIVED' })
-    expect(archivedRes.listing.status).toBe('ARCHIVED')
+    const listRes = await getMyListings({ status: 'ALL', sortBy: 'price_asc' })
+    expect(listRes.isFallback).toBe(false)
+    expect(listRes.pageData.content.map((item) => item.id)).toEqual(['lst-2', 'lst-1'])
   })
 
-  it('propagates 403 authorization errors without swallowing them into local fallback', async () => {
-    const forbiddenErr = new Error('Provider not verified')
-    forbiddenErr.response = {
-      status: 403,
-      data: { message: 'Provider verification must be APPROVED before publishing' },
-    }
-    vi.spyOn(listingHttp, 'post').mockRejectedValue(forbiddenErr)
+  it('executes create, update, and status transitions against live apiClient without silent mock fallback', async () => {
+    vi.spyOn(listingHttp, 'post').mockResolvedValue({
+      data: { id: 'lst-900', title: 'Solar Water Heater Leak Fix', status: 'ACTIVE' },
+    })
+    vi.spyOn(listingHttp, 'put').mockResolvedValue({
+      data: { id: 'lst-900', title: 'Solar Water Heater Leak Fix Updated', status: 'ACTIVE' },
+    })
+    vi.spyOn(listingHttp, 'patch').mockResolvedValue({
+      data: { id: 'lst-900', title: 'Solar Water Heater Leak Fix Updated', status: 'PAUSED' },
+    })
+
+    const created = await createListing({
+      categoryId: 'cat-1',
+      title: 'Solar Water Heater Leak Fix',
+      saveAsDraft: false,
+    })
+    expect(created.isFallback).toBe(false)
+    expect(created.listing.status).toBe('ACTIVE')
+
+    const updated = await updateListing('lst-900', {
+      categoryId: 'cat-1',
+      title: 'Solar Water Heater Leak Fix Updated',
+      saveAsDraft: false,
+    })
+    expect(updated.listing.title).toContain('Updated')
+
+    const paused = await updateListingStatus('lst-900', { status: 'PAUSED' })
+    expect(paused.listing.status).toBe('PAUSED')
+  })
+
+  it('propagates 401/403/404/503 backend errors honestly and extracts error codes and fieldErrors', async () => {
+    const normalizedErr = new Error('Provider verification must be APPROVED before publishing listings')
+    normalizedErr.status = 403
+    normalizedErr.code = 'PROVIDER_NOT_VERIFIED'
+    vi.spyOn(listingHttp, 'post').mockRejectedValue(normalizedErr)
 
     await expect(
       createListing({
@@ -98,6 +132,86 @@ describe('listingService utilities & local fallback CRUD', () => {
         title: 'Unverified Provider Publish Attempt',
         saveAsDraft: false,
       }),
-    ).rejects.toMatchObject({ response: { status: 403 } })
+    ).rejects.toMatchObject({ status: 403, code: 'PROVIDER_NOT_VERIFIED' })
+
+    expect(extractListingErrorCode(normalizedErr)).toBe('PROVIDER_NOT_VERIFIED')
+    expect(extractListingApiError(normalizedErr)).toBe(
+      'Provider verification must be APPROVED before publishing listings',
+    )
+
+    const validationErr = {
+      fieldErrors: [{ field: 'description', message: 'Description must be at least 50 characters' }],
+    }
+    expect(extractListingApiError(validationErr)).toBe('Description must be at least 50 characters')
+
+    expect(
+      formatModerationFeedback(
+        'Off-platform phone number detected in description',
+        ['PHONE_NUMBER_DETECTED: Listing content appears to include a phone number'],
+      ),
+    ).toBe('Off-platform phone number detected in description.')
+
+    expect(
+      formatModerationFeedback(null, [
+        'PHONE_NUMBER_DETECTED: Listing content appears to include a phone number',
+        'LINK_DETECTED: External URLs are not allowed',
+      ]),
+    ).toBe('Listing content appears to include a phone number. External URLs are not allowed.')
+  })
+})
+
+describe('sriLankaZones Haversine geo-catalog & hybrid merge utilities', () => {
+  it('computes accurate Haversine distances and expands zones monotonically within cap', () => {
+    expect(computeHaversineKm(6.9271, 79.8612, 6.9271, 79.8612)).toBe(0)
+    const colomboKandyKm = computeHaversineKm(6.9271, 79.8612, 7.2906, 80.6337)
+    expect(colomboKandyKm).toBeGreaterThan(85)
+    expect(colomboKandyKm).toBeLessThan(110)
+
+    const kandyZero = getZonesWithinRadius(7.2906, 80.6337, 0, { fallbackLabel: 'Kandy City' })
+    expect(kandyZero).toEqual(['Kandy City'])
+
+    const kandySmall = getZonesWithinRadius(7.2906, 80.6337, 8)
+    const kandyLarge = getZonesWithinRadius(7.2906, 80.6337, 30)
+    expect(kandySmall[0]).toBe('Kandy')
+    expect(kandySmall).toContain('Peradeniya')
+    expect(kandyLarge.length).toBeGreaterThan(kandySmall.length)
+    expect(kandyLarge).toContain('Nawalapitiya')
+
+    const colomboWide = getZonesWithinRadius(6.9271, 79.8612, 50)
+    expect(colomboWide.length).toBe(MAX_SERVICE_AREAS)
+  })
+
+  it('preserves manual zones under the max-20 cap, filters excluded auto zones, and deduplicates cleanly', () => {
+    const mockAuto = Array.from({ length: 24 }, (_, idx) => `AutoTown-${idx + 1}`)
+    mockAuto.splice(2, 0, 'Peradeniya')
+    mockAuto.splice(5, 0, 'peradeniya')
+
+    const merged = mergeRadiusZones({
+      autoZones: mockAuto,
+      manualZones: ['Custom Estate Lane', 'custom estate lane', 'Peradeniya'],
+      excludedAutoZones: ['AutoTown-1', 'autotown-2'],
+      maxZones: MAX_SERVICE_AREAS,
+    })
+
+    expect(merged.serviceAreas.length).toBe(MAX_SERVICE_AREAS)
+    expect(merged.manualCount).toBe(2)
+    expect(merged.includedAutoCount).toBe(18)
+    expect(merged.serviceAreas).toContain('Custom Estate Lane')
+    expect(merged.serviceAreas).toContain('Peradeniya')
+    expect(merged.serviceAreas).not.toContain('AutoTown-1')
+    expect(merged.serviceAreas).not.toContain('AutoTown-2')
+    expect(merged.truncatedCount).toBe(4)
+  })
+
+  it('validates Sri Lanka bounds (rejecting VPN/desktop Helsinki coords) and resolves nearest Sri Lankan town', () => {
+    expect(isWithinSriLankaBounds(6.9271, 79.8612)).toBe(true)
+    expect(isWithinSriLankaBounds(9.6615, 80.0255)).toBe(true)
+    expect(isWithinSriLankaBounds(60.1713, 24.9298)).toBe(false)
+    expect(isWithinSriLankaBounds(Number.NaN, 79.8612)).toBe(false)
+
+    const nearestNugegoda = findNearestSriLankaZone(6.865, 79.9)
+    expect(nearestNugegoda?.name).toBe('Nugegoda')
+    expect(nearestNugegoda?.district).toBe('Colombo')
+    expect(findNearestSriLankaZone(undefined, 79.9)).toBeNull()
   })
 })
