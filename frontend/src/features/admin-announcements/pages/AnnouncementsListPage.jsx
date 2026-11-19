@@ -139,7 +139,7 @@ export function AnnouncementsListPage() {
     const target = toDelete
     setDeleting(true)
     try {
-      await deleteAnnouncement(target.id)
+      await deleteAnnouncement(target.id, target.version)
       toast.success(`"${target.title}" was deleted.`)
       if ((result.data?.content?.length ?? 0) <= 1 && page > 1) setPage((p) => p - 1)
     } catch (error) {

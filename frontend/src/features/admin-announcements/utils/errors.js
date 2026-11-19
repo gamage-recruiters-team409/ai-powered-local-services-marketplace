@@ -4,7 +4,8 @@ const CODE_MESSAGES = Object.freeze({
   ANNOUNCEMENT_NOT_DELETABLE: 'This announcement has already been published and can no longer be deleted.',
   ANNOUNCEMENT_STATE_CONFLICT:
     'This announcement just changed (for example it was published at its scheduled time). The latest version is shown.',
-  ANNOUNCEMENT_UPDATE_CONFLICT: 'Someone else changed this announcement at the same time. Reload it and try again.',
+  ANNOUNCEMENT_UPDATE_CONFLICT:
+    'Someone else changed this announcement after you opened it. Reload the latest version and make your change again.',
   ANNOUNCEMENT_FIELDS_LOCKED: 'Only the title and message of a published announcement can be changed.',
   VALIDATION_FAILED: 'Some fields need attention.',
   MALFORMED_REQUEST: 'The request could not be read. Check the fields and try again.',

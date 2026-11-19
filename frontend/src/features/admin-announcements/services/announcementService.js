@@ -63,15 +63,22 @@ export async function createAnnouncement(body) {
   return data
 }
 
-/** PUT /admin/announcements/{id} (intent DRAFT | PUBLISH) -> AnnouncementResponse */
+/**
+ * PUT /admin/announcements/{id} (intent DRAFT | PUBLISH) -> AnnouncementResponse.
+ * body.version must be the version the form was loaded with: a newer one on the server gives 409
+ * ANNOUNCEMENT_UPDATE_CONFLICT instead of overwriting someone else's change.
+ */
 export async function updateAnnouncement(id, body) {
   const { data } = await announcementHttp.put(itemPath(id), body)
   return data
 }
 
-/** DELETE /admin/announcements/{id} -> 204 (DRAFT or SCHEDULED only) */
-export async function deleteAnnouncement(id) {
-  await announcementHttp.delete(itemPath(id))
+/**
+ * DELETE /admin/announcements/{id}?version= -> 204 (DRAFT or SCHEDULED only). With the version that is on screen, a
+ * delete of an announcement someone changed meanwhile gives 409 instead of removing the newer change.
+ */
+export async function deleteAnnouncement(id, version) {
+  await announcementHttp.delete(itemPath(id), { params: cleanParams({ version }) })
 }
 
 export function isRequestCancelled(error) {

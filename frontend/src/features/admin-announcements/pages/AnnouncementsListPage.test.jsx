@@ -178,7 +178,7 @@ describe('Announcements list', () => {
     const callsBefore = listAnnouncements.mock.calls.length
     fireEvent.click(within(scheduledDialog).getByRole('button', { name: 'Delete' }))
 
-    await waitFor(() => expect(deleteAnnouncement).toHaveBeenCalledWith(SCHEDULED.id))
+    await waitFor(() => expect(deleteAnnouncement).toHaveBeenCalledWith(SCHEDULED.id, SCHEDULED.version))
     expect(await screen.findByText(`"${SCHEDULED.title}" was deleted.`)).toBeTruthy()
     await waitFor(() => expect(listAnnouncements.mock.calls.length).toBeGreaterThan(callsBefore))
   })

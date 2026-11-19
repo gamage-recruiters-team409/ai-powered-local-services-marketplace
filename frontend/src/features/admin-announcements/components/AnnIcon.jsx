@@ -61,6 +61,7 @@ const PATHS = {
     </>
   ),
   alertTriangle: <path d="M12 3 2 20h20L12 3ZM12 10v4M12 17h.01" />,
+  refresh: <path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4" />,
 }
 
 export function AnnIcon({ name, size = 16, className, strokeWidth = 1.8 }) {

@@ -1092,7 +1092,8 @@
 
 .trackingNote {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  line-height: 1.5;
   gap: 8px;
   margin: 0 -28px -22px;
   padding: 14px 28px;
@@ -1319,11 +1320,45 @@
 }
 
 .dialogInfo {
+  align-items: flex-start;
   color: var(--adm-color-text-muted);
+  line-height: 1.5;
+}
+
+.dialogInfo p {
+  margin: 0;
 }
 
 .dialogInfo svg {
+  flex-shrink: 0;
+  margin-top: 2px;
   color: var(--adm-color-primary);
+}
+
+.alertAction {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+
+.pendingNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--adm-color-bg);
+  color: var(--adm-color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.pendingNote svg {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .dialogText {

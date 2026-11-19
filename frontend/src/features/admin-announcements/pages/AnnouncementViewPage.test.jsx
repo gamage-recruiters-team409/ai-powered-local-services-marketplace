@@ -58,7 +58,7 @@ describe('View announcement', () => {
     expect(container.querySelector('a[href^="javascript"]')).toBeNull()
   })
 
-  it('shows the reference, status, audience, delivery chips and no fake delivery numbers', async () => {
+  it('shows the reference, status, audience, requested delivery options and no fake delivery numbers', async () => {
     getAnnouncement.mockResolvedValue(announcement({ id: '65f1c0aa11bb22cc33a1b2c3' }))
     renderAnnouncements(`${BASE}/65f1c0aa11bb22cc33a1b2c3`)
 
@@ -67,10 +67,20 @@ describe('View announcement', () => {
     expect(screen.getByText('All users')).toBeTruthy()
     expect(screen.getByText('Published on')).toBeTruthy()
     expect(screen.getByText('Admin')).toBeTruthy()
-    expect(screen.getByText('Push alert')).toBeTruthy()
-    expect(screen.getByText(/^Pinned until /)).toBeTruthy()
-    expect(screen.getByText('Delivery tracking will be available when notifications are connected.')).toBeTruthy()
+    expect(screen.getByText('Push alert requested')).toBeTruthy()
+    expect(screen.getByText(/^Header pin requested until /)).toBeTruthy()
+    expect(screen.getByText(/Delivery tracking will be available when notifications are connected\./)).toBeTruthy()
     expect(screen.queryByText(/Delivered to|Total views|Acknowledge rate/)).toBeNull()
+  })
+
+  it('delivery not applied: says it is published but NOT delivered, and never claims a push or pin was sent', async () => {
+    getAnnouncement.mockResolvedValue(announcement({ id: 'pub-1', deliveryState: 'NOT_APPLIED' }))
+    renderAnnouncements(`${BASE}/pub-1`)
+
+    const note = await screen.findByText(/^Published, not delivered to users\./)
+    expect(note.textContent).toContain('Delivery to users is not connected yet.')
+    expect(note.textContent).toContain('no push alerts, emails or header banners are sent')
+    expect(screen.queryByText(/^Pinned until|^Push alert$|has been sent|was delivered|Delivered/)).toBeNull()
   })
 
   it('ADMIN: Edit is shown; a published announcement cannot be deleted', async () => {
@@ -94,7 +104,7 @@ describe('View announcement', () => {
     fireEvent.click(within(screen.getByRole('dialog', { name: 'Delete scheduled announcement' }))
       .getByRole('button', { name: 'Delete' }))
 
-    await waitFor(() => expect(deleteAnnouncement).toHaveBeenCalledWith('sch-1'))
+    await waitFor(() => expect(deleteAnnouncement).toHaveBeenCalledWith('sch-1', 4))
     await waitFor(() => expect(router.state.location.pathname).toBe(BASE))
   })
 

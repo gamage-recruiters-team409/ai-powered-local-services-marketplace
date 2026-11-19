@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createAnnouncement,
@@ -31,6 +31,10 @@ function fill({ title = 'Planned maintenance', message = 'We are **offline** on 
   fireEvent.change(titleInput(), { target: { value: title } })
   fireEvent.change(messageInput(), { target: { value: message } })
 }
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 beforeEach(() => {
   createAnnouncement.mockReset()
@@ -98,21 +102,38 @@ describe('New announcement form', () => {
     fireEvent.click(screen.getByLabelText('Pin to user portal header'))
 
     fireEvent.click(screen.getByRole('button', { name: 'Publish announcement' }))
-    const dialog = screen.getByRole('dialog', { name: 'Publish announcement' })
+    const dialog = screen.getByRole('dialog', { name: 'Publish announcement now' })
     expect(within(dialog).getByText('Planned maintenance')).toBeTruthy()
     expect(within(dialog).getByText('All users')).toBeTruthy()
-    expect(within(dialog).getByText('Publish now')).toBeTruthy()
-    expect(within(dialog).getByText(/Pinned to the user portal header for 48 hours/)).toBeTruthy()
-    expect(within(dialog).getByText('This will be sent to the selected users.')).toBeTruthy()
+    expect(within(dialog).getByText('Publish now', { selector: 'dd' })).toBeTruthy()
+    expect(within(dialog).getByText(/Pin to the user portal header for 48 hours/)).toBeTruthy()
     expect(within(dialog).queryByText(/recipients/i)).toBeNull()
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Publish' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Publish now' }))
 
     await waitFor(() => expect(createAnnouncement).toHaveBeenCalledWith(expect.objectContaining({
       intent: 'PUBLISH', scheduledAt: null, pinToHeader: true,
     })))
+    expect(createAnnouncement.mock.calls[0][0]).not.toHaveProperty('version')
     await waitFor(() => expect(router.state.location.search).toBe('?tab=published'))
-    expect(await screen.findByText('Announcement published.')).toBeTruthy()
+    expect(await screen.findByText(/^Announcement published\. Delivery to users is pending/)).toBeTruthy()
+  })
+
+  it('delivery not connected: the modal and the form say publishing saves it and changes its status, nothing is sent', () => {
+    renderAnnouncements(`${BASE}/new`)
+    fill()
+    fireEvent.click(screen.getByLabelText('Pin to user portal header'))
+    expect(screen.getByText(/These options are saved with the announcement\./).textContent)
+      .toContain('Delivery to users is not connected yet.')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Publish announcement' }))
+    const dialog = screen.getByRole('dialog', { name: 'Publish announcement now' })
+    const info = within(dialog).getByText(/its status changes to Published now/)
+    expect(info.textContent).toContain('Delivery to users is not connected yet.')
+    expect(info.textContent).toContain('no push alerts, emails or header banners are sent until notifications are integrated')
+    expect(within(dialog).getByText('Requested delivery options')).toBeTruthy()
+    expect(within(dialog).queryByText(/will be sent to|sent to the selected users|will be sent at/)).toBeNull()
+    expect(dialog.getAttribute('aria-describedby')).toBe(info.parentElement.id)
   })
 
   it('Scheduled: the modal shows the local time and the schedule is sent as UTC ISO', async () => {
@@ -123,9 +144,10 @@ describe('New announcement form', () => {
     fireEvent.change(scheduleInput(), { target: { value: local } })
 
     fireEvent.click(screen.getByRole('button', { name: 'Publish announcement' }))
-    const dialog = screen.getByRole('dialog', { name: 'Publish announcement' })
+    const dialog = screen.getByRole('dialog', { name: 'Schedule announcement' })
     expect(within(dialog).getByText(/^Scheduled: /)).toBeTruthy()
-    expect(within(dialog).getByText('This will be sent at the scheduled time.')).toBeTruthy()
+    expect(within(dialog).getByText(/saved as Scheduled and changes to Published at the scheduled time/).textContent)
+      .toContain('Delivery to users is not connected yet.')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Schedule' }))
 
     await waitFor(() => expect(createAnnouncement).toHaveBeenCalled())
@@ -143,6 +165,38 @@ describe('New announcement form', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Publish announcement' }))
     expect(screen.getByText('The scheduled time is in the past.')).toBeTruthy()
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('rejects a schedule within the backend 1-minute threshold (it would be published immediately)', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 19, 10, 0, 20))
+    renderAnnouncements(`${BASE}/new`)
+    fill()
+    // 10:01:00 is 40 seconds ahead: not more than 1 minute.
+    fireEvent.change(scheduleInput(), { target: { value: '2026-11-19T10:01' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Publish announcement' }))
+    expect(screen.getByText(/A schedule must be more than 1 minute from now\./)).toBeTruthy()
+    expect(scheduleInput().getAttribute('aria-invalid')).toBe('true')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(createAnnouncement).not.toHaveBeenCalled()
+  })
+
+  it('schedule that falls inside the threshold while the modal is open: Schedule is refused, nothing is sent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 19, 10, 0, 30))
+    renderAnnouncements(`${BASE}/new`)
+    fill()
+    fireEvent.change(scheduleInput(), { target: { value: '2026-11-19T10:02' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Publish announcement' }))
+    const dialog = screen.getByRole('dialog', { name: 'Schedule announcement' })
+    vi.setSystemTime(new Date(2026, 10, 19, 10, 1, 30))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Schedule' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByText(/A schedule must be more than 1 minute from now\./)).toBeTruthy()
+    expect(createAnnouncement).not.toHaveBeenCalled()
   })
 
   it('shows backend validation errors next to the field', async () => {
@@ -163,7 +217,7 @@ describe('New announcement form', () => {
     renderAnnouncements(`${BASE}/new`)
     fill()
     fireEvent.click(screen.getByRole('button', { name: 'Publish announcement' }))
-    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Publish' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Publish now' }))
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect((await screen.findAllByText('INTERNAL_SERVER_ERROR')).length).toBeGreaterThan(0)
@@ -226,8 +280,9 @@ describe('Edit announcement form', () => {
       sendPush: true,
       pinToHeader: true,
       intent: 'PUBLISH',
+      version: 4,
     }))
-    expect(screen.queryByRole('dialog', { name: 'Publish announcement' })).toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
     await waitFor(() => expect(router.state.location.pathname).toBe(`${BASE}/pub-1`))
   })
 
@@ -244,6 +299,41 @@ describe('Edit announcement form', () => {
     expect(scheduleInput().value).not.toBe('')
     expect(screen.getByRole('button', { name: 'Move to drafts' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Save draft' })).toBeNull()
+  })
+
+  it('sends the version the form was loaded with when saving a draft', async () => {
+    getAnnouncement.mockResolvedValue(announcement({ id: 'dr-1', status: 'DRAFT', publishedAt: null, version: 7 }))
+    updateAnnouncement.mockResolvedValue(announcement({ id: 'dr-1', status: 'DRAFT', version: 8 }))
+    renderAnnouncements(`${BASE}/dr-1/edit`)
+
+    fireEvent.change(await screen.findByRole('textbox', { name: /Announcement title/ }), { target: { value: 'Mine' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+
+    await waitFor(() => expect(updateAnnouncement).toHaveBeenCalledWith('dr-1', expect.objectContaining({
+      title: 'Mine', intent: 'DRAFT', version: 7,
+    })))
+  })
+
+  it('stale form: another admin saved first -> 409 UPDATE_CONFLICT is shown, nothing is overwritten, reload shows theirs', async () => {
+    const draft = { id: 'dr-1', status: 'DRAFT', publishedAt: null, pinExpiresAt: null }
+    getAnnouncement
+      .mockResolvedValueOnce(announcement({ ...draft, title: 'Original', version: 4 }))
+      .mockResolvedValueOnce(announcement({ ...draft, title: 'Title from admin B', version: 5 }))
+    updateAnnouncement.mockRejectedValue(apiError(409, 'ANNOUNCEMENT_UPDATE_CONFLICT'))
+    const router = renderAnnouncements(`${BASE}/dr-1/edit`)
+
+    fireEvent.change(await screen.findByRole('textbox', { name: /Announcement title/ }), { target: { value: 'Title from admin A' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+
+    await waitFor(() => expect(updateAnnouncement).toHaveBeenCalledWith('dr-1', expect.objectContaining({ version: 4 })))
+    expect((await screen.findAllByText(/changed this announcement after you opened it/)).length).toBeGreaterThan(0)
+    expect(router.state.location.pathname).toBe(`${BASE}/dr-1/edit`)
+    expect(titleInput().value).toBe('Title from admin A')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload latest version' }))
+    await waitFor(() => expect(titleInput().value).toBe('Title from admin B'))
+    expect(getAnnouncement).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('button', { name: 'Reload latest version' })).toBeNull()
   })
 
   it('shows "not found" for an unknown announcement', async () => {

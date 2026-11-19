@@ -9,7 +9,13 @@ import { AnnIcon } from '../components/AnnIcon'
 import { AudienceChip, InfoChip, StatusChip } from '../components/Chips'
 import { DeleteDialog } from '../components/DeleteDialog'
 import { MarkdownContent } from '../components/MarkdownContent'
-import { announcementPaths, PIN_HOURS, shortReference, STATUS } from '../config/announcementConfig'
+import {
+  announcementPaths,
+  DELIVERY_PENDING_NOTE,
+  PIN_HOURS,
+  shortReference,
+  STATUS,
+} from '../config/announcementConfig'
 import { deleteAnnouncement, getAnnouncement, isRequestCancelled } from '../services/announcementService'
 import { formatDateTime, timeZoneLabel } from '../utils/datetime'
 import { parseApiError, STALE_CODES } from '../utils/errors'
@@ -23,18 +29,27 @@ function dateInfo(a) {
   return { label: 'Last edited', value: formatDateTime(a.updatedAt) }
 }
 
+/** What the admin asked for. Worded as requests: nothing is delivered until notifications are integrated. */
 function deliveryChips(a) {
   const chips = []
-  if (a.sendPush) chips.push({ icon: 'bell', text: 'Push alert' })
+  if (a.sendPush) chips.push({ icon: 'bell', text: 'Push alert requested' })
   if (a.pinToHeader) {
     chips.push(
       a.pinExpiresAt
-        ? { icon: 'pin', text: `Pinned until ${formatDateTime(a.pinExpiresAt)}` }
-        : { icon: 'pin', text: `Pinned for ${PIN_HOURS} hours after publishing` },
+        ? { icon: 'pin', text: `Header pin requested until ${formatDateTime(a.pinExpiresAt)}` }
+        : { icon: 'pin', text: `Header pin requested for ${PIN_HOURS} hours after publishing` },
     )
   }
   if (chips.length === 0) chips.push({ icon: 'info', text: 'No push alert, not pinned' })
   return chips
+}
+
+/** Delivery status line. Never claims delivery: the backend delivery port is a stub and reports NOT_APPLIED. */
+function deliveryStatus(a) {
+  if (a.status === STATUS.PUBLISHED && a.deliveryState === 'NOT_APPLIED') {
+    return `Published, not delivered to users. ${DELIVERY_PENDING_NOTE}`
+  }
+  return DELIVERY_PENDING_NOTE
 }
 
 /** Screen 3: one announcement, message rendered safely from markdown. No delivery statistics (no data yet). */
@@ -64,7 +79,7 @@ export function AnnouncementViewPage() {
   const confirmDelete = async () => {
     setDeleting(true)
     try {
-      await deleteAnnouncement(id)
+      await deleteAnnouncement(id, result.data.version)
       toast.success(`"${result.data.title}" was deleted.`)
       navigate(announcementPaths.list())
     } catch (error) {
@@ -162,7 +177,7 @@ export function AnnouncementViewPage() {
 
         <MarkdownContent text={a.message} className={styles.viewMessage} />
 
-        <div className={styles.deliveryChips} aria-label="Delivery options">
+        <div className={styles.deliveryChips} aria-label="Requested delivery options">
           {deliveryChips(a).map((chip) => (
             <InfoChip key={chip.text} icon={chip.icon}>
               {chip.text}
@@ -172,7 +187,9 @@ export function AnnouncementViewPage() {
 
         <p className={styles.trackingNote}>
           <AnnIcon name="info" size={15} />
-          Delivery tracking will be available when notifications are connected.
+          <span>
+            {deliveryStatus(a)} Delivery tracking will be available when notifications are connected.
+          </span>
         </p>
       </article>
 

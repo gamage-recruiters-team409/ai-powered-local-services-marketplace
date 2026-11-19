@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { deliveryLine, shortReference } from '../config/announcementConfig'
+import { deliveryLine, isScheduledPublish, shortReference } from '../config/announcementConfig'
 import { localInputToUtcIso, toLocalInputValue, utcOffsetLabel } from './datetime'
 import { parseApiError } from './errors'
 import { safeHref } from './markdown'
@@ -85,6 +85,29 @@ describe('markdown helpers', () => {
 })
 
 describe('labels and errors', () => {
+  it('isScheduledPublish matches the backend: only MORE than 1 minute ahead is scheduled', () => {
+    const now = new Date('2026-11-19T10:00:00.000Z')
+    const at = (ms) => new Date(now.getTime() + ms).toISOString()
+    expect(isScheduledPublish(null, now)).toBe(false)
+    expect(isScheduledPublish('', now)).toBe(false)
+    expect(isScheduledPublish('not a date', now)).toBe(false)
+    expect(isScheduledPublish(at(-3600 * 1000), now)).toBe(false)
+    expect(isScheduledPublish(at(0), now)).toBe(false)
+    expect(isScheduledPublish(at(30 * 1000), now)).toBe(false)
+    expect(isScheduledPublish(at(60 * 1000), now)).toBe(false)
+    expect(isScheduledPublish(at(60 * 1000 + 1), now)).toBe(true)
+    expect(isScheduledPublish(at(2 * 3600 * 1000), now)).toBe(true)
+  })
+
+  it('validation: publishing with a time within 1 minute is rejected; a draft may keep it', () => {
+    const now = new Date(2026, 10, 19, 10, 0, 20)
+    const form = { title: 'T', message: 'M', audience: 'ALL_USERS', scheduledLocal: '2026-11-19T10:01' }
+    expect(validateAnnouncement(form, { intent: 'PUBLISH', now }).scheduledAt).toMatch(/more than 1 minute from now/)
+    expect(validateAnnouncement(form, { intent: 'DRAFT', now }).scheduledAt).toBeUndefined()
+    expect(validateAnnouncement({ ...form, scheduledLocal: '2026-11-19T10:02' }, { intent: 'PUBLISH', now }).scheduledAt)
+      .toBeUndefined()
+  })
+
   it('delivery line and short reference', () => {
     expect(deliveryLine({ sendPush: true, pinToHeader: true })).toBe('In-app banner + push notification')
     expect(deliveryLine({ sendPush: true, pinToHeader: false })).toBe('Push notification')

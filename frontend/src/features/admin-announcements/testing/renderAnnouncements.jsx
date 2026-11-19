@@ -32,6 +32,7 @@ export function renderAnnouncements(path, { canEdit = true } = {}) {
 export function announcement(overrides = {}) {
   return {
     id: '65f1c0aa11bb22cc33a1b2c3',
+    version: 4,
     title: 'Easter Weekend Service Hours',
     message: 'Support hours change over **Easter**.',
     audience: 'ALL_USERS',

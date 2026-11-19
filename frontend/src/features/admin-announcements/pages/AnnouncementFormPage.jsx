@@ -14,6 +14,7 @@ import {
   announcementPaths,
   AUDIENCE,
   AUDIENCE_OPTIONS,
+  DELIVERY_PENDING_NOTE,
   INTENT,
   LIMITS,
   PIN_HOURS,
@@ -22,7 +23,7 @@ import {
 } from '../config/announcementConfig'
 import { createAnnouncement, getAnnouncement, isRequestCancelled, updateAnnouncement } from '../services/announcementService'
 import { formatDateTime, localInputToUtcIso, timeZoneLabel, toLocalInputValue } from '../utils/datetime'
-import { parseApiError } from '../utils/errors'
+import { parseApiError, STALE_CODES } from '../utils/errors'
 import { validateAnnouncement } from '../utils/validation'
 import styles from '../announcements.module.css'
 
@@ -143,6 +144,9 @@ function AnnouncementForm({ id }) {
   }
 
   const body = (intent) => {
+    // The version this form was loaded with: if someone changed the announcement since, the backend answers 409
+    // ANNOUNCEMENT_UPDATE_CONFLICT instead of overwriting their change.
+    const loadedVersion = isEdit ? { version: original.version } : {}
     if (isPublished) {
       // Only title and message may change; everything else is sent exactly as stored.
       return {
@@ -153,6 +157,7 @@ function AnnouncementForm({ id }) {
         sendPush: original.sendPush,
         pinToHeader: original.pinToHeader,
         intent: INTENT.PUBLISH,
+        ...loadedVersion,
       }
     }
     return {
@@ -163,6 +168,7 @@ function AnnouncementForm({ id }) {
       sendPush: form.sendPush,
       pinToHeader: form.pinToHeader,
       intent,
+      ...loadedVersion,
     }
   }
 
@@ -180,7 +186,7 @@ function AnnouncementForm({ id }) {
       if (saved.status === STATUS.SCHEDULED) {
         toast.success(`Announcement scheduled for ${formatDateTime(saved.scheduledAt)}.`)
       } else if (saved.status === STATUS.PUBLISHED) {
-        toast.success('Announcement published.')
+        toast.success('Announcement published. Delivery to users is pending notification integration.')
       } else {
         toast.success(isScheduled ? 'Moved to drafts. It will not be published automatically.' : 'Draft saved.')
       }
@@ -206,6 +212,22 @@ function AnnouncementForm({ id }) {
     if (!check(INTENT.PUBLISH)) return
     if (isPublished) save(INTENT.PUBLISH)
     else setPublishOpen(true)
+  }
+
+  // Time passes while the dialog is open: a schedule that was more than 1 minute ahead may no longer be. Check again
+  // so the admin never confirms "Schedule" and gets an immediately published announcement.
+  const onConfirmPublish = () => {
+    if (!check(INTENT.PUBLISH)) {
+      setPublishOpen(false)
+      return
+    }
+    save(INTENT.PUBLISH)
+  }
+
+  const reloadLatest = () => {
+    setServerError(null)
+    setErrors({})
+    setLoadKey((key) => key + 1)
   }
 
   if (loading) {
@@ -274,6 +296,14 @@ function AnnouncementForm({ id }) {
         {serverError && !Object.keys(serverError.fieldErrors).length && (
           <Alert variant="error" title="Not saved" inline onClose={() => setServerError(null)}>
             {serverError.message}
+            {isEdit && STALE_CODES.includes(serverError.code) && (
+              <span className={styles.alertAction}>
+                <Button variant="outline" size="small" onClick={reloadLatest} icon={<AnnIcon name="refresh" size={14} />}>
+                  Reload latest version
+                </Button>
+                <span className={styles.subtle}>Your unsaved changes on this page will be replaced.</span>
+              </span>
+            )}
           </Alert>
         )}
 
@@ -331,7 +361,7 @@ function AnnouncementForm({ id }) {
                 helperText={
                   isPublished
                     ? undefined
-                    : `Times shown in ${timeZoneLabel()}. Leave empty to publish immediately.`
+                    : `Times shown in ${timeZoneLabel()}. Leave empty to publish immediately; to schedule, pick a time more than 1 minute from now.`
                 }
               />
               {isPublished && <LockedNote />}
@@ -359,7 +389,7 @@ function AnnouncementForm({ id }) {
                 label="Send push notification alert"
                 checked={form.sendPush}
                 onChange={(event) => set('sendPush')(event.target.checked)}
-                helperText="Trigger mobile and browser alerts to the target accounts at release time."
+                helperText="Request mobile and browser alerts to the target accounts at release time."
                 disabled={busy || isPublished}
               />
             </div>
@@ -371,10 +401,14 @@ function AnnouncementForm({ id }) {
                 label="Pin to user portal header"
                 checked={form.pinToHeader}
                 onChange={(event) => set('pinToHeader')(event.target.checked)}
-                helperText={`Display as a sticky banner on the dashboard for ${PIN_HOURS} hours after publishing.`}
+                helperText={`Request a sticky dashboard banner for ${PIN_HOURS} hours after publishing.`}
                 disabled={busy || isPublished}
               />
             </div>
+            <p className={styles.pendingNote}>
+              <AnnIcon name="info" size={14} />
+              <span>{DELIVERY_PENDING_NOTE} These options are saved with the announcement.</span>
+            </p>
           </fieldset>
         </div>
       </form>
@@ -419,7 +453,7 @@ function AnnouncementForm({ id }) {
         }}
         publishing={saving === INTENT.PUBLISH}
         onCancel={() => setPublishOpen(false)}
-        onConfirm={() => save(INTENT.PUBLISH)}
+        onConfirm={onConfirmPublish}
       />
 
       <ConfirmDialog

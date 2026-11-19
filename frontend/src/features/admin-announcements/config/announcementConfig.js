@@ -10,6 +10,27 @@ export const LIMITS = Object.freeze({ TITLE: 80, MESSAGE: 5000, SEARCH: 80, PAGE
 
 export const PIN_HOURS = 48
 
+/**
+ * Same rule as the backend (AnnouncementRules.SCHEDULE_THRESHOLD): publishing with a scheduled time MORE than 1 minute
+ * ahead schedules it; any other time publishes it immediately.
+ */
+export const SCHEDULE_THRESHOLD_MS = 60 * 1000
+
+/** True when publishing with this scheduled time (UTC ISO string or Date) creates a SCHEDULED announcement. */
+export function isScheduledPublish(scheduledAt, now = new Date()) {
+  if (!scheduledAt) return false
+  const at = new Date(scheduledAt).getTime()
+  return !Number.isNaN(at) && at > now.getTime() + SCHEDULE_THRESHOLD_MS
+}
+
+/**
+ * User delivery (push alerts, emails, header banners) is not connected yet: the backend's delivery port is a stub that
+ * returns NOT_APPLIED. Publishing only saves the announcement and changes its status.
+ */
+export const DELIVERY_PENDING_NOTE =
+  'Delivery to users is not connected yet. Publishing saves the announcement and changes its status, but no push ' +
+  'alerts, emails or header banners are sent until notifications are integrated.'
+
 export const STATUS_META = Object.freeze({
   [STATUS.PUBLISHED]: { label: 'Published', tone: 'success' },
   [STATUS.SCHEDULED]: { label: 'Scheduled', tone: 'warning' },
