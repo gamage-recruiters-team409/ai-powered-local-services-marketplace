@@ -1133,6 +1133,15 @@
 .field {
   display: grid;
   gap: 6px;
+  min-width: 0;
+}
+
+/* width: 100% must include padding and border, or the control overflows the dialog. */
+.select,
+.textarea,
+.filterSelect select {
+  box-sizing: border-box;
+  max-width: 100%;
 }
 
 .fieldLabel {
