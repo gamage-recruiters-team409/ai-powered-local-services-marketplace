@@ -1,5 +1,12 @@
+import { Navigate } from 'react-router-dom'
+
 import { CUSTOMER_ACCOUNT_PATH } from '../../shared/layouts/customer'
-import { CustomerAccountPage } from './CustomerAccountPage'
+import DeactivatePage from '../../features/customer-account/pages/DeactivatePage'
+import FavoritesPage from '../../features/customer-account/pages/FavoritesPage'
+import PaymentsPage from '../../features/customer-account/pages/PaymentsPage'
+import ProfilePage from '../../features/customer-account/pages/ProfilePage'
+import SavedAddressesPage from '../../features/customer-account/pages/SavedAddressesPage'
+import SettingsPage from '../../features/customer-account/pages/SettingsPage'
 import { CustomerGuards } from './CustomerGuards'
 import { CustomerLayoutRoute } from './CustomerLayoutRoute'
 
@@ -20,7 +27,13 @@ import { CustomerLayoutRoute } from './CustomerLayoutRoute'
  */
 
 export const CUSTOMER_ACCOUNT_ROUTES = [
-  { path: CUSTOMER_ACCOUNT_PATH, element: <CustomerAccountPage /> },
+  { path: CUSTOMER_ACCOUNT_PATH, element: <Navigate to="/customer/account/profile" replace /> },
+  { path: '/customer/account/profile', element: <ProfilePage /> },
+  { path: '/customer/account/addresses', element: <SavedAddressesPage /> },
+  { path: '/customer/account/settings', element: <SettingsPage /> },
+  { path: '/customer/account/deactivate', element: <DeactivatePage /> },
+  { path: '/customer/account/payments', element: <PaymentsPage /> },
+  { path: '/customer/account/favorites', element: <FavoritesPage /> },
 ]
 
 export const CUSTOMER_PAGE_ROUTES = []

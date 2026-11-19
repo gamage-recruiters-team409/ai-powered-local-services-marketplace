@@ -11,6 +11,18 @@ vi.mock('../../features/auth/hooks/useAuth', () => ({
   default: () => auth.current,
 }))
 
+vi.mock('../../features/customer-account/services/customerAccountApi', () => ({
+  getProfile: vi.fn().mockResolvedValue({
+    fullName: 'Nimal Perera',
+    email: 'nimal@example.com',
+    emailVerified: true,
+    phoneNumber: '+94 77 123 4567',
+  }),
+  updateProfile: vi.fn().mockResolvedValue({}),
+  getAddresses: vi.fn().mockResolvedValue([]),
+  getDistricts: vi.fn().mockResolvedValue([]),
+}))
+
 import { customerRoutes, CUSTOMER_ACCOUNT_ROUTES, CUSTOMER_PAGE_ROUTES } from './customerRoutes'
 
 function signedIn({ role = 'CUSTOMER', mustChangePassword = false } = {}) {
@@ -92,7 +104,7 @@ describe('customerRoutes for a signed-in customer', () => {
   it('renders the account page inside the layout with the account sidebar', () => {
     renderAt('/customer/account')
 
-    expect(screen.getByRole('heading', { level: 1, name: 'Account' })).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 1, name: 'Profile' })).toBeTruthy()
     const sidebar = screen.getByRole('complementary', { name: 'Account sidebar' })
     expect(within(sidebar).getByText('Nimal Perera')).toBeTruthy()
     expect(within(sidebar).getByText('nimal@example.com')).toBeTruthy()
