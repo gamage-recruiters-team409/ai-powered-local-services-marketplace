@@ -17,64 +17,85 @@ function formatPrice(amount) {
 export function FavoritesPage() {
   const toast = useToast();
   const [activeTab, setActiveTab] = useState('PROVIDER');
-  const [favourites, setFavourites] = useState([]);
   const [page, setPage] = useState(0);
-  const [pageSize] = useState(6);
-  const [totalPages, setTotalPages] = useState(0);
-  const [totalElements, setTotalElements] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [listingsUnavailable, setListingsUnavailable] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
+  const pageSize = 6;
+  const currentKey = `${activeTab}:${page}`;
 
-  const fetchFavourites = async (type, pageNum) => {
-    setLoading(true);
-    setErrorMessage('');
-    setListingsUnavailable(false);
+  const [result, setResult] = useState({
+    key: null,
+    data: null,
+    error: null,
+    listingsUnavailable: false,
+  });
+  const [removedIds, setRemovedIds] = useState(new Set());
 
-    try {
-      const data = await getFavourites(type, pageNum, pageSize);
-      setFavourites(data.content || []);
-      setPage(data.page ?? pageNum);
-      setTotalPages(data.totalPages ?? 0);
-      setTotalElements(data.totalElements ?? 0);
-    } catch (err) {
-      if (type === 'LISTING' && (err.status === 503 || err.code === 'FAVOURITES_LISTING_UNAVAILABLE')) {
-        setListingsUnavailable(true);
-        setFavourites([]);
-      } else {
-        setErrorMessage(err.message || 'Failed to load favorites');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loading = result.key !== currentKey;
+  const rawContent = result.data?.content || [];
+  const favourites = rawContent.filter((item) => !removedIds.has(item.favouriteId));
+  const totalPages = result.data?.totalPages ?? 0;
+  const totalElements = Math.max(0, (result.data?.totalElements ?? 0) - removedIds.size);
+  const listingsUnavailable = result.listingsUnavailable;
+  const errorMessage = result.error ? (result.error.message || 'Failed to load favorites') : '';
 
   useEffect(() => {
-    fetchFavourites(activeTab, page);
-  }, [activeTab, page]);
+    let cancelled = false;
+    getFavourites(activeTab, page, pageSize)
+      .then((data) => {
+        if (!cancelled) {
+          setResult({
+            key: `${activeTab}:${page}`,
+            data,
+            error: null,
+            listingsUnavailable: false,
+          });
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          const isListing503 =
+            activeTab === 'LISTING' &&
+            (err.status === 503 || err.code === 'FAVOURITES_LISTING_UNAVAILABLE');
+          setResult({
+            key: `${activeTab}:${page}`,
+            data: null,
+            error: isListing503 ? null : err,
+            listingsUnavailable: isListing503,
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, page, pageSize]);
 
   const handleTabChange = (newTab) => {
     if (newTab !== activeTab) {
       setActiveTab(newTab);
       setPage(0);
+      setRemovedIds(new Set());
     }
   };
 
-  const handleRemove = async (fav) => {
-    const previous = [...favourites];
-    const previousTotal = totalElements;
+  const handlePageChange = (newPage) => {
+    setPage(newPage);
+    setRemovedIds(new Set());
+  };
 
+  const handleRemove = async (fav) => {
     // Optimistic update
-    setFavourites((current) => current.filter((item) => item.favouriteId !== fav.favouriteId));
-    setTotalElements((prev) => Math.max(0, prev - 1));
+    setRemovedIds((prev) => new Set(prev).add(fav.favouriteId));
 
     try {
       await removeFavourite(fav.type, fav.targetId);
       toast.success('Removed from favorites');
     } catch (err) {
       // Rollback on error
-      setFavourites(previous);
-      setTotalElements(previousTotal);
+      setRemovedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(fav.favouriteId);
+        return next;
+      });
       toast.error(err.message || 'Failed to remove from favorites');
     }
   };
@@ -304,7 +325,7 @@ export function FavoritesPage() {
               totalElements={totalElements}
               pageSize={pageSize}
               itemLabel="favorites"
-              onPageChange={(newPage) => setPage(newPage)}
+              onPageChange={(newPage) => handlePageChange(newPage)}
             />
           </div>
         )}

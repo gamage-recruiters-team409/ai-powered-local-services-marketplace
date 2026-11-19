@@ -36,33 +36,38 @@ function formatBookingId(bookingId) {
 }
 
 export function PaymentsPage() {
-  const [payments, setPayments] = useState([]);
   const [page, setPage] = useState(0);
-  const [pageSize] = useState(10);
-  const [totalPages, setTotalPages] = useState(0);
-  const [totalElements, setTotalElements] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState('');
+  const pageSize = 10;
+  const [result, setResult] = useState({
+    key: null,
+    data: null,
+    error: null,
+  });
 
-  const fetchPayments = async (pageNum) => {
-    setLoading(true);
-    setErrorMessage('');
-    try {
-      const data = await getMyPayments(pageNum, pageSize);
-      setPayments(data.content || []);
-      setPage(data.page ?? pageNum);
-      setTotalPages(data.totalPages ?? 0);
-      setTotalElements(data.totalElements ?? 0);
-    } catch (err) {
-      setErrorMessage(err.message || 'Failed to load payments');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loading = result.key !== page;
+  const payments = result.data?.content || [];
+  const totalPages = result.data?.totalPages ?? 0;
+  const totalElements = result.data?.totalElements ?? 0;
+  const errorMessage = result.error ? (result.error.message || 'Failed to load payments') : '';
 
   useEffect(() => {
-    fetchPayments(page);
-  }, [page]);
+    let cancelled = false;
+    getMyPayments(page, pageSize)
+      .then((data) => {
+        if (!cancelled) {
+          setResult({ key: page, data, error: null });
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setResult({ key: page, data: null, error: err });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [page, pageSize]);
 
   const renderRefundStatus = (p) => {
     const { status, refundedAmount, amount, currency } = p;

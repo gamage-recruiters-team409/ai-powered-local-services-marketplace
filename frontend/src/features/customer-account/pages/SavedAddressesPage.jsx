@@ -17,52 +17,68 @@ import styles from './customerAccount.module.css';
 
 export function SavedAddressesPage() {
   const toast = useToast();
-  const [addresses, setAddresses] = useState([]);
-  const [provinces, setProvinces] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [result, setResult] = useState({
+    key: -1,
+    addresses: [],
+    provinces: [],
+    error: null,
+  });
+
   const [modalOpen, setModalOpen] = useState(false);
+  const [modalSession, setModalSession] = useState(0);
   const [editingAddress, setEditingAddress] = useState(null);
   const [addressToDelete, setAddressToDelete] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [modalError, setModalError] = useState(null);
-  const [pageError, setPageError] = useState(null);
-  const [maxAddressesReached, setMaxAddressesReached] = useState(false);
 
-  const loadData = async () => {
-    try {
-      const [addrData, districtData] = await Promise.all([
-        getAddresses(),
-        getDistricts(),
-      ]);
-      setAddresses(addrData || []);
-      setProvinces(districtData?.provinces || []);
-      setPageError(null);
-      if (addrData && addrData.length >= 10) {
-        setMaxAddressesReached(true);
-      } else {
-        setMaxAddressesReached(false);
-      }
-    } catch (err) {
-      setPageError(err.message || 'Failed to load addresses');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const loading = result.key !== reloadKey;
+  const addresses = result.addresses;
+  const provinces = result.provinces;
+  const pageError = result.error;
+  const maxAddressesReached = addresses.length >= 10;
 
   useEffect(() => {
-    loadData();
-  }, []);
+    let cancelled = false;
+    Promise.all([getAddresses(), getDistricts()])
+      .then(([addrData, districtData]) => {
+        if (!cancelled) {
+          setResult({
+            key: reloadKey,
+            addresses: addrData || [],
+            provinces: districtData?.provinces || [],
+            error: null,
+          });
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setResult({
+            key: reloadKey,
+            addresses: [],
+            provinces: [],
+            error: err.message || 'Failed to load addresses',
+          });
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadKey]);
 
   const handleOpenAdd = () => {
     setEditingAddress(null);
     setModalError(null);
+    setModalSession((c) => c + 1);
     setModalOpen(true);
   };
 
   const handleOpenEdit = (addr) => {
     setEditingAddress(addr);
     setModalError(null);
+    setModalSession((c) => c + 1);
     setModalOpen(true);
   };
 
@@ -80,15 +96,14 @@ export function SavedAddressesPage() {
       }
       setModalOpen(false);
       setEditingAddress(null);
-      await loadData();
+      setReloadKey((c) => c + 1);
     } catch (err) {
       if (err.code === 'MAX_ADDRESSES_REACHED') {
-        setMaxAddressesReached(true);
         setModalError(err.message || 'Maximum number of saved addresses reached.');
       } else if (err.code === 'CONCURRENT_MODIFICATION') {
         toast.error('Address was modified by another action. Reloading list.');
         setModalOpen(false);
-        await loadData();
+        setReloadKey((c) => c + 1);
       } else {
         setModalError(err.message || 'Failed to save address');
       }
@@ -101,11 +116,11 @@ export function SavedAddressesPage() {
     try {
       await setDefaultAddress(addrId);
       toast.success('Default address updated');
-      await loadData();
+      setReloadKey((c) => c + 1);
     } catch (err) {
       if (err.code === 'CONCURRENT_MODIFICATION') {
         toast.error('Unable to set default address due to a concurrent update. Reloading list.');
-        await loadData();
+        setReloadKey((c) => c + 1);
       } else {
         toast.error(err.message || 'Failed to set default address');
       }
@@ -119,7 +134,7 @@ export function SavedAddressesPage() {
       await deleteAddress(addressToDelete.id);
       toast.success('Address deleted successfully');
       setAddressToDelete(null);
-      await loadData();
+      setReloadKey((c) => c + 1);
     } catch (err) {
       toast.error(err.message || 'Failed to delete address');
     } finally {
@@ -249,6 +264,7 @@ export function SavedAddressesPage() {
         )}
 
         <AddressModal
+          key={editingAddress ? `edit-${editingAddress.id}` : `add-${modalSession}`}
           isOpen={modalOpen}
           initialData={editingAddress}
           provinces={provinces}

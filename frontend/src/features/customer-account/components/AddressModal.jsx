@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import styles from '../customerAccount.module.css';
 
 export function AddressModal({
@@ -10,23 +10,10 @@ export function AddressModal({
   saving = false,
   error = null,
 }) {
-  const [label, setLabel] = useState('');
-  const [addressLine1, setAddressLine1] = useState('');
-  const [district, setDistrict] = useState('');
+  const [label, setLabel] = useState(initialData?.label ?? '');
+  const [addressLine1, setAddressLine1] = useState(initialData?.addressLine1 ?? '');
+  const [district, setDistrict] = useState(initialData?.district ?? '');
   const [validationError, setValidationError] = useState('');
-
-  useEffect(() => {
-    if (initialData) {
-      setLabel(initialData.label || '');
-      setAddressLine1(initialData.addressLine1 || '');
-      setDistrict(initialData.district || '');
-    } else {
-      setLabel('');
-      setAddressLine1('');
-      setDistrict('');
-    }
-    setValidationError('');
-  }, [initialData, isOpen]);
 
   if (!isOpen) return null;
 
