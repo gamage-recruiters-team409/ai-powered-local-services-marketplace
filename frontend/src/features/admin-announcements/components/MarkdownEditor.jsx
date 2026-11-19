@@ -8,8 +8,8 @@ import styles from '../announcements.module.css'
 
 const TOOLS = [
   { id: 'bold', label: 'Bold', icon: 'bold', apply: (v, s, e) => wrapSelection(v, s, e, '**', 'bold text') },
-  { id: 'italic', label: 'Italic', icon: 'italic', apply: (v, s, e) => wrapSelection(v, s, e, '_', 'italic text') },
-  { id: 'link', label: 'Insert link', icon: 'link', apply: (v, s, e) => insertLink(v, s, e) },
+  { id: 'italic', label: 'Italic', icon: 'italic', divider: true, apply: (v, s, e) => wrapSelection(v, s, e, '_', 'italic text') },
+  { id: 'link', label: 'Insert link', icon: 'link', divider: true, apply: (v, s, e) => insertLink(v, s, e) },
   { id: 'bullets', label: 'Bulleted list', icon: 'list', apply: (v, s, e) => prefixLines(v, s, e, false) },
   { id: 'numbers', label: 'Numbered list', icon: 'listOrdered', apply: (v, s, e) => prefixLines(v, s, e, true) },
 ]
@@ -58,17 +58,19 @@ export function MarkdownEditor({ value, onChange, title, error, disabled = false
       <div className={`${styles.editor} ${error ? styles.editorError : ''} ${disabled ? styles.editorDisabled : ''}`}>
         <div className={styles.toolbar} role="toolbar" aria-label="Formatting" aria-controls={id}>
           {TOOLS.map((tool) => (
-            <button
-              key={tool.id}
-              type="button"
-              className={styles.toolButton}
-              aria-label={tool.label}
-              title={tool.label}
-              onClick={() => applyTool(tool)}
-              disabled={disabled || preview}
-            >
-              <AnnIcon name={tool.icon} size={16} />
-            </button>
+            <span key={tool.id} className={styles.toolGroup}>
+              <button
+                type="button"
+                className={styles.toolButton}
+                aria-label={tool.label}
+                title={tool.label}
+                onClick={() => applyTool(tool)}
+                disabled={disabled || preview}
+              >
+                <AnnIcon name={tool.icon} size={16} />
+              </button>
+              {tool.divider && <span className={styles.toolDivider} aria-hidden="true" />}
+            </span>
           ))}
           <button
             type="button"
@@ -119,8 +121,16 @@ export function MarkdownEditor({ value, onChange, title, error, disabled = false
         ) : (
           <span />
         )}
-        <span id={counterId} className={`${styles.counter} ${over ? styles.counterOver : ''}`}>
-          {value.length} / {LIMITS.MESSAGE} characters
+        <span className={styles.counterWrap}>
+          <span className={styles.meter} aria-hidden="true">
+            <span
+              className={`${styles.meterFill} ${over ? styles.meterOver : ''}`}
+              style={{ width: `${Math.min(100, (value.length / LIMITS.MESSAGE) * 100)}%` }}
+            />
+          </span>
+          <span id={counterId} className={`${styles.counter} ${over ? styles.counterOver : ''}`}>
+            {value.length} / {LIMITS.MESSAGE} characters
+          </span>
         </span>
       </div>
     </div>

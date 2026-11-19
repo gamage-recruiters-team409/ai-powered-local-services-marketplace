@@ -118,7 +118,8 @@ export function AnnouncementViewPage() {
       actions={<StatusChip status={a.status} />}
       plain
     >
-      <article className={styles.viewCard} aria-labelledby="ann-view-title">
+      <article className={styles.viewCard} aria-labelledby="ann-view-title" data-status={a.status}>
+        <div className={styles.viewAccent} aria-hidden="true" />
         <header className={styles.viewHeader}>
           <span className={styles.viewIcon}>
             <AnnIcon name="megaphone" size={18} />
@@ -130,17 +131,26 @@ export function AnnouncementViewPage() {
 
         <dl className={styles.infoStrip}>
           <div>
-            <dt>Audience</dt>
+            <dt>
+              <AnnIcon name="users" size={12} />
+              Audience
+            </dt>
             <dd>
               <AudienceChip audience={a.audience} />
             </dd>
           </div>
           <div>
-            <dt>{date.label}</dt>
+            <dt>
+              <AnnIcon name="calendar" size={12} />
+              {date.label}
+            </dt>
             <dd>{date.value || '—'}</dd>
           </div>
           <div>
-            <dt>{a.status === STATUS.PUBLISHED ? 'Published by' : 'Created by'}</dt>
+            <dt>
+              <AnnIcon name="userCircle" size={12} />
+              {a.status === STATUS.PUBLISHED ? 'Published by' : 'Created by'}
+            </dt>
             <dd className={styles.byline}>
               <span className={styles.avatar} aria-hidden="true">
                 A

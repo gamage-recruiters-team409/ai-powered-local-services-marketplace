@@ -257,10 +257,16 @@ function AnnouncementForm({ id }) {
         }}
       >
         <div className={styles.formCardHeader}>
-          <h2 className={styles.formCardTitle}>
-            <AnnIcon name="megaphone" size={16} /> Broadcast Details &amp; Configuration
-          </h2>
-          <span className={styles.subtle}>Fields marked with * are required</span>
+          <div className={styles.formCardHeading}>
+            <span className={styles.formCardIcon} aria-hidden="true">
+              <AnnIcon name="megaphone" size={16} />
+            </span>
+            <div>
+              <h2 className={styles.formCardTitle}>Broadcast Details &amp; Configuration</h2>
+              <p className={styles.formCardHint}>Write the message, choose who receives it, and when.</p>
+            </div>
+          </div>
+          <span className={styles.requiredHint}>Fields marked with * are required</span>
         </div>
 
         {serverError && !Object.keys(serverError.fieldErrors).length && (
@@ -281,11 +287,19 @@ function AnnouncementForm({ id }) {
               error={errors.title}
               disabled={busy}
             />
-            <span
-              className={`${styles.counter} ${styles.titleCounter} ${form.title.trim().length > LIMITS.TITLE ? styles.counterOver : ''}`}
-              aria-live="polite"
-            >
-              {form.title.trim().length} / {LIMITS.TITLE} characters
+            <span className={`${styles.counterWrap} ${styles.titleCounter}`}>
+              <span className={styles.meter} aria-hidden="true">
+                <span
+                  className={`${styles.meterFill} ${form.title.trim().length > LIMITS.TITLE ? styles.meterOver : ''}`}
+                  style={{ width: `${Math.min(100, (form.title.trim().length / LIMITS.TITLE) * 100)}%` }}
+                />
+              </span>
+              <span
+                className={`${styles.counter} ${form.title.trim().length > LIMITS.TITLE ? styles.counterOver : ''}`}
+                aria-live="polite"
+              >
+                {form.title.trim().length} / {LIMITS.TITLE} characters
+              </span>
             </span>
           </div>
 
@@ -335,7 +349,10 @@ function AnnouncementForm({ id }) {
               Broadcast delivery options
               {isPublished && <LockedNote />}
             </legend>
-            <div className={styles.deliveryOption}>
+            <div className={styles.deliveryOption} data-checked={form.sendPush || undefined}>
+              <span className={styles.deliveryIcon} aria-hidden="true">
+                <AnnIcon name="bell" size={16} />
+              </span>
               <Checkbox
                 label="Send push notification alert"
                 checked={form.sendPush}
@@ -344,7 +361,10 @@ function AnnouncementForm({ id }) {
                 disabled={busy || isPublished}
               />
             </div>
-            <div className={styles.deliveryOption}>
+            <div className={styles.deliveryOption} data-checked={form.pinToHeader || undefined}>
+              <span className={styles.deliveryIcon} aria-hidden="true">
+                <AnnIcon name="pin" size={16} />
+              </span>
               <Checkbox
                 label="Pin to user portal header"
                 checked={form.pinToHeader}
