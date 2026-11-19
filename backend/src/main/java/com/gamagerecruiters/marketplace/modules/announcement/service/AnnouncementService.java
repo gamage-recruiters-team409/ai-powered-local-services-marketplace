@@ -156,8 +156,17 @@ public class AnnouncementService {
         return AnnouncementMapper.toResponse(saved, now);
     }
 
+    /**
+     * {@code request.version()} is the version the admin's form was loaded with. If the announcement changed since
+     * (another admin saved, or the publisher published it) the update is rejected with 409 instead of overwriting it.
+     */
     public AnnouncementResponse update(String adminId, String id, AnnouncementRequest request) {
+        if (request.version() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ANNOUNCEMENT_VERSION_REQUIRED",
+                    "version is required: send the version of the announcement you loaded");
+        }
         Announcement current = find(id);
+        assertLoadedVersion(current, request.version());
         Instant now = clock.instant();
 
         if (current.getStatus() == AnnouncementStatus.PUBLISHED) {
@@ -183,11 +192,19 @@ public class AnnouncementService {
         return AnnouncementMapper.toResponse(updated, now);
     }
 
-    public void delete(String adminId, String id) {
+    /**
+     * Deletes a DRAFT/SCHEDULED announcement. The delete is conditional on the status and version read here;
+     * {@code loadedVersion} (optional) is the version the admin was looking at, so a delete from a stale screen gets
+     * 409 ANNOUNCEMENT_UPDATE_CONFLICT instead of removing a newer change.
+     */
+    public void delete(String adminId, String id, Long loadedVersion) {
         Announcement current = find(id);
         if (current.getStatus() == AnnouncementStatus.PUBLISHED) {
             throw new ResourceConflictException("ANNOUNCEMENT_NOT_DELETABLE",
                     "A published announcement cannot be deleted");
+        }
+        if (loadedVersion != null) {
+            assertLoadedVersion(current, loadedVersion);
         }
         if (!store.deleteUnpublished(current)) {
             throw conflictAfterRace(id, current);
@@ -240,6 +257,14 @@ public class AnnouncementService {
         if (locked) {
             throw new ResourceConflictException("ANNOUNCEMENT_FIELDS_LOCKED",
                     "A published announcement can only have its title and message edited");
+        }
+    }
+
+    /** The admin's screen was loaded from an older version: never act on it. */
+    private static void assertLoadedVersion(Announcement current, long loadedVersion) {
+        if (!Objects.equals(current.getVersion(), loadedVersion)) {
+            throw new ResourceConflictException("ANNOUNCEMENT_UPDATE_CONFLICT",
+                    "The announcement was changed after you opened it. Reload it and try again");
         }
     }
 

@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.announcement.controller;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
@@ -96,7 +97,7 @@ class AdminAnnouncementControllerTest {
 
     private static AnnouncementResponse response() {
         Instant now = Instant.parse("2026-11-19T10:00:00Z");
-        return new AnnouncementResponse(ID, "Maintenance", "We are **offline** on Sunday", AnnouncementAudience.ALL_USERS,
+        return new AnnouncementResponse(ID, 3L, "Maintenance", "We are **offline** on Sunday", AnnouncementAudience.ALL_USERS,
                 AnnouncementStatus.PUBLISHED, null, now, true, true, now.plusSeconds(3600), true,
                 DeliveryState.NOT_APPLIED, "user-ADMIN", "user-ADMIN", now, now);
     }
@@ -140,7 +141,7 @@ class AdminAnnouncementControllerTest {
                         .param("status", "PUBLISHED").param("audience", "ALL_USERS").param("q", "maint"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value(ID))
-                .andExpect(jsonPath("$.version").doesNotExist());
+                .andExpect(jsonPath("$.content[0].version").value(3));
         verify(announcementService).list("PUBLISHED", "ALL_USERS", "maint", 0, 5);
         mockMvc.perform(get(BASE + "/summary").header("Authorization", auth))
                 .andExpect(status().isOk())
@@ -179,7 +180,7 @@ class AdminAnnouncementControllerTest {
                 .andExpect(jsonPath("$.createdBy").value("user-ADMIN"));
         mockMvc.perform(json(put(BASE + "/" + ID), BODY).header("Authorization", auth)).andExpect(status().isOk());
         mockMvc.perform(delete(BASE + "/" + ID).header("Authorization", auth)).andExpect(status().isNoContent());
-        verify(announcementService).delete("user-ADMIN", ID);
+        verify(announcementService).delete("user-ADMIN", ID, null);
     }
 
     @ParameterizedTest
@@ -229,7 +230,7 @@ class AdminAnnouncementControllerTest {
     @DisplayName("service conflicts keep their code: 409 ANNOUNCEMENT_NOT_DELETABLE / FIELDS_LOCKED")
     void conflictCodes() throws Exception {
         doThrow(new ResourceConflictException("ANNOUNCEMENT_NOT_DELETABLE", "published"))
-                .when(announcementService).delete("user-ADMIN", ID);
+                .when(announcementService).delete("user-ADMIN", ID, null);
         when(announcementService.update(eq("user-ADMIN"), eq(ID), any()))
                 .thenThrow(new ResourceConflictException("ANNOUNCEMENT_FIELDS_LOCKED", "locked"));
         String auth = bearer(Role.ADMIN);
@@ -240,6 +241,35 @@ class AdminAnnouncementControllerTest {
         mockMvc.perform(json(put(BASE + "/" + ID), BODY).header("Authorization", auth))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value("ANNOUNCEMENT_FIELDS_LOCKED"));
+    }
+
+    @Test
+    @DisplayName("version contract: PUT passes the loaded version to the service; DELETE passes ?version; "
+            + "stale -> 409 ANNOUNCEMENT_UPDATE_CONFLICT")
+    void versionContract() throws Exception {
+        String withVersion = BODY.replace("\"intent\":\"PUBLISH\"", "\"intent\":\"PUBLISH\",\"version\":3");
+        when(announcementService.update(eq("user-ADMIN"), eq(ID), any())).thenReturn(response());
+        String auth = bearer(Role.ADMIN);
+
+        mockMvc.perform(json(put(BASE + "/" + ID), withVersion).header("Authorization", auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(3));
+        verify(announcementService).update(eq("user-ADMIN"), eq(ID), argThat(r -> Long.valueOf(3).equals(r.version())));
+
+        mockMvc.perform(delete(BASE + "/" + ID).param("version", "3").header("Authorization", auth))
+                .andExpect(status().isNoContent());
+        verify(announcementService).delete("user-ADMIN", ID, 3L);
+
+        doThrow(new ResourceConflictException("ANNOUNCEMENT_UPDATE_CONFLICT", "stale"))
+                .when(announcementService).delete("user-ADMIN", ID, 2L);
+        mockMvc.perform(delete(BASE + "/" + ID).param("version", "2").header("Authorization", auth))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("ANNOUNCEMENT_UPDATE_CONFLICT"));
+
+        mockMvc.perform(json(put(BASE + "/" + ID), withVersion.replace("\"version\":3", "\"version\":-1"))
+                        .header("Authorization", auth))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("version"));
     }
 
     @Test

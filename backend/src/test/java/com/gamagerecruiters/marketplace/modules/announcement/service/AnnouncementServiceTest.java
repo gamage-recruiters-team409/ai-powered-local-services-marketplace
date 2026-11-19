@@ -23,6 +23,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -57,6 +58,7 @@ class AnnouncementServiceTest {
     private static final String ADMIN = "admin-1";
     private static final String ID = "ann-1";
     private static final String TITLE = "Planned maintenance";
+    private static final long STORED_VERSION = 3L;
     private static final String MESSAGE = "We will be **offline** on Sunday.";
 
     @Mock
@@ -91,13 +93,13 @@ class AnnouncementServiceTest {
 
     private static AnnouncementRequest request(AnnouncementIntent intent, Instant scheduledAt, boolean pin) {
         return new AnnouncementRequest("  " + TITLE + " ", MESSAGE, AnnouncementAudience.CUSTOMERS, scheduledAt, true,
-                pin, intent);
+                pin, intent, STORED_VERSION);
     }
 
     private Announcement stored(AnnouncementStatus status) {
         Announcement a = new Announcement();
         a.setId(ID);
-        a.setVersion(3L);
+        a.setVersion(STORED_VERSION);
         a.setTitle(TITLE);
         a.setMessage(MESSAGE);
         a.setAudience(AnnouncementAudience.CUSTOMERS);
@@ -188,11 +190,11 @@ class AnnouncementServiceTest {
     void publishedFieldsLocked() {
         stored(AnnouncementStatus.PUBLISHED);
         List<AnnouncementRequest> changes = List.of(
-                new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.PROVIDERS, null, true, false, AnnouncementIntent.PUBLISH),
-                new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.CUSTOMERS, null, false, false, AnnouncementIntent.PUBLISH),
-                new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.CUSTOMERS, null, true, true, AnnouncementIntent.PUBLISH),
-                new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.CUSTOMERS, NOW, true, false, AnnouncementIntent.PUBLISH),
-                new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.CUSTOMERS, null, true, false, AnnouncementIntent.DRAFT));
+                new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.PROVIDERS, null, true, false, AnnouncementIntent.PUBLISH, STORED_VERSION),
+                new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.CUSTOMERS, null, false, false, AnnouncementIntent.PUBLISH, STORED_VERSION),
+                new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.CUSTOMERS, null, true, true, AnnouncementIntent.PUBLISH, STORED_VERSION),
+                new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.CUSTOMERS, NOW, true, false, AnnouncementIntent.PUBLISH, STORED_VERSION),
+                new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.CUSTOMERS, null, true, false, AnnouncementIntent.DRAFT, STORED_VERSION));
 
         for (AnnouncementRequest change : changes) {
             assertApiError(catchThrowable(() -> service.update(ADMIN, ID, change)), HttpStatus.CONFLICT,
@@ -210,7 +212,7 @@ class AnnouncementServiceTest {
                 .thenReturn(Optional.of(current));
 
         service.update(ADMIN, ID, new AnnouncementRequest(" Fixed title ", "Fixed *text*", AnnouncementAudience.CUSTOMERS,
-                null, true, false, AnnouncementIntent.PUBLISH));
+                null, true, false, AnnouncementIntent.PUBLISH, STORED_VERSION));
 
         verify(store).updatePublishedText(current, "Fixed title", "Fixed *text*", ADMIN, NOW);
         verifyNoInteractions(deliveryPort);
@@ -254,6 +256,53 @@ class AnnouncementServiceTest {
     }
 
     @Test
+    @DisplayName("update without the loaded version -> 400 ANNOUNCEMENT_VERSION_REQUIRED, nothing read or stored")
+    void updateRequiresVersion() {
+        AnnouncementRequest noVersion = new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.CUSTOMERS, null,
+                true, false, AnnouncementIntent.DRAFT, null);
+
+        assertApiError(catchThrowable(() -> service.update(ADMIN, ID, noVersion)), HttpStatus.BAD_REQUEST,
+                "ANNOUNCEMENT_VERSION_REQUIRED");
+        verify(store, never()).findById(any());
+        verify(store, never()).replaceUnpublished(any(), any());
+    }
+
+    @ParameterizedTest(name = "stored status {0}")
+    @EnumSource(AnnouncementStatus.class)
+    @DisplayName("stale form: loaded version older than the stored one -> 409 UPDATE_CONFLICT, nothing written")
+    void staleFormRejected(AnnouncementStatus status) {
+        stored(status);
+        AnnouncementRequest stale = new AnnouncementRequest(TITLE, MESSAGE, AnnouncementAudience.CUSTOMERS, null,
+                true, false, AnnouncementIntent.PUBLISH, STORED_VERSION - 1);
+
+        assertApiError(catchThrowable(() -> service.update(ADMIN, ID, stale)), HttpStatus.CONFLICT,
+                "ANNOUNCEMENT_UPDATE_CONFLICT");
+        verify(store, never()).replaceUnpublished(any(), any());
+        verify(store, never()).updatePublishedText(any(), any(), any(), any(), any());
+        verifyNoInteractions(deliveryPort);
+    }
+
+    @Test
+    @DisplayName("delete from a stale screen (older version sent) -> 409 UPDATE_CONFLICT, nothing deleted")
+    void staleDeleteRejected() {
+        stored(AnnouncementStatus.DRAFT);
+
+        assertApiError(catchThrowable(() -> service.delete(ADMIN, ID, STORED_VERSION - 1)), HttpStatus.CONFLICT,
+                "ANNOUNCEMENT_UPDATE_CONFLICT");
+        verify(store, never()).deleteUnpublished(any());
+    }
+
+    @Test
+    @DisplayName("delete race: same status but the conditional delete found a newer version -> 409 UPDATE_CONFLICT")
+    void deleteRaceWithAnotherAdmin() {
+        Announcement read = stored(AnnouncementStatus.DRAFT);
+        when(store.deleteUnpublished(read)).thenReturn(false);
+
+        assertApiError(catchThrowable(() -> service.delete(ADMIN, ID, STORED_VERSION)), HttpStatus.CONFLICT,
+                "ANNOUNCEMENT_UPDATE_CONFLICT");
+    }
+
+    @Test
     @DisplayName("unknown id -> 404 ANNOUNCEMENT_NOT_FOUND")
     void notFound() {
         when(store.findById(ID)).thenReturn(Optional.empty());
@@ -267,17 +316,17 @@ class AnnouncementServiceTest {
     @DisplayName("delete: PUBLISHED -> 409 ANNOUNCEMENT_NOT_DELETABLE; DRAFT and SCHEDULED are deleted")
     void deleteRules() {
         stored(AnnouncementStatus.PUBLISHED);
-        assertApiError(catchThrowable(() -> service.delete(ADMIN, ID)), HttpStatus.CONFLICT, "ANNOUNCEMENT_NOT_DELETABLE");
+        assertApiError(catchThrowable(() -> service.delete(ADMIN, ID, null)), HttpStatus.CONFLICT, "ANNOUNCEMENT_NOT_DELETABLE");
         verify(store, never()).deleteUnpublished(any());
 
         Announcement draft = stored(AnnouncementStatus.DRAFT);
         when(store.deleteUnpublished(draft)).thenReturn(true);
-        service.delete(ADMIN, ID);
+        service.delete(ADMIN, ID, null);
         verify(store).deleteUnpublished(draft);
 
         Announcement scheduled = stored(AnnouncementStatus.SCHEDULED);
         when(store.deleteUnpublished(scheduled)).thenReturn(true);
-        service.delete(ADMIN, ID);
+        service.delete(ADMIN, ID, null);
         verify(store).deleteUnpublished(scheduled);
     }
 
@@ -290,7 +339,7 @@ class AnnouncementServiceTest {
         when(store.findById(ID)).thenReturn(Optional.of(read), Optional.of(published));
         when(store.deleteUnpublished(read)).thenReturn(false);
 
-        assertApiError(catchThrowable(() -> service.delete(ADMIN, ID)), HttpStatus.CONFLICT, "ANNOUNCEMENT_STATE_CONFLICT");
+        assertApiError(catchThrowable(() -> service.delete(ADMIN, ID, null)), HttpStatus.CONFLICT, "ANNOUNCEMENT_STATE_CONFLICT");
     }
 
     // ---------- list ----------

@@ -130,7 +130,13 @@ class AnnouncementMongoIntegrationTest {
 
     private static AnnouncementRequest request(String title, AnnouncementAudience audience, AnnouncementIntent intent,
                                                Instant scheduledAt, boolean pin) {
-        return new AnnouncementRequest(title, "Message for " + title, audience, scheduledAt, false, pin, intent);
+        return new AnnouncementRequest(title, "Message for " + title, audience, scheduledAt, false, pin, intent, null);
+    }
+
+    /** The same request sent from a form that was loaded at {@code loadedVersion}. */
+    private static AnnouncementRequest from(AnnouncementRequest r, Long loadedVersion) {
+        return new AnnouncementRequest(r.title(), r.message(), r.audience(), r.scheduledAt(), r.sendPush(),
+                r.pinToHeader(), r.intent(), loadedVersion);
     }
 
     /** A SCHEDULED announcement whose time has already come (scheduledAt moved into the past directly in the DB). */
@@ -225,10 +231,12 @@ class AnnouncementMongoIntegrationTest {
             + "the published announcement is unchanged")
     void editRacingWithPublisher() {
         String id = dueScheduled("Race edit", false);
+        Long loaded = load(id).getVersion();
         interleaveAfterFirstRead(() -> publisher.publishDue());
 
-        assertApiError(catchThrowable(() -> service.update(ADMIN, id, request("Edited", AnnouncementAudience.CUSTOMERS,
-                AnnouncementIntent.DRAFT, null, false))), 409, "ANNOUNCEMENT_STATE_CONFLICT");
+        assertApiError(catchThrowable(() -> service.update(ADMIN, id, from(request("Edited",
+                AnnouncementAudience.CUSTOMERS, AnnouncementIntent.DRAFT, null, false), loaded))), 409,
+                "ANNOUNCEMENT_STATE_CONFLICT");
 
         Announcement stored = load(id);
         assertThat(stored.getStatus()).isEqualTo(AnnouncementStatus.PUBLISHED);
@@ -243,7 +251,7 @@ class AnnouncementMongoIntegrationTest {
         String id = dueScheduled("Race delete", false);
         interleaveAfterFirstRead(() -> publisher.publishDue());
 
-        assertApiError(catchThrowable(() -> service.delete(ADMIN, id)), 409, "ANNOUNCEMENT_STATE_CONFLICT");
+        assertApiError(catchThrowable(() -> service.delete(ADMIN, id, null)), 409, "ANNOUNCEMENT_STATE_CONFLICT");
         assertThat(load(id)).isNotNull();
         assertThat(load(id).getStatus()).isEqualTo(AnnouncementStatus.PUBLISHED);
     }
@@ -256,9 +264,73 @@ class AnnouncementMongoIntegrationTest {
         Announcement snapshot = load(id);
         interleaveAfterFirstRead(() -> store.replaceUnpublished(snapshot, otherAdminChange(snapshot)));
 
-        assertApiError(catchThrowable(() -> service.update(ADMIN, id, request("Mine", AnnouncementAudience.ALL_USERS,
-                AnnouncementIntent.DRAFT, null, false))), 409, "ANNOUNCEMENT_UPDATE_CONFLICT");
+        assertApiError(catchThrowable(() -> service.update(ADMIN, id, from(request("Mine",
+                AnnouncementAudience.ALL_USERS, AnnouncementIntent.DRAFT, null, false), snapshot.getVersion()))), 409,
+                "ANNOUNCEMENT_UPDATE_CONFLICT");
         assertThat(load(id).getTitle()).isEqualTo("Theirs");
+    }
+
+    @Test
+    @DisplayName("delete race: another admin edits the draft (same status, newer version) between this admin's read "
+            + "and delete -> 409 UPDATE_CONFLICT, the edited announcement is kept")
+    void deleteRacingWithAnotherAdminEdit() {
+        String id = service.create(ADMIN, request("Draft", AnnouncementAudience.ALL_USERS, AnnouncementIntent.DRAFT,
+                null, false)).id();
+        Announcement snapshot = load(id);
+        interleaveAfterFirstRead(() -> store.replaceUnpublished(snapshot, otherAdminChange(snapshot)));
+
+        assertApiError(catchThrowable(() -> service.delete(ADMIN, id, null)), 409, "ANNOUNCEMENT_UPDATE_CONFLICT");
+
+        Announcement kept = load(id);
+        assertThat(kept).as("not deleted").isNotNull();
+        assertThat(kept.getStatus()).as("status unchanged").isEqualTo(AnnouncementStatus.DRAFT);
+        assertThat(kept.getVersion()).isEqualTo(snapshot.getVersion() + 1);
+        assertThat(kept.getTitle()).isEqualTo("Theirs");
+        assertThat(kept.getUpdatedBy()).isEqualTo("other-admin");
+    }
+
+    @Test
+    @DisplayName("stale forms: admins A and B open the same draft; B saves first; A's older form -> 409 "
+            + "UPDATE_CONFLICT and B's change is kept; a stale delete is refused too; after reloading A can save")
+    void staleFormsFromTwoAdmins() {
+        String id = service.create(ADMIN, request("Original", AnnouncementAudience.ALL_USERS, AnnouncementIntent.DRAFT,
+                null, false)).id();
+        Long openedByA = service.get(id).version();
+        Long openedByB = service.get(id).version();
+
+        AnnouncementResponse savedByB = service.update("admin-b", id, from(request("B's title",
+                AnnouncementAudience.PROVIDERS, AnnouncementIntent.DRAFT, null, false), openedByB));
+        assertThat(savedByB.version()).isEqualTo(openedByB + 1);
+
+        assertApiError(catchThrowable(() -> service.update("admin-a", id, from(request("A's title",
+                AnnouncementAudience.CUSTOMERS, AnnouncementIntent.DRAFT, null, false), openedByA))), 409,
+                "ANNOUNCEMENT_UPDATE_CONFLICT");
+        assertApiError(catchThrowable(() -> service.delete("admin-a", id, openedByA)), 409,
+                "ANNOUNCEMENT_UPDATE_CONFLICT");
+
+        Announcement stored = load(id);
+        assertThat(stored.getTitle()).as("B's change is not overwritten").isEqualTo("B's title");
+        assertThat(stored.getAudience()).isEqualTo(AnnouncementAudience.PROVIDERS);
+        assertThat(stored.getUpdatedBy()).isEqualTo("admin-b");
+
+        Long reloadedByA = service.get(id).version();
+        assertThat(service.update("admin-a", id, from(request("A's title", AnnouncementAudience.CUSTOMERS,
+                AnnouncementIntent.DRAFT, null, false), reloadedByA)).title()).isEqualTo("A's title");
+    }
+
+    @Test
+    @DisplayName("stale forms on a PUBLISHED announcement: A's older text correction -> 409, B's correction kept")
+    void staleTextCorrectionOnPublished() {
+        String id = service.create(ADMIN, request("Live", AnnouncementAudience.ALL_USERS, AnnouncementIntent.PUBLISH,
+                null, false)).id();
+        Long opened = service.get(id).version();
+
+        service.update("admin-b", id, from(request("Live (B)", AnnouncementAudience.ALL_USERS,
+                AnnouncementIntent.PUBLISH, null, false), opened));
+        assertApiError(catchThrowable(() -> service.update("admin-a", id, from(request("Live (A)",
+                AnnouncementAudience.ALL_USERS, AnnouncementIntent.PUBLISH, null, false), opened))), 409,
+                "ANNOUNCEMENT_UPDATE_CONFLICT");
+        assertThat(load(id).getTitle()).isEqualTo("Live (B)");
     }
 
     private static Announcement otherAdminChange(Announcement snapshot) {
@@ -283,14 +355,15 @@ class AnnouncementMongoIntegrationTest {
         verify(deliveryPort, times(1)).deliver(any());
 
         service.update(ADMIN, id, new AnnouncementRequest("Live (fixed)", "Corrected text", AnnouncementAudience.PROVIDERS,
-                null, false, true, AnnouncementIntent.PUBLISH));
+                null, false, true, AnnouncementIntent.PUBLISH, load(id).getVersion()));
         assertThat(load(id).getTitle()).isEqualTo("Live (fixed)");
         verify(deliveryPort, times(1)).deliver(any());
 
+        Long current = load(id).getVersion();
         assertApiError(catchThrowable(() -> service.update(ADMIN, id, new AnnouncementRequest("Live", "x",
-                AnnouncementAudience.ALL_USERS, null, false, true, AnnouncementIntent.PUBLISH))), 409,
+                AnnouncementAudience.ALL_USERS, null, false, true, AnnouncementIntent.PUBLISH, current))), 409,
                 "ANNOUNCEMENT_FIELDS_LOCKED");
-        assertApiError(catchThrowable(() -> service.delete(ADMIN, id)), 409, "ANNOUNCEMENT_NOT_DELETABLE");
+        assertApiError(catchThrowable(() -> service.delete(ADMIN, id, null)), 409, "ANNOUNCEMENT_NOT_DELETABLE");
         verify(store, never()).deleteUnpublished(any());
         assertThat(load(id).getStatus()).isEqualTo(AnnouncementStatus.PUBLISHED);
     }

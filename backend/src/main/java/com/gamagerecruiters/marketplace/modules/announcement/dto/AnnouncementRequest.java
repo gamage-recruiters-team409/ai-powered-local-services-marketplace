@@ -8,6 +8,7 @@ import com.gamagerecruiters.marketplace.modules.announcement.validation.NoHtmlTa
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 
 /**
@@ -36,7 +37,15 @@ public record AnnouncementRequest(
         Boolean pinToHeader,
 
         @NotNull(message = "intent is required")
-        AnnouncementIntent intent
+        AnnouncementIntent intent,
+
+        /*
+         * The version of the announcement the admin loaded (AnnouncementResponse.version). Required on update: if the
+         * announcement changed since then the update is rejected with 409 ANNOUNCEMENT_UPDATE_CONFLICT instead of
+         * overwriting the newer change. Ignored on create.
+         */
+        @PositiveOrZero(message = "version must be 0 or more")
+        Long version
 ) {
 
     public boolean push() {

@@ -8,10 +8,12 @@ import com.gamagerecruiters.marketplace.modules.announcement.domain.DeliveryStat
 
 /**
  * Admin view of an announcement. {@code message} is raw markdown (render it as markdown, never as HTML).
- * {@code pinActive} = published, pinned and pinExpiresAt still in the future.
+ * {@code pinActive} = published, pinned and pinExpiresAt still in the future. {@code version} increases on every
+ * change; send it back on update (and optionally on delete) so a stale form cannot overwrite a newer change.
  */
 public record AnnouncementResponse(
         String id,
+        Long version,
         String title,
         String message,
         AnnouncementAudience audience,

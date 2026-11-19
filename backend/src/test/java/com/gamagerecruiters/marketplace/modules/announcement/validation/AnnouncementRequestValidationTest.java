@@ -39,7 +39,7 @@ class AnnouncementRequestValidationTest {
 
     private static AnnouncementRequest request(String title, String message) {
         return new AnnouncementRequest(title, message, AnnouncementAudience.ALL_USERS, null, null, null,
-                AnnouncementIntent.DRAFT);
+                AnnouncementIntent.DRAFT, null);
     }
 
     private static Set<String> invalidFields(AnnouncementRequest request) {
@@ -56,7 +56,7 @@ class AnnouncementRequestValidationTest {
         assertThat(invalidFields(request("t".repeat(81), "m"))).containsExactly("title");
         assertThat(invalidFields(request("t", "m".repeat(5001)))).containsExactly("message");
         assertThat(invalidFields(request("  ", "  "))).containsExactlyInAnyOrder("title", "message");
-        assertThat(invalidFields(new AnnouncementRequest("t", "m", null, null, null, null, null)))
+        assertThat(invalidFields(new AnnouncementRequest("t", "m", null, null, null, null, null, null)))
                 .containsExactlyInAnyOrder("audience", "intent");
     }
 

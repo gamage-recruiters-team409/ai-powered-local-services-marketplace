@@ -94,12 +94,15 @@ public class AnnouncementStore {
         return Optional.ofNullable(mongoTemplate.findAndModify(query, update, RETURN_NEW, Announcement.class));
     }
 
-    /** Deletes a DRAFT/SCHEDULED announcement only while it still has the status that was read. True if deleted. */
+    /**
+     * Deletes a DRAFT/SCHEDULED announcement only while it still has the status AND version that were read, so an
+     * edit made by another admin in between (same status, newer version) is never deleted. True if deleted.
+     */
     public boolean deleteUnpublished(Announcement read) {
         if (read.getStatus() == AnnouncementStatus.PUBLISHED) {
             return false;
         }
-        Query query = Query.query(Criteria.where(F_ID).is(read.getId()).and(F_STATUS).is(read.getStatus()));
+        Query query = Query.query(unchanged(read.getId(), read.getStatus(), read.getVersion()));
         return mongoTemplate.remove(query, Announcement.class).getDeletedCount() == 1;
     }
 

@@ -77,8 +77,8 @@ public class AdminAnnouncementController {
 
     @DeleteMapping("/{id}")
     @PreAuthorize(AnnouncementAccess.ADMIN_AREA_EDIT)
-    public ResponseEntity<Void> delete(@PathVariable String id) {
-        announcementService.delete(currentUserId(), id);
+    public ResponseEntity<Void> delete(@PathVariable String id, @RequestParam(required = false) Long version) {
+        announcementService.delete(currentUserId(), id, version);
         return ResponseEntity.noContent().build();
     }
 

@@ -14,6 +14,7 @@ public final class AnnouncementMapper {
     public static AnnouncementResponse toResponse(Announcement a, Instant now) {
         return new AnnouncementResponse(
                 a.getId(),
+                a.getVersion(),
                 a.getTitle(),
                 a.getMessage(),
                 a.getAudience(),
