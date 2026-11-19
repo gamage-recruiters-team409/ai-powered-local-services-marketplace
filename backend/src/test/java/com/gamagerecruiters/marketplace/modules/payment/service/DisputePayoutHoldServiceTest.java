@@ -15,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
 
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
@@ -178,6 +179,88 @@ class DisputePayoutHoldServiceTest {
                         DISPUTE_ID, BOOKING_ID, PROVIDER_ID));
 
         verify(holdRepository, never()).save(any());
+    }
+
+    /**
+     * A concurrent insert for the same dispute should reuse the matching hold.
+     */
+    @Test
+    void prepareHold_duplicateKeyReturnsMatchingConcurrentHold() {
+        stubBooking(PROVIDER_ID, CUSTOMER_ID);
+
+        Payment payment = mockPayment(
+                "payment-1", CUSTOMER_ID, "100.00", "10.00");
+
+        DisputePayoutHold concurrentHold = new DisputePayoutHold(
+                DISPUTE_ID, BOOKING_ID, "payment-1",
+                PROVIDER_ID, new BigDecimal("90.00"), "LKR");
+
+        when(holdRepository.findByDisputeId(DISPUTE_ID))
+                .thenReturn(Optional.empty(), Optional.of(concurrentHold));
+        when(paymentRepository.findByBookingId(BOOKING_ID))
+                .thenReturn(List.of(payment));
+        when(holdRepository.save(any(DisputePayoutHold.class)))
+                .thenThrow(new DuplicateKeyException("Concurrent insert"));
+
+        DisputePayoutHold result =
+                service.prepareHold(DISPUTE_ID, BOOKING_ID, PROVIDER_ID);
+
+        assertSame(concurrentHold, result);
+        verify(holdRepository, times(2)).findByDisputeId(DISPUTE_ID);
+        verify(holdRepository).save(any(DisputePayoutHold.class));
+    }
+
+    /**
+     * A duplicate dispute ID must not be reused for another booking.
+     */
+    @Test
+    void prepareHold_duplicateKeyRejectsMismatchedConcurrentHold() {
+        stubBooking(PROVIDER_ID, CUSTOMER_ID);
+
+        Payment payment = mockPayment(
+                "payment-1", CUSTOMER_ID, "100.00", "10.00");
+
+        DisputePayoutHold conflictingHold = new DisputePayoutHold(
+                DISPUTE_ID, "different-booking", "payment-1",
+                PROVIDER_ID, new BigDecimal("90.00"), "LKR");
+
+        when(holdRepository.findByDisputeId(DISPUTE_ID))
+                .thenReturn(Optional.empty(), Optional.of(conflictingHold));
+        when(paymentRepository.findByBookingId(BOOKING_ID))
+                .thenReturn(List.of(payment));
+        when(holdRepository.save(any(DisputePayoutHold.class)))
+                .thenThrow(new DuplicateKeyException("Concurrent insert"));
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.prepareHold(
+                        DISPUTE_ID, BOOKING_ID, PROVIDER_ID));
+
+        assertTrue(exception.getMessage().contains("different booking or provider"));
+    }
+
+    /**
+     * An unresolved duplicate-key error must not be silently accepted.
+     */
+    @Test
+    void prepareHold_duplicateKeyWithoutExistingHoldPropagates() {
+        stubBooking(PROVIDER_ID, CUSTOMER_ID);
+
+        Payment payment = mockPayment(
+                "payment-1", CUSTOMER_ID, "100.00", "10.00");
+
+        when(holdRepository.findByDisputeId(DISPUTE_ID))
+                .thenReturn(Optional.empty());
+        when(paymentRepository.findByBookingId(BOOKING_ID))
+                .thenReturn(List.of(payment));
+        when(holdRepository.save(any(DisputePayoutHold.class)))
+                .thenThrow(new DuplicateKeyException("Concurrent insert"));
+
+        assertThrows(DuplicateKeyException.class,
+                () -> service.prepareHold(
+                        DISPUTE_ID, BOOKING_ID, PROVIDER_ID));
+
+        verify(holdRepository, times(2)).findByDisputeId(DISPUTE_ID);
     }
 
     /**

@@ -132,7 +132,7 @@ public class DisputePayoutHoldTransactionService {
 
                     // Reject inconsistent records instead of silently
                     // creating another financial reservation.
-                    if (ledgerRepository.existsByEventKey(eventKey)) {
+                    if (ledgerRepository.existsByEventKey(eventKey) || ledgerRepository.existsByEventKey(eventKey + ":AVAILABLE")) {
                         throw new IllegalStateException(
                                 "Hold ledger event already exists "
                                         + "but hold is not APPLIED");
@@ -140,18 +140,31 @@ public class DisputePayoutHoldTransactionService {
 
                     validateNoConflictingHold(hold);
 
-                    // Validate the disputed booking's own ledger
-                    // history before reserving provider earnings.
-                    validateBookingAvailability(hold);
+                                        // Reserve booking-specific pending and available earnings.
+                    // Both events join this MongoDB transaction.
+                    HoldAllocation allocation = determineHoldAllocation(hold);
 
-                    EarningsLedgerEntry entry = createHoldEvent(
-                            hold, eventKey);
+                    if (allocation.pending().signum() > 0) {
+                        EarningsLedgerEntry pendingEntry = createHoldEvent(
+                                hold, eventKey,
+                                EarningsLedgerEventType.EARNING_HOLD_FROM_PENDING,
+                                allocation.pending());
 
-                    // The existing ledger transaction uses REQUIRED
-                    // propagation and joins this outer transaction.
-                    // It validates the aggregate provider balance,
-                    // assigns the sequence and persists the event.
-                    ledgerTransactionService.appendAtomically(entry);
+                        ledgerTransactionService.appendAtomically(pendingEntry);
+                    }
+
+                    if (allocation.available().signum() > 0) {
+                        String availableKey = allocation.pending().signum() > 0
+                                ? eventKey + ":AVAILABLE"
+                                : eventKey;
+
+                        EarningsLedgerEntry availableEntry = createHoldEvent(
+                                hold, availableKey,
+                                EarningsLedgerEventType.EARNING_HOLD,
+                                allocation.available());
+
+                        ledgerTransactionService.appendAtomically(availableEntry);
+                    }
 
                     // This status change must commit together with
                     // the ledger and provider balance updates.
@@ -214,9 +227,19 @@ public class DisputePayoutHoldTransactionService {
      */
     private void validateBookingAvailability(
             DisputePayoutHold hold) {
+        determineHoldAllocation(hold);
+    }
 
-        List<EarningsLedgerEntry> entries = ledgerRepository.findByBookingIdOrderByCreatedAtDesc(
-                hold.getBookingId());
+    /**
+     * Calculates booking-specific pending and available reservations.
+     * The combined reservation must cover the entire hold amount.
+     */
+    private HoldAllocation determineHoldAllocation(
+            DisputePayoutHold hold) {
+
+        List<EarningsLedgerEntry> entries =
+                ledgerRepository.findByBookingIdOrderByCreatedAtDesc(
+                        hold.getBookingId());
 
         if (entries == null || entries.isEmpty()) {
             throw new IllegalStateException(
@@ -224,37 +247,55 @@ public class DisputePayoutHoldTransactionService {
         }
 
         for (EarningsLedgerEntry entry : entries) {
-
             if (entry == null
                     || !hold.getPaymentId().equals(entry.getPaymentId())
                     || !hold.getBookingId().equals(entry.getBookingId())
                     || !hold.getProviderId().equals(entry.getProviderId())
                     || !hold.getCurrency().equals(entry.getCurrency())) {
-
                 throw new IllegalStateException(
-                        "Booking ledger contains conflicting "
-                                + "financial ownership");
+                        "Booking ledger contains conflicting financial ownership");
             }
         }
 
-        EarningsBalanceCalculator.EarningsBalance balance = balanceCalculator.calculate(entries);
+        EarningsBalanceCalculator.EarningsBalance balance =
+                balanceCalculator.calculate(entries);
 
+        BigDecimal pending = balance.pending();
         BigDecimal available = balance.available();
+        BigDecimal required = hold.getAmount();
 
-        if (available == null
-                || available.compareTo(hold.getAmount()) < 0) {
-
+        if (pending == null || available == null || required == null
+                || pending.signum() < 0 || available.signum() < 0
+                || required.signum() <= 0) {
             throw new IllegalStateException(
-                    "Insufficient booking-specific available earnings");
+                    "Invalid booking earnings balances or hold amount");
         }
+
+        if (pending.add(available).compareTo(required) < 0) {
+            throw new IllegalStateException(
+                    "Insufficient booking-specific pending and available earnings");
+        }
+
+        BigDecimal fromPending = pending.min(required);
+        BigDecimal fromAvailable = required.subtract(fromPending);
+
+        return new HoldAllocation(fromPending, fromAvailable);
     }
+
+    private record HoldAllocation(
+            BigDecimal pending,
+            BigDecimal available) {
+    }
+
 
     /**
      * Builds a deterministic, validated earnings hold event.
      */
     private EarningsLedgerEntry createHoldEvent(
             DisputePayoutHold hold,
-            String eventKey) {
+            String eventKey,
+            EarningsLedgerEventType eventType,
+            BigDecimal amount) {
 
         EarningsLedgerEntry entry = new EarningsLedgerEntry();
 
@@ -262,8 +303,8 @@ public class DisputePayoutHoldTransactionService {
         entry.setPaymentId(hold.getPaymentId());
         entry.setBookingId(hold.getBookingId());
         entry.setProviderId(hold.getProviderId());
-        entry.setEventType(EarningsLedgerEventType.EARNING_HOLD);
-        entry.setAmount(hold.getAmount());
+        entry.setEventType(eventType);
+        entry.setAmount(amount);
         entry.setCurrency(hold.getCurrency());
         entry.setCreatedAt(Instant.now());
 
@@ -280,33 +321,194 @@ public class DisputePayoutHoldTransactionService {
             DisputePayoutHold hold,
             String eventKey) {
 
-        EarningsLedgerEntry recorded = ledgerRepository.findByEventKey(eventKey)
+        EarningsLedgerEntry primary = ledgerRepository.findByEventKey(eventKey)
                 .orElseThrow(() -> new IllegalStateException(
-                        "Applied hold has no committed ledger event"));
+                        "Applied hold has no primary committed ledger event"));
 
-        boolean matches = Objects.equals(eventKey, recorded.getEventKey())
-                && Objects.equals(
-                        hold.getPaymentId(), recorded.getPaymentId())
-                && Objects.equals(
-                        hold.getBookingId(), recorded.getBookingId())
-                && Objects.equals(
-                        hold.getProviderId(), recorded.getProviderId())
-                && Objects.equals(
-                        hold.getCurrency(), recorded.getCurrency())
-                && recorded.getEventType() == EarningsLedgerEventType.EARNING_HOLD
+        validateCommittedHoldEntry(hold, primary, eventKey);
+
+        String availableKey = eventKey + ":AVAILABLE";
+        var secondary = ledgerRepository.findByEventKey(availableKey);
+
+        BigDecimal total = primary.getAmount();
+
+        if (secondary.isPresent()) {
+            EarningsLedgerEntry additional = secondary.get();
+            validateCommittedHoldEntry(hold, additional, availableKey);
+
+            if (primary.getEventType()
+                    != EarningsLedgerEventType.EARNING_HOLD_FROM_PENDING
+                    || additional.getEventType()
+                    != EarningsLedgerEventType.EARNING_HOLD) {
+                throw new IllegalStateException(
+                        "Invalid split hold event ordering");
+            }
+
+            total = total.add(additional.getAmount());
+        }
+
+        if (total.compareTo(hold.getAmount()) != 0) {
+            throw new IllegalStateException(
+                    "Applied hold amount does not match committed ledger events");
+        }
+    }
+
+    private void validateCommittedHoldEntry(
+            DisputePayoutHold hold,
+            EarningsLedgerEntry recorded,
+            String expectedKey) {
+
+        boolean matches = Objects.equals(expectedKey, recorded.getEventKey())
+                && Objects.equals(hold.getPaymentId(), recorded.getPaymentId())
+                && Objects.equals(hold.getBookingId(), recorded.getBookingId())
+                && Objects.equals(hold.getProviderId(), recorded.getProviderId())
+                && Objects.equals(hold.getCurrency(), recorded.getCurrency())
+                && (recorded.getEventType() == EarningsLedgerEventType.EARNING_HOLD
+                        || recorded.getEventType()
+                        == EarningsLedgerEventType.EARNING_HOLD_FROM_PENDING)
                 && recorded.getAmount() != null
-                && recorded.getAmount().compareTo(
-                        hold.getAmount()) == 0;
+                && recorded.getAmount().signum() > 0;
 
         if (!matches) {
             throw new IllegalStateException(
-                    "Applied hold does not match its ledger event");
+                    "Applied hold does not match its committed ledger event");
         }
     }
+
 
     /**
      * Rejects missing dispute identifiers.
      */
+    /**
+     * Atomically returns reserved earnings to their original balance sources.
+     * A repeated release verifies the committed ledger events without
+     * creating duplicate financial movements.
+     */
+    public DisputePayoutHold releaseHold(String disputeId) {
+        requireDisputeId(disputeId);
+
+        return Objects.requireNonNull(transactionTemplate.execute(status -> {
+            DisputePayoutHold hold = requireHold(disputeId);
+
+            String holdKey = HOLD_EVENT_PREFIX + disputeId;
+            String availableHoldKey = holdKey + ":AVAILABLE";
+            String releaseKey = "DISPUTE_RELEASE:" + disputeId;
+            String availableReleaseKey = releaseKey + ":AVAILABLE";
+
+            if (hold.getStatus() != HoldStatus.APPLIED
+                    && hold.getStatus() != HoldStatus.RELEASED) {
+                throw new IllegalStateException(
+                        "Only applied holds can be released");
+            }
+
+            // Verify the original reservation before moving any money.
+            requireMatchingCommittedEvent(hold, holdKey);
+
+            EarningsLedgerEntry primary = ledgerRepository
+                    .findByEventKey(holdKey)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Original hold ledger event missing"));
+
+            var secondary = ledgerRepository.findByEventKey(availableHoldKey);
+
+            if (hold.getStatus() == HoldStatus.RELEASED) {
+                verifyReleaseEvent(
+                        hold, releaseKey, primary.getEventType(),
+                        primary.getAmount());
+
+                if (secondary.isPresent()) {
+                    verifyReleaseEvent(
+                            hold, availableReleaseKey,
+                            secondary.get().getEventType(),
+                            secondary.get().getAmount());
+                } else if (ledgerRepository.existsByEventKey(
+                        availableReleaseKey)) {
+                    throw new IllegalStateException(
+                            "Unexpected secondary release event");
+                }
+
+                return hold;
+            }
+
+            if (ledgerRepository.existsByEventKey(releaseKey)
+                    || ledgerRepository.existsByEventKey(availableReleaseKey)) {
+                throw new IllegalStateException(
+                        "Release ledger event already exists for an applied hold");
+            }
+
+            appendReleaseEvent(hold, primary, releaseKey);
+
+            if (secondary.isPresent()) {
+                appendReleaseEvent(
+                        hold, secondary.get(), availableReleaseKey);
+            }
+
+            hold.markReleased();
+            return holdRepository.save(hold);
+        }));
+    }
+
+    /**
+     * Appends a source-preserving release within the outer transaction.
+     */
+    private void appendReleaseEvent(
+            DisputePayoutHold hold,
+            EarningsLedgerEntry original,
+            String eventKey) {
+
+        EarningsLedgerEventType releaseType =
+                releaseTypeFor(original.getEventType());
+
+        EarningsLedgerEntry release = createHoldEvent(
+                hold, eventKey, releaseType, original.getAmount());
+
+        ledgerTransactionService.appendAtomically(release);
+    }
+
+    /**
+     * Maps a reservation to the balance from which it originated.
+     */
+    private EarningsLedgerEventType releaseTypeFor(
+            EarningsLedgerEventType originalType) {
+
+        return switch (originalType) {
+            case EARNING_HOLD_FROM_PENDING ->
+                    EarningsLedgerEventType.EARNING_RELEASE_TO_PENDING;
+            case EARNING_HOLD ->
+                    EarningsLedgerEventType.EARNING_RELEASE;
+            default -> throw new IllegalStateException(
+                    "Unsupported original hold event type");
+        };
+    }
+
+    /**
+     * Verifies the persisted release on an idempotent retry.
+     */
+    private void verifyReleaseEvent(
+            DisputePayoutHold hold,
+            String releaseKey,
+            EarningsLedgerEventType originalType,
+            BigDecimal expectedAmount) {
+
+        EarningsLedgerEntry recorded = ledgerRepository
+                .findByEventKey(releaseKey)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Released hold has no committed release event"));
+
+        boolean matches = Objects.equals(releaseKey, recorded.getEventKey())
+                && Objects.equals(hold.getPaymentId(), recorded.getPaymentId())
+                && Objects.equals(hold.getBookingId(), recorded.getBookingId())
+                && Objects.equals(hold.getProviderId(), recorded.getProviderId())
+                && Objects.equals(hold.getCurrency(), recorded.getCurrency())
+                && recorded.getEventType() == releaseTypeFor(originalType)
+                && recorded.getAmount() != null
+                && recorded.getAmount().compareTo(expectedAmount) == 0;
+
+        if (!matches) {
+            throw new IllegalStateException(
+                    "Committed release does not match original reservation");
+        }
+    }
     private static void requireDisputeId(String disputeId) {
 
         if (disputeId == null || disputeId.isBlank()) {

@@ -77,7 +77,7 @@ public class DisputePayoutHold {
 
         Objects.requireNonNull(amount, "Hold amount is required");
 
-        if (amount.signum() <= 0 || amount.scale() > 2) {
+        if (amount.signum() <= 0 || amount.stripTrailingZeros().scale() > 2) {
             throw new IllegalArgumentException(
                     "Hold amount must be positive with at most two decimal places");
         }

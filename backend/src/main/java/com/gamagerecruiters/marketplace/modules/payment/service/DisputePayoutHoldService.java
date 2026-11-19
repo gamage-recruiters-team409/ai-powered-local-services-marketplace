@@ -5,6 +5,7 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Objects;
 
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
@@ -169,7 +170,24 @@ public class DisputePayoutHoldService {
                 providerAmount,
                 payment.getCurrency());
 
-        return holdRepository.save(hold);
+        try {
+            return holdRepository.save(hold);
+        } catch (DuplicateKeyException exception) {
+            // A concurrent request may have created the same dispute hold.
+            // Re-read it and accept only the original booking/provider.
+            DisputePayoutHold concurrentHold = holdRepository
+                    .findByDisputeId(disputeId)
+                    .orElseThrow(() -> exception);
+
+            if (!bookingId.equals(concurrentHold.getBookingId())
+                    || !providerId.equals(concurrentHold.getProviderId())) {
+                throw new IllegalStateException(
+                        "Dispute ID is already associated with a different booking or provider",
+                        exception);
+            }
+
+            return concurrentHold;
+        }
     }
 
     /**
