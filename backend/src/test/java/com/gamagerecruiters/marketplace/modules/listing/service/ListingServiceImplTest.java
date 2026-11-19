@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.listing.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -28,15 +29,21 @@ import org.springframework.data.mongodb.core.geo.GeoJsonPoint;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.AuthorityUtils;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitExceededException;
 import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitService;
+import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.customer.service.DistrictCatalog;
 import com.gamagerecruiters.marketplace.modules.listing.domain.AddOnItem;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ExecutionModel;
@@ -520,6 +527,50 @@ class ListingServiceImplTest {
                 new ListingModerationRequest(ModerationDecision.REJECT, "Confirmed violation")
         );
         assertThat(rejected.status()).isEqualTo(ListingStatus.REJECTED);
+    }
+
+    @Test
+    @DisplayName("Moderation approval checks the actual listing owner's eligibility while keeping moderator SecurityContext unchanged")
+    void moderationApprovalChecksListingOwnerWithoutMutatingModeratorSecurityContext() {
+        ServiceListing ownersFlagged = persistedListing("flagged-owner-2", ListingStatus.FLAGGED);
+        ownersFlagged.setProviderId(OTHER_PROVIDER_ID);
+        ownersFlagged.setModerationFlags(List.of("EXTERNAL_LINK_DETECTED"));
+        when(listingRepository.findById("flagged-owner-2")).thenReturn(Optional.of(ownersFlagged));
+        stubActiveCategoryHierarchy();
+        when(listingRepository.save(any(ServiceListing.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        SecurityContext moderatorContext = SecurityContextHolder.createEmptyContext();
+        Authentication moderatorAuth = new UsernamePasswordAuthenticationToken(
+                new UserPrincipal(MODERATOR_ID, "mod@test.local", Role.MODERATOR),
+                null,
+                List.of(new SimpleGrantedAuthority("ROLE_MODERATOR"))
+        );
+        moderatorContext.setAuthentication(moderatorAuth);
+        SecurityContextHolder.setContext(moderatorContext);
+        try {
+            doAnswer(inv -> {
+                assertThat(SecurityContextHolder.getContext()).isSameAs(moderatorContext);
+                assertThat(SecurityContextHolder.getContext().getAuthentication()).isSameAs(moderatorAuth);
+                assertThat(CurrentUser.getUserId()).isEqualTo(MODERATOR_ID);
+                assertThat(CurrentUser.getRole()).isEqualTo(Role.MODERATOR);
+                return null;
+            }).when(providerEligibilityChecker).assertEligibleToManageListing(OTHER_PROVIDER_ID, true);
+
+            ListingResponse approved = listingService.moderateListing(
+                    MODERATOR_ID,
+                    "flagged-owner-2",
+                    new ListingModerationRequest(ModerationDecision.APPROVE, "Verified safe content")
+            );
+
+            assertThat(approved.status()).isEqualTo(ListingStatus.ACTIVE);
+            assertThat(approved.providerId()).isEqualTo(OTHER_PROVIDER_ID);
+            verify(providerEligibilityChecker).assertEligibleToManageListing(OTHER_PROVIDER_ID, true);
+            verify(providerEligibilityChecker, never()).assertEligibleToManageListing(MODERATOR_ID, true);
+            assertThat(SecurityContextHolder.getContext()).isSameAs(moderatorContext);
+            assertThat(CurrentUser.getUserId()).isEqualTo(MODERATOR_ID);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
     }
 
     @Test

@@ -42,6 +42,7 @@ import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProf
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.VerificationDocumentRepository;
+import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationFacade;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -145,6 +146,11 @@ class ApplicationContextRealStartupTest {
         assertNotNull(
                 applicationContext.getBean(CatalogCategoryLookupAdapter.class),
                 "CatalogCategoryLookupAdapter bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(ProviderVerificationFacade.class),
+                "ProviderVerificationFacade bean must exist"
         );
 
         assertNotNull(
