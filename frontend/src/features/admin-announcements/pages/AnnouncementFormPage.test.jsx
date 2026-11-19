@@ -231,7 +231,7 @@ describe('Edit announcement form', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`${BASE}/pub-1`))
   })
 
-  it('draft: fields are prefilled and the Scheduled chip is shown for a scheduled one', async () => {
+  it('scheduled: fields are prefilled, the Scheduled chip is shown and the draft button says "Move to drafts"', async () => {
     getAnnouncement.mockResolvedValue(announcement({
       id: 'sch-1', status: 'SCHEDULED', publishedAt: null, pinExpiresAt: null,
       scheduledAt: new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(), audience: 'PROVIDERS',
@@ -242,7 +242,8 @@ describe('Edit announcement form', () => {
     expect(screen.getByText('Scheduled')).toBeTruthy()
     expect(screen.getByLabelText(/Target audience/).value).toBe('PROVIDERS')
     expect(scheduleInput().value).not.toBe('')
-    expect(screen.getByRole('button', { name: 'Save draft' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Move to drafts' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Save draft' })).toBeNull()
   })
 
   it('shows "not found" for an unknown announcement', async () => {

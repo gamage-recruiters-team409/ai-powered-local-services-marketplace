@@ -100,6 +100,8 @@ function AnnouncementForm({ id }) {
 
   const original = isEdit ? loadResult.data : null
   const isPublished = original?.status === STATUS.PUBLISHED
+  // For a scheduled announcement, saving as a draft cancels the schedule: say so on the button.
+  const isScheduled = original?.status === STATUS.SCHEDULED
   const currentStatus = original?.status ?? STATUS.DRAFT
   const dirty = JSON.stringify(form) !== JSON.stringify(initial)
   const busy = saving !== null
@@ -180,7 +182,7 @@ function AnnouncementForm({ id }) {
       } else if (saved.status === STATUS.PUBLISHED) {
         toast.success('Announcement published.')
       } else {
-        toast.success('Draft saved.')
+        toast.success(isScheduled ? 'Moved to drafts. It will not be published automatically.' : 'Draft saved.')
       }
       navigate(announcementPaths.list(tabForStatus(saved.status)))
     } catch (error) {
@@ -389,8 +391,9 @@ function AnnouncementForm({ id }) {
               loading={saving === INTENT.DRAFT}
               disabled={busy}
               icon={<AnnIcon name="bookmark" size={15} />}
+              title={isScheduled ? 'Cancels the schedule and keeps it as a draft' : undefined}
             >
-              Save draft
+              {isScheduled ? 'Move to drafts' : 'Save draft'}
             </Button>
           )}
           <Button
