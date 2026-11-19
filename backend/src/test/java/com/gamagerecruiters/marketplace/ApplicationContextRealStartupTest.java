@@ -30,6 +30,7 @@ import com.gamagerecruiters.marketplace.modules.booking.repository.BookingReposi
 import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
+import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerFavouriteRepository;
 import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
@@ -78,6 +79,9 @@ class ApplicationContextRealStartupTest {
 
         @MockitoBean
         private CustomerAddressRepository customerAddressRepository;
+
+        @MockitoBean
+        private CustomerFavouriteRepository customerFavouriteRepository;
 
         @MockitoBean
         private ProviderProfileRepository providerProfileRepository;
