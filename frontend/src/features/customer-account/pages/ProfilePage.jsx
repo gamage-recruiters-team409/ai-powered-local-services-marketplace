@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { CustomerPage } from '../../../shared/layouts/customer/CustomerPage';
 import { useToast } from '../../../shared/components/feedback/useToast';
 import { getProfile, updateProfile } from '../services/customerAccountApi';
-import { StatusBadge } from './components/StatusBadge';
-import styles from './customerAccount.module.css';
+import { StatusBadge } from '../components/StatusBadge';
+import styles from '../customerAccount.module.css';
 
 /**
  * Validates Sri Lankan phone number format matching SriLankanPhoneUtil:

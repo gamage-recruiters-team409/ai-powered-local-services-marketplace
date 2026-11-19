@@ -4,7 +4,7 @@ import { CustomerPage } from '../../../shared/layouts/customer/CustomerPage';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { useToast } from '../../../shared/components/feedback/useToast';
 import { deactivateAccount } from '../services/customerAccountApi';
-import styles from './customerAccount.module.css';
+import styles from '../customerAccount.module.css';
 
 export function DeactivatePage() {
   const navigate = useNavigate();

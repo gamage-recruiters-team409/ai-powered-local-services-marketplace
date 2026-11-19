@@ -10,10 +10,10 @@ import {
   setDefaultAddress,
   getDistricts,
 } from '../services/customerAccountApi';
-import { AddressModal } from './components/AddressModal';
-import { StatusBadge } from './components/StatusBadge';
-import { EmptyState } from './components/EmptyState';
-import styles from './customerAccount.module.css';
+import { AddressModal } from '../components/AddressModal';
+import { StatusBadge } from '../components/StatusBadge';
+import { EmptyState } from '../components/EmptyState';
+import styles from '../customerAccount.module.css';
 
 export function SavedAddressesPage() {
   const toast = useToast();

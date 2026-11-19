@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import { CustomerPage } from '../../../shared/layouts/customer/CustomerPage';
 import { useToast } from '../../../shared/components/feedback/useToast';
 import { getFavourites, removeFavourite } from '../services/favouritesApi';
-import { StatusBadge } from './components/StatusBadge';
-import { Pagination } from './components/Pagination';
-import { EmptyState } from './components/EmptyState';
-import styles from './customerAccount.module.css';
+import { StatusBadge } from '../components/StatusBadge';
+import { Pagination } from '../components/Pagination';
+import { EmptyState } from '../components/EmptyState';
+import styles from '../customerAccount.module.css';
 
 function formatPrice(amount) {
   if (amount == null) return null;

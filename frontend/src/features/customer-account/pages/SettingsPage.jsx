@@ -6,7 +6,7 @@ import { useToast } from '../../../shared/components/feedback/useToast';
 import PasswordRules from '../../auth/components/PasswordRules';
 import { checkPasswordCriteria } from '../../auth/utils/validators';
 import { changePassword } from '../services/customerAccountApi';
-import styles from './customerAccount.module.css';
+import styles from '../customerAccount.module.css';
 
 export function SettingsPage() {
   const navigate = useNavigate();

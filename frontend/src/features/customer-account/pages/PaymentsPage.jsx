@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import { CustomerPage } from '../../../shared/layouts/customer/CustomerPage';
 import { getMyPayments } from '../services/paymentsApi';
 import { getPaymentStatusInfo } from '../config/paymentStatus';
-import { StatusBadge } from './components/StatusBadge';
-import { Pagination } from './components/Pagination';
-import { EmptyState } from './components/EmptyState';
-import styles from './customerAccount.module.css';
+import { StatusBadge } from '../components/StatusBadge';
+import { Pagination } from '../components/Pagination';
+import { EmptyState } from '../components/EmptyState';
+import styles from '../customerAccount.module.css';
 
 function formatDate(isoString) {
   if (!isoString) return '—';
