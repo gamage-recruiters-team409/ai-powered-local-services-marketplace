@@ -192,6 +192,256 @@ describe('FavoritesPage', () => {
     });
   });
 
+  it('page 2 with last item removed refetches, navigates to previous page, and shows remaining favorites rather than empty state', async () => {
+    favouritesApi.removeFavourite.mockResolvedValueOnce();
+
+    favouritesApi.getFavourites.mockImplementation((type, page) => {
+      if (page === 0) {
+        return Promise.resolve({
+          content: [
+            {
+              favouriteId: 'fav-1',
+              type: 'PROVIDER',
+              targetId: 'prov-1',
+              name: 'First Page Provider',
+              rating: 4.8,
+              city: 'Colombo',
+              priceFrom: 3000,
+              currency: 'LKR',
+              inactive: false,
+              imageUrl: null,
+            },
+          ],
+          page: 0,
+          size: 6,
+          totalElements: 7,
+          totalPages: 2,
+        });
+      }
+      if (page === 1) {
+        return Promise.resolve({
+          content: [
+            {
+              favouriteId: 'fav-7',
+              type: 'PROVIDER',
+              targetId: 'prov-7',
+              name: 'Second Page Lone Provider',
+              rating: 4.5,
+              city: 'Kandy',
+              priceFrom: 4000,
+              currency: 'LKR',
+              inactive: false,
+              imageUrl: null,
+            },
+          ],
+          page: 1,
+          size: 6,
+          totalElements: 7,
+          totalPages: 2,
+        });
+      }
+      return Promise.resolve({ content: [], page: 0, size: 6, totalElements: 0, totalPages: 0 });
+    });
+
+    render(
+      <MemoryRouter>
+        <FavoritesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('First Page Provider')).toBeTruthy();
+    });
+
+    // Navigate to page 2 (Next >)
+    const nextBtn = screen.getByRole('button', { name: /next page/i });
+    fireEvent.click(nextBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Second Page Lone Provider')).toBeTruthy();
+    });
+
+    // Next time getFavourites is called for page 1 (after removal), it returns empty content but totalElements: 6, totalPages: 1
+    favouritesApi.getFavourites.mockImplementation((type, page) => {
+      if (page === 1) {
+        return Promise.resolve({
+          content: [],
+          page: 1,
+          size: 6,
+          totalElements: 6,
+          totalPages: 1,
+        });
+      }
+      if (page === 0) {
+        return Promise.resolve({
+          content: [
+            {
+              favouriteId: 'fav-1',
+              type: 'PROVIDER',
+              targetId: 'prov-1',
+              name: 'First Page Provider',
+              rating: 4.8,
+              city: 'Colombo',
+              priceFrom: 3000,
+              currency: 'LKR',
+              inactive: false,
+              imageUrl: null,
+            },
+          ],
+          page: 0,
+          size: 6,
+          totalElements: 6,
+          totalPages: 1,
+        });
+      }
+      return Promise.resolve({ content: [], page: 0, size: 6, totalElements: 0, totalPages: 0 });
+    });
+
+    // Remove the only favourite on page 2
+    const removeBtn = screen.getByLabelText(/remove .* from favorites/i);
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(favouritesApi.removeFavourite).toHaveBeenCalledWith('PROVIDER', 'prov-7');
+    });
+
+    // The UI should fall back to page 0, showing "First Page Provider", NOT the "No favorites yet" empty state
+    await waitFor(() => {
+      expect(screen.getByText('First Page Provider')).toBeTruthy();
+      expect(screen.queryByText(/no favorites yet/i)).toBeNull();
+    });
+  });
+
+  it('shows empty state after removing the only favourite overall', async () => {
+    favouritesApi.removeFavourite.mockResolvedValueOnce();
+    favouritesApi.getFavourites.mockResolvedValueOnce({
+      content: [
+        {
+          favouriteId: 'fav-only',
+          type: 'PROVIDER',
+          targetId: 'prov-only',
+          name: 'Sole Provider',
+          rating: 4.8,
+          city: 'Colombo',
+          priceFrom: 3000,
+          currency: 'LKR',
+          inactive: false,
+          imageUrl: null,
+        },
+      ],
+      page: 0,
+      size: 6,
+      totalElements: 1,
+      totalPages: 1,
+    });
+
+    render(
+      <MemoryRouter>
+        <FavoritesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Sole Provider')).toBeTruthy();
+    });
+
+    // When refetched after removal, server returns empty
+    favouritesApi.getFavourites.mockResolvedValueOnce({
+      content: [],
+      page: 0,
+      size: 6,
+      totalElements: 0,
+      totalPages: 0,
+    });
+
+    const removeBtn = screen.getByLabelText(/remove .* from favorites/i);
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(favouritesApi.removeFavourite).toHaveBeenCalledWith('PROVIDER', 'prov-only');
+      expect(screen.getByText(/no favorites yet/i)).toBeTruthy();
+    });
+  });
+
+  it('removing one item from a page with several items keeps page and updates pagination summary', async () => {
+    favouritesApi.removeFavourite.mockResolvedValueOnce();
+    favouritesApi.getFavourites.mockResolvedValueOnce({
+      content: [
+        {
+          favouriteId: 'fav-1',
+          type: 'PROVIDER',
+          targetId: 'prov-1',
+          name: 'Provider One',
+          rating: 4.8,
+          city: 'Colombo',
+          priceFrom: 3000,
+          currency: 'LKR',
+          inactive: false,
+          imageUrl: null,
+        },
+        {
+          favouriteId: 'fav-2',
+          type: 'PROVIDER',
+          targetId: 'prov-2',
+          name: 'Provider Two',
+          rating: 4.7,
+          city: 'Gampaha',
+          priceFrom: 2500,
+          currency: 'LKR',
+          inactive: false,
+          imageUrl: null,
+        },
+      ],
+      page: 0,
+      size: 6,
+      totalElements: 8,
+      totalPages: 2,
+    });
+
+    render(
+      <MemoryRouter>
+        <FavoritesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Provider One')).toBeTruthy();
+      expect(screen.getByText('Provider Two')).toBeTruthy();
+      expect(screen.getByText(/showing 1-2 of 8 favorites/i)).toBeTruthy();
+    });
+
+    // Refetch returns updated totals
+    favouritesApi.getFavourites.mockResolvedValueOnce({
+      content: [
+        {
+          favouriteId: 'fav-2',
+          type: 'PROVIDER',
+          targetId: 'prov-2',
+          name: 'Provider Two',
+          rating: 4.7,
+          city: 'Gampaha',
+          priceFrom: 2500,
+          currency: 'LKR',
+          inactive: false,
+          imageUrl: null,
+        },
+      ],
+      page: 0,
+      size: 6,
+      totalElements: 7,
+      totalPages: 2,
+    });
+
+    const removeBtns = screen.getAllByLabelText(/remove .* from favorites/i);
+    fireEvent.click(removeBtns[0]);
+
+    await waitFor(() => {
+      expect(favouritesApi.removeFavourite).toHaveBeenCalledWith('PROVIDER', 'prov-1');
+      expect(screen.getByText(/showing 1-1 of 7 favorites/i)).toBeTruthy();
+      expect(screen.getByText('Provider Two')).toBeTruthy();
+    });
+  });
+
   it('renders empty state when there are no favorites', async () => {
     favouritesApi.getFavourites.mockResolvedValueOnce({
       content: [],

@@ -18,8 +18,9 @@ export function FavoritesPage() {
   const toast = useToast();
   const [activeTab, setActiveTab] = useState('PROVIDER');
   const [page, setPage] = useState(0);
+  const [reloadCounter, setReloadCounter] = useState(0);
   const pageSize = 6;
-  const currentKey = `${activeTab}:${page}`;
+  const currentKey = `${activeTab}:${page}:${reloadCounter}`;
 
   const [result, setResult] = useState({
     key: null,
@@ -45,8 +46,21 @@ export function FavoritesPage() {
     getFavourites(activeTab, page, pageSize)
       .then((data) => {
         if (!cancelled) {
+          const content = data?.content || [];
+          const totalElems = data?.totalElements ?? 0;
+          const totalPgs = data?.totalPages ?? 0;
+
+          if (content.length === 0 && totalElems > 0 && page > 0) {
+            const lastValidPage = Math.max(0, totalPgs - 1);
+            if (lastValidPage !== page) {
+              setPage(lastValidPage);
+              return;
+            }
+          }
+
+          setRemovedIds(new Set());
           setResult({
-            key: `${activeTab}:${page}`,
+            key: `${activeTab}:${page}:${reloadCounter}`,
             data,
             error: null,
             listingsUnavailable: false,
@@ -59,7 +73,7 @@ export function FavoritesPage() {
             activeTab === 'LISTING' &&
             (err.status === 503 || err.code === 'FAVOURITES_LISTING_UNAVAILABLE');
           setResult({
-            key: `${activeTab}:${page}`,
+            key: `${activeTab}:${page}:${reloadCounter}`,
             data: null,
             error: isListing503 ? null : err,
             listingsUnavailable: isListing503,
@@ -70,7 +84,7 @@ export function FavoritesPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab, page, pageSize]);
+  }, [activeTab, page, pageSize, reloadCounter]);
 
   const handleTabChange = (newTab) => {
     if (newTab !== activeTab) {
@@ -92,6 +106,7 @@ export function FavoritesPage() {
     try {
       await removeFavourite(fav.type, fav.targetId);
       toast.success('Removed from favorites');
+      setReloadCounter((c) => c + 1);
     } catch (err) {
       // Rollback on error
       setRemovedIds((prev) => {
@@ -159,7 +174,7 @@ export function FavoritesPage() {
               description="Service listing favourites will be enabled once service catalog listings become available. You can still save and view provider favourites."
             />
           </div>
-        ) : favourites.length === 0 ? (
+        ) : totalElements === 0 ? (
           <div className={styles.card}>
             <EmptyState
               icon={
