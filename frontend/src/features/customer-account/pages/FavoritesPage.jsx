@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { CustomerPage } from '../../../shared/layouts/customer/CustomerPage';
 import { useToast } from '../../../shared/components/feedback/useToast';
 import { getFavourites, removeFavourite } from '../services/favouritesApi';
@@ -311,16 +312,14 @@ export function FavoritesPage() {
                       )}
 
                       {fav.type === 'PROVIDER' ? (
-                        <button
-                          type="button"
+                        <Link
+                          to={`/providers/${fav.targetId}`}
                           className={styles.btnSecondary}
-                          disabled
-                          aria-disabled="true"
-                          title="Not available yet"
+                          data-testid="Link_ViewProfile"
                           style={{ width: '100%', marginTop: 'auto' }}
                         >
                           View profile
-                        </button>
+                        </Link>
                       ) : (
                         <button
                           type="button"

@@ -104,10 +104,11 @@ describe('FavoritesPage', () => {
     // Check inactive badge on second card
     expect(screen.getByText('Inactive')).toBeTruthy();
 
-    // Check disabled View Profile button
-    const viewProfileBtns = screen.getAllByRole('button', { name: /view profile/i });
-    expect(viewProfileBtns[0].hasAttribute('disabled')).toBe(true);
-    expect(viewProfileBtns[0].getAttribute('title')).toBe('Not available yet');
+    // Check View Profile links to provider profile page
+    const viewProfileLinks = screen.getAllByRole('link', { name: /view profile/i });
+    expect(viewProfileLinks).toHaveLength(2);
+    expect(viewProfileLinks[0].getAttribute('href')).toBe('/providers/prov-1');
+    expect(viewProfileLinks[1].getAttribute('href')).toBe('/providers/prov-2');
   });
 
   it('switches to listings tab and renders listing cards', async () => {
@@ -578,5 +579,23 @@ describe('FavoritesPage', () => {
 
     fireEvent.click(bookBtn);
     expect(screen.getByText('Old Garden Care Package')).toBeTruthy();
+  });
+
+  it('renders View profile links with correct href for active and inactive providers', async () => {
+    render(
+      <MemoryRouter>
+        <FavoritesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Nuwan Perera - AC Solutions')).toBeTruthy();
+      expect(screen.getByText('Lanka Lawn & Garden Care')).toBeTruthy();
+    });
+
+    const links = screen.getAllByTestId('Link_ViewProfile');
+    expect(links).toHaveLength(2);
+    expect(links[0].getAttribute('href')).toBe('/providers/prov-1');
+    expect(links[1].getAttribute('href')).toBe('/providers/prov-2');
   });
 });
