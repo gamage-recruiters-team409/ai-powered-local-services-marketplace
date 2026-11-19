@@ -1,8 +1,10 @@
 
 package com.gamagerecruiters.marketplace.modules.provider.service;
 
+import java.util.Set;
+
 /**
- * Read-only provider activity eligibility contract
+ * Read-only provider activity and service-area contract
  * for other marketplace modules.
  *
  * The providerId represents the provider USER ID,
@@ -27,4 +29,13 @@ public interface ProviderActivityFacade {
      * their profile.
      */
     boolean isProviderPaused(String providerId);
+
+    /**
+     * Returns the provider's configured service-area districts.
+     *
+     * @param providerId provider USER ID
+     * @return immutable set of district names, or an empty set
+     *         when the provider has no configured service area
+     */
+    Set<String> getServiceAreaDistricts(String providerId);
 }
