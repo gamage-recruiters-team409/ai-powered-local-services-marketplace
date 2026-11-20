@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.booking.service;
 
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
+import com.gamagerecruiters.marketplace.modules.booking.dto.BookingPaymentSnapshot;
 
 /**
  * The only entry point other modules use to read or change booking information.
@@ -105,4 +106,32 @@ public interface BookingFacade {
      * 409 INVALID_STATUS_TRANSITION, 409 BOOKING_UPDATE_CONFLICT (concurrent update; safe to retry).</p>
      */
     BookingParticipants resolveDispute(String bookingId, BookingStatus finalStatus, String reference);
+
+    // ---------- WP07 payment ----------
+
+    /**
+     * Trusted payment values for checkout (amount, currency, commission, deadlines).
+     * Caller: the booking's customer, an ADMIN / SUPER_ADMIN / FINANCE_ADMIN, or WP07 inside
+     * {@code TrustedBookingSystemCall.run(PAYMENT_PROCESSING, ...)}. Otherwise 401 / 403.
+     * 404 BOOKING_NOT_FOUND; 409 PRICE_SNAPSHOT_MISSING for bookings created before price snapshots.
+     */
+    BookingPaymentSnapshot getPaymentSnapshot(String bookingId);
+
+    /**
+     * Payment succeeded: AWAITING_PAYMENT → CONFIRMED (recorded as SYSTEM with the payment reference).
+     * Caller: WP07 inside {@code TrustedBookingSystemCall.run(PAYMENT_PROCESSING, ...)} only (a signed
+     * payment webhook may run it inside its HTTP request). Idempotent: the same reference after it was
+     * applied returns the booking unchanged; a different reference → 409 PAYMENT_ALREADY_APPLIED.
+     * Not AWAITING_PAYMENT (e.g. already EXPIRED) → 409 INVALID_STATUS_TRANSITION (WP07 refunds).
+     * {@code paymentReference}: letters, digits, '_', '-', ':' or '.', 1–100 characters
+     * (400 INVALID_PAYMENT_REFERENCE).
+     */
+    BookingParticipants markPaymentConfirmed(String bookingId, String paymentReference);
+
+    /**
+     * Payment not completed: AWAITING_PAYMENT → EXPIRED (slot released), only once paymentDueAt has
+     * passed (409 PAYMENT_NOT_DUE). Same caller rule as {@link #markPaymentConfirmed}. Idempotent: a booking
+     * already expired from AWAITING_PAYMENT (by WP07 or the booking expiry job) is returned unchanged.
+     */
+    BookingParticipants markPaymentExpired(String bookingId, String paymentReference);
 }
