@@ -110,7 +110,7 @@ export function normalizeProfileTab(value) {
   return PROFILE_TABS.includes(tab) ? tab : 'overview';
 }
 
-export function getProviderServiceOptions(provider = {}) {
+export function getProviderServiceOptions(provider = {}, { allowFallback = true } = {}) {
   const serviceTypes = Array.isArray(provider.serviceTypes)
     ? provider.serviceTypes
     : [];
@@ -130,6 +130,10 @@ export function getProviderServiceOptions(provider = {}) {
 
   if (services.length > 0) {
     return services;
+  }
+
+  if (!allowFallback) {
+    return [];
   }
 
   return [
@@ -161,7 +165,7 @@ export function getProviderReviewState(provider = {}) {
       message = 'This provider has no reviews yet.';
     } else {
       message =
-        'Individual review content is not available in this demo. The aggregate rating is shown above.';
+        'Individual review content is not available. The aggregate rating is shown above.';
     }
   }
 

@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.review.service;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -192,6 +193,11 @@ public class ReviewServiceImpl implements ReviewService {
     @Override
     public RatingSummaryResponse getRatingSummary(String providerId) {
         return summarize(providerId, ratingQuery.countPublishedByRating(providerId));
+    }
+
+    @Override
+    public Map<String, RatingSummaryResponse> getRatingSummaries(Collection<String> providerIds) {
+        return ratingQuery.getRatingSummaries(providerIds);
     }
 
     // ------------------------------------------------------------------ helpers

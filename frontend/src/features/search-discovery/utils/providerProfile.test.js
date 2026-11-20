@@ -55,6 +55,14 @@ describe('getProviderServiceOptions', () => {
     });
   });
 
+  it('does not create a synthetic service for live profiles without service types', () => {
+    expect(getProviderServiceOptions({ category: 'Home cleaning', serviceTypes: [] })).toHaveLength(1);
+    expect(getProviderServiceOptions(
+      { category: 'Home cleaning', serviceTypes: [] },
+      { allowFallback: false },
+    )).toEqual([]);
+  });
+
   it('preserves supplied package-specific pricing, descriptions, and inclusions', () => {
     const services = getProviderServiceOptions({
       serviceTypes: [
@@ -230,6 +238,8 @@ describe('getProviderReviewState', () => {
     expect(state.reviewCount).toBe(128);
     expect(state.hasReviewContent).toBe(false);
     expect(state.message).toMatch(/individual review content is not available/i);
+    expect(state.message).not.toMatch(/in this demo/i);
+    expect(state.message).toMatch(/aggregate rating is shown above/i);
   });
 
   it('uses a no-reviews message for a zero count', () => {

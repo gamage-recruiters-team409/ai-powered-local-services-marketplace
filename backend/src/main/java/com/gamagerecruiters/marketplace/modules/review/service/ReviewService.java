@@ -1,5 +1,8 @@
 package com.gamagerecruiters.marketplace.modules.review.service;
 
+import java.util.Collection;
+import java.util.Map;
+
 import com.gamagerecruiters.marketplace.modules.review.dto.CreateReviewRequest;
 import com.gamagerecruiters.marketplace.modules.review.dto.ProviderReplyRequest;
 import com.gamagerecruiters.marketplace.modules.review.dto.RatingSummaryResponse;
@@ -28,4 +31,6 @@ public interface ReviewService {
     ReviewPageResponse getPublishedReviews(String providerId, int page, int size);
 
     RatingSummaryResponse getRatingSummary(String providerId);
+
+    Map<String, RatingSummaryResponse> getRatingSummaries(Collection<String> providerIds);
 }

@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -15,7 +16,9 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,7 +32,11 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.geo.GeoJsonPoint;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
@@ -107,6 +114,9 @@ class ListingServiceImplTest {
 
     @Mock
     private RateLimitService rateLimitService;
+
+    @Mock
+    private MongoTemplate mongoTemplate;
 
     private ListingServiceImpl listingService;
 
@@ -1213,5 +1223,122 @@ class ListingServiceImplTest {
         assertThat(snapshot.totalPrice()).isEqualByComparingTo("4500.00");
         assertThat(snapshot.totalDurationMin()).isEqualTo(120);
         assertThat(snapshot.commissionRate()).isEqualByComparingTo("0.12");
+    }
+
+    @Test
+    @DisplayName("Public search builds all supported filters and server-side pagination in MongoDB")
+    void searchPublicListingsAppliesServerSideFiltersAndPagination() {
+        when(categoryLookupPortProvider.getIfAvailable()).thenReturn(categoryLookupPort);
+        when(categoryLookupPort.findActiveCategories()).thenReturn(List.of(
+                new CategorySnapshot(ROOT_CAT_ID, "Electrical", null, true, new BigDecimal("0.10")),
+                new CategorySnapshot(SUB_CAT_ID, "Wiring Repair", ROOT_CAT_ID, true, new BigDecimal("0.12"))));
+        ServiceListing listing = persistedListing("search-1", ListingStatus.ACTIVE);
+        when(mongoTemplate.find(any(Query.class), eq(ServiceListing.class))).thenReturn(List.of(listing));
+        when(mongoTemplate.count(any(Query.class), eq(ServiceListing.class))).thenReturn(9L);
+
+        ListingServiceImpl searchService = new ListingServiceImpl(
+                listingRepository,
+                new ListingMapper(),
+                new ListingMediaValidator(),
+                new ListingContentScreeningService(),
+                providerEligibilityChecker,
+                new SriLankaDistrictGeoService(districtCatalog),
+                categoryLookupPortProvider,
+                rateLimitServiceProvider,
+                mongoTemplate
+        );
+        Pageable pageable = PageRequest.of(1, 2,
+                Sort.by(Sort.Order.desc("basePrice"), Sort.Order.asc("id")));
+
+        Page<ListingResponse> page = searchService.searchPublicListings(
+                "wiring",
+                "Colombo",
+                SUB_CAT_ID,
+                new BigDecimal("5000.00"),
+                Set.of(PROVIDER_ID),
+                pageable
+        );
+
+        assertThat(page.getTotalElements()).isEqualTo(9L);
+        assertThat(page.getNumber()).isEqualTo(1);
+        assertThat(page.getSize()).isEqualTo(2);
+        assertThat(page.getContent()).extracting(ListingResponse::id).containsExactly("search-1");
+
+        ArgumentCaptor<Query> findCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).find(findCaptor.capture(), eq(ServiceListing.class));
+        Document findQuery = findCaptor.getValue().getQueryObject();
+        assertThat(findQuery.toString()).contains(
+                "status", "hiddenByProviderSuspension", "title", "description",
+                "district", "baseCity", "serviceAreas", "categoryId", "basePrice", "providerId");
+        assertThat(findCaptor.getValue().getSkip()).isEqualTo(2);
+        assertThat(findCaptor.getValue().getLimit()).isEqualTo(2);
+        assertThat(page.getSort().getOrderFor("basePrice").getDirection())
+                .isEqualTo(Sort.Direction.DESC);
+
+        ArgumentCaptor<Query> countCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).count(countCaptor.capture(), eq(ServiceListing.class));
+        assertThat(countCaptor.getValue().getSkip()).isZero();
+        assertThat(countCaptor.getValue().getLimit()).isZero();
+    }
+
+    @Test
+    @DisplayName("Public search fails closed when the active catalog is empty")
+    void searchPublicListingsFailsClosedWithoutActiveCategories() {
+        when(categoryLookupPortProvider.getIfAvailable()).thenReturn(categoryLookupPort);
+        when(categoryLookupPort.findActiveCategories()).thenReturn(List.of());
+        when(mongoTemplate.find(any(Query.class), eq(ServiceListing.class))).thenReturn(List.of());
+        when(mongoTemplate.count(any(Query.class), eq(ServiceListing.class))).thenReturn(0L);
+
+        ListingServiceImpl searchService = new ListingServiceImpl(
+                listingRepository,
+                new ListingMapper(),
+                new ListingMediaValidator(),
+                new ListingContentScreeningService(),
+                providerEligibilityChecker,
+                new SriLankaDistrictGeoService(districtCatalog),
+                categoryLookupPortProvider,
+                rateLimitServiceProvider,
+                mongoTemplate
+        );
+
+        Page<ListingResponse> page = searchService.searchPublicListings(
+                null, null, null, null, null, PageRequest.of(0, 12));
+
+        assertThat(page.getContent()).isEmpty();
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).find(queryCaptor.capture(), eq(ServiceListing.class));
+        assertThat(queryCaptor.getValue().getQueryObject().toString()).contains("categoryId");
+    }
+
+    @Test
+    @DisplayName("Public search fails closed and returns empty page when providerIds filter is empty")
+    void searchPublicListingsReturnsEmptyPageWhenProviderIdsEmpty() {
+        ListingServiceImpl searchService = new ListingServiceImpl(
+                listingRepository,
+                new ListingMapper(),
+                new ListingMediaValidator(),
+                new ListingContentScreeningService(),
+                providerEligibilityChecker,
+                new SriLankaDistrictGeoService(districtCatalog),
+                categoryLookupPortProvider,
+                rateLimitServiceProvider,
+                mongoTemplate
+        );
+
+        Page<ListingResponse> page = searchService.searchPublicListings(
+                null, null, null, null, Set.of(), PageRequest.of(0, 12));
+
+        assertThat(page.getContent()).isEmpty();
+        assertThat(page.getTotalElements()).isZero();
+        verify(mongoTemplate, never()).find(any(Query.class), eq(ServiceListing.class));
+    }
+
+    @Test
+    @DisplayName("Public search fails clearly when MongoTemplate was not injected")
+    void searchPublicListingsRequiresMongoTemplate() {
+        assertThatThrownBy(() -> listingService.searchPublicListings(
+                null, null, null, null, PageRequest.of(0, 12)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("MongoTemplate");
     }
 }

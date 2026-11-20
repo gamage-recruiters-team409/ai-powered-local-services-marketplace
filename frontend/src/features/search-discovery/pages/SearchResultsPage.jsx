@@ -15,6 +15,8 @@ import {
 } from '../components/SearchResultsState';
 import '../styles/search-discovery.css';
 
+const PAGE_SIZE = 12;
+
 const DEFAULT_FILTERS = {
   standardClean: true,
   deepClean: false,
@@ -56,12 +58,16 @@ export function SearchResultsPage() {
   const [activeLocation, setActiveLocation] = useState('Austin, TX 78701');
   const [sortBy, setSortBy] = useState('recommended');
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
 
   const [results, setResults] = useState([]);
   const [totalCount, setTotalCount] = useState(3);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isFixture, setIsFixture] = useState(false);
+  const [isLive, setIsLive] = useState(false);
+  const [unsupportedFilters, setUnsupportedFilters] = useState([]);
   const [selectedProviders, setSelectedProviders] = useState([]);
   // Incremented by every explicit Search / Retry / Reset action so the request
   // effect runs even when the query and filters are unchanged.
@@ -110,12 +116,21 @@ export function SearchResultsPage() {
           location: activeLocation,
           filters,
           sortBy,
+          page,
+          size: pageSize,
         });
         if (!isCancelled) {
           const items = data.results || [];
+          const responseSize =
+            Number.isInteger(data.size) && data.size > 0 ? data.size : pageSize;
           setResults(items);
-          setTotalCount(data.totalCount || items.length);
+          setTotalCount(data.totalCount ?? items.length);
+          setPageSize(responseSize);
           setIsFixture(Boolean(data.isFixture));
+          setIsLive(Boolean(data.isLive));
+          setUnsupportedFilters(
+            Array.isArray(data.unsupportedFilters) ? data.unsupportedFilters : [],
+          );
 
           // Seed default comparison on initial load
           setSelectedProviders((prev) => {
@@ -135,6 +150,8 @@ export function SearchResultsPage() {
           setTotalCount(0);
           setSelectedProviders([]);
           setIsFixture(false);
+          setIsLive(false);
+          setUnsupportedFilters([]);
           setError('Failed to fetch provider listings. Please try again.');
         }
       } finally {
@@ -149,10 +166,11 @@ export function SearchResultsPage() {
     return () => {
       isCancelled = true;
     };
-  }, [activeQuery, activeLocation, filters, sortBy, searchNonce]);
+  }, [activeQuery, activeLocation, filters, sortBy, page, pageSize, searchNonce]);
 
   const handleSearchSubmit = ({ query: newQuery, location: newLocation }) => {
     setIsLoading(true);
+    setPage(0);
     setActiveQuery(newQuery);
     setActiveLocation(newLocation);
     setSearchNonce((n) => n + 1);
@@ -160,14 +178,22 @@ export function SearchResultsPage() {
 
   const handleFilterChange = (key, value) => {
     setIsLoading(true);
+    setPage(0);
     setFilters((prev) => ({
       ...prev,
       [key]: value,
     }));
   };
 
+  const handleSortChange = (value) => {
+    setIsLoading(true);
+    setPage(0);
+    setSortBy(value);
+  };
+
   const handleClearAllChips = () => {
     setIsLoading(true);
+    setPage(0);
     setFilters(CLEARED_FILTERS);
     setSearchNonce((n) => n + 1);
   };
@@ -176,11 +202,28 @@ export function SearchResultsPage() {
     setQuery('Home cleaning');
     setLocation('Austin, TX 78701');
     setIsLoading(true);
+    setPage(0);
     setActiveQuery('Home cleaning');
     setActiveLocation('Austin, TX 78701');
     setSortBy('recommended');
     setFilters(DEFAULT_FILTERS);
     setSearchNonce((n) => n + 1);
+  };
+
+  const totalPages = Math.ceil(totalCount / pageSize);
+
+  const handlePageChange = (nextPage) => {
+    if (
+      nextPage < 0 ||
+      nextPage >= totalPages ||
+      nextPage === page ||
+      isLoading
+    ) {
+      return;
+    }
+
+    setIsLoading(true);
+    setPage(nextPage);
   };
 
   const handleToggleComparison = (provider, isAdding, triggerEl) => {
@@ -221,10 +264,33 @@ export function SearchResultsPage() {
   };
 
   const formatPaginationText = () => {
-    if (results.length === 0) return 'Showing 0 of 0 providers';
-    if (results.length === 1) return `Showing 1 of ${totalCount} provider`;
-    return `Showing 1–${results.length} of ${totalCount} providers`;
+    if (!totalCount) return 'Showing 0 of 0 providers';
+    if (results.length === 0) return `Showing 0 of ${totalCount} providers`;
+    if (results.length === 1 && page === 0 && totalCount === 1) {
+      return 'Showing 1 of 1 provider';
+    }
+
+    const start = page * pageSize + 1;
+    const end = Math.min(start + results.length - 1, totalCount);
+    const noun = totalCount === 1 ? 'provider' : 'providers';
+
+    return `Showing ${start}–${end} of ${totalCount} ${noun}`;
   };
+
+  const hasActiveUnsupportedFilters =
+    filters.highRating ||
+    filters.backgroundChecked ||
+    (filters.distance != null && String(filters.distance).trim() !== '') ||
+    Boolean(filters.availability && filters.availability !== 'any') ||
+    Boolean(
+      filters.standardClean ||
+        filters.deepClean ||
+        filters.moveOutClean ||
+        filters.recurringClean,
+    );
+  const showUnsupportedNotice =
+    isLive &&
+    (unsupportedFilters.length > 0 || hasActiveUnsupportedFilters || sortBy === 'rating');
 
   return (
     <div className="localserve-page-wrapper">
@@ -243,7 +309,7 @@ export function SearchResultsPage() {
             onSearch={handleSearchSubmit}
             totalCount={totalCount}
             sortBy={sortBy}
-            onSortChange={setSortBy}
+            onSortChange={handleSortChange}
             filters={filters}
             onToggleFilter={handleFilterChange}
             onClearAll={handleClearAllChips}
@@ -271,13 +337,19 @@ export function SearchResultsPage() {
                 </p>
               )}
 
+              {showUnsupportedNotice && (
+                <p className="search-unsupported-notice" role="status">
+                  Live search does not enforce availability, distance, background check,
+                  service type, or rating filters. Results may not reflect these preferences.
+                  {sortBy === 'rating' && ' Highest-rated sorting is also not supported.'}
+                </p>
+              )}
+
               {error && (
                 <SearchErrorState
                   error={error}
                   onRetry={() => {
                     setIsLoading(true);
-                    setActiveQuery(query);
-                    setActiveLocation(location);
                     setSearchNonce((n) => n + 1);
                   }}
                 />
@@ -296,7 +368,7 @@ export function SearchResultsPage() {
                   <div className="results-cards-list">
                     {results.map((item) => (
                       <SearchResultCard
-                        key={item.id}
+                        key={`${item.providerId || item.id || 'provider'}:${item.listingId || 'profile'}`}
                         item={item}
                         isSelected={selectedProviders.some((p) => p.id === item.id)}
                         onToggleComparison={handleToggleComparison}
@@ -317,23 +389,35 @@ export function SearchResultsPage() {
                     </span>
 
                     <div className="pagination-controls">
-                      <button type="button" className="pagination-btn" aria-label="Previous page">
-                        ‹
-                      </button>
                       <button
                         type="button"
-                        className="pagination-btn pagination-btn-active"
-                        aria-current="page"
+                        className="pagination-btn"
+                        aria-label="Previous page"
+                        onClick={() => handlePageChange(page - 1)}
+                        disabled={page <= 0}
                       >
-                        1
+                        ‹
                       </button>
-                      <button type="button" className="pagination-btn">
-                        2
-                      </button>
-                      <button type="button" className="pagination-btn">
-                        3
-                      </button>
-                      <button type="button" className="pagination-btn" aria-label="Next page">
+                      {Array.from({ length: totalPages }, (_, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          className={`pagination-btn${
+                            index === page ? ' pagination-btn-active' : ''
+                          }`}
+                          aria-current={index === page ? 'page' : undefined}
+                          onClick={() => handlePageChange(index)}
+                        >
+                          {index + 1}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="pagination-btn"
+                        aria-label="Next page"
+                        onClick={() => handlePageChange(page + 1)}
+                        disabled={page >= totalPages - 1}
+                      >
                         ›
                       </button>
                     </div>
