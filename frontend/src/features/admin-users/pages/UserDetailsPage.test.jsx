@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -13,6 +13,7 @@ import {
 import {
   apiError,
   BASE,
+  CUSTOMER_ID,
   customerDetail,
   notConnected,
   PROVIDER_ID,
@@ -52,8 +53,18 @@ const LISTING = {
 
 const openPage = async (detail = providerDetail(), options) => {
   getUser.mockResolvedValue(detail)
-  renderUsers(`${BASE}/${detail.profile.id}`, options)
+  const router = renderUsers(`${BASE}/${detail.profile.id}`, options)
   await screen.findByRole('heading', { name: detail.profile.displayName })
+  return router
+}
+
+/** getUser for the next account stays pending until resolve() is called. */
+function pendingNextAccount() {
+  let resolve
+  getUser.mockImplementationOnce(() => new Promise((r) => {
+    resolve = r
+  }))
+  return (data) => act(async () => resolve(data))
 }
 
 beforeEach(() => {
@@ -167,6 +178,54 @@ describe('Account details', () => {
   })
 })
 
+describe('Navigating between accounts', () => {
+  it('while the next account loads, the previous account and its actions are gone; then the new one shows', async () => {
+    const router = await openPage()
+    expect(screen.getByRole('button', { name: 'Suspend account' })).toBeTruthy()
+    const resolve = pendingNextAccount()
+
+    await act(async () => router.navigate(`${BASE}/${CUSTOMER_ID}`))
+
+    expect(screen.queryByRole('heading', { name: 'Sarah Smith' })).toBeNull()
+    expect(screen.queryByText('sarah.smith@example.test')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Suspend account' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Reactivate account' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Review/ })).toBeNull()
+    expect(screen.getByLabelText('Loading account')).toBeTruthy()
+    expect(getUser).toHaveBeenLastCalledWith(CUSTOMER_ID, expect.anything())
+
+    await resolve(customerDetail({ actions: { canSuspend: false, canReactivate: true, canReviewListings: false } }))
+    expect(await screen.findByRole('heading', { name: 'Nimal Perera' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reactivate account' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Suspend account' })).toBeNull()
+  })
+
+  it('an open Suspend dialog for the previous account closes on navigation and nothing can be submitted', async () => {
+    const router = await openPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Suspend account' }))
+    expect(screen.getByRole('dialog', { name: 'Suspend account' })).toBeTruthy()
+    pendingNextAccount()
+
+    await act(async () => router.navigate(`${BASE}/${CUSTOMER_ID}`))
+
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Suspend account' })).toBeNull()
+    expect(suspendUser).not.toHaveBeenCalled()
+  })
+
+  it('an open review modal for the previous account closes on navigation', async () => {
+    const router = await openPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Review Commercial Deep Cleaning' }))
+    expect(screen.getByRole('dialog', { name: 'Review listing' })).toBeTruthy()
+    pendingNextAccount()
+
+    await act(async () => router.navigate(`${BASE}/${CUSTOMER_ID}`))
+
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(reviewUserListing).not.toHaveBeenCalled()
+  })
+})
+
 describe('Suspend account modal', () => {
   const open = async () => {
     await openPage()
@@ -256,8 +315,8 @@ describe('Reactivate account modal', () => {
 })
 
 describe('Review listing modal', () => {
-  const open = async (detail) => {
-    await openPage(detail)
+  const open = async (detail, options) => {
+    await openPage(detail, options)
     fireEvent.click(screen.getByRole('button', { name: 'Review Commercial Deep Cleaning' }))
     const dialog = screen.getByRole('dialog', { name: 'Review listing' })
     await within(dialog).findByText(/Deep cleaning for offices/)
@@ -315,12 +374,29 @@ describe('Review listing modal', () => {
   })
 
   it('read-only for SUPER_ADMIN (canReviewListings false): no note and no decision buttons', async () => {
-    const dialog = await open(providerDetail({ actions: { canSuspend: false, canReactivate: false, canReviewListings: false } }))
+    const dialog = await open(
+      providerDetail({ actions: { canSuspend: false, canReactivate: false, canReviewListings: false } }),
+      { canEdit: false },
+    )
 
     expect(within(dialog).queryByRole('button', { name: 'Keep hidden' })).toBeNull()
     expect(within(dialog).queryByRole('button', { name: 'Make visible' })).toBeNull()
     expect(within(dialog).queryByRole('textbox')).toBeNull()
     expect(within(dialog).getByText(/View only/)).toBeTruthy()
+  })
+
+  it('ADMIN while listing decisions are not supported (canReviewListings false): listing shown read-only with a '
+    + '"not available yet" note, no actionable buttons', async () => {
+    const dialog = await open(providerDetail({ actions: { canSuspend: true, canReactivate: false, canReviewListings: false } }))
+
+    expect(within(dialog).getByText('Commercial Deep Cleaning')).toBeTruthy()
+    expect(dialog.querySelectorAll('mark').length).toBe(2)
+    expect(within(dialog).queryByRole('button', { name: 'Keep hidden' })).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: 'Make visible' })).toBeNull()
+    expect(within(dialog).queryByRole('textbox')).toBeNull()
+    expect(within(dialog).getByText(/Listing decisions are not available yet — the listing service is not connected\./)).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeTruthy()
+    expect(reviewUserListing).not.toHaveBeenCalled()
   })
 
   it('listing details not connected: placeholder instead of the description', async () => {

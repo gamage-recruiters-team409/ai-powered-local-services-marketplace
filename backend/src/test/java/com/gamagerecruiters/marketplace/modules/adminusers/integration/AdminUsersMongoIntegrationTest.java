@@ -271,6 +271,8 @@ class AdminUsersMongoIntegrationTest {
         assertThat(detail.adminActions().data().get(1).actorName()).as("admin name resolved").isEqualTo("User 0009");
         assertThat(detail.actions().canSuspend()).isTrue();
         assertThat(detail.actions().canReactivate()).isFalse();
+        assertThat(detail.actions().canReviewListings())
+                .as("the real listing adapter does not support admin decisions yet").isFalse();
         assertThat(detail.disputes().data().lifetime()).isZero();
         assertThat(detail.bookingStats().available()).as("booking stats are a stub").isFalse();
     }

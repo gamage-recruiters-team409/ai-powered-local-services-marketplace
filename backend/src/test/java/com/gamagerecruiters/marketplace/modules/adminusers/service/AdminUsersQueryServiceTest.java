@@ -267,16 +267,36 @@ class AdminUsersQueryServiceTest {
             + "listings; SUPER_ADMIN and the admin's own account get nothing")
     void actions() {
         UserAccount activeProvider = account(PROVIDER_ID, Role.PROVIDER, UserStatus.ACTIVE);
-        assertThat(AdminUsersQueryService.actions(activeProvider, ACTOR, Role.ADMIN))
+        assertThat(AdminUsersQueryService.actions(activeProvider, ACTOR, Role.ADMIN, true))
                 .isEqualTo(new AdminUserDetailResponse.Actions(true, false, true));
+        assertThat(AdminUsersQueryService.actions(activeProvider, ACTOR, Role.ADMIN, false))
+                .as("listing decisions not supported -> no review action")
+                .isEqualTo(new AdminUserDetailResponse.Actions(true, false, false));
         assertThat(AdminUsersQueryService.actions(account(CUSTOMER_ID, Role.CUSTOMER, UserStatus.SUSPENDED), ACTOR,
-                Role.ADMIN)).isEqualTo(new AdminUserDetailResponse.Actions(false, true, false));
+                Role.ADMIN, true)).isEqualTo(new AdminUserDetailResponse.Actions(false, true, false));
         assertThat(AdminUsersQueryService.actions(account(CUSTOMER_ID, Role.CUSTOMER, UserStatus.DEACTIVATED), ACTOR,
-                Role.ADMIN)).isEqualTo(new AdminUserDetailResponse.Actions(false, false, false));
-        assertThat(AdminUsersQueryService.actions(activeProvider, ACTOR, Role.SUPER_ADMIN))
+                Role.ADMIN, true)).isEqualTo(new AdminUserDetailResponse.Actions(false, false, false));
+        assertThat(AdminUsersQueryService.actions(activeProvider, ACTOR, Role.SUPER_ADMIN, true))
                 .as("read-only").isEqualTo(new AdminUserDetailResponse.Actions(false, false, false));
-        assertThat(AdminUsersQueryService.actions(activeProvider, PROVIDER_ID, Role.ADMIN))
+        assertThat(AdminUsersQueryService.actions(activeProvider, PROVIDER_ID, Role.ADMIN, true))
                 .as("own account").isEqualTo(new AdminUserDetailResponse.Actions(false, false, false));
+    }
+
+    @Test
+    @DisplayName("detail: canReviewListings follows the listing port's real capability (false today -> read-only "
+            + "review); a failing capability check also means false")
+    void canReviewListingsFollowsPortCapability() {
+        when(directory.findById(PROVIDER_ID)).thenReturn(Optional.of(account(PROVIDER_ID, Role.PROVIDER, UserStatus.ACTIVE)));
+        allPortsAvailable();
+
+        when(listings.supportsListingReview()).thenReturn(false);
+        assertThat(service.detail(PROVIDER_ID, ACTOR, Role.ADMIN).actions().canReviewListings()).isFalse();
+
+        when(listings.supportsListingReview()).thenReturn(true);
+        assertThat(service.detail(PROVIDER_ID, ACTOR, Role.ADMIN).actions().canReviewListings()).isTrue();
+
+        when(listings.supportsListingReview()).thenThrow(new IllegalStateException("down"));
+        assertThat(service.detail(PROVIDER_ID, ACTOR, Role.ADMIN).actions().canReviewListings()).isFalse();
     }
 
     @Test

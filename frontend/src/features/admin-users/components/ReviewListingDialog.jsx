@@ -44,7 +44,12 @@ function HighlightedText({ text, highlight }) {
   )
 }
 
-function ReviewForm({ userId, providerName, listing: summary, canReview, onClose, onDone }) {
+/**
+ * canReview: the backend says decisions are possible (ADMIN, and the listing service supports them).
+ * readOnlyReason when not: 'unavailable' (an ADMIN, but listing decisions are not connected yet) or 'viewOnly'
+ * (SUPER_ADMIN). The listing itself is always shown.
+ */
+function ReviewForm({ userId, providerName, listing: summary, canReview, readOnlyReason = 'viewOnly', onClose, onDone }) {
   const toast = useToast()
   const descriptionId = useId()
   const [result, setResult] = useState({ loading: true, section: null, error: null })
@@ -222,7 +227,10 @@ function ReviewForm({ userId, providerName, listing: summary, canReview, onClose
         />
       ) : (
         <p className={styles.readOnlyNote}>
-          <UsersIcon name="lock" size={13} /> View only. Listing decisions are made by admins.
+          <UsersIcon name={readOnlyReason === 'unavailable' ? 'info' : 'lock'} size={13} />
+          {readOnlyReason === 'unavailable'
+            ? 'Listing decisions are not available yet — the listing service is not connected. You can review the listing details.'
+            : 'View only. Listing decisions are made by admins.'}
         </p>
       )}
     </AnnouncementDialog>

@@ -280,18 +280,34 @@ public class AdminUsersQueryService {
                 section(id, "queuedBookings", () -> bookings.queued(id, role, AdminUsersRules.QUEUED_BOOKINGS)),
                 section(id, "adminActions", () -> audit.recentForTarget(id, AdminUsersRules.ADMIN_ACTIONS)
                         .map(this::withActorNames)),
-                actions(user, actorId, actorRole));
+                actions(user, actorId, actorRole, provider && listingReviewSupported()));
     }
 
-    /** ADMIN edits the ADMIN area; SUPER_ADMIN reads it only. Never on the admin's own account. */
-    static AdminUserDetailResponse.Actions actions(UserAccount user, String actorId, Role actorRole) {
+    /**
+     * ADMIN edits the ADMIN area; SUPER_ADMIN reads it only. Never on the admin's own account.
+     * {@code canReviewListings} also needs the listing source to actually support decisions, so the UI never offers
+     * an action that can only answer 503 (it shows the listing read-only instead).
+     */
+    static AdminUserDetailResponse.Actions actions(UserAccount user, String actorId, Role actorRole,
+                                                   boolean listingReviewSupported) {
         boolean editor = actorRole == Role.ADMIN && actorId != null && !actorId.equals(user.id());
         boolean suspendable = user.status() == UserStatus.ACTIVE || user.status() == UserStatus.PENDING_VERIFICATION
                 || user.status() == UserStatus.LOCKED;
         return new AdminUserDetailResponse.Actions(
                 editor && suspendable,
                 editor && user.status() == UserStatus.SUSPENDED,
-                editor && user.role() == Role.PROVIDER);
+                editor && user.role() == Role.PROVIDER && listingReviewSupported);
+    }
+
+    /** A failing capability check means "not supported": the review stays read-only. */
+    private boolean listingReviewSupported() {
+        try {
+            return listings.supportsListingReview();
+        } catch (RuntimeException e) {
+            log.warn("event=ADMIN_USERS_SECTION_FAILED section=listingReviewSupport cause={}",
+                    e.getClass().getSimpleName());
+            return false;
+        }
     }
 
     /** Audit records with the admin's display name, and a suspension's reason code split from its note. */

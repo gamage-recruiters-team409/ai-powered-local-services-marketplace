@@ -4,6 +4,7 @@ import { Link, useLocation, useParams } from 'react-router-dom'
 import { PageError, Skeleton } from '../../../shared/components/feedback'
 import { Button } from '../../../shared/components/forms'
 import { AdminPage } from '../../../shared/layouts/admin'
+import { useAreaAccess } from '../../disputes-admin/access/useAdminAccess'
 import { categoryLabel } from '../../disputes/config/disputeStatus'
 import { ReactivateDialog, SuspendDialog } from '../components/AccountDialogs'
 import { BarChart, DonutChart } from '../components/Charts'
@@ -431,9 +432,18 @@ function DetailsSkeleton() {
   )
 }
 
-/** Screen 2: account details of one customer or provider. */
+/**
+ * Screen 2: account details of one customer or provider. Keyed by the account id: moving to another account
+ * remounts the page, so the previous account's data, buttons and any open dialog are gone at once and nothing can
+ * be submitted for the wrong account while the next one loads.
+ */
 export function UserDetailsPage() {
   const { id } = useParams()
+  return <AccountDetails key={id} id={id} />
+}
+
+function AccountDetails({ id }) {
+  const { canEdit } = useAreaAccess()
   const location = useLocation()
   const listLink = userPaths.list(location.state?.listSearch?.replace(/^\?/, '') ?? '')
   const [reloadKey, setReloadKey] = useState(0)
@@ -455,7 +465,8 @@ export function UserDetailsPage() {
 
   const reload = () => setReloadKey((k) => k + 1)
   const breadcrumbs = ['Operations', { label: 'Users', to: listLink }, 'Account details']
-  const user = result.data
+  // Only data from the current request: never an earlier response while a reload or another account is loading.
+  const user = loading ? null : result.data
 
   if (result.error && !loading) {
     const notFound = result.error.status === 404
@@ -578,6 +589,7 @@ export function UserDetailsPage() {
             providerName={user.profile.displayName}
             listing={reviewing ?? { id: '' }}
             canReview={Boolean(actions.canReviewListings)}
+            readOnlyReason={canEdit ? 'unavailable' : 'viewOnly'}
             onClose={() => setReviewing(null)}
             onDone={() => {
               setReviewing(null)

@@ -36,7 +36,8 @@ public record AdminUserDetailResponse(
 
     /**
      * What the logged-in admin may do on this page, decided by the backend (the frontend has no user id): ADMIN only
-     * (SUPER_ADMIN is read-only), never on the admin's own account. The endpoints check every rule again.
+     * (SUPER_ADMIN is read-only), never on the admin's own account. {@code canReviewListings} is true only when the
+     * listing source supports admin decisions (today it does not). The endpoints check every rule again.
      */
     public record Actions(boolean canSuspend, boolean canReactivate, boolean canReviewListings) {
     }
