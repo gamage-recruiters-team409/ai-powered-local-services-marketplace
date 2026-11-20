@@ -111,16 +111,13 @@ public class PayoutTransactionService {
             var existing = payoutRepository.findByRequestKey(requested.getRequestKey());
             if (existing.isPresent()) {
                 requireMatchingPayout(existing.get(), requested);
-                if (existing.get().getStatus() == PayoutStatus.PENDING
-                        && !allocationRepository.findByPayoutId(existing.get().getId()).isEmpty()) {
-                    return existing.get();
+
+                if (existing.get().getStatus() == PayoutStatus.PENDING) {
+                    verifyExistingPendingReservation(existing.get());
                 }
-                if (existing.get().getStatus() != PayoutStatus.PENDING) {
-                    return existing.get();
-                }
+
                 return existing.get();
             }
-
             Payout payout = payoutRepository.save(requested);
             requirePersistedId(payout);
 
@@ -167,30 +164,60 @@ public class PayoutTransactionService {
                         || !paymentId.equals(snapshot.paymentId())) {
                     throw new IllegalStateException("Payout allocation ownership mismatch");
                 }
+                if (snapshot.paymentStatus() == null
+                        || snapshot.refundedAmount() == null
+                        || snapshot.refundedAmount().signum() < 0) {
+                    throw new IllegalStateException("Invalid payout allocation financial snapshot");
+                }
+
+                // Skip ordinary ineligible payments; preserve financial integrity failures.
                 if (snapshot.paymentStatus() != PaymentStatus.CAPTURED
                         && snapshot.paymentStatus() != PaymentStatus.RELEASED) {
-                    throw new IllegalStateException("Payout allocation payment is not eligible");
+                    continue;
                 }
-                if (snapshot.refundedAmount().signum() != 0) {
-                    throw new IllegalStateException("Refunded earnings cannot be paid out");
+                if (snapshot.refundedAmount().signum() > 0) {
+                    continue;
                 }
 
                 var participants = bookingFacade.getBookingParticipants(bookingId);
                 if (participants == null
                         || !bookingId.equals(participants.bookingId())
-                        || participants.status() != BookingStatus.COMPLETED
                         || !payout.getProviderId().equals(participants.providerId())) {
-                    throw new IllegalStateException("Payout allocation booking is not completed and eligible");
+                    throw new IllegalStateException("Payout allocation booking ownership mismatch");
+                }
+                if (participants.status() == null) {
+                    throw new IllegalStateException("Payout allocation booking status is missing");
+                }
+                if (participants.status() != BookingStatus.COMPLETED) {
+                    continue;
                 }
 
                 var confirmedAt = completionLookup.findConfirmedAt(bookingId);
+                if (confirmedAt == null) {
+                    throw new IllegalStateException("Completion lookup result is unavailable");
+                }
                 if (confirmedAt.isEmpty()) {
-                    throw new IllegalStateException("Payout allocation lacks verified completion evidence");
+                    continue;
                 }
 
-                requireNoActiveDisputeHold(bookingId);
-                requireApprovedPayoutMaturity(bookingId, confirmedAt.get());
+                Instant confirmationTime = confirmedAt.get();
+                Instant now = clock.instant();
 
+                // Future completion evidence is inconsistent and must fail closed.
+                if (confirmationTime.isAfter(now)) {
+                    throw new IllegalStateException(
+                            "Payout blocked: completion confirmation is in the future for booking "
+                                    + bookingId);
+                }
+
+                // The approved 72-hour maturity rule applies per booking.
+                if (now.isBefore(confirmationTime.plus(payoutMaturityDuration))) {
+                    continue;
+                }
+
+                if (hasActiveDisputeHold(bookingId)) {
+                    continue;
+                }
                 BigDecimal available = allocationCalculator.calculateAvailable(groups.get(key));
                 if (available.signum() <= 0) {
                     continue;
@@ -230,6 +257,68 @@ public class PayoutTransactionService {
         }));
     }
 
+    /**
+     * Ensures a PENDING payout retry has complete financial reservation evidence.
+     * Inconsistent records are rejected instead of being returned as successful.
+     */
+    private void verifyExistingPendingReservation(Payout payout) {
+        List<PayoutAllocation> allocations =
+                allocationRepository.findByPayoutId(payout.getId());
+
+        if (allocations == null || allocations.isEmpty()) {
+            throw incompleteReservation();
+        }
+
+        BigDecimal allocatedTotal = BigDecimal.ZERO;
+
+        for (PayoutAllocation allocation : allocations) {
+            if (allocation == null
+                    || !payout.getId().equals(allocation.getPayoutId())
+                    || !payout.getProviderId().equals(allocation.getProviderId())
+                    || !payout.getCurrency().equals(allocation.getCurrency())
+                    || allocation.getAmount() == null
+                    || allocation.getAmount().signum() <= 0
+                    || allocation.getPaymentId() == null
+                    || allocation.getBookingId() == null) {
+                throw incompleteReservation();
+            }
+
+            String eventKey = "PAYOUT_RESERVE:" + payout.getId() + ":"
+                    + allocation.getPaymentId() + ":"
+                    + allocation.getBookingId();
+
+            var evidenceResult = ledgerRepository.findByEventKey(eventKey);
+            if (evidenceResult == null || evidenceResult.isEmpty()) {
+                throw incompleteReservation();
+            }
+
+            EarningsLedgerEntry evidence = evidenceResult.get();
+
+            if (evidence.getEventType() != EarningsLedgerEventType.PAYOUT_RESERVE
+                    || !eventKey.equals(evidence.getEventKey())
+                    || !allocation.getPaymentId().equals(evidence.getPaymentId())
+                    || !allocation.getBookingId().equals(evidence.getBookingId())
+                    || !payout.getProviderId().equals(evidence.getProviderId())
+                    || !payout.getCurrency().equals(evidence.getCurrency())
+                    || evidence.getAmount() == null
+                    || evidence.getAmount().compareTo(allocation.getAmount()) != 0) {
+                throw incompleteReservation();
+            }
+
+            allocatedTotal = allocatedTotal.add(allocation.getAmount());
+        }
+
+        if (allocatedTotal.compareTo(payout.getAmount()) != 0) {
+            throw incompleteReservation();
+        }
+    }
+
+    private ApiException incompleteReservation() {
+        return new ApiException(
+                HttpStatus.CONFLICT,
+                "INCOMPLETE_PAYOUT_RESERVATION",
+                "Existing payout reservation has incomplete financial evidence");
+    }
     /** Moves a reserved payout into admin processing. */
     public Payout markProcessing(String payoutId, String adminId) {
         requireText(payoutId, "Payout ID");
@@ -317,37 +406,26 @@ public class PayoutTransactionService {
         });
     }
 
-    private void requireNoActiveDisputeHold(String bookingId) {
+    /**
+     * Checks whether a booking has an active dispute hold.
+     * Invalid hold records remain financial integrity failures.
+     */
+    private boolean hasActiveDisputeHold(String bookingId) {
         List<DisputePayoutHold> holds = holdRepository.findByBookingId(bookingId);
         if (holds == null) {
             throw new IllegalStateException("Dispute hold history is unavailable");
         }
         for (DisputePayoutHold hold : holds) {
-            if (hold != null && (hold.getStatus() == DisputePayoutHold.HoldStatus.PENDING
-                    || hold.getStatus() == DisputePayoutHold.HoldStatus.APPLIED)) {
-                throw new IllegalStateException("Payout blocked by an active dispute hold");
+            if (hold == null || hold.getStatus() == null) {
+                throw new IllegalStateException("Dispute hold history contains invalid data");
+            }
+            if (hold.getStatus() == DisputePayoutHold.HoldStatus.PENDING
+                    || hold.getStatus() == DisputePayoutHold.HoldStatus.APPLIED) {
+                return true;
             }
         }
+        return false;
     }
-
-    private void requireApprovedPayoutMaturity(String bookingId, Instant confirmedAt) {
-        Objects.requireNonNull(confirmedAt, "Completion confirmation timestamp is required");
-
-        Instant now = clock.instant();
-        if (confirmedAt.isAfter(now)) {
-            throw new IllegalStateException(
-                    "Payout blocked: completion confirmation is in the future for booking "
-                            + bookingId);
-        }
-
-        Instant maturityBoundary = confirmedAt.plus(payoutMaturityDuration);
-        if (now.isBefore(maturityBoundary)) {
-            throw new IllegalStateException(
-                    "Payout blocked: earnings mature only at or after "
-                            + maturityBoundary + " for booking " + bookingId);
-        }
-    }
-
     private EarningsLedgerEntry payoutEvent(
             Payout payout,
             PayoutAllocation allocation,
