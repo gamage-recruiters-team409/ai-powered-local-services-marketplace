@@ -665,6 +665,16 @@
   font-weight: 600;
 }
 
+.search-unsupported-notice {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background-color: #f9fafb;
+  color: #374151;
+  font-size: 13px;
+}
+
 .results-cards-list {
   display: flex;
   flex-direction: column;

@@ -1,9 +1,25 @@
 import axios from 'axios';
 import { MOCK_SEARCH_RESULTS } from '../fixtures/mockSearchResults.js';
+import { FALLBACK_PROVIDER_IMAGE } from '../fixtures/providerImages.js';
 
 const API_BASE_URL =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) ||
   'http://localhost:8080/api/v1';
+
+export const UNSUPPORTED_LIVE_FILTERS = [
+  'serviceTypes',
+  'availability',
+  'maxDistanceMiles',
+  'backgroundChecked',
+  'minRating',
+];
+
+const SUPPORTED_LIVE_SORTS = ['recommended', 'price_asc', 'price_desc'];
+
+export const DEFAULT_SEARCH_PAGE = 0;
+export const DEFAULT_SEARCH_SIZE = 12;
+
+const LIVE_REQUEST_TIMEOUT_MS = 2500;
 
 /**
  * Fixture mode is explicit and opt-in. It must never be enabled implicitly in
@@ -32,24 +48,141 @@ function getActiveServiceTypes(filters = {}) {
   return SERVICE_TYPE_KEYS.filter(([key]) => filters[key]).map(([, type]) => type);
 }
 
-function buildLiveParams({ trimmedQuery, trimmedLocation, filters, sortBy }) {
-  const availability =
-    filters.availability && filters.availability !== 'any' && filters.availability !== 'custom'
-      ? filters.availability
-      : undefined;
+function toNonNegativeInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function toPositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function getRequestedUnsupportedLiveFilters(filters = {}) {
+  const requested = [];
+
+  if (getActiveServiceTypes(filters).length > 0) {
+    requested.push('serviceTypes');
+  }
+
+  if (
+    filters.availability &&
+    filters.availability !== 'any' &&
+    filters.availability !== 'custom'
+  ) {
+    requested.push('availability');
+  }
+
+  if (filters.distance != null && String(filters.distance).trim() !== '') {
+    requested.push('maxDistanceMiles');
+  }
+
+  if (filters.backgroundChecked) {
+    requested.push('backgroundChecked');
+  }
+
+  if (filters.highRating) {
+    requested.push('minRating');
+  }
+
+  return requested;
+}
+
+export function mapLivePricing(pricing) {
+  const source = pricing && typeof pricing === 'object' ? pricing : {};
+  const amount =
+    typeof source.amount === 'number' && Number.isFinite(source.amount)
+      ? source.amount
+      : null;
+  const model = typeof source.model === 'string' ? source.model : null;
 
   return {
-    q: trimmedQuery,
-    location: trimmedLocation,
-    sort: sortBy,
-    verified: filters.verifiedOnly,
-    serviceTypes: getActiveServiceTypes(filters).join(','),
-    maxHourlyRate: typeof filters.budgetMax === 'number' ? filters.budgetMax : undefined,
-    minRating: filters.highRating ? HIGH_RATING_THRESHOLD : undefined,
-    availability,
-    maxDistanceMiles: filters.distance != null ? Number(filters.distance) : undefined,
-    backgroundChecked: filters.backgroundChecked ? true : undefined,
+    hourlyRate: model === 'HOURLY' ? amount : null,
+    amount,
+    model,
+    durationMinutes:
+      typeof source.durationMinutes === 'number' &&
+      Number.isFinite(source.durationMinutes)
+        ? source.durationMinutes
+        : null,
+    currency: null,
+    unit: null,
   };
+}
+
+export function mapLiveSupportedFlags(supported) {
+  const source = supported && typeof supported === 'object' ? supported : {};
+
+  return {
+    distance: Boolean(source.distance),
+    availability: Boolean(source.availability),
+    backgroundCheck: Boolean(source.backgroundCheck),
+    serviceTypes: Boolean(source.serviceTypes),
+  };
+}
+
+export function mapProviderSearchResult(result) {
+  const source = result && typeof result === 'object' ? result : {};
+
+  return {
+    id: source.listingId ?? source.providerId,
+    providerId: source.providerId,
+    profileId: source.profileId ?? null,
+    listingId: source.listingId ?? null,
+    name: source.name,
+    image: source.image || FALLBACK_PROVIDER_IMAGE,
+    isVerified: Boolean(source.verified),
+    rating: typeof source.rating === 'number' ? source.rating : null,
+    reviewCount: typeof source.reviewCount === 'number' ? source.reviewCount : null,
+    category: source.category ?? null,
+    description: source.description ?? null,
+    location: source.location ?? null,
+    pricing: mapLivePricing(source.pricing),
+    distanceText: null,
+    responseTimeText: null,
+    nextAvailable: null,
+    serviceTypes: [],
+    inclusions: [],
+    cancellationPolicy: null,
+    serviceRadiusMiles: null,
+    supported: mapLiveSupportedFlags(source.supported),
+  };
+}
+
+function buildLiveParams({
+  trimmedQuery,
+  trimmedLocation,
+  filters,
+  sortBy,
+  page,
+  size,
+}) {
+  const params = {};
+
+  if (trimmedQuery) {
+    params.q = trimmedQuery;
+  }
+
+  if (trimmedLocation) {
+    params.location = trimmedLocation;
+  }
+
+  if (filters.verifiedOnly === true) {
+    params.verified = true;
+  }
+
+  if (
+    typeof filters.budgetMax === 'number' &&
+    Number.isFinite(filters.budgetMax)
+  ) {
+    params.maxPrice = filters.budgetMax;
+  }
+
+  params.sort = SUPPORTED_LIVE_SORTS.includes(sortBy) ? sortBy : 'recommended';
+  params.page = page;
+  params.size = size;
+
+  return params;
 }
 
 /**
@@ -166,9 +299,13 @@ export async function fetchSearchResults({
   location = '',
   filters = {},
   sortBy = 'recommended',
+  page = DEFAULT_SEARCH_PAGE,
+  size = DEFAULT_SEARCH_SIZE,
 } = {}) {
-  const trimmedQuery = query.trim().toLowerCase();
-  const trimmedLocation = location.trim().toLowerCase();
+  const trimmedQuery = query.trim();
+  const trimmedLocation = location.trim();
+  const normalizedPage = toNonNegativeInteger(page, DEFAULT_SEARCH_PAGE);
+  const normalizedSize = toPositiveInteger(size, DEFAULT_SEARCH_SIZE);
 
   if (isFixtureModeEnabled()) {
     // Brief latency simulation for realistic UI transition
@@ -179,23 +316,56 @@ export async function fetchSearchResults({
       isFixture: true,
       results,
       totalCount: results.length,
+      page: normalizedPage,
+      size: normalizedSize,
+      pageCount: Math.ceil(results.length / normalizedSize),
+      unsupportedFilters: [],
     };
   }
 
   const response = await axios.get(`${API_BASE_URL}/search`, {
-    params: buildLiveParams({ trimmedQuery, trimmedLocation, filters, sortBy }),
-    timeout: 2500,
+    params: buildLiveParams({
+      trimmedQuery,
+      trimmedLocation,
+      filters,
+      sortBy,
+      page: normalizedPage,
+      size: normalizedSize,
+    }),
+    timeout: LIVE_REQUEST_TIMEOUT_MS,
   });
 
-  const results = response?.data?.results;
-  if (!Array.isArray(results)) {
+  const data = response?.data;
+  if (!Array.isArray(data?.results)) {
     throw new Error('Search service returned an unexpected response.');
   }
+
+  const totalCount =
+    Number.isFinite(Number(data.totalCount)) && data.totalCount != null
+      ? Number(data.totalCount)
+      : data.results.length;
+  const responsePage = toNonNegativeInteger(data.page, normalizedPage);
+  const responseSize = toPositiveInteger(data.size, normalizedSize);
+  const pageCount = Number.isFinite(Number(data.pageCount))
+    ? Number(data.pageCount)
+    : Math.ceil(totalCount / responseSize);
+  const backendUnsupported = Array.isArray(data.unsupportedFilters)
+    ? data.unsupportedFilters.filter((name) => typeof name === 'string')
+    : [];
 
   return {
     isLive: true,
     isFixture: false,
-    results,
-    totalCount: response.data.totalCount ?? results.length,
+    results: data.results.map(mapProviderSearchResult),
+    totalCount,
+    page: responsePage,
+    size: responseSize,
+    pageCount,
+    unsupportedFilters: [
+      ...new Set([
+        ...getRequestedUnsupportedLiveFilters(filters),
+        ...backendUnsupported,
+      ]),
+    ],
   };
 }

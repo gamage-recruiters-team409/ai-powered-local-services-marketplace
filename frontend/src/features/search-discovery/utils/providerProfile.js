@@ -110,7 +110,7 @@ export function normalizeProfileTab(value) {
   return PROFILE_TABS.includes(tab) ? tab : 'overview';
 }
 
-export function getProviderServiceOptions(provider = {}) {
+export function getProviderServiceOptions(provider = {}, { allowFallback = true } = {}) {
   const serviceTypes = Array.isArray(provider.serviceTypes)
     ? provider.serviceTypes
     : [];
@@ -132,6 +132,10 @@ export function getProviderServiceOptions(provider = {}) {
     return services;
   }
 
+  if (!allowFallback) {
+    return [];
+  }
+
   return [
     {
       key: 'category',
@@ -142,6 +146,42 @@ export function getProviderServiceOptions(provider = {}) {
       isFallback: true,
     },
   ];
+}
+
+export function getProviderListingServiceOptions(provider = {}) {
+  const listings = Array.isArray(provider.listings) ? provider.listings : [];
+  const seen = new Set();
+  const services = [];
+
+  listings.forEach((listing) => {
+    if (!listing || typeof listing !== 'object') {
+      return;
+    }
+
+    const listingId = getTrimmedString(listing.id);
+    if (!listingId || seen.has(listingId)) {
+      return;
+    }
+
+    seen.add(listingId);
+    services.push({
+      key: listingId,
+      listingId,
+      label:
+        getTrimmedString(listing.title) ||
+        getTrimmedString(listing.categoryName) ||
+        'Service',
+      description: getTrimmedString(listing.description) || null,
+      pricing:
+        listing.pricing && typeof listing.pricing === 'object'
+          ? listing.pricing
+          : null,
+      inclusions: null,
+      isFallback: false,
+    });
+  });
+
+  return services;
 }
 
 export function getProviderReviewState(provider = {}) {
@@ -161,7 +201,7 @@ export function getProviderReviewState(provider = {}) {
       message = 'This provider has no reviews yet.';
     } else {
       message =
-        'Individual review content is not available in this demo. The aggregate rating is shown above.';
+        'Individual review content is not available. The aggregate rating is shown above.';
     }
   }
 
