@@ -1,19 +1,31 @@
 package com.gamagerecruiters.marketplace.modules.auth.service;
 
+import java.time.DayOfWeek;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import org.bson.Document;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationOperation;
+import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -25,10 +37,14 @@ import org.springframework.stereotype.Service;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.mongodb.client.result.UpdateResult;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.domain.TokenType;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.dto.AdminUserSummary;
+import com.gamagerecruiters.marketplace.modules.auth.dto.Granularity;
+import com.gamagerecruiters.marketplace.modules.auth.dto.PeriodCount;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.AdminRolePolicy;
@@ -72,6 +88,7 @@ public class UserInternalServiceImpl implements UserInternalService {
     }
 
     @Override
+    @Deprecated
     @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     public User changeStatus(String userId, UserStatus status) {
         String currentUserId = CurrentUser.getUserId();
@@ -314,6 +331,181 @@ public class UserInternalServiceImpl implements UserInternalService {
             query.addCriteria(Criteria.where("status").is(status));
         }
         return mongoTemplate.count(query, User.class);
+    }
+
+    @Override
+    public List<PeriodCount> countNewUsers(String actorId, Set<Role> roles, Instant from, Instant to, Granularity granularity) {
+        if (from == null || to == null || granularity == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PARAMETERS",
+                    "from, to, and granularity are required");
+        }
+        if (!from.isBefore(to)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE",
+                    "from must be before to");
+        }
+
+        User actor = validateActorForRead(actorId);
+        Set<Role> visible = AdminRolePolicy.visibleRoles(actor.getRole());
+
+        // Validate requested roles are within the actor's visibility scope
+        if (roles != null && !roles.isEmpty()) {
+            for (Role role : roles) {
+                if (!visible.contains(role)) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ROLE_NOT_PERMITTED",
+                            "Actor role '" + actor.getRole() + "' is not permitted to view role '" + role + "'");
+                }
+            }
+        }
+
+        // Build the match criteria
+        List<Criteria> matchCriteria = new ArrayList<>();
+        matchCriteria.add(Criteria.where("createdAt").gte(from).lt(to));
+
+        if (roles != null && !roles.isEmpty()) {
+            matchCriteria.add(Criteria.where("role").in(roles));
+        } else if (actor.getRole() != Role.SUPER_ADMIN) {
+            matchCriteria.add(Criteria.where("role").in(visible));
+        }
+
+        String unit = granularity == Granularity.WEEK ? "week" : "month";
+
+        AggregationOperation matchOp = Aggregation.match(
+                new Criteria().andOperator(matchCriteria.toArray(new Criteria[0]))
+        );
+
+        AggregationOperation groupOp = context -> new Document("$group",
+                new Document("_id", new Document("$dateTrunc",
+                        new Document("date", "$createdAt")
+                                .append("unit", unit)
+                                .append("timezone", "UTC")
+                                .append("startOfWeek", "monday")))
+                        .append("count", new Document("$sum", 1)));
+
+        AggregationOperation sortOp = context -> new Document("$sort", new Document("_id", 1));
+
+        Aggregation aggregation = Aggregation.newAggregation(matchOp, groupOp, sortOp);
+        AggregationResults<Document> results = mongoTemplate.aggregate(aggregation, User.class, Document.class);
+
+        // Generate all period starts so empty periods are filled with 0
+        List<Instant> periodStarts = generatePeriodStarts(from, to, granularity);
+        Map<Instant, Long> countsByPeriod = new LinkedHashMap<>();
+        for (Instant ps : periodStarts) {
+            countsByPeriod.put(ps, 0L);
+        }
+
+        if (results != null && results.getMappedResults() != null) {
+            for (Document doc : results.getMappedResults()) {
+                Object idObj = doc.get("_id");
+                Instant periodStart = null;
+                if (idObj instanceof java.util.Date d) {
+                    periodStart = d.toInstant();
+                } else if (idObj instanceof Instant inst) {
+                    periodStart = inst;
+                }
+                if (periodStart != null) {
+                    Instant aligned = normalizePeriodStart(periodStart, granularity);
+                    Number countNum = (Number) doc.get("count");
+                    long count = countNum != null ? countNum.longValue() : 0L;
+                    countsByPeriod.computeIfPresent(aligned, (k, current) -> current + count);
+                }
+            }
+        }
+
+        return countsByPeriod.entrySet().stream()
+                .map(e -> new PeriodCount(e.getKey(), e.getValue()))
+                .toList();
+    }
+
+    @Override
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
+    public User changeStatus(String actorId, String userId, UserStatus expectedStatus, UserStatus newStatus) {
+        if (actorId == null || actorId.isBlank()) {
+            throw new AccessDeniedException("Authentication required: actor could not be resolved");
+        }
+
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.isAuthenticated() && auth.getPrincipal() instanceof UserPrincipal principal) {
+            if (!actorId.equals(principal.getUserId())) {
+                throw new ApiException(HttpStatus.FORBIDDEN, "ACTOR_IDENTITY_MISMATCH",
+                        "Supplied actor ID does not match authenticated user ID");
+            }
+        }
+
+        User actor = userRepository.findById(actorId)
+                .orElseThrow(() -> new AccessDeniedException("Actor user not found in database"));
+
+        User target = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("USER_NOT_FOUND", "User not found with id: " + userId));
+
+        // Validate using AdminRolePolicy (checks actor active, not self, role hierarchy, deactivated, last SUPER_ADMIN)
+        AdminRolePolicy.validateStatusChange(actor, target, newStatus, userRepository);
+
+        // Atomic conditional update: match by id AND current status
+        Query query = new Query(Criteria.where("_id").is(userId).and("status").is(expectedStatus));
+        Update update = new Update().set("status", newStatus);
+
+        if (newStatus == UserStatus.ACTIVE) {
+            update.set("failedLoginCount", 0);
+            update.unset("lockStartedAt");
+        }
+
+        UpdateResult result = mongoTemplate.updateFirst(query, update, User.class);
+
+        if (result.getMatchedCount() == 0) {
+            boolean exists = userRepository.existsById(userId);
+            if (exists) {
+                throw new ResourceConflictException("CONCURRENT_MODIFICATION",
+                        "User status was modified concurrently. Expected '" + expectedStatus
+                                + "' but it has changed. Please retry.");
+            } else {
+                throw new ResourceNotFoundException("USER_NOT_FOUND", "User not found with id: " + userId);
+            }
+        }
+
+        // Revoke refresh tokens when suspending or deactivating
+        if (newStatus == UserStatus.SUSPENDED || newStatus == UserStatus.DEACTIVATED) {
+            authTokenRepository.revokeAllActiveTokensByUserIdAndType(userId, TokenType.REFRESH);
+        }
+
+        return userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("USER_NOT_FOUND", "User not found after update"));
+    }
+
+    private Instant normalizePeriodStart(Instant instant, Granularity granularity) {
+        ZonedDateTime zdt = instant.atZone(ZoneOffset.UTC);
+        if (granularity == Granularity.WEEK) {
+            return zdt.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+                    .truncatedTo(ChronoUnit.DAYS)
+                    .toInstant();
+        } else {
+            return zdt.withDayOfMonth(1)
+                    .truncatedTo(ChronoUnit.DAYS)
+                    .toInstant();
+        }
+    }
+
+    private List<Instant> generatePeriodStarts(Instant from, Instant to, Granularity granularity) {
+        List<Instant> starts = new ArrayList<>();
+        ZonedDateTime current = from.atZone(ZoneOffset.UTC);
+
+        if (granularity == Granularity.WEEK) {
+            // Align to Monday of the week containing 'from'
+            current = current.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+                    .truncatedTo(ChronoUnit.DAYS);
+            while (current.toInstant().isBefore(to)) {
+                starts.add(current.toInstant());
+                current = current.plusWeeks(1);
+            }
+        } else {
+            // MONTH: align to first day of the month containing 'from'
+            current = current.withDayOfMonth(1).truncatedTo(ChronoUnit.DAYS);
+            while (current.toInstant().isBefore(to)) {
+                starts.add(current.toInstant());
+                current = current.plusMonths(1);
+            }
+        }
+
+        return starts;
     }
 
     private User validateActorForRead(String actorId) {

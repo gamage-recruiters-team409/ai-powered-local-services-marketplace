@@ -31,6 +31,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -71,6 +74,9 @@ class AuthServiceTest {
     @Mock
     private EmailTokenService emailTokenService;
 
+    @Mock
+    private MongoTemplate mongoTemplate;
+
     private AuthServiceImpl authService;
 
     @BeforeEach
@@ -81,6 +87,7 @@ class AuthServiceTest {
                 passwordEncoder,
                 tokenService,
                 emailTokenService,
+                mongoTemplate,
                 false, // requireEmailVerification = false for dev
                 5,     // maxFailedLogins = 5
                 15,    // lockDurationMinutes = 15
@@ -131,6 +138,7 @@ class AuthServiceTest {
                 passwordEncoder,
                 tokenService,
                 emailTokenService,
+                mongoTemplate,
                 true, // requireEmailVerification = true
                 5,
                 15,
@@ -791,5 +799,76 @@ class AuthServiceTest {
         assertNotNull(principal);
         assertEquals("user-bypass", principal.userId());
         assertEquals(Role.PROVIDER, principal.role());
+    }
+
+    @Test
+    @DisplayName("lastActiveAt: Successful login sets lastActiveAt timestamp on user")
+    void shouldSetLastActiveAtOnSuccessfulLogin() {
+        LoginRequest request = new LoginRequest("active-user@marketplace.local", "Password123!");
+
+        User user = new User();
+        user.setId("u-active-1");
+        user.setName("Active User");
+        user.setEmail("active-user@marketplace.local");
+        user.setPasswordHash("hashedPass");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        assertNull(user.getLastActiveAt(), "lastActiveAt must initially be null");
+
+        when(userRepository.findByEmail("active-user@marketplace.local")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("Password123!", "hashedPass")).thenReturn(true);
+        when(tokenService.generateAccessToken("u-active-1", "active-user@marketplace.local", Role.CUSTOMER)).thenReturn("jwt");
+        when(tokenService.generateRefreshToken()).thenReturn("refresh-token");
+        when(tokenService.hashToken("refresh-token")).thenReturn("hash");
+        when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
+        when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
+
+        Instant beforeLogin = Instant.now().minusSeconds(1);
+        authService.login(request);
+        Instant afterLogin = Instant.now().plusSeconds(1);
+
+        assertNotNull(user.getLastActiveAt(), "lastActiveAt must be set on successful login");
+        assertTrue(user.getLastActiveAt().isAfter(beforeLogin) && user.getLastActiveAt().isBefore(afterLogin),
+                "lastActiveAt must be set to current timestamp");
+        verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        verify(userRepository, never()).save(user);
+    }
+
+    @Test
+    @DisplayName("lastActiveAt: Successful token refresh sets lastActiveAt timestamp on user")
+    void shouldSetLastActiveAtOnSuccessfulRefresh() {
+        RefreshTokenRequest request = new RefreshTokenRequest("valid-refresh-token");
+        String tokenHash = "token-hash-123";
+
+        AuthToken validToken = new AuthToken("u-refresh-1", TokenType.REFRESH, tokenHash,
+                Instant.now().plusSeconds(3600), Instant.now());
+
+        User user = new User();
+        user.setId("u-refresh-1");
+        user.setName("Refresh User");
+        user.setEmail("refresh-user@marketplace.local");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        assertNull(user.getLastActiveAt(), "lastActiveAt must initially be null");
+
+        when(tokenService.hashToken("valid-refresh-token")).thenReturn(tokenHash);
+        when(authTokenRepository.findAndConsumeValidToken(eq(tokenHash), any(Instant.class)))
+                .thenReturn(Optional.of(validToken));
+        when(userRepository.findById("u-refresh-1")).thenReturn(Optional.of(user));
+        when(tokenService.generateAccessToken("u-refresh-1", "refresh-user@marketplace.local", Role.CUSTOMER)).thenReturn("jwt");
+        when(tokenService.generateRefreshToken()).thenReturn("new-refresh-token");
+        when(tokenService.hashToken("new-refresh-token")).thenReturn("new-hash");
+        when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
+        when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
+
+        Instant beforeRefresh = Instant.now().minusSeconds(1);
+        authService.refresh(request);
+        Instant afterRefresh = Instant.now().plusSeconds(1);
+
+        assertNotNull(user.getLastActiveAt(), "lastActiveAt must be set on successful refresh");
+        assertTrue(user.getLastActiveAt().isAfter(beforeRefresh) && user.getLastActiveAt().isBefore(afterRefresh),
+                "lastActiveAt must be set to current timestamp");
+        verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        verify(userRepository, never()).save(user);
     }
 }

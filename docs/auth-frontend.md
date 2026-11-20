@@ -85,3 +85,27 @@ The user interface implements the 15 high-fidelity visual designs matching the L
 - **Server Subprotocol Echo:** The server handshake interceptor validates the subprotocol and echoes `"bearer"` back to the client upon successful validation.
 - **Connect-Time Access Token Validation:** Handshake interceptors call `AuthService.validateAccessToken(token)` from the auth module to validate the access token. Validation occurs once at connect time; clients refresh tokens via HTTP and reconnect after token expiry.
 - **Handshake Route Security:** `SecurityConfig` allows unauthenticated `GET /ws` handshakes through the security filter chain, delegating authentication to the handshake interceptor. Non-GET methods and subpaths remain strictly protected.
+
+---
+
+## 7. Admin User Management & Analytics (WP09 Integration)
+
+### 7.1 New User Registration Analytics (`countNewUsers`)
+- **Signature:** `List<PeriodCount> countNewUsers(String actorId, Set<Role> roles, Instant from, Instant to, Granularity granularity)`
+- **Aggregation Pipeline:** Executes a single MongoDB aggregation (`$match` -> `$group` via `$dateTrunc` -> `$sort` by `_id`) grouping by week (`monday` start of week) or month in UTC.
+- **Empty Period Zero-Filling:** All periods within `[from, to)` are generated and empty periods are guaranteed to be present with `count: 0`, ordered chronologically.
+- **Actor Binding & Scoping:** Strict validation identical to `searchUsers`: requires valid authenticated session matching `actorId`, active actor account, and restricts queries to the actor's permitted role hierarchy (`AdminRolePolicy.visibleRoles`).
+- **Legacy Records Handling:** Users lacking a `createdAt` field (or where `createdAt` is null) are excluded from period counts by the `$gte: from` date criteria. No additional indexes are introduced.
+
+### 7.2 User Activity Tracking (`lastActiveAt`)
+- **Entity Field:** `private Instant lastActiveAt` on `User.java`.
+- **Update Frequency:** Updated **strictly** on successful password login (`AuthServiceImpl.login`) and on successful token refresh (`AuthServiceImpl.refresh`). It is **intentionally NOT updated on every API request** to avoid high-frequency write contention and database write amplification.
+- **Summary Exposure:** Exposed via `AdminUserSummary.lastActiveAt()`.
+- **Backward Compatibility:** Preserves an overloaded 7-argument constructor on `AdminUserSummary` setting `lastActiveAt = null` to maintain binary and source compatibility for existing services and tests.
+
+### 7.3 Atomic Optimistic Status Modification (`changeStatus`)
+- **Signature:** `User changeStatus(String actorId, String userId, UserStatus expectedStatus, UserStatus newStatus)`
+- **Atomic Conditional Update:** Executes `mongoTemplate.updateFirst(query, update, User.class)` where the query matches both `{ _id: userId, status: expectedStatus }`.
+- **Conflict Handling:** If `matchedCount == 0`, verifies whether the user exists in the database. If present, throws HTTP 409 `CONCURRENT_MODIFICATION` indicating concurrent state modification; if absent, throws HTTP 404 `USER_NOT_FOUND`.
+- **Policy Enforcement:** Reuses `AdminRolePolicy.validateStatusChange(actor, target, newStatus, userRepository)` to verify active actor status, disallow self-modification, enforce administrative role hierarchies, disallow modifying `DEACTIVATED` accounts, and protect the last active `SUPER_ADMIN`.
+- **Session Revocation:** Automatically revokes all active `REFRESH` tokens for the target user via `AuthTokenRepository.revokeAllActiveTokensByUserIdAndType(userId, TokenType.REFRESH)` whenever `newStatus` is `SUSPENDED` or `DEACTIVATED`. When transitioned to `ACTIVE`, resets `failedLoginCount` to 0 and unsets `lockStartedAt`.

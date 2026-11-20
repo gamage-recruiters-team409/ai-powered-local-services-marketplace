@@ -5,6 +5,10 @@ import java.time.Instant;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -41,6 +45,7 @@ public class AuthServiceImpl implements AuthService {
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokenService;
     private final EmailTokenService emailTokenService;
+    private final MongoTemplate mongoTemplate;
 
     private final boolean requireEmailVerification;
     private final int maxFailedLogins;
@@ -53,6 +58,7 @@ public class AuthServiceImpl implements AuthService {
             PasswordEncoder passwordEncoder,
             TokenService tokenService,
             EmailTokenService emailTokenService,
+            MongoTemplate mongoTemplate,
             @Value("${app.auth.require-email-verification:true}") boolean requireEmailVerification,
             @Value("${app.auth.max-failed-logins:5}") int maxFailedLogins,
             @Value("${app.auth.lock-duration-minutes:15}") int lockDurationMinutes,
@@ -63,6 +69,7 @@ public class AuthServiceImpl implements AuthService {
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
         this.emailTokenService = emailTokenService;
+        this.mongoTemplate = mongoTemplate;
         this.requireEmailVerification = requireEmailVerification;
         this.maxFailedLogins = maxFailedLogins;
         this.lockDurationMinutes = lockDurationMinutes;
@@ -210,6 +217,10 @@ public class AuthServiceImpl implements AuthService {
             userRepository.save(user);
         }
 
+        // Record last activity timestamp via targeted update without overwriting the whole document
+        user.setLastActiveAt(Instant.now());
+        recordLastActiveAt(user.getId());
+
         return issueTokens(user);
     }
 
@@ -265,8 +276,22 @@ public class AuthServiceImpl implements AuthService {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "ACCOUNT_NOT_ACTIVE", "User account is not active");
         }
 
+        // Record last activity timestamp via targeted update without overwriting the whole document
+        user.setLastActiveAt(Instant.now());
+        recordLastActiveAt(user.getId());
+
         // Issue new token pair
         return issueTokens(user);
+    }
+
+    private void recordLastActiveAt(String userId) {
+        if (mongoTemplate != null && userId != null) {
+            mongoTemplate.updateFirst(
+                    Query.query(Criteria.where("_id").is(userId)),
+                    new Update().set("lastActiveAt", Instant.now()),
+                    User.class
+            );
+        }
     }
 
     @Override
