@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.AuthenticationCredentialsNotFoundException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -37,6 +38,7 @@ import com.gamagerecruiters.marketplace.modules.messaging.dto.ModerationMessageR
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
 import java.util.List;
 
 @SpringJUnitConfig(classes = MessageServiceMethodSecurityTest.TestConfig.class)
@@ -130,7 +132,38 @@ class MessageServiceMethodSecurityTest {
     }
 
     @Test
-    void c8SjFSqSJ6DYAcBJrNGN76hEhcij5vtyJK5G819CvV7Fm() {
+    void moderatorAndSuperAdminCanListFlaggedMessages() {
+        when(mongoTemplate.find(any(Query.class), org.mockito.ArgumentMatchers.eq(Message.class)))
+                .thenReturn(List.of());
+
+        for (Role role : new Role[]{Role.MODERATOR, Role.SUPER_ADMIN}) {
+            loginAs("viewer-" + role.name(), role);
+            service.listFlaggedMessages(null, null, 0, 20);
+        }
+    }
+
+    @Test
+    void customerProviderAndAdminCannotListFlaggedMessages() {
+        for (Role role : new Role[]{Role.CUSTOMER, Role.PROVIDER, Role.ADMIN}) {
+            loginAs("denied-" + role.name(), role);
+            assertThatThrownBy(() -> service.listFlaggedMessages(null, null, 0, 20))
+                    .isInstanceOf(AccessDeniedException.class);
+        }
+    }
+
+    @Test
+    void moderatorAndGuestCannotReportMessages() {
+        loginAs("moderator-1", Role.MODERATOR);
+        assertThatThrownBy(() -> service.reportMessage("message-1"))
+                .isInstanceOf(AccessDeniedException.class);
+
+        SecurityContextHolder.clearContext();
+        assertThatThrownBy(() -> service.reportMessage("message-1"))
+                .isInstanceOfAny(AccessDeniedException.class, AuthenticationCredentialsNotFoundException.class);
+    }
+
+    @Test
+    void customerAndProviderCannotAccessModerationOperations() {
         for (Role role : new Role[]{Role.CUSTOMER, Role.PROVIDER}) {
             loginAs("party-1", role);
             assertThatThrownBy(() -> service.getMessageForModeration("message-1"))
@@ -205,7 +238,7 @@ class MessageServiceMethodSecurityTest {
         Message hidden = message();
         hidden.setStatus(MessageStatus.HIDDEN);
         hidden.setHideReason("Policy violation");
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(
+        when(messageRepository.findByConversationId(
                 org.mockito.ArgumentMatchers.eq("conversation-1"), org.mockito.ArgumentMatchers.any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(hidden)));
 

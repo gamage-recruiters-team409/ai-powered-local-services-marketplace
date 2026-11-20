@@ -38,6 +38,7 @@ import com.gamagerecruiters.marketplace.modules.messaging.domain.FlagSource;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.Message;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.MessageStatus;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePollingResponse;
+import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.service.MessageService;
@@ -189,6 +190,37 @@ class MessagingMongoIntegrationTest {
         assertThat(combinedIds).hasSize(101).doesNotHaveDuplicates().isSorted();
         assertThat(combinedIds).containsExactlyInAnyOrderElementsOf(
                 saved.stream().map(Message::getId).toList());
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: same-timestamp history pages have no repeats or gaps")
+    void pagedHistoryWithSameTimestampDoesNotRepeatOrSkipMessages() {
+        Instant timestamp = Instant.parse("2026-11-20T09:00:00Z");
+        Conversation conversation = conversation("conversation-stable-history", "booking-stable-history");
+        conversationRepository.save(conversation);
+        List<Message> messages = List.of(
+                message("history-message-a", conversation.getId(), timestamp),
+                message("history-message-b", conversation.getId(), timestamp),
+                message("history-message-c", conversation.getId(), timestamp),
+                message("history-message-d", conversation.getId(), timestamp),
+                message("history-message-e", conversation.getId(), timestamp));
+        messageRepository.saveAll(messages);
+
+        loginAs("customer-1", Role.CUSTOMER);
+        when(bookingFacade.getBookingParticipants("booking-stable-history"))
+                .thenReturn(participants("booking-stable-history"));
+
+        MessagePageResponse first = messageService.listMessages("booking-stable-history", 0, 2);
+        MessagePageResponse second = messageService.listMessages("booking-stable-history", 1, 2);
+        MessagePageResponse third = messageService.listMessages("booking-stable-history", 2, 2);
+        List<String> ids = java.util.stream.Stream.of(first, second, third)
+                .flatMap(response -> response.content().stream())
+                .map(response -> response.id())
+                .toList();
+
+        assertThat(ids).containsExactly("history-message-e", "history-message-d", "history-message-c",
+                "history-message-b", "history-message-a");
+        assertThat(ids).doesNotHaveDuplicates();
     }
 
     private static Conversation conversation(String id, String bookingId) {

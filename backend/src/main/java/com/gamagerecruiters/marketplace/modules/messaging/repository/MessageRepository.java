@@ -9,7 +9,7 @@ import com.gamagerecruiters.marketplace.modules.messaging.domain.Message;
 
 public interface MessageRepository extends MongoRepository<Message, String> {
 
-    Page<Message> findByConversationIdOrderByCreatedAtDesc(String conversationId, Pageable pageable);
+    Page<Message> findByConversationId(String conversationId, Pageable pageable);
 
     Page<Message> findByConversationIdAndCreatedAtAfter(
             String conversationId, java.time.Instant since, Pageable pageable);

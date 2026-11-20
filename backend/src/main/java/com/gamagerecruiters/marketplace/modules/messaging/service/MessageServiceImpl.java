@@ -2,7 +2,9 @@ package com.gamagerecruiters.marketplace.modules.messaging.service;
 
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -12,6 +14,7 @@ import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.support.PageableExecutionUtils;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -135,8 +138,8 @@ public class MessageServiceImpl implements MessageService {
         if (conversation.isEmpty()) {
             return new MessagePageResponse(java.util.List.of(), page, pageSize, 0, 0);
         }
-        Page<Message> messages = messageRepository.findByConversationIdOrderByCreatedAtDesc(
-                conversation.get().getId(), PageRequest.of(page, pageSize));
+        Page<Message> messages = messageRepository.findByConversationId(
+                conversation.get().getId(), historyPageRequest(page, pageSize));
         return new MessagePageResponse(
                 messages.map(message -> toResponse(message, participants.status())).getContent(),
                 messages.getNumber(), messages.getSize(), messages.getTotalElements(), messages.getTotalPages());
@@ -190,8 +193,8 @@ public class MessageServiceImpl implements MessageService {
         if (conversation.isEmpty()) {
             return new MessagePageResponse(java.util.List.of(), validPage, pageSize, 0, 0);
         }
-        Page<Message> messages = messageRepository.findByConversationIdOrderByCreatedAtDesc(
-                conversation.get().getId(), PageRequest.of(validPage, pageSize));
+        Page<Message> messages = messageRepository.findByConversationId(
+                conversation.get().getId(), historyPageRequest(validPage, pageSize));
         return new MessagePageResponse(
                 messages.map(message -> toResponse(message, participants.status())).getContent(),
                 messages.getNumber(), messages.getSize(), messages.getTotalElements(), messages.getTotalPages());
@@ -207,8 +210,8 @@ public class MessageServiceImpl implements MessageService {
         if (conversation.isEmpty()) {
             return new ModerationMessagePageResponse(java.util.List.of(), validPage, pageSize, 0, 0);
         }
-        Page<Message> messages = messageRepository.findByConversationIdOrderByCreatedAtDesc(
-                conversation.get().getId(), PageRequest.of(validPage, pageSize));
+        Page<Message> messages = messageRepository.findByConversationId(
+                conversation.get().getId(), historyPageRequest(validPage, pageSize));
         return new ModerationMessagePageResponse(
                 messages.getContent().stream()
                         .map(message -> toModerationResponse(message, conversation.get()))
@@ -240,6 +243,57 @@ public class MessageServiceImpl implements MessageService {
         Message message = findMessage(messageId);
         Conversation conversation = conversationRepository.findById(message.getConversationId()).orElse(null);
         return toModerationResponse(message, conversation);
+    }
+
+    @Override
+    @PreAuthorize("@adminAccessPolicyService.canViewArea(authentication, 'MODERATOR')")
+    public ModerationMessagePageResponse listFlaggedMessages(FlagSource flagSource, MessageStatus status,
+                                                              int page, int size) {
+        int validPage = validPage(page);
+        int pageSize = normalizedPageSize(size);
+        PageRequest pageable = PageRequest.of(validPage, pageSize,
+                Sort.by(Sort.Order.desc("flaggedAt"), Sort.Order.desc("id")));
+
+        Query query = Query.query(Criteria.where("flagged").is(true));
+        if (flagSource != null) {
+            query.addCriteria(Criteria.where("flagSource").is(flagSource));
+        }
+        if (status != null) {
+            query.addCriteria(Criteria.where("status").is(status));
+        }
+        query.with(pageable);
+        List<Message> messages = mongoTemplate.find(query, Message.class);
+        Page<Message> flaggedMessages = PageableExecutionUtils.getPage(messages, pageable,
+                () -> mongoTemplate.count(Query.of(query).limit(-1).skip(-1), Message.class));
+
+        Set<String> conversationIds = messages.stream()
+                .map(Message::getConversationId)
+                .collect(java.util.stream.Collectors.toSet());
+        Map<String, Conversation> conversations = new HashMap<>();
+        if (!conversationIds.isEmpty()) {
+            conversationRepository.findAllById(conversationIds)
+                    .forEach(conversation -> conversations.put(conversation.getId(), conversation));
+        }
+        return new ModerationMessagePageResponse(messages.stream()
+                .map(message -> toModerationResponse(message, conversations.get(message.getConversationId())))
+                .toList(), flaggedMessages.getNumber(), flaggedMessages.getSize(),
+                flaggedMessages.getTotalElements(), flaggedMessages.getTotalPages());
+    }
+
+    /**
+     * WP09 calls this from the report endpoint so the participant check cannot be forgotten.
+     */
+    @Override
+    @PreAuthorize("hasAnyRole('CUSTOMER','PROVIDER')")
+    public void reportMessage(String messageId) {
+        String userId = requireUser();
+        Message message = findMessage(messageId);
+        Conversation conversation = conversationRepository.findById(message.getConversationId())
+                .orElseThrow(() -> new ResourceNotFoundException("CONVERSATION_NOT_FOUND", "Conversation not found"));
+        if (!userId.equals(conversation.getCustomerId()) && !userId.equals(conversation.getProviderId())) {
+            throw new AccessDeniedException("Access denied: user is not a participant in this conversation");
+        }
+        flagMessage(messageId, FlagSource.USER_REPORT);
     }
 
     @Override
@@ -401,6 +455,10 @@ public class MessageServiceImpl implements MessageService {
 
     private int normalizedPageSize(int size) {
         return size <= 0 ? DEFAULT_PAGE_SIZE : Math.min(size, MAX_PAGE_SIZE);
+    }
+
+    private PageRequest historyPageRequest(int page, int size) {
+        return PageRequest.of(page, size, Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
     }
 
     private ApiException messageUpdateConflict() {

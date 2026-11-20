@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.messaging.service;
 import java.time.Instant;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.ConversationPageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.FlagSource;
+import com.gamagerecruiters.marketplace.modules.messaging.domain.MessageStatus;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.ModerationMessageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.ModerationMessagePageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePageResponse;
@@ -29,8 +30,16 @@ public interface MessageService {
 
     ModerationMessageResponse getMessageForModeration(String messageId);
 
+    ModerationMessagePageResponse listFlaggedMessages(FlagSource flagSource, MessageStatus status,
+                                                       int page, int size);
+
     /**
-     * Caller must first check the reporter with isMessageParticipant.
+     * WP09 calls this from its report endpoint so the participant check cannot be forgotten.
+     */
+    void reportMessage(String messageId);
+
+    /**
+     * Role-free because the AI moderation path has no logged-in user.
      */
     void flagMessage(String messageId, FlagSource source);
 

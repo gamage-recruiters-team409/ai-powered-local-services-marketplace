@@ -230,7 +230,7 @@ class MessageServiceImplTest {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         Message message = message("message-1", "conversation-1", "077  123  4567", MessageStatus.VISIBLE);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(message)));
 
         MessageResponse response = service.listMessages(BOOKING_ID, 0, 20).content().get(0);
@@ -244,7 +244,7 @@ class MessageServiceImplTest {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         Message message = message("message-1", "conversation-1", "077  123  4567", MessageStatus.VISIBLE);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(message)));
 
         MessageResponse response = service.listMessages(BOOKING_ID, 0, 20).content().get(0);
@@ -274,7 +274,7 @@ class MessageServiceImplTest {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         Message message = message("message-1", "conversation-1", "Call 0771234567", MessageStatus.VISIBLE);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(message)));
 
         MessageResponse masked = service.listMessages(BOOKING_ID, 0, 20).content().get(0);
@@ -291,7 +291,7 @@ class MessageServiceImplTest {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         Message message = message("message-1", "conversation-1", "secret", MessageStatus.HIDDEN);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(message)));
 
         assertThat(service.listMessages(BOOKING_ID, 0, 20).content().get(0).body()).isNull();
@@ -362,7 +362,7 @@ class MessageServiceImplTest {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(message)));
 
         var result = service.listMessages(BOOKING_ID, 0, 20);
@@ -379,7 +379,7 @@ class MessageServiceImplTest {
 
         assertThat(result.content()).isEmpty();
         assertThat(result.totalElements()).isZero();
-        verify(messageRepository, never()).findByConversationIdOrderByCreatedAtDesc(
+        verify(messageRepository, never()).findByConversationId(
                 anyString(), any(Pageable.class));
     }
 
@@ -387,13 +387,13 @@ class MessageServiceImplTest {
     void listLimitsPageSizeTo50() {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of()));
 
         service.listMessages(BOOKING_ID, 0, 100);
 
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
-        verify(messageRepository).findByConversationIdOrderByCreatedAtDesc(eq("conversation-1"), captor.capture());
+        verify(messageRepository).findByConversationId(eq("conversation-1"), captor.capture());
         assertThat(captor.getValue().getPageSize()).isEqualTo(50);
     }
 
@@ -422,7 +422,7 @@ class MessageServiceImplTest {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         Message hidden = message("message-1", "conversation-1", "unsafe content", MessageStatus.HIDDEN);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(hidden)));
 
         var response = service.getChatHistoryForMediator(BOOKING_ID, 0, 20).content().get(0);
@@ -580,7 +580,7 @@ class MessageServiceImplTest {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         Message hidden = message("message-1", "conversation-1", "secret", MessageStatus.HIDDEN);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(hidden)));
 
         var response = service.getChatHistory(BOOKING_ID, 0, 20).content().get(0);
@@ -612,7 +612,7 @@ class MessageServiceImplTest {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         Message message = message("message-1", "conversation-1", "Call 0771234567", MessageStatus.VISIBLE);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(message)));
 
         var masked = service.getChatHistory(BOOKING_ID, 0, 20).content().get(0);
@@ -634,7 +634,7 @@ class MessageServiceImplTest {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         Message message = message("message-1", "conversation-1", "Call 0771234567", MessageStatus.VISIBLE);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(message)));
 
         var response = service.getChatHistory(BOOKING_ID, 0, 20).content().get(0);
@@ -828,13 +828,175 @@ class MessageServiceImplTest {
         Message second = message("message-2", "conversation-1", "second", MessageStatus.HIDDEN);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
         when(conversationRepository.findById("conversation-1")).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+        when(messageRepository.findByConversationId(anyString(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(first, second)));
 
         var response = service.getChatHistoryForMediator(BOOKING_ID, 0, 20);
 
         assertThat(response.content()).hasSize(2);
         verify(conversationRepository, never()).findById(anyString());
+    }
+
+    @Test
+    void listFlaggedMessagesReturnsOriginalTextAndLoadsConversationsInOneBatch() {
+        Message flagged = message("message-1", "conversation-1", "Original reported text", MessageStatus.VISIBLE);
+        flagged.setFlagged(true);
+        flagged.setFlagSource(FlagSource.USER_REPORT);
+        flagged.setFlaggedAt(CREATED_AT);
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        when(mongoTemplate.find(any(Query.class), eq(Message.class))).thenReturn(List.of(flagged));
+        when(conversationRepository.findAllById(any())).thenReturn(List.of(conversation));
+
+        var response = service.listFlaggedMessages(null, null, 0, 20);
+
+        assertThat(response.content()).hasSize(1);
+        assertThat(response.content().get(0).body()).isEqualTo("Original reported text");
+        verify(conversationRepository, org.mockito.Mockito.times(1)).findAllById(any());
+        verify(conversationRepository, never()).findById(anyString());
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).find(queryCaptor.capture(), eq(Message.class));
+        assertThat(queryCaptor.getValue().getQueryObject()).containsEntry("flagged", true);
+    }
+
+    @Test
+    void listFlaggedMessagesAppliesOptionalFlagSourceAndStatusFilters() {
+        when(mongoTemplate.find(any(Query.class), eq(Message.class))).thenReturn(List.of());
+
+        service.listFlaggedMessages(FlagSource.USER_REPORT, null, 0, 20);
+        service.listFlaggedMessages(null, MessageStatus.HIDDEN, 0, 20);
+        service.listFlaggedMessages(FlagSource.AI, MessageStatus.VISIBLE, 0, 20);
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate, org.mockito.Mockito.times(3)).find(queryCaptor.capture(), eq(Message.class));
+        assertThat(queryCaptor.getAllValues().get(0).getQueryObject())
+                .containsEntry("flagged", true).containsEntry("flagSource", FlagSource.USER_REPORT);
+        assertThat(queryCaptor.getAllValues().get(1).getQueryObject())
+                .containsEntry("flagged", true).containsEntry("status", MessageStatus.HIDDEN);
+        assertThat(queryCaptor.getAllValues().get(2).getQueryObject())
+                .containsEntry("flagged", true).containsEntry("flagSource", FlagSource.AI)
+                .containsEntry("status", MessageStatus.VISIBLE);
+    }
+
+    @Test
+    void listFlaggedMessagesReturnsEmptyPageWithoutLoadingConversations() {
+        when(mongoTemplate.find(any(Query.class), eq(Message.class))).thenReturn(List.of());
+
+        var response = service.listFlaggedMessages(null, null, 0, 20);
+
+        assertThat(response.content()).isEmpty();
+        verify(conversationRepository, never()).findAllById(any());
+    }
+
+    @Test
+    void listFlaggedMessagesPreservesNewestFlagOrderIncludingMatchingTimestamps() {
+        Message newer = message("message-z", "conversation-1", "newer", MessageStatus.VISIBLE);
+        newer.setFlagged(true);
+        newer.setFlaggedAt(CREATED_AT);
+        Message olderId = message("message-a", "conversation-1", "older id", MessageStatus.VISIBLE);
+        olderId.setFlagged(true);
+        olderId.setFlaggedAt(CREATED_AT);
+        when(mongoTemplate.find(any(Query.class), eq(Message.class))).thenReturn(List.of(newer, olderId));
+        when(conversationRepository.findAllById(any())).thenReturn(List.of(conversation("conversation-1", BOOKING_ID)));
+
+        var response = service.listFlaggedMessages(null, null, 0, 20);
+
+        assertThat(response.content()).extracting(item -> item.id())
+                .containsExactly("message-z", "message-a");
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).find(queryCaptor.capture(), eq(Message.class));
+        assertThat(queryCaptor.getValue().getSortObject()).containsEntry("flaggedAt", -1).containsEntry("id", -1);
+    }
+
+    @Test
+    void listFlaggedMessagesCapsPageSizeAtFifty() {
+        when(mongoTemplate.find(any(Query.class), eq(Message.class))).thenReturn(List.of());
+
+        service.listFlaggedMessages(null, null, 1, 100);
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).find(queryCaptor.capture(), eq(Message.class));
+        assertThat(queryCaptor.getValue().getLimit()).isEqualTo(50);
+        assertThat(queryCaptor.getValue().getSkip()).isEqualTo(50L);
+    }
+
+    @Test
+    void listFlaggedMessagesRejectsNegativePage() {
+        assertThatThrownBy(() -> service.listFlaggedMessages(null, null, -1, 20))
+                .isInstanceOf(ApiException.class)
+                .satisfies(error -> assertThat(((ApiException) error).getErrorCode()).isEqualTo("INVALID_PAGINATION"));
+        verify(mongoTemplate, never()).find(any(Query.class), eq(Message.class));
+    }
+
+    @Test
+    void participantCanReportMessage() {
+        Message message = message("message-1", "conversation-1", "reportable", MessageStatus.VISIBLE);
+        message.setVersion(0L);
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        conversation.setCustomerId(CUSTOMER_ID);
+        conversation.setProviderId(PROVIDER_ID);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(conversationRepository.findById("conversation-1")).thenReturn(Optional.of(conversation));
+
+        service.reportMessage("message-1");
+
+        assertThat(message.isFlagged()).isTrue();
+        assertThat(message.getFlagSource()).isEqualTo(FlagSource.USER_REPORT);
+        verify(messageRepository).save(message);
+    }
+
+    @Test
+    void strangerCannotReportMessageAndNothingIsSaved() {
+        loginAs("stranger");
+        Message message = message("message-1", "conversation-1", "reportable", MessageStatus.VISIBLE);
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        conversation.setCustomerId(CUSTOMER_ID);
+        conversation.setProviderId(PROVIDER_ID);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(conversationRepository.findById("conversation-1")).thenReturn(Optional.of(conversation));
+
+        assertThatThrownBy(() -> service.reportMessage("message-1")).isInstanceOf(AccessDeniedException.class);
+        assertThat(message.isFlagged()).isFalse();
+        verify(messageRepository, never()).save(any(Message.class));
+    }
+
+    @Test
+    void reportingUnknownMessageReturnsNotFound() {
+        when(messageRepository.findById("missing")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.reportMessage("missing"))
+                .isInstanceOf(ResourceNotFoundException.class)
+                .satisfies(error -> assertThat(((ResourceNotFoundException) error).getErrorCode())
+                        .isEqualTo("MESSAGE_NOT_FOUND"));
+    }
+
+    @Test
+    void unauthenticatedUserCannotReportMessage() {
+        SecurityContextHolder.clearContext();
+
+        assertThatThrownBy(() -> service.reportMessage("message-1"))
+                .isInstanceOf(ApiException.class)
+                .satisfies(error -> assertUnauthorized((ApiException) error));
+    }
+
+    @Test
+    void reportingAnAlreadyFlaggedMessageKeepsFirstFlagDetails() {
+        Instant firstFlaggedAt = CREATED_AT.minusSeconds(60);
+        Message message = message("message-1", "conversation-1", "reportable", MessageStatus.VISIBLE);
+        message.setVersion(0L);
+        message.setFlagged(true);
+        message.setFlagSource(FlagSource.AI);
+        message.setFlaggedAt(firstFlaggedAt);
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        conversation.setCustomerId(CUSTOMER_ID);
+        conversation.setProviderId(PROVIDER_ID);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+        when(conversationRepository.findById("conversation-1")).thenReturn(Optional.of(conversation));
+
+        service.reportMessage("message-1");
+
+        assertThat(message.getFlagSource()).isEqualTo(FlagSource.AI);
+        assertThat(message.getFlaggedAt()).isEqualTo(firstFlaggedAt);
+        verify(messageRepository, never()).save(any(Message.class));
     }
 
     private static BookingParticipants participants(BookingStatus status, String seriesId) {
