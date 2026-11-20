@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
@@ -29,4 +31,14 @@ public interface BookingRepository extends MongoRepository<Booking, String> {
 
     /** Accepted bookings whose payment due time has passed (expiry job). */
     List<Booking> findTop100ByStatusAndPaymentDueAtBeforeOrderByPaymentDueAtAsc(BookingStatus status, Instant before);
+
+    /** Customer's bookings (My Bookings); uses customerId_1_status_1. */
+    Page<Booking> findByCustomerId(String customerId, Pageable pageable);
+
+    Page<Booking> findByCustomerIdAndStatusIn(String customerId, Collection<BookingStatus> statuses, Pageable pageable);
+
+    /** Provider's bookings; uses providerId_1_slotStart_1. */
+    Page<Booking> findByProviderId(String providerId, Pageable pageable);
+
+    Page<Booking> findByProviderIdAndStatusIn(String providerId, Collection<BookingStatus> statuses, Pageable pageable);
 }
