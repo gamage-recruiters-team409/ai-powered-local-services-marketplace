@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import * as mockApi from '../api/completionApi.mock'
 import CompletionStatusBadge from '../components/CompletionStatusBadge'
@@ -106,11 +107,16 @@ function seed(scenario) {
   mockApi.seedBookingSlot(scenario.booking.id, scenario.booking.slotStart)
 }
 
-export default function CompletionPreviewPage() {
+/**
+ * fixedRole: 'PROVIDER' renders only the provider view (used inside the Provider Common Layout at
+ * /dev/provider/completion-preview); without it the page shows the Provider/Customer switch.
+ */
+export default function CompletionPreviewPage({ fixedRole }) {
+  const navigate = useNavigate()
   const [run, setRun] = useState(() => {
     const scenario = buildScenario('confirmed')
     seed(scenario)
-    return { role: 'PROVIDER', name: 'confirmed', version: 0, scenario, status: scenario.booking.status }
+    return { role: fixedRole ?? 'PROVIDER', name: 'confirmed', version: 0, scenario, status: scenario.booking.status }
   })
 
   const choose = (name, role = run.role) => {
@@ -128,9 +134,12 @@ export default function CompletionPreviewPage() {
   const onStatus = (status) => setRun((previous) => ({ ...previous, status }))
   const key = `${run.role}-${run.name}-${run.version}`
 
+  const Wrapper = fixedRole ? 'div' : 'main'
+
   return (
-    <main className="sc-preview">
-      <p className="sc-preview__note">Preview – WP08 Service Completion with mock data. Pick a view and a state:</p>
+    <Wrapper className={fixedRole ? 'sc-preview sc-preview--embedded' : 'sc-preview'}>
+      <p className="sc-preview__note">Preview – WP08 Service Completion with mock data. Pick {fixedRole ? 'a state' : 'a view and a state'}:</p>
+      {!fixedRole && (
       <div className="sc-preview__roles" role="group" aria-label="View">
         {['PROVIDER', 'CUSTOMER'].map((role) => (
           <button
@@ -144,6 +153,7 @@ export default function CompletionPreviewPage() {
           </button>
         ))}
       </div>
+      )}
       <div className="sc-preview__tabs" role="group" aria-label="Preview state">
         {SCENARIOS[run.role].map(([name, label]) => (
           <button
@@ -175,7 +185,7 @@ export default function CompletionPreviewPage() {
           earnings={scenario.earnings}
           review={scenario.review}
           onBookingStatusChange={onStatus}
-          onReplyToReview={() => window.alert('Reply to review will be added with the review pages.')}
+          onReplyToReview={() => navigate('/provider/reviews')}
         />
       ) : (
         <CustomerCompletionSection
@@ -185,9 +195,21 @@ export default function CompletionPreviewPage() {
           dispute={scenario.dispute}
           disputeUrlFor={(id) => `#dispute-${id}`}
           onBookingStatusChange={onStatus}
-          onLeaveReview={() => window.alert('The review pages (S07) will be added next.')}
+          onLeaveReview={() =>
+            navigate(`/customer/reviews/new/${encodeURIComponent(scenario.booking.id)}`, {
+              state: {
+                booking: {
+                  id: scenario.booking.id,
+                  ref: scenario.booking.ref,
+                  title: scenario.booking.title,
+                  providerName: scenario.booking.providerName,
+                  completedAt: scenario.completion?.confirmedAt ?? new Date().toISOString(),
+                },
+              },
+            })
+          }
         />
       )}
-    </main>
+    </Wrapper>
   )
 }

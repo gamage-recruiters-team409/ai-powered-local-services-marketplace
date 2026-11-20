@@ -1,5 +1,7 @@
 import * as realApi from './completionApi'
 import * as mockApi from './completionApi.mock'
+import * as realReviewApi from './reviewApi'
+import * as mockReviewApi from './reviewApi.mock'
 
 /**
  * Set VITE_USE_COMPLETION_MOCK=true in frontend/.env (local only) to use the mock API.
@@ -17,6 +19,27 @@ export function completionErrorMessage(error) {
   }
   if (error?.response?.status === 403) {
     return 'You are not allowed to do this for this booking.'
+  }
+  return 'Something went wrong. Please try again.'
+}
+
+// ---------------------------------------------------------------- reviews (S07–S09)
+
+if (useCompletionMock) {
+  mockReviewApi.seedDemoReviews()
+}
+
+/** Same switch as the completion API: VITE_USE_COMPLETION_MOCK=true uses the in-memory review data. */
+export const reviewApi = useCompletionMock ? mockReviewApi : realReviewApi
+
+/** Turns a review API error into a short message for the user. */
+export function reviewErrorMessage(error) {
+  const data = error?.response?.data
+  if (data?.message) {
+    return data.message
+  }
+  if (error?.response?.status === 403) {
+    return 'You can only review your own bookings.'
   }
   return 'Something went wrong. Please try again.'
 }

@@ -26,6 +26,9 @@ import { CustomerLayoutRoute } from './CustomerLayoutRoute'
  * Also add the menu item to shared/layouts/customer/customerNavConfig.js.
  */
 
+/** Loads a page module on demand (keeps the review pages out of the main bundle). */
+const reviewPage = (load) => async () => ({ Component: (await load()).default })
+
 export const CUSTOMER_ACCOUNT_ROUTES = [
   { path: CUSTOMER_ACCOUNT_PATH, element: <Navigate to="/customer/account/profile" replace /> },
   { path: '/customer/account/profile', element: <ProfilePage /> },
@@ -34,6 +37,16 @@ export const CUSTOMER_ACCOUNT_ROUTES = [
   { path: '/customer/account/deactivate', element: <DeactivatePage /> },
   { path: '/customer/account/payments', element: <PaymentsPage /> },
   { path: '/customer/account/favorites', element: <FavoritesPage /> },
+  // WP08 – Reviews (S07–S09); the "My Reviews" sidebar item stays active on the sub-pages
+  { path: '/customer/reviews', lazy: reviewPage(() => import('../../features/completion-reviews/pages/MyReviewsPage')) },
+  {
+    path: '/customer/reviews/new/:bookingId',
+    lazy: reviewPage(() => import('../../features/completion-reviews/pages/WriteReviewPage')),
+  },
+  {
+    path: '/customer/reviews/:reviewId/edit',
+    lazy: reviewPage(() => import('../../features/completion-reviews/pages/EditReviewPage')),
+  },
 ]
 
 export const CUSTOMER_PAGE_ROUTES = []
