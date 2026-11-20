@@ -126,6 +126,11 @@ public class PublicProviderProfileServiceImpl implements PublicProviderProfileSe
                 return listing.categoryName();
             }
         }
+        // Fall back to profile-level category ids when no listing has a resolved name
+        List<String> profileCategories = profile.getCategoryIds();
+        if (profileCategories != null && !profileCategories.isEmpty()) {
+            return String.join(", ", profileCategories);
+        }
         return null;
     }
 
