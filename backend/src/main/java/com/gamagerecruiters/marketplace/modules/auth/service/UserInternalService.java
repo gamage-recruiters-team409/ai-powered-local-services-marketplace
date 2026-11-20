@@ -20,6 +20,11 @@ import com.gamagerecruiters.marketplace.modules.auth.dto.PeriodCount;
  */
 public interface UserInternalService {
 
+    /**
+     * Maximum number of period buckets permitted in a single {@link #countNewUsers} request (120 buckets).
+     */
+    int MAX_NEW_USER_BUCKETS = 120;
+
     record UserContact(String id, String fullName, String email, UserStatus status) {}
 
     UserContact getContactById(String userId);

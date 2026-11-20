@@ -14,6 +14,8 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.bson.Document;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -56,6 +58,8 @@ import com.gamagerecruiters.marketplace.modules.customer.util.SriLankanPhoneUtil
 @Service
 public class UserInternalServiceImpl implements UserInternalService {
 
+    private static final Logger log = LoggerFactory.getLogger(UserInternalServiceImpl.class);
+
     private static final Pattern PASSWORD_POLICY = Pattern.compile("^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}$");
 
     private final UserRepository userRepository;
@@ -91,24 +95,9 @@ public class UserInternalServiceImpl implements UserInternalService {
     @Deprecated
     @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     public User changeStatus(String userId, UserStatus status) {
-        String currentUserId = CurrentUser.getUserId();
-        if (currentUserId == null) {
-            throw new AccessDeniedException("Authentication required: actor could not be resolved from security context");
-        }
-
-        User actor = userRepository.findById(currentUserId)
-                .orElseThrow(() -> new AccessDeniedException("Actor user not found in database"));
-
+        String actorId = CurrentUser.getUserId();
         User target = getById(userId);
-
-        AdminRolePolicy.validateStatusChange(actor, target, status, userRepository);
-
-        target.setStatus(status);
-        if (status == UserStatus.ACTIVE) {
-            target.setFailedLoginCount(0);
-            target.setLockStartedAt(null);
-        }
-        return userRepository.save(target);
+        return changeStatus(actorId, userId, target.getStatus(), status);
     }
 
     @Override
@@ -357,6 +346,13 @@ public class UserInternalServiceImpl implements UserInternalService {
             }
         }
 
+        // Generate period starts and enforce MAX_NEW_USER_BUCKETS limit before running query or zero-filling
+        List<Instant> periodStarts = generatePeriodStarts(from, to, granularity);
+        if (periodStarts.size() > MAX_NEW_USER_BUCKETS) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE",
+                    "Requested date range produces " + periodStarts.size() + " buckets, which exceeds the maximum limit of " + MAX_NEW_USER_BUCKETS);
+        }
+
         // Build the match criteria
         List<Criteria> matchCriteria = new ArrayList<>();
         matchCriteria.add(Criteria.where("createdAt").gte(from).lt(to));
@@ -386,8 +382,7 @@ public class UserInternalServiceImpl implements UserInternalService {
         Aggregation aggregation = Aggregation.newAggregation(matchOp, groupOp, sortOp);
         AggregationResults<Document> results = mongoTemplate.aggregate(aggregation, User.class, Document.class);
 
-        // Generate all period starts so empty periods are filled with 0
-        List<Instant> periodStarts = generatePeriodStarts(from, to, granularity);
+        // Pre-fill empty periods with 0
         Map<Instant, Long> countsByPeriod = new LinkedHashMap<>();
         for (Instant ps : periodStarts) {
             countsByPeriod.put(ps, 0L);
@@ -419,20 +414,7 @@ public class UserInternalServiceImpl implements UserInternalService {
     @Override
     @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     public User changeStatus(String actorId, String userId, UserStatus expectedStatus, UserStatus newStatus) {
-        if (actorId == null || actorId.isBlank()) {
-            throw new AccessDeniedException("Authentication required: actor could not be resolved");
-        }
-
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth != null && auth.isAuthenticated() && auth.getPrincipal() instanceof UserPrincipal principal) {
-            if (!actorId.equals(principal.getUserId())) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "ACTOR_IDENTITY_MISMATCH",
-                        "Supplied actor ID does not match authenticated user ID");
-            }
-        }
-
-        User actor = userRepository.findById(actorId)
-                .orElseThrow(() -> new AccessDeniedException("Actor user not found in database"));
+        User actor = validateAuthenticatedActor(actorId, "Actor account must be active to modify user status");
 
         User target = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("USER_NOT_FOUND", "User not found with id: " + userId));
@@ -462,9 +444,45 @@ public class UserInternalServiceImpl implements UserInternalService {
             }
         }
 
-        // Revoke refresh tokens when suspending or deactivating
+        // F2: Concurrency protection for last active SUPER_ADMIN across different users
+        if (target.getRole() == Role.SUPER_ADMIN && expectedStatus == UserStatus.ACTIVE && newStatus != UserStatus.ACTIVE) {
+            long activeSuperAdmins = userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            if (activeSuperAdmins == 0) {
+                // Compensating conditional update back to expectedStatus
+                Query compensateQuery = new Query(Criteria.where("_id").is(userId).and("status").is(newStatus));
+                Update compensateUpdate = new Update().set("status", expectedStatus);
+                if (expectedStatus == UserStatus.ACTIVE) {
+                    compensateUpdate.set("failedLoginCount", 0);
+                    compensateUpdate.unset("lockStartedAt");
+                }
+                UpdateResult compResult = mongoTemplate.updateFirst(compensateQuery, compensateUpdate, User.class);
+                if (compResult.getModifiedCount() == 0) {
+                    log.error("Failed to compensate status for user {}", userId);
+                }
+                throw new ApiException(HttpStatus.CONFLICT, "LAST_ACTIVE_SUPER_ADMIN",
+                        "Cannot deactivate, suspend or lock the last remaining ACTIVE SUPER_ADMIN");
+            }
+        }
+
+        // F3: Revoke refresh tokens when suspending or deactivating
         if (newStatus == UserStatus.SUSPENDED || newStatus == UserStatus.DEACTIVATED) {
-            authTokenRepository.revokeAllActiveTokensByUserIdAndType(userId, TokenType.REFRESH);
+            try {
+                authTokenRepository.revokeAllActiveTokensByUserIdAndType(userId, TokenType.REFRESH);
+            } catch (Exception ex) {
+                // Compensating conditional update back to expectedStatus
+                Query compensateQuery = new Query(Criteria.where("_id").is(userId).and("status").is(newStatus));
+                Update compensateUpdate = new Update().set("status", expectedStatus);
+                if (expectedStatus == UserStatus.ACTIVE) {
+                    compensateUpdate.set("failedLoginCount", 0);
+                    compensateUpdate.unset("lockStartedAt");
+                }
+                UpdateResult compResult = mongoTemplate.updateFirst(compensateQuery, compensateUpdate, User.class);
+                if (compResult.getModifiedCount() == 0) {
+                    log.error("Failed to compensate status for user {}", userId);
+                }
+                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
+                        "Failed to revoke active tokens during status change; user status has been restored. Please retry.");
+            }
         }
 
         return userRepository.findById(userId)
@@ -508,9 +526,9 @@ public class UserInternalServiceImpl implements UserInternalService {
         return starts;
     }
 
-    private User validateActorForRead(String actorId) {
+    private User validateAuthenticatedActor(String actorId, String inactiveMessage) {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || !auth.isAuthenticated() || !(auth.getPrincipal() instanceof UserPrincipal principal)) {
+        if (auth == null || !auth.isAuthenticated() || "anonymousUser".equals(auth.getPrincipal()) || !(auth.getPrincipal() instanceof UserPrincipal principal)) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_REQUIRED",
                     "Authentication required: user could not be resolved from security context");
         }
@@ -531,8 +549,13 @@ public class UserInternalServiceImpl implements UserInternalService {
                         "Actor user not found in database"));
         if (actor.getStatus() != UserStatus.ACTIVE) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ACTOR_ACCOUNT_INACTIVE",
-                    "Actor account must be active to view users");
+                    inactiveMessage);
         }
+        return actor;
+    }
+
+    private User validateActorForRead(String actorId) {
+        User actor = validateAuthenticatedActor(actorId, "Actor account must be active to view users");
         Set<Role> visible = AdminRolePolicy.visibleRoles(actor.getRole());
         if (visible.isEmpty()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ROLE_NOT_PERMITTED",

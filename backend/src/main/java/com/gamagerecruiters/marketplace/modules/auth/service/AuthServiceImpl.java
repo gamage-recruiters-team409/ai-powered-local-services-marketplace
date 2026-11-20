@@ -4,6 +4,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -37,6 +39,8 @@ import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 
 @Service
 public class AuthServiceImpl implements AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthServiceImpl.class);
 
     private static final String GENERIC_BAD_CREDENTIALS_MSG = "Invalid email or password";
 
@@ -286,11 +290,15 @@ public class AuthServiceImpl implements AuthService {
 
     private void recordLastActiveAt(String userId) {
         if (mongoTemplate != null && userId != null) {
-            mongoTemplate.updateFirst(
-                    Query.query(Criteria.where("_id").is(userId)),
-                    new Update().set("lastActiveAt", Instant.now()),
-                    User.class
-            );
+            try {
+                mongoTemplate.updateFirst(
+                        Query.query(Criteria.where("_id").is(userId)),
+                        new Update().set("lastActiveAt", Instant.now()),
+                        User.class
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to record lastActiveAt for user {}: {}", userId, ex.getMessage());
+            }
         }
     }
 
