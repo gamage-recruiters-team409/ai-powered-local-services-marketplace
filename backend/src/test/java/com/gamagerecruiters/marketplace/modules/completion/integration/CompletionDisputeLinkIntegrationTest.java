@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -30,6 +31,10 @@ import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
 import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -64,12 +69,16 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
  *
  * <p>The WP09 side is replaced by a mock of {@link CompletionDisputes} (the case is "created" by the mock), and the
  * dispute ID write is made to fail with a spy on the real {@link CompletionAtomicUpdates}. The issue, the DISPUTED
- * booking and the reconciler run against the real database.
+ * booking and the reconciler run against the real database. The batch size is 2 here, so the fair-retry tests
+ * can create more missing links than one batch holds.
  */
 @SpringBootTest(properties = {
         "app.completion.auto-confirm.enabled=false",
         "app.completion.dispute-link.enabled=false",
-        "app.completion.dispute-link.min-age=PT0S"
+        "app.completion.dispute-link.min-age=PT0S",
+        "app.completion.dispute-link.batch-size=2",
+        "app.completion.dispute-link.retry-base=PT10M",
+        "app.completion.dispute-link.retry-max=PT6H"
 })
 @ActiveProfiles("integration-test")
 @Tag("integration")
@@ -118,6 +127,9 @@ class CompletionDisputeLinkIntegrationTest {
 
     @Autowired
     private ServiceCompletionRepository completionRepository;
+
+    @Autowired
+    private MongoTemplate mongoTemplate;
 
     @MockitoBean
     private CompletionDisputes disputes;
@@ -273,5 +285,102 @@ class CompletionDisputeLinkIntegrationTest {
         assertEquals(1, reconciler.reconcileOnce());
         assertEquals("dsp-h", completion(healthy).getDisputeId());
         assertNull(completion(failing).getDisputeId());
+        // The failed lookup is scheduled for a later retry instead of staying at the front
+        assertEquals(1, completion(failing).getDisputeLinkAttempts());
+        assertNotNull(completion(failing).getDisputeLinkNextAttemptAt());
+    }
+
+    // ------------------------------------------------------------------ fair retries (re-review finding)
+
+    /** A completion with a raised issue and no dispute ID (as after a failed link write), raised minutesAgo. */
+    private String issueWithoutLink(int minutesAgo) {
+        Instant raisedAt = Instant.now().minus(Duration.ofMinutes(minutesAgo));
+        ServiceCompletion completion = new ServiceCompletion();
+        completion.setBookingId("it-" + UUID.randomUUID());
+        completion.setCustomerId(CUSTOMER);
+        completion.setProviderId(PROVIDER);
+        completion.setStartedAt(raisedAt.minus(Duration.ofHours(3)));
+        completion.setMarkedCompletedAt(raisedAt.minus(Duration.ofHours(1)));
+        completion.setIssueRaisedAt(raisedAt);
+        completion.setCreatedAt(raisedAt.minus(Duration.ofHours(3)));
+        completion.setUpdatedAt(raisedAt);
+        completionRepository.save(completion);
+        return completion.getBookingId();
+    }
+
+    @Test
+    @DisplayName("Fair retry: older links without a WP09 case do not starve newer recoverable links (batch size 2)")
+    void unresolvedLinksDoNotStarveNewerOnes() {
+        // Three older records whose WP09 case does not exist (mock returns empty by default)
+        String old1 = issueWithoutLink(60);
+        String old2 = issueWithoutLink(50);
+        String old3 = issueWithoutLink(40);
+        // Two newer records whose case exists in WP09
+        String new1 = issueWithoutLink(10);
+        String new2 = issueWithoutLink(5);
+        when(disputes.findDisputeId(new1, CUSTOMER)).thenReturn(Optional.of("dsp-n1"));
+        when(disputes.findDisputeId(new2, CUSTOMER)).thenReturn(Optional.of("dsp-n2"));
+
+        int linked = 0;
+        for (int pass = 0; pass < 3; pass++) {
+            linked += reconciler.reconcileOnce();
+        }
+
+        assertEquals(2, linked);
+        assertEquals("dsp-n1", completion(new1).getDisputeId());
+        assertEquals("dsp-n2", completion(new2).getDisputeId());
+        Instant now = Instant.now();
+        for (String old : new String[] {old1, old2, old3}) {
+            ServiceCompletion unresolved = completion(old);
+            assertNull(unresolved.getDisputeId());
+            assertEquals(1, unresolved.getDisputeLinkAttempts(), "each unresolved record is tried once, not every pass");
+            assertTrue(unresolved.getDisputeLinkNextAttemptAt().isAfter(now));
+        }
+        verify(disputes, times(1)).findDisputeId(old1, CUSTOMER);
+        verify(disputes, never()).openDispute(anyString(), anyString(), any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("Fair retry: an unresolved link waits for its backoff, then is retried and recovered when WP09 has the case")
+    void unresolvedLinkIsRetriedAfterBackoff() {
+        String bookingId = issueWithoutLink(30);
+
+        assertEquals(0, reconciler.reconcileOnce());   // no WP09 case yet
+        ServiceCompletion afterFirst = completion(bookingId);
+        assertEquals(1, afterFirst.getDisputeLinkAttempts());
+        Duration wait = Duration.between(Instant.now(), afterFirst.getDisputeLinkNextAttemptAt());
+        assertTrue(wait.compareTo(Duration.ofMinutes(9)) > 0 && wait.compareTo(Duration.ofMinutes(11)) < 0,
+                "first retry after about 10 minutes, was " + wait);
+
+        assertEquals(0, reconciler.reconcileOnce());   // not due yet: not looked up again
+        verify(disputes, times(1)).findDisputeId(bookingId, CUSTOMER);
+
+        // Backoff has passed and WP09 now has the case
+        mongoTemplate.updateFirst(new Query(Criteria.where("bookingId").is(bookingId)),
+                new Update().set("disputeLinkNextAttemptAt", Instant.now().minus(Duration.ofMinutes(1))),
+                ServiceCompletion.class);
+        when(disputes.findDisputeId(bookingId, CUSTOMER)).thenReturn(Optional.of("dsp-late"));
+
+        assertEquals(1, reconciler.reconcileOnce());
+        assertEquals("dsp-late", completion(bookingId).getDisputeId());
+        verify(disputes, never()).openDispute(anyString(), anyString(), any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("Fair retry: the second unsuccessful attempt doubles the wait")
+    void backoffDoublesAfterEachAttempt() {
+        String bookingId = issueWithoutLink(30);
+        reconciler.reconcileOnce();
+        mongoTemplate.updateFirst(new Query(Criteria.where("bookingId").is(bookingId)),
+                new Update().set("disputeLinkNextAttemptAt", Instant.now().minus(Duration.ofMinutes(1))),
+                ServiceCompletion.class);
+
+        reconciler.reconcileOnce();
+
+        ServiceCompletion afterSecond = completion(bookingId);
+        assertEquals(2, afterSecond.getDisputeLinkAttempts());
+        Duration wait = Duration.between(Instant.now(), afterSecond.getDisputeLinkNextAttemptAt());
+        assertTrue(wait.compareTo(Duration.ofMinutes(19)) > 0 && wait.compareTo(Duration.ofMinutes(21)) < 0,
+                "second retry after about 20 minutes, was " + wait);
     }
 }

@@ -11,6 +11,8 @@ import org.springframework.data.mongodb.core.mapping.Document;
  * Completion details of a booking (WP08).
  * The booking status itself is owned by WP05; this document stores the
  * completion evidence and timestamps for one booking.
+ * disputeLinkAttempts / disputeLinkNextAttemptAt: retry state of the dispute-link reconciler
+ * (only used while an issue has no dispute ID; missing on older documents = never tried).
  */
 @Document(collection = "service_completions")
 public class ServiceCompletion {
@@ -28,6 +30,8 @@ public class ServiceCompletion {
     private CompletionConfirmationType confirmationType;
     private Instant issueRaisedAt;
     private String disputeId;
+    private int disputeLinkAttempts;
+    private Instant disputeLinkNextAttemptAt;
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -144,5 +148,21 @@ public class ServiceCompletion {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public int getDisputeLinkAttempts() {
+        return disputeLinkAttempts;
+    }
+
+    public void setDisputeLinkAttempts(int disputeLinkAttempts) {
+        this.disputeLinkAttempts = disputeLinkAttempts;
+    }
+
+    public Instant getDisputeLinkNextAttemptAt() {
+        return disputeLinkNextAttemptAt;
+    }
+
+    public void setDisputeLinkNextAttemptAt(Instant disputeLinkNextAttemptAt) {
+        this.disputeLinkNextAttemptAt = disputeLinkNextAttemptAt;
     }
 }

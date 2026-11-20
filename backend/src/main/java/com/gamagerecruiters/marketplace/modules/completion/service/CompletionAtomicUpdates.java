@@ -92,6 +92,19 @@ public class CompletionAtomicUpdates {
         return modify(query, update);
     }
 
+    /**
+     * Records an unsuccessful dispute-link attempt (no WP09 case found yet, or the lookup failed): counts the
+     * attempt and sets when the record may be tried again. Only while no dispute ID is stored.
+     */
+    public Optional<ServiceCompletion> scheduleDisputeLinkRetry(String bookingId, Instant nextAttemptAt, Instant now) {
+        Query query = new Query(Criteria.where("bookingId").is(bookingId).and("disputeId").is(null));
+        Update update = new Update()
+                .inc("disputeLinkAttempts", 1)
+                .set("disputeLinkNextAttemptAt", nextAttemptAt)
+                .set("updatedAt", now);
+        return modify(query, update);
+    }
+
     private Optional<ServiceCompletion> modify(Query query, Update update) {
         return Optional.ofNullable(mongoTemplate.findAndModify(query, update,
                 FindAndModifyOptions.options().returnNew(true), ServiceCompletion.class));
