@@ -22,4 +22,11 @@ public interface BookingRepository extends MongoRepository<Booking, String> {
      */
     List<Booking> findByProviderIdAndStatusInAndSlotStartLessThanAndSlotEndGreaterThan(
             String providerId, Collection<BookingStatus> statuses, Instant to, Instant from);
+
+    /** Requests whose provider response deadline has passed (expiry job). */
+    List<Booking> findTop100ByStatusAndResponseDeadlineBeforeOrderByResponseDeadlineAsc(
+            BookingStatus status, Instant before);
+
+    /** Accepted bookings whose payment due time has passed (expiry job). */
+    List<Booking> findTop100ByStatusAndPaymentDueAtBeforeOrderByPaymentDueAtAsc(BookingStatus status, Instant before);
 }
