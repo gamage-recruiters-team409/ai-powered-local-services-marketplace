@@ -2,6 +2,8 @@ import * as realApi from './completionApi'
 import * as mockApi from './completionApi.mock'
 import * as realReviewApi from './reviewApi'
 import * as mockReviewApi from './reviewApi.mock'
+import * as realModerationApi from './moderationApi'
+import * as mockModerationApi from './moderationApi.mock'
 
 /**
  * Set VITE_USE_COMPLETION_MOCK=true in frontend/.env (local only) to use the mock API.
@@ -43,3 +45,12 @@ export function reviewErrorMessage(error) {
   }
   return 'Something went wrong. Please try again.'
 }
+
+// ---------------------------------------------------------------- review moderation (S14–S16, admin)
+
+if (useCompletionMock) {
+  mockModerationApi.seedDemoModeration()
+}
+
+/** Same switch: VITE_USE_COMPLETION_MOCK=true uses the in-memory moderation data. */
+export const moderationApi = useCompletionMock ? mockModerationApi : realModerationApi

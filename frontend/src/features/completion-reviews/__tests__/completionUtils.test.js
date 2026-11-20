@@ -14,6 +14,8 @@ import {
   validatePhoto,
 } from '../utils/completionUtils'
 
+
+
 const file = (name, type, size = 1000) => ({ name, type, size })
 
 describe('completionUtils', () => {

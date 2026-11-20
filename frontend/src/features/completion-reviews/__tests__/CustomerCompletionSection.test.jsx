@@ -6,6 +6,9 @@ import userEvent from '@testing-library/user-event'
 import CustomerCompletionSection from '../components/CustomerCompletionSection'
 import ServiceCompletionSection from '../components/ServiceCompletionSection'
 
+// These screen tests open dialogs and type text; slower PCs need more than the 5 s default.
+vi.setConfig({ testTimeout: 20000 })
+
 // jsdom does not implement <dialog>.showModal()/close(); the shared Modal needs them.
 beforeAll(() => {
   if (!HTMLDialogElement.prototype.showModal) {

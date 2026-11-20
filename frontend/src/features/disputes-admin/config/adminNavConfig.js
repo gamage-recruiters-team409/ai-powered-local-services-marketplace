@@ -59,7 +59,7 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
   // ---------- Moderator ----------
   { id: 'moderator.dashboard', area: MODERATOR, section: null, label: 'Dashboard', path: '', icon: 'dashboard', description: 'Overview of the moderation queue' },
   { id: 'moderator.moderation.reported-content', area: MODERATOR, section: 'Operations', group: MODERATION_GROUP, label: 'Reported content', path: 'moderation/reported-content', description: 'Reported messages and content' },
-  { id: 'moderator.moderation.reviews', area: MODERATOR, section: 'Operations', group: MODERATION_GROUP, label: 'Review moderation', path: 'moderation/reviews', description: 'Reported reviews' },
+  { id: 'moderator.moderation.reviews', area: MODERATOR, section: 'Operations', group: MODERATION_GROUP, label: 'Review moderation', path: 'moderation/reviews', description: 'Reported reviews', nested: true, page: lazy(() => import('../../completion-reviews/pages/admin/ReviewModerationSection')) },
 
   // ---------- Finance Admin ----------
   { id: 'finance.dashboard', area: FINANCE_ADMIN, section: null, label: 'Dashboard', path: '', icon: 'dashboard', description: 'Overview of platform finances' },

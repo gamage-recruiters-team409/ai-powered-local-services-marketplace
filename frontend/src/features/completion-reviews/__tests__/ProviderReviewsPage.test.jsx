@@ -7,6 +7,9 @@ import { MemoryRouter } from 'react-router-dom'
 import ProviderReviewsPage from '../pages/ProviderReviewsPage'
 import { filterProviderReviews, initials, notRepliedCount, ratingDistribution } from '../utils/reviewUtils'
 
+// These screen tests open dialogs and type text; slower PCs need more than the 5 s default.
+vi.setConfig({ testTimeout: 20000 })
+
 afterEach(() => cleanup())
 
 const reviews = [

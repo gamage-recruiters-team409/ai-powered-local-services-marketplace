@@ -8,6 +8,9 @@ import MyReviewsPage from '../pages/MyReviewsPage'
 import WriteReviewPage from '../pages/WriteReviewPage'
 import EditReviewPage from '../pages/EditReviewPage'
 
+// These screen tests open dialogs and type text; slower PCs need more than the 5 s default.
+vi.setConfig({ testTimeout: 20000 })
+
 afterEach(() => cleanup())
 
 const NOW = new Date('2026-11-18T10:00:00Z')

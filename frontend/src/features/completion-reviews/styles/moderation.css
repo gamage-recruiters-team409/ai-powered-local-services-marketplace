@@ -1,0 +1,29 @@
+/* WP08 – review moderation screens (S14–S16) inside the admin layout. */
+.rm-tabs { display: flex; gap: 4px; border-bottom: 1px solid #e2e8f0; margin-bottom: 16px; }
+.rm-tab { background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; font: inherit; color: #475569; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.rm-tab:hover { color: #0f172a; }
+.rm-tab:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.rm-tab--active { color: #1d4ed8; border-bottom-color: #1d4ed8; font-weight: 600; }
+.rm-tab-count { background: #e0e7ff; color: #1d4ed8; border-radius: 999px; padding: 0 8px; font-size: 12px; }
+.rm-review-cell { display: flex; flex-direction: column; gap: 2px; max-width: 420px; }
+.rm-excerpt { color: #0f172a; }
+.rm-muted { color: #64748b; font-size: 13px; }
+.rm-badges { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.rm-open-link { color: #1d4ed8; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.rm-open-link:hover { text-decoration: underline; }
+.rm-back { display: inline-block; margin-bottom: 12px; color: #1d4ed8; text-decoration: none; }
+.rm-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.rm-main, .rm-side { display: flex; flex-direction: column; gap: 16px; }
+.rm-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 20px; }
+.rm-card h2 { font-size: 16px; margin: 0 0 10px; }
+.rm-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.rm-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+.rm-text { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.rm-text mark { background: #fef3c7; color: #92400e; border-radius: 3px; padding: 0 2px; }
+.rm-flags, .rm-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.rm-reply { margin: 12px 0 0; padding: 8px 12px; border-left: 3px solid #cbd5e1; background: #f8fafc; }
+.rm-dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; }
+.rm-dl dt { color: #64748b; }
+.rm-dl dd { margin: 0; overflow-wrap: anywhere; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
+@media (max-width: 900px) { .rm-grid { grid-template-columns: 1fr; } }
