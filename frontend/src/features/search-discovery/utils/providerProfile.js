@@ -148,6 +148,42 @@ export function getProviderServiceOptions(provider = {}, { allowFallback = true 
   ];
 }
 
+export function getProviderListingServiceOptions(provider = {}) {
+  const listings = Array.isArray(provider.listings) ? provider.listings : [];
+  const seen = new Set();
+  const services = [];
+
+  listings.forEach((listing) => {
+    if (!listing || typeof listing !== 'object') {
+      return;
+    }
+
+    const listingId = getTrimmedString(listing.id);
+    if (!listingId || seen.has(listingId)) {
+      return;
+    }
+
+    seen.add(listingId);
+    services.push({
+      key: listingId,
+      listingId,
+      label:
+        getTrimmedString(listing.title) ||
+        getTrimmedString(listing.categoryName) ||
+        'Service',
+      description: getTrimmedString(listing.description) || null,
+      pricing:
+        listing.pricing && typeof listing.pricing === 'object'
+          ? listing.pricing
+          : null,
+      inclusions: null,
+      isFallback: false,
+    });
+  });
+
+  return services;
+}
+
 export function getProviderReviewState(provider = {}) {
   const reviews = Array.isArray(provider.reviews)
     ? provider.reviews.filter((review) => review && typeof review === 'object')

@@ -9,6 +9,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -1340,5 +1341,39 @@ class ListingServiceImplTest {
                 null, null, null, null, PageRequest.of(0, 12)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("MongoTemplate");
+    }
+
+    @ParameterizedTest(name = "excludes {0} from public discovery")
+    @EnumSource(value = ListingStatus.class, mode = EnumSource.Mode.EXCLUDE, names = "ACTIVE")
+    @DisplayName("Public search and provider listings restrict discovery to ACTIVE")
+    void publicDiscoveryQueriesOnlyAllowActiveStatuses(ListingStatus excludedStatus) {
+        when(categoryLookupPortProvider.getIfAvailable()).thenReturn(categoryLookupPort);
+        when(categoryLookupPort.findActiveCategories()).thenReturn(List.of(
+                new CategorySnapshot(ROOT_CAT_ID, "Electrical", null, true, new BigDecimal("0.10"))));
+        when(mongoTemplate.find(any(Query.class), eq(ServiceListing.class))).thenReturn(List.of());
+        when(mongoTemplate.count(any(Query.class), eq(ServiceListing.class))).thenReturn(0L);
+
+        ListingServiceImpl searchService = new ListingServiceImpl(
+                listingRepository,
+                new ListingMapper(),
+                new ListingMediaValidator(),
+                new ListingContentScreeningService(),
+                providerEligibilityChecker,
+                new SriLankaDistrictGeoService(districtCatalog),
+                categoryLookupPortProvider,
+                rateLimitServiceProvider,
+                mongoTemplate
+        );
+
+        searchService.searchPublicListings(null, null, null, null, null, PageRequest.of(0, 12));
+        searchService.getPublicListingsByProviderId(PROVIDER_ID);
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate, times(2)).find(queryCaptor.capture(), eq(ServiceListing.class));
+        for (Query query : queryCaptor.getAllValues()) {
+            String queryText = query.getQueryObject().toString();
+            assertThat(queryText).contains("status", "ACTIVE");
+            assertThat(queryText).doesNotContain(excludedStatus.name());
+        }
     }
 }

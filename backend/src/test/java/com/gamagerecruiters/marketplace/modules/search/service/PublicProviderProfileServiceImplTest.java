@@ -16,6 +16,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
@@ -23,6 +24,8 @@ import com.gamagerecruiters.marketplace.modules.listing.domain.ExecutionModel;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ListingStatus;
 import com.gamagerecruiters.marketplace.modules.listing.domain.PricingModel;
 import com.gamagerecruiters.marketplace.modules.listing.dto.ListingResponse;
+import com.gamagerecruiters.marketplace.modules.listing.service.CategoryLookupPort;
+import com.gamagerecruiters.marketplace.modules.listing.service.CategoryLookupPort.CategorySnapshot;
 import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
@@ -39,6 +42,9 @@ class PublicProviderProfileServiceImplTest {
     private ProviderProfileRepository profileRepository;
     private ReviewService reviewService;
     private ProviderVerificationRepository verificationRepository;
+    @SuppressWarnings("unchecked")
+    private final ObjectProvider<CategoryLookupPort> categoryLookupPortProvider = mock(ObjectProvider.class);
+    private final CategoryLookupPort categoryLookupPort = mock(CategoryLookupPort.class);
     private PublicProviderProfileServiceImpl service;
 
     @BeforeEach
@@ -48,7 +54,8 @@ class PublicProviderProfileServiceImplTest {
         reviewService = mock(ReviewService.class);
         verificationRepository = mock(ProviderVerificationRepository.class);
         service = new PublicProviderProfileServiceImpl(
-                listingService, profileRepository, reviewService, verificationRepository);
+                listingService, profileRepository, reviewService, verificationRepository,
+                categoryLookupPortProvider);
     }
 
     @Test
@@ -106,10 +113,10 @@ class PublicProviderProfileServiceImplTest {
     }
 
     @Test
-    @DisplayName("Resolves by canonical userId and falls back to profile categories when no listings exist")
+    @DisplayName("Resolves by canonical userId and falls back to readable active category names when no listings exist")
     void resolvesByUserId() {
         ProviderProfile profile = profile("profile-2", "user-2", "Ben Painting", null,
-                List.of("cat-a", "cat-b"));
+                List.of("cat-a", "cat-b", "cat-missing"));
         when(profileRepository.findById("user-2")).thenReturn(Optional.empty());
         when(profileRepository.findByUserId("user-2")).thenReturn(Optional.of(profile));
         when(listingService.getPublicListingsByProviderId("user-2")).thenReturn(List.of());
@@ -117,6 +124,11 @@ class PublicProviderProfileServiceImplTest {
                 .thenReturn(Map.of("user-2", summary("user-2", 0.0, 0)));
         when(verificationRepository.findAllByProviderIdIn(List.of("user-2")))
                 .thenReturn(List.of(verification("user-2", ProviderVerificationStatus.SUBMITTED)));
+        when(categoryLookupPortProvider.getIfAvailable()).thenReturn(categoryLookupPort);
+        when(categoryLookupPort.findActiveCategories()).thenReturn(List.of(
+                new CategorySnapshot("cat-a", "Electrical", null, true, new BigDecimal("0.10")),
+                new CategorySnapshot("cat-b", "Home Cleaning", null, true, new BigDecimal("0.12")),
+                new CategorySnapshot("cat-missing", "Hidden Category", null, false, new BigDecimal("0.10"))));
 
         PublicProviderProfileResponse response = service.getPublicProfile("user-2");
 
@@ -125,7 +137,7 @@ class PublicProviderProfileServiceImplTest {
         assertThat(response.verified()).isFalse();
         assertThat(response.rating()).isNull();
         assertThat(response.reviewCount()).isZero();
-        assertThat(response.category()).isEqualTo("cat-a, cat-b");
+        assertThat(response.category()).isEqualTo("Electrical, Home Cleaning");
         assertThat(response.serviceTypes()).isEmpty();
         assertThat(response.pricing().amount()).isNull();
         assertThat(response.pricing().model()).isNull();

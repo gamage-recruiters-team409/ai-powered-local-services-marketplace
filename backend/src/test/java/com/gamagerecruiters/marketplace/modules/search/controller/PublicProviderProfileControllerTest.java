@@ -13,10 +13,12 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import com.gamagerecruiters.marketplace.common.exception.GlobalExceptionHandler;
+import com.gamagerecruiters.marketplace.modules.listing.service.CategoryLookupPort;
 import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
@@ -54,8 +56,11 @@ class PublicProviderProfileControllerTest {
                 .thenReturn(Map.of("user-1", new RatingSummaryResponse("user-1", 0.0, 0, Map.of())));
         when(verificationRepository.findAllByProviderIdIn(List.of("user-1"))).thenReturn(List.of());
 
+        @SuppressWarnings("unchecked")
+        ObjectProvider<CategoryLookupPort> categoryLookupPortProvider = mock(ObjectProvider.class);
         PublicProviderProfileServiceImpl service = new PublicProviderProfileServiceImpl(
-                listingService, profileRepository, reviewService, verificationRepository);
+                listingService, profileRepository, reviewService, verificationRepository,
+                categoryLookupPortProvider);
         mockMvc = MockMvcBuilders.standaloneSetup(new PublicProviderProfileController(service))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

@@ -29,6 +29,9 @@ public enum ListingStatus {
     public static final Set<ListingStatus> FAVOURITE_READABLE_STATUSES =
             Collections.unmodifiableSet(EnumSet.of(ACTIVE, PAUSED));
 
+    public static final Set<ListingStatus> PUBLIC_DISCOVERY_STATUSES =
+            Collections.unmodifiableSet(EnumSet.of(ACTIVE));
+
     /**
      * Statuses that prevent soft-deactivation of the listing's parent category (FR-LIST-001).
      */

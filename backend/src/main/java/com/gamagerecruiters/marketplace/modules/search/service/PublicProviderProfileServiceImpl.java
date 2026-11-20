@@ -3,17 +3,21 @@ package com.gamagerecruiters.marketplace.modules.search.service;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.listing.domain.PricingModel;
 import com.gamagerecruiters.marketplace.modules.listing.dto.ListingResponse;
+import com.gamagerecruiters.marketplace.modules.listing.service.CategoryLookupPort;
+import com.gamagerecruiters.marketplace.modules.listing.service.CategoryLookupPort.CategorySnapshot;
 import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
@@ -39,17 +43,20 @@ public class PublicProviderProfileServiceImpl implements PublicProviderProfileSe
     private final ProviderProfileRepository providerProfileRepository;
     private final ReviewService reviewService;
     private final ProviderVerificationRepository verificationRepository;
+    private final ObjectProvider<CategoryLookupPort> categoryLookupPortProvider;
 
     public PublicProviderProfileServiceImpl(
             ListingService listingService,
             ProviderProfileRepository providerProfileRepository,
             ReviewService reviewService,
-            ProviderVerificationRepository verificationRepository
+            ProviderVerificationRepository verificationRepository,
+            ObjectProvider<CategoryLookupPort> categoryLookupPortProvider
     ) {
         this.listingService = listingService;
         this.providerProfileRepository = providerProfileRepository;
         this.reviewService = reviewService;
         this.verificationRepository = verificationRepository;
+        this.categoryLookupPortProvider = categoryLookupPortProvider;
     }
 
     @Override
@@ -123,15 +130,40 @@ public class PublicProviderProfileServiceImpl implements PublicProviderProfileSe
     private String category(ProviderProfile profile, List<ListingResponse> listings) {
         for (ListingResponse listing : listings) {
             if (hasText(listing.categoryName())) {
-                return listing.categoryName();
+                return listing.categoryName().trim();
             }
         }
-        // Fall back to profile-level category ids when no listing has a resolved name
+
         List<String> profileCategories = profile.getCategoryIds();
-        if (profileCategories != null && !profileCategories.isEmpty()) {
-            return String.join(", ", profileCategories);
+        if (profileCategories == null || profileCategories.isEmpty() || categoryLookupPortProvider == null) {
+            return null;
         }
-        return null;
+
+        CategoryLookupPort categoryLookupPort = categoryLookupPortProvider.getIfAvailable();
+        if (categoryLookupPort == null) {
+            return null;
+        }
+
+        List<CategorySnapshot> activeCategories = categoryLookupPort.findActiveCategories();
+        if (activeCategories == null || activeCategories.isEmpty()) {
+            return null;
+        }
+
+        Map<String, String> namesById = new LinkedHashMap<>();
+        for (CategorySnapshot category : activeCategories) {
+            if (category != null && category.active() && hasText(category.id()) && hasText(category.name())) {
+                namesById.putIfAbsent(category.id().trim(), category.name().trim());
+            }
+        }
+
+        List<String> names = new ArrayList<>();
+        for (String categoryId : profileCategories) {
+            String name = categoryId == null ? null : namesById.get(categoryId.trim());
+            if (hasText(name) && !names.contains(name)) {
+                names.add(name);
+            }
+        }
+        return names.isEmpty() ? null : String.join(", ", names);
     }
 
     private List<String> serviceTypes(List<ListingResponse> listings) {

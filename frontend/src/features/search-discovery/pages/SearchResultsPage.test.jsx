@@ -16,9 +16,14 @@ beforeAll(() => {
   };
 });
 
-vi.mock('../services/searchAdapter', () => ({
-  fetchSearchResults: vi.fn(),
-}));
+vi.mock('../services/searchAdapter', async (importOriginal) => {
+  const actual = await importOriginal();
+
+  return {
+    ...actual,
+    fetchSearchResults: vi.fn(),
+  };
+});
 
 import { fetchSearchResults } from '../services/searchAdapter.js';
 import SearchResultsPage from './SearchResultsPage.jsx';
@@ -90,12 +95,14 @@ function renderSearchPage() {
 }
 
 beforeEach(() => {
+  vi.stubEnv('VITE_SEARCH_FIXTURE_MODE', 'true');
   fetchSearchResults.mockResolvedValue(fixtureResponse);
 });
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('SearchResultsPage search lifecycle', () => {
@@ -196,6 +203,53 @@ describe('SearchResultsPage clear all and reset', () => {
     expect(filters.budgetMax).toBe(60);
     expect(filters.distance).toBe('5');
     expect(filters.availability).toBe('any');
+  });
+});
+
+describe('SearchResultsPage live defaults', () => {
+  it('does not send fixture query or location on the initial live search', async () => {
+    vi.stubEnv('VITE_SEARCH_FIXTURE_MODE', 'false');
+    fetchSearchResults.mockResolvedValue(pagedResponse());
+
+    renderSearchPage();
+
+    await screen.findByText('Provider 1');
+    expect(fetchSearchResults.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ query: '', location: '' }),
+    );
+  });
+
+  it('resets live query and location to empty values', async () => {
+    vi.stubEnv('VITE_SEARCH_FIXTURE_MODE', 'false');
+    fetchSearchResults.mockResolvedValue(pagedResponse());
+    const user = userEvent.setup();
+
+    renderSearchPage();
+    await screen.findByText('Provider 1');
+
+    await user.type(screen.getByLabelText(/what do you need/i), 'Colombo');
+    await user.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() => expect(fetchSearchResults).toHaveBeenCalledTimes(2));
+
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+    await waitFor(() => expect(fetchSearchResults).toHaveBeenCalledTimes(3));
+    expect(fetchSearchResults.mock.calls.at(-1)[0]).toEqual(
+      expect.objectContaining({ query: '', location: '' }),
+    );
+  });
+
+  it('keeps the original sample defaults when fixture mode is explicitly enabled', async () => {
+    vi.stubEnv('VITE_SEARCH_FIXTURE_MODE', 'true');
+
+    renderSearchPage();
+
+    await screen.findByText("Maya's Home Care");
+    expect(fetchSearchResults.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        query: 'Home cleaning',
+        location: 'Austin, TX 78701',
+      }),
+    );
   });
 });
 

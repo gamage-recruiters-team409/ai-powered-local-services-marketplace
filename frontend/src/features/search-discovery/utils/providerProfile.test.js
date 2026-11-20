@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   getProviderAvailabilityState,
+  getProviderListingServiceOptions,
   getProviderReviewState,
   getProviderServiceOptions,
   getRatingStarStates,
@@ -170,6 +171,56 @@ describe('getProviderServiceOptions', () => {
       pricing: null,
       inclusions: null,
     });
+  });
+});
+
+describe('getProviderListingServiceOptions', () => {
+  it('builds one service per real listing with listing identifiers and prices', () => {
+    const services = getProviderListingServiceOptions({
+      serviceTypes: ['Electrical', 'Wiring Repair', 'Painting', 'Interior Painting'],
+      listings: [
+        {
+          id: 'listing-1',
+          title: 'Wiring Repair',
+          description: 'Licensed electrical repair.',
+          categoryName: 'Electrical',
+          pricing: { amount: 3000, model: 'FIXED' },
+        },
+        {
+          id: 'listing-2',
+          title: 'Interior Painting',
+          description: 'Two-room painting package.',
+          categoryName: 'Painting',
+          pricing: { amount: 1500, model: 'FIXED' },
+        },
+      ],
+    });
+
+    expect(services).toHaveLength(2);
+    expect(services.map((service) => service.listingId)).toEqual([
+      'listing-1',
+      'listing-2',
+    ]);
+    expect(services[0]).toMatchObject({
+      key: 'listing-1',
+      label: 'Wiring Repair',
+      description: 'Licensed electrical repair.',
+      pricing: { amount: 3000, model: 'FIXED' },
+    });
+    expect(services[1]).toMatchObject({
+      key: 'listing-2',
+      label: 'Interior Painting',
+      description: 'Two-room painting package.',
+      pricing: { amount: 1500, model: 'FIXED' },
+    });
+  });
+
+  it('ignores listings without an identifier', () => {
+    expect(
+      getProviderListingServiceOptions({
+        listings: [{ title: 'No identifier', pricing: { amount: 10 } }],
+      }),
+    ).toEqual([]);
   });
 });
 

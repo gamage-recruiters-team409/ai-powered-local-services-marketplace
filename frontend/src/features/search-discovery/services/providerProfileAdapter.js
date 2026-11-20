@@ -77,7 +77,13 @@ async function fetchLiveProviderProfile(providerId) {
     cancellationPolicy: null,
     serviceRadiusMiles: null,
     supported,
-    listings: Array.isArray(data.listings) ? data.listings : [],
+    listings: Array.isArray(data.listings)
+      ? data.listings.map((listing) => ({
+          ...listing,
+          image: listing?.image || FALLBACK_PROVIDER_IMAGE,
+          pricing: mapLivePricing(listing?.pricing),
+        }))
+      : [],
   };
 
   return {

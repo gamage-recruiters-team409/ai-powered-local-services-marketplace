@@ -684,7 +684,7 @@ public class ListingServiceImpl implements ListingService {
             Collection<String> activeCategoryIds
     ) {
         List<Criteria> filters = new ArrayList<>();
-        filters.add(Criteria.where("status").in(ListingStatus.FAVOURITE_READABLE_STATUSES));
+        filters.add(Criteria.where("status").in(ListingStatus.PUBLIC_DISCOVERY_STATUSES));
         filters.add(Criteria.where("hiddenByProviderSuspension").ne(true));
 
         String queryText = trimToNull(q);

@@ -123,7 +123,20 @@ describe('fetchProviderProfile live mode', () => {
       inclusions: [],
       cancellationPolicy: null,
       serviceRadiusMiles: null,
-      listings: liveProfile.listings,
+      listings: [
+        {
+          ...liveProfile.listings[0],
+          image: FALLBACK_PROVIDER_IMAGE,
+          pricing: {
+            hourlyRate: 55,
+            amount: 55,
+            model: 'HOURLY',
+            durationMinutes: 60,
+            currency: null,
+            unit: null,
+          },
+        },
+      ],
       supported: {
         distance: false,
         availability: false,

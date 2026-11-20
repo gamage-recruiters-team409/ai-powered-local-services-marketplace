@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { fetchSearchResults } from '../services/searchAdapter';
+import { fetchSearchResults, isFixtureModeEnabled } from '../services/searchAdapter';
 import LocalServeNavbar from '../components/LocalServeNavbar';
 import SearchInputHeader from '../components/SearchInputHeader';
 import SearchFiltersSidebar from '../components/SearchFiltersSidebar';
@@ -46,16 +46,30 @@ const CLEARED_FILTERS = {
   distance: '25',
 };
 
+const FIXTURE_DEFAULT_QUERY = 'Home cleaning';
+const FIXTURE_DEFAULT_LOCATION = 'Austin, TX 78701';
+const LIVE_DEFAULT_QUERY = '';
+const LIVE_DEFAULT_LOCATION = '';
+
+function getDefaultSearchValues() {
+  if (isFixtureModeEnabled()) {
+    return { query: FIXTURE_DEFAULT_QUERY, location: FIXTURE_DEFAULT_LOCATION };
+  }
+
+  return { query: LIVE_DEFAULT_QUERY, location: LIVE_DEFAULT_LOCATION };
+}
+
 /**
  * Main Search Results Page matching the approved LocalServe design.
  * Features full-width responsive header/footer, sidebar filters,
  * provider cards with authentic images, comparison tray, and pagination.
  */
 export function SearchResultsPage() {
-  const [query, setQuery] = useState('Home cleaning');
-  const [location, setLocation] = useState('Austin, TX 78701');
-  const [activeQuery, setActiveQuery] = useState('Home cleaning');
-  const [activeLocation, setActiveLocation] = useState('Austin, TX 78701');
+  const [defaultSearchValues] = useState(getDefaultSearchValues);
+  const [query, setQuery] = useState(defaultSearchValues.query);
+  const [location, setLocation] = useState(defaultSearchValues.location);
+  const [activeQuery, setActiveQuery] = useState(defaultSearchValues.query);
+  const [activeLocation, setActiveLocation] = useState(defaultSearchValues.location);
   const [sortBy, setSortBy] = useState('recommended');
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [page, setPage] = useState(0);
@@ -199,12 +213,13 @@ export function SearchResultsPage() {
   };
 
   const handleResetAll = () => {
-    setQuery('Home cleaning');
-    setLocation('Austin, TX 78701');
+    const defaults = getDefaultSearchValues();
+    setQuery(defaults.query);
+    setLocation(defaults.location);
     setIsLoading(true);
     setPage(0);
-    setActiveQuery('Home cleaning');
-    setActiveLocation('Austin, TX 78701');
+    setActiveQuery(defaults.query);
+    setActiveLocation(defaults.location);
     setSortBy('recommended');
     setFilters(DEFAULT_FILTERS);
     setSearchNonce((n) => n + 1);

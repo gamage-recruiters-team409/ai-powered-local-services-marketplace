@@ -19,6 +19,7 @@ import {
   formatCancellationPolicy,
   formatDistanceArea,
   formatInclusions,
+  formatListingPrice,
   formatNextAvailable,
   formatPrice,
   formatProviderLocation,
@@ -29,6 +30,7 @@ import {
 } from '../utils/providerComparison.js';
 import {
   getProviderAvailabilityState,
+  getProviderListingServiceOptions,
   getProviderReviewState,
   getProviderServiceOptions,
   getRatingStarStates,
@@ -441,7 +443,7 @@ function ServicesPanel({ provider, serviceOptions, onBook }) {
           </p>
         )}
         {serviceOptions.map((service) => {
-          const servicePrice = formatPrice(service.pricing);
+          const servicePrice = formatListingPrice(service.pricing);
           const serviceInclusions = formatInclusions(service.inclusions);
           const hasServicePrice = servicePrice !== NOT_PROVIDED;
           const hasServiceInclusions = serviceInclusions !== NOT_PROVIDED;
@@ -740,7 +742,9 @@ export function ProviderProfilePage() {
   };
 
   const serviceOptions = provider
-    ? getProviderServiceOptions(provider, { allowFallback: isFixture })
+    ? isFixture
+      ? getProviderServiceOptions(provider)
+      : getProviderListingServiceOptions(provider)
     : [];
   const reviewState = provider
     ? getProviderReviewState(provider)
