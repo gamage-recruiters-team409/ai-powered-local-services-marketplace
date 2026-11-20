@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.auth.concurrency;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -11,6 +12,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -19,6 +21,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -31,6 +34,9 @@ import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -96,18 +102,35 @@ class StatusChangeConcurrencyIntegrationTest {
     @MockitoSpyBean
     private AuthTokenRepository authTokenRepository;
 
+    @MockitoSpyBean
+    private MongoTemplate mongoTemplate;
+
     @BeforeEach
     void cleanDatabase() {
         reset(authTokenRepository);
+        reset(mongoTemplate);
         authTokenRepository.deleteAll();
         userRepository.deleteAll();
+        mongoTemplate.remove(new Query(), "auth_locks");
         SecurityContextHolder.clearContext();
     }
 
     @AfterEach
     void tearDown() {
         reset(authTokenRepository);
+        reset(mongoTemplate);
         SecurityContextHolder.clearContext();
+    }
+
+    private User createUserRecord(String id, Role role, UserStatus status) {
+        User user = new User();
+        user.setId(id);
+        user.setName("User " + id);
+        user.setEmail(id + "@marketplace.local");
+        user.setRole(role);
+        user.setStatus(status);
+        user.setCreatedAt(Instant.now());
+        return user;
     }
 
     private void authenticateAs(String userId, String email, Role role) {
@@ -296,79 +319,258 @@ class StatusChangeConcurrencyIntegrationTest {
     }
 
     @Test
-    @DisplayName("F3 Real MongoDB Testcontainers: Token revocation failure rolls back status to ACTIVE; retry succeeds and revokes token")
-    void testTokenRevocationFailureRollsBackStatusAndRetrySucceeds() {
-        // 1. Create active SUPER_ADMIN actor
-        User actor = new User();
-        actor.setId("actor-super-f3");
-        actor.setName("Super Admin F3");
-        actor.setEmail("superf3@marketplace.local");
-        actor.setRole(Role.SUPER_ADMIN);
-        actor.setStatus(UserStatus.ACTIVE);
-        actor.setCreatedAt(Instant.now());
-        userRepository.save(actor);
+    @DisplayName("F2 Real MongoDB Testcontainers: 3 concurrent SUPER_ADMINs suspending each other across 30 iterations never leaves 0 active SUPER_ADMINs")
+    void testConcurrentThreeSuperAdminSuspensionMaintainsAtLeastOneActive() throws InterruptedException {
+        int iterations = 30;
 
-        // 2. Create active target CUSTOMER user
-        User target = new User();
-        target.setId("target-user-f3");
-        target.setName("Target Customer F3");
-        target.setEmail("targetf3@marketplace.local");
-        target.setRole(Role.CUSTOMER);
-        target.setStatus(UserStatus.ACTIVE);
-        target.setCreatedAt(Instant.now());
-        userRepository.save(target);
+        for (int iter = 0; iter < iterations; iter++) {
+            userRepository.deleteAll();
+            mongoTemplate.remove(new Query(), "auth_locks");
 
-        // 3. Issue an active refresh token
-        AuthToken token = new AuthToken(
-                "target-user-f3",
-                TokenType.REFRESH,
-                "token-hash-f3-test",
-                Instant.now().plusSeconds(3600),
-                Instant.now()
-        );
-        authTokenRepository.save(token);
+            User adminA = createUserRecord("super-3a-" + iter, Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            User adminB = createUserRecord("super-3b-" + iter, Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            User adminC = createUserRecord("super-3c-" + iter, Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            userRepository.saveAll(List.of(adminA, adminB, adminC));
 
-        authenticateAs("actor-super-f3", "superf3@marketplace.local", Role.SUPER_ADMIN);
+            int threadCount = 6;
+            ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch readyLatch = new CountDownLatch(threadCount);
+            CountDownLatch startLatch = new CountDownLatch(1);
+            CountDownLatch doneLatch = new CountDownLatch(threadCount);
+
+            String[][] pairs = {
+                    {adminA.getId(), adminA.getEmail(), adminB.getId()},
+                    {adminA.getId(), adminA.getEmail(), adminC.getId()},
+                    {adminB.getId(), adminB.getEmail(), adminA.getId()},
+                    {adminB.getId(), adminB.getEmail(), adminC.getId()},
+                    {adminC.getId(), adminC.getEmail(), adminA.getId()},
+                    {adminC.getId(), adminC.getEmail(), adminB.getId()}
+            };
+
+            for (String[] pair : pairs) {
+                final String actorId = pair[0];
+                final String actorEmail = pair[1];
+                final String targetId = pair[2];
+
+                executor.submit(() -> {
+                    authenticateAs(actorId, actorEmail, Role.SUPER_ADMIN);
+                    readyLatch.countDown();
+                    try {
+                        startLatch.await();
+                        userInternalService.changeStatus(actorId, targetId, UserStatus.ACTIVE, UserStatus.SUSPENDED);
+                    } catch (Exception ignored) {
+                    } finally {
+                        SecurityContextHolder.clearContext();
+                        doneLatch.countDown();
+                    }
+                });
+            }
+
+            readyLatch.await();
+            startLatch.countDown();
+            doneLatch.await();
+            executor.shutdown();
+
+            long activeSuperAdmins = userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            assertTrue(activeSuperAdmins >= 1,
+                    "Iteration " + iter + ": Invariant violated! Expected >= 1 active SUPER_ADMIN but found: " + activeSuperAdmins);
+        }
+    }
+
+    @Test
+    @DisplayName("Guard Real MongoDB: Expired super-admin status lock lease can be acquired by a new operation")
+    void testExpiredSuperAdminGuardLeaseCanBeTakenOver() {
+        // 1. Manually insert an expired lock document in auth_locks collection
+        Document expiredLock = new Document("_id", "super-admin-status")
+                .append("owner", "old-expired-owner-uuid")
+                .append("lockedUntil", Instant.now().minusSeconds(30));
+        mongoTemplate.save(expiredLock, "auth_locks");
+
+        // 2. Create two active SUPER_ADMINs
+        User adminA = createUserRecord("super-lease-a", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User adminB = createUserRecord("super-lease-b", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        userRepository.saveAll(List.of(adminA, adminB));
+
+        authenticateAs(adminA.getId(), adminA.getEmail(), Role.SUPER_ADMIN);
+
+        // 3. A suspends B -> Guard acquisition should overwrite the expired lock
+        User updatedB = userInternalService.changeStatus(adminA.getId(), adminB.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED);
+        assertNotNull(updatedB);
+        assertEquals(UserStatus.SUSPENDED, updatedB.getStatus());
+
+        // 4. Verify in real database: B is suspended, and the lock was released in finally block
+        User persistedB = userRepository.findById(adminB.getId()).orElse(null);
+        assertNotNull(persistedB);
+        assertEquals(UserStatus.SUSPENDED, persistedB.getStatus());
+
+        Document lockDoc = mongoTemplate.findById("super-admin-status", Document.class, "auth_locks");
+        assertNotNull(lockDoc);
+        assertFalse(lockDoc.containsKey("owner"), "Owner must be unset upon lock release");
+    }
+
+    @Test
+    @DisplayName("Guard Real MongoDB: Failure injected after guard acquisition leaves user ACTIVE, releases guard, and retry succeeds")
+    void testFailureAfterGuardAcquisitionLeavesGuardReleasedAndRetrySucceeds() {
+        // 1. Create two active SUPER_ADMINs
+        User adminA = createUserRecord("super-fail-a", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User adminB = createUserRecord("super-fail-b", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        userRepository.saveAll(List.of(adminA, adminB));
+
+        authenticateAs(adminA.getId(), adminA.getEmail(), Role.SUPER_ADMIN);
 
         try {
-            // 4. Configure spy to fail on revocation attempt (throws once without doCallRealMethod)
-            doThrow(new RuntimeException("Simulated transient MongoDB failure during token revocation"))
-                    .when(authTokenRepository)
-                    .revokeAllActiveTokensByUserIdAndType(eq("target-user-f3"), eq(TokenType.REFRESH));
+            // 2. Inject failure on mongoTemplate.updateFirst for User.class (after guard acquisition and token revocation)
+            doThrow(new RuntimeException("Simulated DB connection drop during status update"))
+                    .when(mongoTemplate)
+                    .updateFirst(any(Query.class), any(Update.class), eq(User.class));
 
-            // 5. First attempt: should throw 503 STATUS_CHANGE_FAILED and restore status to ACTIVE
             ApiException ex = assertThrows(ApiException.class, () ->
-                    userInternalService.changeStatus("actor-super-f3", "target-user-f3", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+                    userInternalService.changeStatus(adminA.getId(), adminB.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED));
 
             assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
             assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+            assertEquals("The status change could not be confirmed. Please reload the user and retry.", ex.getMessage());
 
-            // 6. Verify target user is restored to ACTIVE in real MongoDB
-            User restoredUser = userRepository.findById("target-user-f3").orElse(null);
-            assertNotNull(restoredUser);
-            assertEquals(UserStatus.ACTIVE, restoredUser.getStatus(), "Target status must be restored to ACTIVE on revocation failure");
+            // 3. Invariant holds: both SUPER_ADMINs remain ACTIVE
+            User userB = userRepository.findById(adminB.getId()).orElse(null);
+            assertNotNull(userB);
+            assertEquals(UserStatus.ACTIVE, userB.getStatus());
 
-            // 7. Verify refresh token was NOT revoked
-            AuthToken unrevokedToken = authTokenRepository.findByTokenHash("token-hash-f3-test").orElse(null);
-            assertNotNull(unrevokedToken);
-            assertFalse(unrevokedToken.isRevoked(), "Refresh token must not be revoked when status change fails");
+            long activeCount = userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            assertEquals(2L, activeCount);
 
-            // 8. Reset spy so authTokenRepository reverts to real MongoDB behavior for retry
+            // 4. Guard is released in finally block
+            Document lockDoc = mongoTemplate.findById("super-admin-status", Document.class, "auth_locks");
+            assertNotNull(lockDoc);
+            assertFalse(lockDoc.containsKey("owner"), "Lock owner must be unset after exception in update");
+
+            // 5. Reset mongoTemplate spy so next attempt works
+            reset(mongoTemplate);
+
+            // 6. Next attempt works normally
+            User retryUpdatedB = userInternalService.changeStatus(adminA.getId(), adminB.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED);
+            assertNotNull(retryUpdatedB);
+            assertEquals(UserStatus.SUSPENDED, retryUpdatedB.getStatus());
+
+            User finalB = userRepository.findById(adminB.getId()).orElse(null);
+            assertNotNull(finalB);
+            assertEquals(UserStatus.SUSPENDED, finalB.getStatus());
+        } finally {
+            reset(mongoTemplate);
+        }
+    }
+
+    @Test
+    @DisplayName("F3 Real MongoDB Testcontainers: Token revocation failure leaves status, failedLoginCount, and lockStartedAt intact; retry succeeds")
+    void testTokenRevocationFailureLeavesStatusAndAuthStateIntactAndRetrySucceeds() {
+        // --- Case 1: Target is ACTIVE with failedLoginCount = 3 ---
+        User actor = createUserRecord("actor-super-f3-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        userRepository.save(actor);
+
+        User targetActive = createUserRecord("target-user-f3-1", Role.CUSTOMER, UserStatus.ACTIVE);
+        targetActive.setFailedLoginCount(3);
+        targetActive.setLockStartedAt(null);
+        userRepository.save(targetActive);
+
+        AuthToken token1 = new AuthToken(
+                targetActive.getId(),
+                TokenType.REFRESH,
+                "token-hash-f3-1",
+                Instant.now().plusSeconds(3600),
+                Instant.now()
+        );
+        authTokenRepository.save(token1);
+
+        authenticateAs(actor.getId(), actor.getEmail(), Role.SUPER_ADMIN);
+
+        try {
+            // Revocation throws once
+            doThrow(new RuntimeException("Simulated transient failure during token revocation"))
+                    .when(authTokenRepository)
+                    .revokeAllActiveTokensByUserIdAndType(eq(targetActive.getId()), eq(TokenType.REFRESH));
+
+            ApiException ex1 = assertThrows(ApiException.class, () ->
+                    userInternalService.changeStatus(actor.getId(), targetActive.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+            assertEquals("STATUS_CHANGE_FAILED", ex1.getErrorCode());
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex1.getStatus());
+            assertFalse(ex1.getMessage().contains("restored"), "Message must not claim status was restored");
+            assertEquals("The status was not changed because sessions could not be revoked. Please retry.", ex1.getMessage());
+
+            // Target in DB is completely unchanged
+            User persisted1 = userRepository.findById(targetActive.getId()).orElse(null);
+            assertNotNull(persisted1);
+            assertEquals(UserStatus.ACTIVE, persisted1.getStatus());
+            assertEquals(3, persisted1.getFailedLoginCount(), "failedLoginCount must remain untouched");
+            assertNull(persisted1.getLockStartedAt(), "lockStartedAt must remain null");
+
+            // Token is unrevoked
+            AuthToken storedToken1 = authTokenRepository.findByTokenHash("token-hash-f3-1").orElse(null);
+            assertNotNull(storedToken1);
+            assertFalse(storedToken1.isRevoked());
+
+            // Retry succeeds
             reset(authTokenRepository);
+            User updated1 = userInternalService.changeStatus(actor.getId(), targetActive.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED);
+            assertNotNull(updated1);
+            assertEquals(UserStatus.SUSPENDED, updated1.getStatus());
 
-            // 9. Retry attempt: should succeed and revoke refresh token
-            User updated = userInternalService.changeStatus("actor-super-f3", "target-user-f3", UserStatus.ACTIVE, UserStatus.SUSPENDED);
-            assertNotNull(updated);
-            assertEquals(UserStatus.SUSPENDED, updated.getStatus());
+            User finalUser1 = userRepository.findById(targetActive.getId()).orElse(null);
+            assertNotNull(finalUser1);
+            assertEquals(UserStatus.SUSPENDED, finalUser1.getStatus());
+            assertEquals(3, finalUser1.getFailedLoginCount());
 
-            // 10. Verify target user is SUSPENDED and token is revoked in real MongoDB
-            User finalUser = userRepository.findById("target-user-f3").orElse(null);
-            assertNotNull(finalUser);
-            assertEquals(UserStatus.SUSPENDED, finalUser.getStatus());
+            AuthToken finalToken1 = authTokenRepository.findByTokenHash("token-hash-f3-1").orElse(null);
+            assertNotNull(finalToken1);
+            assertTrue(finalToken1.isRevoked());
+        } finally {
+            reset(authTokenRepository);
+        }
 
-            AuthToken finalToken = authTokenRepository.findByTokenHash("token-hash-f3-test").orElse(null);
-            assertNotNull(finalToken);
-            assertTrue(finalToken.isRevoked(), "Refresh token must be revoked after successful retry");
+        // --- Case 2: Target is LOCKED with lockStartedAt set ---
+        Instant lockTime = Instant.now().minusSeconds(120).truncatedTo(ChronoUnit.MILLIS);
+        User targetLocked = createUserRecord("target-user-f3-2", Role.CUSTOMER, UserStatus.LOCKED);
+        targetLocked.setFailedLoginCount(5);
+        targetLocked.setLockStartedAt(lockTime);
+        userRepository.save(targetLocked);
+
+        AuthToken token2 = new AuthToken(
+                targetLocked.getId(),
+                TokenType.REFRESH,
+                "token-hash-f3-2",
+                Instant.now().plusSeconds(3600),
+                Instant.now()
+        );
+        authTokenRepository.save(token2);
+
+        try {
+            doThrow(new RuntimeException("Simulated transient failure during token revocation"))
+                    .when(authTokenRepository)
+                    .revokeAllActiveTokensByUserIdAndType(eq(targetLocked.getId()), eq(TokenType.REFRESH));
+
+            ApiException ex2 = assertThrows(ApiException.class, () ->
+                    userInternalService.changeStatus(actor.getId(), targetLocked.getId(), UserStatus.LOCKED, UserStatus.SUSPENDED));
+
+            assertEquals("STATUS_CHANGE_FAILED", ex2.getErrorCode());
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex2.getStatus());
+            assertFalse(ex2.getMessage().contains("restored"));
+
+            // LOCKED status and lockStartedAt remain intact
+            User persisted2 = userRepository.findById(targetLocked.getId()).orElse(null);
+            assertNotNull(persisted2);
+            assertEquals(UserStatus.LOCKED, persisted2.getStatus(), "Status must remain LOCKED");
+            assertEquals(5, persisted2.getFailedLoginCount());
+            assertEquals(lockTime, persisted2.getLockStartedAt(), "lockStartedAt must remain intact");
+
+            // Retry succeeds
+            reset(authTokenRepository);
+            User updated2 = userInternalService.changeStatus(actor.getId(), targetLocked.getId(), UserStatus.LOCKED, UserStatus.SUSPENDED);
+            assertNotNull(updated2);
+            assertEquals(UserStatus.SUSPENDED, updated2.getStatus());
+
+            User finalUser2 = userRepository.findById(targetLocked.getId()).orElse(null);
+            assertNotNull(finalUser2);
+            assertEquals(UserStatus.SUSPENDED, finalUser2.getStatus());
         } finally {
             reset(authTokenRepository);
         }

@@ -1,6 +1,8 @@
 package com.gamagerecruiters.marketplace.modules.auth.service;
 
+import java.time.DateTimeException;
 import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -11,16 +13,19 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.AggregationOperation;
@@ -59,6 +64,12 @@ import com.gamagerecruiters.marketplace.modules.customer.util.SriLankanPhoneUtil
 public class UserInternalServiceImpl implements UserInternalService {
 
     private static final Logger log = LoggerFactory.getLogger(UserInternalServiceImpl.class);
+
+    private static final String AUTH_LOCKS_COLLECTION = "auth_locks";
+    private static final String SUPER_ADMIN_LOCK_ID = "super-admin-status";
+    private static final Duration SUPER_ADMIN_LOCK_LEASE = Duration.ofSeconds(10);
+    private static final int LOCK_ACQUISITION_RETRIES = 5;
+    private static final long LOCK_RETRY_BACKOFF_MS = 50L;
 
     private static final Pattern PASSWORD_POLICY = Pattern.compile("^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}$");
 
@@ -347,11 +358,7 @@ public class UserInternalServiceImpl implements UserInternalService {
         }
 
         // Generate period starts and enforce MAX_NEW_USER_BUCKETS limit before running query or zero-filling
-        List<Instant> periodStarts = generatePeriodStarts(from, to, granularity);
-        if (periodStarts.size() > MAX_NEW_USER_BUCKETS) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE",
-                    "Requested date range produces " + periodStarts.size() + " buckets, which exceeds the maximum limit of " + MAX_NEW_USER_BUCKETS);
-        }
+        List<Instant> periodStarts = generatePeriodStarts(from, to, granularity, MAX_NEW_USER_BUCKETS);
 
         // Build the match criteria
         List<Criteria> matchCriteria = new ArrayList<>();
@@ -419,74 +426,126 @@ public class UserInternalServiceImpl implements UserInternalService {
         User target = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("USER_NOT_FOUND", "User not found with id: " + userId));
 
-        // Validate using AdminRolePolicy (checks actor active, not self, role hierarchy, deactivated, last SUPER_ADMIN)
-        AdminRolePolicy.validateStatusChange(actor, target, newStatus, userRepository);
-
-        // Atomic conditional update: match by id AND current status
-        Query query = new Query(Criteria.where("_id").is(userId).and("status").is(expectedStatus));
-        Update update = new Update().set("status", newStatus);
-
-        if (newStatus == UserStatus.ACTIVE) {
-            update.set("failedLoginCount", 0);
-            update.unset("lockStartedAt");
+        boolean isSuperAdminGuardRequired = target.getRole() == Role.SUPER_ADMIN && newStatus != UserStatus.ACTIVE;
+        String lockOwner = null;
+        if (isSuperAdminGuardRequired) {
+            lockOwner = acquireSuperAdminGuard();
         }
 
-        UpdateResult result = mongoTemplate.updateFirst(query, update, User.class);
+        try {
+            // Validate using AdminRolePolicy (checks actor active, not self, role hierarchy, deactivated, last SUPER_ADMIN)
+            AdminRolePolicy.validateStatusChange(actor, target, newStatus, userRepository);
 
-        if (result.getMatchedCount() == 0) {
-            boolean exists = userRepository.existsById(userId);
-            if (exists) {
+            // Early stale-view check: if loaded target's current status differs from expectedStatus, reject immediately without revoking or updating
+            if (target.getStatus() != expectedStatus) {
                 throw new ResourceConflictException("CONCURRENT_MODIFICATION",
                         "User status was modified concurrently. Expected '" + expectedStatus
-                                + "' but it has changed. Please retry.");
-            } else {
-                throw new ResourceNotFoundException("USER_NOT_FOUND", "User not found with id: " + userId);
+                                + "' but current status is '" + target.getStatus() + "'. Please retry.");
             }
-        }
 
-        // F2: Concurrency protection for last active SUPER_ADMIN across different users
-        if (target.getRole() == Role.SUPER_ADMIN && expectedStatus == UserStatus.ACTIVE && newStatus != UserStatus.ACTIVE) {
-            long activeSuperAdmins = userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE);
-            if (activeSuperAdmins == 0) {
-                // Compensating conditional update back to expectedStatus
-                Query compensateQuery = new Query(Criteria.where("_id").is(userId).and("status").is(newStatus));
-                Update compensateUpdate = new Update().set("status", expectedStatus);
-                if (expectedStatus == UserStatus.ACTIVE) {
-                    compensateUpdate.set("failedLoginCount", 0);
-                    compensateUpdate.unset("lockStartedAt");
+            // Step 1: Revoke active refresh tokens before updating status
+            if (newStatus == UserStatus.SUSPENDED || newStatus == UserStatus.DEACTIVATED) {
+                try {
+                    authTokenRepository.revokeAllActiveTokensByUserIdAndType(userId, TokenType.REFRESH);
+                } catch (Exception ex) {
+                    throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
+                            "The status was not changed because sessions could not be revoked. Please retry.");
                 }
-                UpdateResult compResult = mongoTemplate.updateFirst(compensateQuery, compensateUpdate, User.class);
-                if (compResult.getModifiedCount() == 0) {
-                    log.error("Failed to compensate status for user {}", userId);
-                }
-                throw new ApiException(HttpStatus.CONFLICT, "LAST_ACTIVE_SUPER_ADMIN",
-                        "Cannot deactivate, suspend or lock the last remaining ACTIVE SUPER_ADMIN");
             }
-        }
 
-        // F3: Revoke refresh tokens when suspending or deactivating
-        if (newStatus == UserStatus.SUSPENDED || newStatus == UserStatus.DEACTIVATED) {
+            // Step 2: Atomic conditional status update (_id AND status == expectedStatus)
+            Query query = new Query(Criteria.where("_id").is(userId).and("status").is(expectedStatus));
+            Update update = new Update().set("status", newStatus);
+
+            if (newStatus == UserStatus.ACTIVE) {
+                update.set("failedLoginCount", 0);
+                update.unset("lockStartedAt");
+            }
+
+            UpdateResult result;
             try {
-                authTokenRepository.revokeAllActiveTokensByUserIdAndType(userId, TokenType.REFRESH);
+                result = mongoTemplate.updateFirst(query, update, User.class);
             } catch (Exception ex) {
-                // Compensating conditional update back to expectedStatus
-                Query compensateQuery = new Query(Criteria.where("_id").is(userId).and("status").is(newStatus));
-                Update compensateUpdate = new Update().set("status", expectedStatus);
-                if (expectedStatus == UserStatus.ACTIVE) {
-                    compensateUpdate.set("failedLoginCount", 0);
-                    compensateUpdate.unset("lockStartedAt");
-                }
-                UpdateResult compResult = mongoTemplate.updateFirst(compensateQuery, compensateUpdate, User.class);
-                if (compResult.getModifiedCount() == 0) {
-                    log.error("Failed to compensate status for user {}", userId);
-                }
                 throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
-                        "Failed to revoke active tokens during status change; user status has been restored. Please retry.");
+                        "The status change could not be confirmed. Please reload the user and retry.");
+            }
+
+            if (result.getMatchedCount() == 0) {
+                boolean exists = userRepository.existsById(userId);
+                if (exists) {
+                    throw new ResourceConflictException("CONCURRENT_MODIFICATION",
+                            "User status was modified concurrently. Expected '" + expectedStatus
+                                    + "' but it has changed. Please retry.");
+                } else {
+                    throw new ResourceNotFoundException("USER_NOT_FOUND", "User not found with id: " + userId);
+                }
+            }
+
+            // Step 3 (only after a successful status update): Secondary best-effort token revocation
+            if (newStatus == UserStatus.SUSPENDED || newStatus == UserStatus.DEACTIVATED) {
+                try {
+                    authTokenRepository.revokeAllActiveTokensByUserIdAndType(userId, TokenType.REFRESH);
+                } catch (Exception ex) {
+                    log.warn("Failed secondary token revocation for user {}: {}", userId, ex.getClass().getSimpleName());
+                }
+            }
+
+            return userRepository.findById(userId)
+                    .orElseThrow(() -> new ResourceNotFoundException("USER_NOT_FOUND", "User not found after update"));
+        } finally {
+            if (lockOwner != null) {
+                releaseSuperAdminGuard(lockOwner);
             }
         }
+    }
 
-        return userRepository.findById(userId)
-                .orElseThrow(() -> new ResourceNotFoundException("USER_NOT_FOUND", "User not found after update"));
+    private String acquireSuperAdminGuard() {
+        String owner = UUID.randomUUID().toString();
+        for (int attempt = 0; attempt < LOCK_ACQUISITION_RETRIES; attempt++) {
+            try {
+                Instant now = Instant.now();
+                Instant expiresAt = now.plus(SUPER_ADMIN_LOCK_LEASE);
+                Query query = new Query(new Criteria("_id").is(SUPER_ADMIN_LOCK_ID)
+                        .orOperator(
+                                Criteria.where("lockedUntil").exists(false),
+                                Criteria.where("lockedUntil").lt(now)
+                        ));
+                Update update = new Update()
+                        .set("owner", owner)
+                        .set("lockedUntil", expiresAt);
+                FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
+                Document doc = mongoTemplate.findAndModify(query, update, options, Document.class, AUTH_LOCKS_COLLECTION);
+                if (doc != null) {
+                    return owner;
+                }
+            } catch (DuplicateKeyException e) {
+                // Another thread holds the unexpired lock; upsert hit unique _id constraint
+            }
+            if (attempt < LOCK_ACQUISITION_RETRIES - 1) {
+                try {
+                    Thread.sleep(LOCK_RETRY_BACKOFF_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new ResourceConflictException("CONCURRENT_MODIFICATION",
+                            "Interrupted while acquiring super-admin status lock");
+                }
+            }
+        }
+        throw new ResourceConflictException("CONCURRENT_MODIFICATION",
+                "Super-admin status modification is currently locked by another operation. Please retry.");
+    }
+
+    private void releaseSuperAdminGuard(String lockOwner) {
+        if (lockOwner == null) {
+            return;
+        }
+        try {
+            Query releaseQuery = new Query(Criteria.where("_id").is(SUPER_ADMIN_LOCK_ID).and("owner").is(lockOwner));
+            Update releaseUpdate = new Update().unset("owner").set("lockedUntil", Instant.EPOCH);
+            mongoTemplate.updateFirst(releaseQuery, releaseUpdate, AUTH_LOCKS_COLLECTION);
+        } catch (Exception ex) {
+            log.warn("Failed to release super-admin status lock: {}", ex.getClass().getSimpleName());
+        }
     }
 
     private Instant normalizePeriodStart(Instant instant, Granularity granularity) {
@@ -502,28 +561,41 @@ public class UserInternalServiceImpl implements UserInternalService {
         }
     }
 
-    private List<Instant> generatePeriodStarts(Instant from, Instant to, Granularity granularity) {
-        List<Instant> starts = new ArrayList<>();
-        ZonedDateTime current = from.atZone(ZoneOffset.UTC);
+    private List<Instant> generatePeriodStarts(Instant from, Instant to, Granularity granularity, int maxBuckets) {
+        try {
+            List<Instant> starts = new ArrayList<>(Math.min(maxBuckets + 1, 128));
+            ZonedDateTime current = from.atZone(ZoneOffset.UTC);
 
-        if (granularity == Granularity.WEEK) {
-            // Align to Monday of the week containing 'from'
-            current = current.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-                    .truncatedTo(ChronoUnit.DAYS);
-            while (current.toInstant().isBefore(to)) {
-                starts.add(current.toInstant());
-                current = current.plusWeeks(1);
+            if (granularity == Granularity.WEEK) {
+                current = current.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+                        .truncatedTo(ChronoUnit.DAYS);
+                while (current.toInstant().isBefore(to)) {
+                    if (starts.size() >= maxBuckets) {
+                        throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE",
+                                "Requested date range exceeds the maximum allowed limit of " + maxBuckets + " periods for " + granularity);
+                    }
+                    starts.add(current.toInstant());
+                    current = current.plusWeeks(1);
+                }
+            } else {
+                current = current.withDayOfMonth(1).truncatedTo(ChronoUnit.DAYS);
+                while (current.toInstant().isBefore(to)) {
+                    if (starts.size() >= maxBuckets) {
+                        throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE",
+                                "Requested date range exceeds the maximum allowed limit of " + maxBuckets + " periods for " + granularity);
+                    }
+                    starts.add(current.toInstant());
+                    current = current.plusMonths(1);
+                }
             }
-        } else {
-            // MONTH: align to first day of the month containing 'from'
-            current = current.withDayOfMonth(1).truncatedTo(ChronoUnit.DAYS);
-            while (current.toInstant().isBefore(to)) {
-                starts.add(current.toInstant());
-                current = current.plusMonths(1);
-            }
+
+            return starts;
+        } catch (ApiException e) {
+            throw e;
+        } catch (DateTimeException | ArithmeticException e) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_DATE_RANGE",
+                    "Requested date range exceeds the maximum allowed limit of " + maxBuckets + " periods for " + granularity);
         }
-
-        return starts;
     }
 
     private User validateAuthenticatedActor(String actorId, String inactiveMessage) {

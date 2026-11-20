@@ -297,7 +297,7 @@ public class AuthServiceImpl implements AuthService {
                         User.class
                 );
             } catch (Exception ex) {
-                log.warn("Failed to record lastActiveAt for user {}: {}", userId, ex.getMessage());
+                log.warn("Failed to record lastActiveAt for user {}: {}", userId, ex.getClass().getSimpleName());
             }
         }
     }

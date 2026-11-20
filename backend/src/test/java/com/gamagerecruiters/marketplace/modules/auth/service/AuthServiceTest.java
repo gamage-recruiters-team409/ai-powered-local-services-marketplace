@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -905,69 +906,113 @@ class AuthServiceTest {
     }
 
     @Test
-    @DisplayName("EXTRA 2: Login succeeds even when lastActiveAt targeted write fails")
+    @DisplayName("EXTRA 2: Login succeeds even when lastActiveAt targeted write fails and logs safely without secrets")
     void shouldSucceedLoginEvenWhenLastActiveAtUpdateThrows() {
-        LoginRequest request = new LoginRequest("active-user@marketplace.local", "Password123!");
+        ch.qos.logback.classic.Logger serviceLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AuthServiceImpl.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> listAppender = new ch.qos.logback.core.read.ListAppender<>();
+        listAppender.start();
+        serviceLogger.addAppender(listAppender);
 
-        User user = new User();
-        user.setId("u-active-2");
-        user.setName("Active User 2");
-        user.setEmail("active-user2@marketplace.local");
-        user.setPasswordHash("hashedPass");
-        user.setRole(Role.CUSTOMER);
-        user.setStatus(UserStatus.ACTIVE);
+        try {
+            LoginRequest request = new LoginRequest("active-user@marketplace.local", "Password123!");
 
-        when(userRepository.findByEmail("active-user@marketplace.local")).thenReturn(Optional.of(user));
-        when(passwordEncoder.matches("Password123!", "hashedPass")).thenReturn(true);
-        when(tokenService.generateAccessToken("u-active-2", "active-user2@marketplace.local", Role.CUSTOMER)).thenReturn("jwt");
-        when(tokenService.generateRefreshToken()).thenReturn("refresh-token");
-        when(tokenService.hashToken("refresh-token")).thenReturn("hash");
-        when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
-        when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
+            User user = new User();
+            user.setId("u-active-2");
+            user.setName("Active User 2");
+            user.setEmail("active-user2@marketplace.local");
+            user.setPasswordHash("hashedPass");
+            user.setRole(Role.CUSTOMER);
+            user.setStatus(UserStatus.ACTIVE);
 
-        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
-                .thenThrow(new RuntimeException("Transient MongoDB error on lastActiveAt write"));
+            when(userRepository.findByEmail("active-user@marketplace.local")).thenReturn(Optional.of(user));
+            when(passwordEncoder.matches("Password123!", "hashedPass")).thenReturn(true);
+            when(tokenService.generateAccessToken("u-active-2", "active-user2@marketplace.local", Role.CUSTOMER)).thenReturn("jwt");
+            when(tokenService.generateRefreshToken()).thenReturn("refresh-token");
+            when(tokenService.hashToken("refresh-token")).thenReturn("hash");
+            when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
+            when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
 
-        AuthResponse response = assertDoesNotThrow(() -> authService.login(request));
+            String fakeSecret = "mongodb://user:super_secret_credentials@host:27017";
+            when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                    .thenThrow(new RuntimeException(fakeSecret));
 
-        assertNotNull(response);
-        assertEquals("jwt", response.accessToken());
-        assertEquals("refresh-token", response.refreshToken());
+            AuthResponse response = assertDoesNotThrow(() -> authService.login(request));
+
+            assertNotNull(response);
+            assertEquals("jwt", response.accessToken());
+            assertEquals("refresh-token", response.refreshToken());
+
+            boolean foundWarning = false;
+            for (ch.qos.logback.classic.spi.ILoggingEvent event : listAppender.list) {
+                String formatted = event.getFormattedMessage();
+                assertFalse(formatted.contains(fakeSecret), "Log message must not contain secret");
+                assertFalse(formatted.contains("super_secret_credentials"), "Log message must not contain raw credentials");
+                assertNull(event.getThrowableProxy(), "Throwable proxy must not be attached to log event");
+                if (formatted.contains("Failed to record lastActiveAt for user u-active-2: RuntimeException")) {
+                    foundWarning = true;
+                }
+            }
+            assertTrue(foundWarning, "Expected warning log with userId and RuntimeException simple name");
+        } finally {
+            serviceLogger.detachAppender(listAppender);
+        }
     }
 
     @Test
-    @DisplayName("EXTRA 2: Refresh succeeds even when lastActiveAt targeted write fails")
+    @DisplayName("EXTRA 2: Refresh succeeds even when lastActiveAt targeted write fails and logs safely without secrets")
     void shouldSucceedRefreshEvenWhenLastActiveAtUpdateThrows() {
-        RefreshTokenRequest request = new RefreshTokenRequest("valid-refresh-token");
-        String tokenHash = "token-hash-error";
+        ch.qos.logback.classic.Logger serviceLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AuthServiceImpl.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> listAppender = new ch.qos.logback.core.read.ListAppender<>();
+        listAppender.start();
+        serviceLogger.addAppender(listAppender);
 
-        AuthToken validToken = new AuthToken("u-refresh-2", TokenType.REFRESH, tokenHash,
-                Instant.now().plusSeconds(3600), Instant.now());
+        try {
+            RefreshTokenRequest request = new RefreshTokenRequest("valid-refresh-token");
+            String tokenHash = "token-hash-error";
 
-        User user = new User();
-        user.setId("u-refresh-2");
-        user.setName("Refresh User 2");
-        user.setEmail("refresh-user2@marketplace.local");
-        user.setRole(Role.CUSTOMER);
-        user.setStatus(UserStatus.ACTIVE);
+            AuthToken validToken = new AuthToken("u-refresh-2", TokenType.REFRESH, tokenHash,
+                    Instant.now().plusSeconds(3600), Instant.now());
 
-        when(tokenService.hashToken("valid-refresh-token")).thenReturn(tokenHash);
-        when(authTokenRepository.findAndConsumeValidToken(eq(tokenHash), any(Instant.class)))
-                .thenReturn(Optional.of(validToken));
-        when(userRepository.findById("u-refresh-2")).thenReturn(Optional.of(user));
-        when(tokenService.generateAccessToken("u-refresh-2", "refresh-user2@marketplace.local", Role.CUSTOMER)).thenReturn("jwt");
-        when(tokenService.generateRefreshToken()).thenReturn("new-refresh-token");
-        when(tokenService.hashToken("new-refresh-token")).thenReturn("new-hash");
-        when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
-        when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
+            User user = new User();
+            user.setId("u-refresh-2");
+            user.setName("Refresh User 2");
+            user.setEmail("refresh-user2@marketplace.local");
+            user.setRole(Role.CUSTOMER);
+            user.setStatus(UserStatus.ACTIVE);
 
-        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
-                .thenThrow(new RuntimeException("Transient MongoDB error on lastActiveAt write"));
+            when(tokenService.hashToken("valid-refresh-token")).thenReturn(tokenHash);
+            when(authTokenRepository.findAndConsumeValidToken(eq(tokenHash), any(Instant.class)))
+                    .thenReturn(Optional.of(validToken));
+            when(userRepository.findById("u-refresh-2")).thenReturn(Optional.of(user));
+            when(tokenService.generateAccessToken("u-refresh-2", "refresh-user2@marketplace.local", Role.CUSTOMER)).thenReturn("jwt");
+            when(tokenService.generateRefreshToken()).thenReturn("new-refresh-token");
+            when(tokenService.hashToken("new-refresh-token")).thenReturn("new-hash");
+            when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
+            when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
 
-        AuthResponse response = assertDoesNotThrow(() -> authService.refresh(request));
+            String fakeSecret = "mongodb://user:super_secret_credentials@host:27017";
+            when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                    .thenThrow(new RuntimeException(fakeSecret));
 
-        assertNotNull(response);
-        assertEquals("jwt", response.accessToken());
-        assertEquals("new-refresh-token", response.refreshToken());
+            AuthResponse response = assertDoesNotThrow(() -> authService.refresh(request));
+
+            assertNotNull(response);
+            assertEquals("jwt", response.accessToken());
+            assertEquals("new-refresh-token", response.refreshToken());
+
+            boolean foundWarning = false;
+            for (ch.qos.logback.classic.spi.ILoggingEvent event : listAppender.list) {
+                String formatted = event.getFormattedMessage();
+                assertFalse(formatted.contains(fakeSecret), "Log message must not contain secret");
+                assertFalse(formatted.contains("super_secret_credentials"), "Log message must not contain raw credentials");
+                assertNull(event.getThrowableProxy(), "Throwable proxy must not be attached to log event");
+                if (formatted.contains("Failed to record lastActiveAt for user u-refresh-2: RuntimeException")) {
+                    foundWarning = true;
+                }
+            }
+            assertTrue(foundWarning, "Expected warning log with userId and RuntimeException simple name");
+        } finally {
+            serviceLogger.detachAppender(listAppender);
+        }
     }
 }
