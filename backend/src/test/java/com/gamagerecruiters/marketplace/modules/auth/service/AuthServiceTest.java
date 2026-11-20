@@ -48,6 +48,7 @@ import com.gamagerecruiters.marketplace.modules.auth.dto.LogoutRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RefreshTokenRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterResponse;
+import com.gamagerecruiters.marketplace.modules.auth.dto.WebSocketPrincipal;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.service.EmailTokenService;
@@ -594,5 +595,201 @@ class AuthServiceTest {
         assertTrue(ownerToken.isRevoked());
         assertNotNull(ownerToken.getRevokedAt());
         verify(authTokenRepository).save(ownerToken);
+    }
+
+    // =========================================================================
+    // WebSocket Access Token Validation Tests
+    // =========================================================================
+
+    @Test
+    @DisplayName("validateAccessToken: Should succeed and return WebSocketPrincipal with userId and current role for valid token")
+    void validateAccessToken_validToken_shouldSucceed() {
+        String token = "valid-token";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn(null);
+        when(tokenService.getUserIdFromToken(token)).thenReturn("user-1");
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.CUSTOMER);
+
+        User user = new User();
+        user.setId("user-1");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setMustChangePassword(false);
+        when(userRepository.findById("user-1")).thenReturn(Optional.of(user));
+
+        WebSocketPrincipal principal = authService.validateAccessToken(token);
+
+        assertNotNull(principal);
+        assertEquals("user-1", principal.userId());
+        assertEquals("user-1", principal.getUserId());
+        assertEquals(Role.CUSTOMER, principal.role());
+        assertEquals(Role.CUSTOMER, principal.getRole());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject null and blank tokens with generic 401 error message")
+    void validateAccessToken_nullOrBlank_shouldThrow() {
+        BadCredentialsException exNull = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(null));
+        assertEquals("Failed to authenticate token", exNull.getMessage());
+
+        BadCredentialsException exBlank = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken("   "));
+        assertEquals("Failed to authenticate token", exBlank.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject expired token with generic 401 error message")
+    void validateAccessToken_expiredToken_shouldThrow() {
+        String token = "expired-token";
+        when(tokenService.validateToken(token)).thenReturn(false);
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject badly signed token with generic 401 error message")
+    void validateAccessToken_badSignature_shouldThrow() {
+        String token = "bad-sig-token";
+        when(tokenService.validateToken(token)).thenReturn(false);
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject malformed token with generic 401 error message")
+    void validateAccessToken_malformedToken_shouldThrow() {
+        String token = "malformed.jwt.token";
+        when(tokenService.validateToken(token)).thenReturn(false);
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject token carrying REFRESH type claim with generic 401 error message")
+    void validateAccessToken_refreshTypeToken_shouldThrow() {
+        String token = "refresh-token-in-jwt";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn("REFRESH");
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject unknown user not found in database with generic 401 error message")
+    void validateAccessToken_unknownUser_shouldThrow() {
+        String token = "valid-token-unknown-user";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn(null);
+        when(tokenService.getUserIdFromToken(token)).thenReturn("unknown-user");
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.CUSTOMER);
+
+        when(userRepository.findById("unknown-user")).thenReturn(Optional.empty());
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject user with non-ACTIVE status (PENDING_VERIFICATION, LOCKED, SUSPENDED, DEACTIVATED)")
+    void validateAccessToken_nonActiveStatuses_shouldThrow() {
+        for (UserStatus nonActiveStatus : List.of(
+                UserStatus.PENDING_VERIFICATION,
+                UserStatus.LOCKED,
+                UserStatus.SUSPENDED,
+                UserStatus.DEACTIVATED)) {
+
+            String token = "token-" + nonActiveStatus;
+            when(tokenService.validateToken(token)).thenReturn(true);
+            when(tokenService.getTokenType(token)).thenReturn(null);
+            when(tokenService.getUserIdFromToken(token)).thenReturn("u-" + nonActiveStatus);
+            when(tokenService.getRoleFromToken(token)).thenReturn(Role.CUSTOMER);
+
+            User user = new User();
+            user.setId("u-" + nonActiveStatus);
+            user.setRole(Role.CUSTOMER);
+            user.setStatus(nonActiveStatus);
+            when(userRepository.findById("u-" + nonActiveStatus)).thenReturn(Optional.of(user));
+
+            BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                    () -> authService.validateAccessToken(token),
+                    "Expected rejection for status: " + nonActiveStatus);
+            assertEquals("Failed to authenticate token", ex.getMessage());
+        }
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject user with mustChangePassword = true with generic 401 error message")
+    void validateAccessToken_mustChangePassword_shouldThrow() {
+        String token = "must-change-pass-token";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn(null);
+        when(tokenService.getUserIdFromToken(token)).thenReturn("user-must-change");
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.CUSTOMER);
+
+        User user = new User();
+        user.setId("user-must-change");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setMustChangePassword(true);
+        when(userRepository.findById("user-must-change")).thenReturn(Optional.of(user));
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject token when role was changed in database after token was issued")
+    void validateAccessToken_roleChangedInDatabase_shouldThrow() {
+        String token = "stale-admin-token";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn(null);
+        when(tokenService.getUserIdFromToken(token)).thenReturn("user-demoted");
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.ADMIN);
+
+        User user = new User();
+        user.setId("user-demoted");
+        user.setRole(Role.CUSTOMER); // demoted in database
+        user.setStatus(UserStatus.ACTIVE);
+        user.setMustChangePassword(false);
+        when(userRepository.findById("user-demoted")).thenReturn(Optional.of(user));
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should succeed when emailVerified is false but status is ACTIVE (dev bypass rule)")
+    void validateAccessToken_activeStatusWithUnverifiedEmail_shouldSucceed() {
+        String token = "bypass-token";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn(null);
+        when(tokenService.getUserIdFromToken(token)).thenReturn("user-bypass");
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.PROVIDER);
+
+        User user = new User();
+        user.setId("user-bypass");
+        user.setRole(Role.PROVIDER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setEmailVerified(false); // unverified email with active status via bypass
+        user.setMustChangePassword(false);
+        when(userRepository.findById("user-bypass")).thenReturn(Optional.of(user));
+
+        WebSocketPrincipal principal = authService.validateAccessToken(token);
+
+        assertNotNull(principal);
+        assertEquals("user-bypass", principal.userId());
+        assertEquals(Role.PROVIDER, principal.role());
     }
 }

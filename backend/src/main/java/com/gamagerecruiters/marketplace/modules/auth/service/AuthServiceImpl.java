@@ -27,6 +27,7 @@ import com.gamagerecruiters.marketplace.modules.auth.dto.RefreshTokenRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterResponse;
 import com.gamagerecruiters.marketplace.modules.auth.dto.UserSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.auth.dto.WebSocketPrincipal;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 
@@ -336,5 +337,49 @@ public class AuthServiceImpl implements AuthService {
                 summary,
                 user.isMustChangePassword()
         );
+    }
+
+    @Override
+    public WebSocketPrincipal validateAccessToken(String token) {
+        if (token == null || token.isBlank()) {
+            throw new BadCredentialsException("Failed to authenticate token");
+        }
+
+        if (!tokenService.validateToken(token)) {
+            throw new BadCredentialsException("Failed to authenticate token");
+        }
+
+        try {
+            String tokenType = tokenService.getTokenType(token);
+            if (tokenType != null && !"ACCESS".equalsIgnoreCase(tokenType) && !"ACCESS_TOKEN".equalsIgnoreCase(tokenType)) {
+                throw new BadCredentialsException("Failed to authenticate token");
+            }
+
+            String userId = tokenService.getUserIdFromToken(token);
+            Role tokenRole = tokenService.getRoleFromToken(token);
+
+            if (userId == null || userId.isBlank() || tokenRole == null) {
+                throw new BadCredentialsException("Failed to authenticate token");
+            }
+
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null || user.getStatus() != UserStatus.ACTIVE) {
+                throw new BadCredentialsException("Failed to authenticate token");
+            }
+
+            if (user.getRole() != tokenRole) {
+                throw new BadCredentialsException("Failed to authenticate token");
+            }
+
+            if (user.isMustChangePassword()) {
+                throw new BadCredentialsException("Failed to authenticate token");
+            }
+
+            return new WebSocketPrincipal(user.getId(), user.getRole());
+        } catch (BadCredentialsException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BadCredentialsException("Failed to authenticate token");
+        }
     }
 }
