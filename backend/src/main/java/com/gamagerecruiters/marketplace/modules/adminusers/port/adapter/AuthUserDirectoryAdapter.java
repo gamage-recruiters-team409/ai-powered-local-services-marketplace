@@ -9,6 +9,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Component;
 
+import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDirectoryPort;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
@@ -74,9 +75,19 @@ public class AuthUserDirectoryAdapter implements UserDirectoryPort {
         return true;
     }
 
+    /**
+     * INTERIM until WP01 PR #50 is merged: develop only has the two-argument changeStatus, so the expected status is
+     * re-checked here first (narrows the window, but is not atomic). After the merge this becomes one call:
+     * {@code userInternalService.changeStatus(actorId, userId, expectedStatus, newStatus)} (atomic conditional update,
+     * 409 CONCURRENT_MODIFICATION, refresh tokens revoked on suspend).
+     */
     @Override
-    public UserAccount changeStatus(String userId, UserStatus status) {
-        return fromUser(userInternalService.changeStatus(userId, status));
+    public UserAccount changeStatus(String actorId, String userId, UserStatus expectedStatus, UserStatus newStatus) {
+        if (userInternalService.getById(userId).getStatus() != expectedStatus) {
+            throw new ResourceConflictException(CONCURRENT_MODIFICATION,
+                    "The account status was changed by someone else. Reload the account and try again");
+        }
+        return fromUser(userInternalService.changeStatus(userId, newStatus));
     }
 
     /** The search result has no email-verified flag; it is only needed on the account page (findById). */

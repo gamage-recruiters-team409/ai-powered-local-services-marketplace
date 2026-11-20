@@ -51,6 +51,14 @@ public interface UserDirectoryPort {
     /** False when suspend/reactivate cannot be applied (stub): the API answers 503 and changes nothing. */
     boolean supportsAccountActions();
 
-    /** Applies the new status through the source's own rules; its errors pass through unchanged. */
-    UserAccount changeStatus(String userId, UserStatus status);
+    /** Error code when the account's status is no longer {@code expectedStatus} (409, from the auth module). */
+    String CONCURRENT_MODIFICATION = "CONCURRENT_MODIFICATION";
+
+    /**
+     * Applies {@code newStatus} through the source's own rules, but only while the account is still in
+     * {@code expectedStatus} (the status the caller read and checked its rules against). When another change got
+     * there first: 409 {@value #CONCURRENT_MODIFICATION}, nothing changed. {@code actorId} is the signed-in admin.
+     * The source's errors pass through unchanged.
+     */
+    UserAccount changeStatus(String actorId, String userId, UserStatus expectedStatus, UserStatus newStatus);
 }

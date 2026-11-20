@@ -34,7 +34,9 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
  *       409 USER_STATUS_NOT_CHANGEABLE</li>
  * </ol>
  * Then the admin audit flow: PENDING record (actor, action, reason, from/to status, time) before the change, the
- * auth module applies it with its own rules (its errors are recorded as FAILED and passed through), then SUCCESS.
+ * auth module applies it with its own rules and only while the account still has the status read here (its errors,
+ * including 409 CONCURRENT_MODIFICATION when another admin changed it first, are recorded as FAILED and passed
+ * through), then SUCCESS.
  * The audit reason is {@code CODE} or {@code CODE: note} for a suspension and the note for a reactivation. "Ban" is
  * SUSPENDED; LOCKED and DEACTIVATED are never set here. Logs contain ids and statuses only, never notes.
  */
@@ -122,7 +124,9 @@ public class AdminUserAccountService {
                 actorId, actorRole, target.id(), target.role(), target.status(), newStatus, auditReason));
         UserAccount updated;
         try {
-            updated = directory.changeStatus(target.id(), newStatus);
+            // Conditional on the status read above: if another admin changed it meanwhile, the source answers
+            // 409 CONCURRENT_MODIFICATION, this record becomes FAILED and only the first change succeeds.
+            updated = directory.changeStatus(actorId, target.id(), target.status(), newStatus);
         } catch (RuntimeException e) {
             ticket.failed(AdminErrors.failureCodeOf(e));
             throw e;

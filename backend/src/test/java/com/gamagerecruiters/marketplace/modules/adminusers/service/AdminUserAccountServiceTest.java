@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -11,8 +12,20 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,9 +37,12 @@ import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
+import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.modules.adminusers.domain.SuspensionReason;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AccountActionResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.AccountActionAuditPort;
@@ -80,7 +96,7 @@ class AdminUserAccountServiceTest {
     }
 
     private void changeReturns(Role role, UserStatus status) {
-        when(directory.changeStatus(TARGET, status)).thenReturn(new UserAccount(TARGET, "Kamal Silva", EMAIL,
+        when(directory.changeStatus(eq(ACTOR), eq(TARGET), any(), eq(status))).thenReturn(new UserAccount(TARGET, "Kamal Silva", EMAIL,
                 "+94771112223", role, status, true, Instant.parse("2026-01-01T00:00:00Z")));
     }
 
@@ -120,7 +136,7 @@ class AdminUserAccountServiceTest {
         verify(audit).begin(change.capture());
         assertThat(change.getValue()).isEqualTo(new AccountActionAuditPort.StatusChange(ACTOR, Role.ADMIN, TARGET,
                 Role.PROVIDER, UserStatus.ACTIVE, UserStatus.SUSPENDED, CODE + ": " + NOTE));
-        verify(directory).changeStatus(TARGET, UserStatus.SUSPENDED);
+        verify(directory).changeStatus(ACTOR, TARGET, UserStatus.ACTIVE, UserStatus.SUSPENDED);
         verify(ticket).succeeded();
         verify(ticket, never()).failed(anyString());
     }
@@ -223,7 +239,7 @@ class AdminUserAccountServiceTest {
         target(Role.CUSTOMER, UserStatus.ACTIVE);
         assertThat(service.reactivate(ACTOR, Role.ADMIN, TARGET, NOTE).changed()).isFalse();
 
-        verify(directory, never()).changeStatus(anyString(), any());
+        verify(directory, never()).changeStatus(anyString(), anyString(), any(), any());
         verifyNoInteractions(audit);
     }
 
@@ -243,7 +259,7 @@ class AdminUserAccountServiceTest {
         target(role, UserStatus.ACTIVE);
 
         assertApiError(catchThrowable(() -> suspend(CODE, NOTE)), HttpStatus.FORBIDDEN, "USER_ACTION_NOT_ALLOWED");
-        verify(directory, never()).changeStatus(anyString(), any());
+        verify(directory, never()).changeStatus(anyString(), anyString(), any(), any());
         verifyNoInteractions(audit);
     }
 
@@ -267,7 +283,7 @@ class AdminUserAccountServiceTest {
         assertApiError(catchThrowable(() -> service.reactivate(ACTOR, Role.ADMIN, TARGET, NOTE)),
                 HttpStatus.SERVICE_UNAVAILABLE, "USER_ACCOUNT_ACTION_UNAVAILABLE");
         verify(directory, never()).findById(anyString());
-        verify(directory, never()).changeStatus(anyString(), any());
+        verify(directory, never()).changeStatus(anyString(), anyString(), any(), any());
         verifyNoInteractions(audit);
     }
 
@@ -296,7 +312,7 @@ class AdminUserAccountServiceTest {
 
         assertApiError(catchThrowable(() -> service.reactivate(ACTOR, Role.ADMIN, TARGET, NOTE)),
                 HttpStatus.CONFLICT, "USER_STATUS_NOT_CHANGEABLE");
-        verify(directory, never()).changeStatus(anyString(), any());
+        verify(directory, never()).changeStatus(anyString(), anyString(), any(), any());
         verify(audit, never()).begin(any());
     }
 
@@ -327,7 +343,7 @@ class AdminUserAccountServiceTest {
     void authRejects() {
         target(Role.PROVIDER, UserStatus.ACTIVE);
         ApiException rejected = new ApiException(HttpStatus.FORBIDDEN, "ROLE_HIERARCHY_VIOLATION", "no");
-        when(directory.changeStatus(TARGET, UserStatus.SUSPENDED)).thenThrow(rejected);
+        when(directory.changeStatus(ACTOR, TARGET, UserStatus.ACTIVE, UserStatus.SUSPENDED)).thenThrow(rejected);
 
         assertThat(catchThrowable(() -> suspend(CODE, NOTE))).isSameAs(rejected);
         verify(ticket).failed("ROLE_HIERARCHY_VIOLATION");
@@ -341,7 +357,7 @@ class AdminUserAccountServiceTest {
         when(audit.begin(any())).thenThrow(new IllegalStateException("audit down"));
 
         assertThat(catchThrowable(() -> suspend(CODE, NOTE))).isInstanceOf(IllegalStateException.class);
-        verify(directory, never()).changeStatus(anyString(), any());
+        verify(directory, never()).changeStatus(anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -356,6 +372,172 @@ class AdminUserAccountServiceTest {
         for (ILoggingEvent event : logs.list) {
             assertThat(event.getFormattedMessage()).contains(TARGET)
                     .doesNotContain(EMAIL).doesNotContain("+9477").doesNotContain(NOTE);
+        }
+    }
+
+    // ---------- concurrent status changes (WP01 atomic status-change contract) ----------
+
+    @Test
+    @DisplayName("reactivate passes the actor and the status it checked (SUSPENDED) as the expected status")
+    void reactivatePassesExpectedStatus() {
+        target(Role.CUSTOMER, UserStatus.SUSPENDED);
+        changeReturns(Role.CUSTOMER, UserStatus.ACTIVE);
+
+        service.reactivate(ACTOR, Role.ADMIN, TARGET, NOTE);
+
+        verify(directory).changeStatus(ACTOR, TARGET, UserStatus.SUSPENDED, UserStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("the status changed after it was read -> audit FAILED with CONCURRENT_MODIFICATION, 409 passes "
+            + "through, no success logged")
+    void concurrentModification() {
+        target(Role.PROVIDER, UserStatus.ACTIVE);
+        ResourceConflictException conflict = new ResourceConflictException(UserDirectoryPort.CONCURRENT_MODIFICATION,
+                "changed");
+        when(directory.changeStatus(ACTOR, TARGET, UserStatus.ACTIVE, UserStatus.SUSPENDED)).thenThrow(conflict);
+
+        assertThat(catchThrowable(() -> suspend(CODE, NOTE))).isSameAs(conflict);
+        verify(ticket).failed(UserDirectoryPort.CONCURRENT_MODIFICATION);
+        verify(ticket, never()).succeeded();
+        assertThat(logs.list).noneMatch(e -> e.getFormattedMessage().contains("ADMIN_USER_STATUS_CHANGED"));
+    }
+
+    @Test
+    @DisplayName("two admins suspend the same account at the same moment -> exactly one succeeds, the other gets 409 "
+            + "CONCURRENT_MODIFICATION; audit has one SUCCESS and one FAILED record")
+    void twoAdminsRace() throws Exception {
+        AtomicDirectory atomicDirectory = new AtomicDirectory(UserStatus.ACTIVE);
+        // Both requests read ACTIVE and write their PENDING record before either change is applied.
+        RacingAudit racingAudit = new RacingAudit(new CyclicBarrier(2));
+        AdminUserAccountService racing = new AdminUserAccountService(atomicDirectory, racingAudit);
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<AccountActionResponse> first = pool.submit(
+                    () -> racing.suspend("admin-a", Role.ADMIN, TARGET, CODE, NOTE));
+            Future<AccountActionResponse> second = pool.submit(
+                    () -> racing.suspend("admin-b", Role.ADMIN, TARGET, "POLICY_VIOLATION", null));
+
+            List<Object> results = new ArrayList<>();
+            for (Future<AccountActionResponse> f : List.of(first, second)) {
+                try {
+                    results.add(f.get(10, TimeUnit.SECONDS));
+                } catch (ExecutionException e) {
+                    results.add(e.getCause());
+                }
+            }
+
+            assertThat(results).filteredOn(AccountActionResponse.class::isInstance).hasSize(1)
+                    .allSatisfy(r -> assertThat(((AccountActionResponse) r).changed()).isTrue());
+            assertThat(results).filteredOn(Throwable.class::isInstance).singleElement()
+                    .satisfies(e -> assertApiError((Throwable) e, HttpStatus.CONFLICT,
+                            UserDirectoryPort.CONCURRENT_MODIFICATION));
+            assertThat(racingAudit.outcomes).containsExactlyInAnyOrder("SUCCESS",
+                    "FAILED:" + UserDirectoryPort.CONCURRENT_MODIFICATION);
+            assertThat(atomicDirectory.status.get()).isEqualTo(UserStatus.SUSPENDED);
+            assertThat(atomicDirectory.applied.get()).as("the status was written once").isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** In-memory account with the auth module's contract: the change applies only while the status is the expected one. */
+    private static final class AtomicDirectory implements UserDirectoryPort {
+        final AtomicReference<UserStatus> status;
+        final AtomicInteger applied = new AtomicInteger();
+
+        AtomicDirectory(UserStatus initial) {
+            status = new AtomicReference<>(initial);
+        }
+
+        private UserAccount account(UserStatus s) {
+            return new UserAccount(TARGET, "Kamal Silva", EMAIL, "+94771112223", Role.PROVIDER, s, true,
+                    Instant.parse("2026-01-01T00:00:00Z"));
+        }
+
+        @Override
+        public Optional<UserAccount> findById(String userId) {
+            return Optional.of(account(status.get()));
+        }
+
+        @Override
+        public boolean supportsAccountActions() {
+            return true;
+        }
+
+        @Override
+        public UserAccount changeStatus(String actorId, String userId, UserStatus expectedStatus, UserStatus newStatus) {
+            if (!status.compareAndSet(expectedStatus, newStatus)) {
+                throw new ResourceConflictException(CONCURRENT_MODIFICATION, "changed");
+            }
+            applied.incrementAndGet();
+            return account(newStatus);
+        }
+
+        @Override
+        public Page<UserAccount> search(String actorId, Set<Role> roles, UserStatus s, String q, Pageable pageable) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public long count(String actorId, Role role, UserStatus s) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Optional<Long> joinedSince(String actorId, Role role, Instant since) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<List<RegistrationCount>> registrations(String actorId, List<Bucket> buckets) {
+            return Optional.empty();
+        }
+
+        @Override
+        public Optional<Instant> lastActiveAt(String userId) {
+            return Optional.empty();
+        }
+    }
+
+    /** Audit whose begin() waits until both requests have written their PENDING record. */
+    private static final class RacingAudit implements AccountActionAuditPort {
+        final Queue<String> outcomes = new ConcurrentLinkedQueue<>();
+        final CyclicBarrier bothPending;
+
+        RacingAudit(CyclicBarrier bothPending) {
+            this.bothPending = bothPending;
+        }
+
+        @Override
+        public Ticket begin(StatusChange change) {
+            try {
+                bothPending.await(10, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            return new Ticket() {
+                @Override
+                public String auditLogId() {
+                    return "audit-" + change.actorId();
+                }
+
+                @Override
+                public void succeeded() {
+                    outcomes.add("SUCCESS");
+                }
+
+                @Override
+                public void failed(String failureCode) {
+                    outcomes.add("FAILED:" + failureCode);
+                }
+            };
+        }
+
+        @Override
+        public Optional<List<AdminAction>> recentForTarget(String targetUserId, int limit) {
+            return Optional.of(List.of());
         }
     }
 }

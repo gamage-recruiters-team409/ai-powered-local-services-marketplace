@@ -1,9 +1,12 @@
 package com.gamagerecruiters.marketplace.modules.adminusers.port.adapter;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -17,11 +20,13 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.AccountActionAuditPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderProfilePort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderReviewStatsPort;
+import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDirectoryPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDisputeStatsPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.stub.StubUserBookingStatsAdapter;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUsersQueryService;
@@ -110,5 +115,28 @@ class AuthUserDirectoryAdapterTest {
         assertThat(adapter.supportsAccountActions()).isTrue();
         when(userInternalService.countByRoleAndStatus("a", Role.PROVIDER, UserStatus.SUSPENDED)).thenReturn(4L);
         assertThat(adapter.count("a", Role.PROVIDER, UserStatus.SUSPENDED)).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("changeStatus: the account is no longer in the expected status -> 409 CONCURRENT_MODIFICATION, "
+            + "nothing written; still in it -> the change is applied")
+    void changeStatusChecksExpectedStatus() {
+        User suspendedMeanwhile = userWithSecrets();
+        suspendedMeanwhile.setStatus(UserStatus.SUSPENDED);
+        when(userInternalService.getById(ID)).thenReturn(suspendedMeanwhile);
+
+        Throwable thrown = catchThrowable(
+                () -> adapter.changeStatus("admin-1", ID, UserStatus.ACTIVE, UserStatus.SUSPENDED));
+        assertThat(thrown).isInstanceOf(ResourceConflictException.class);
+        assertThat(((ResourceConflictException) thrown).getErrorCode())
+                .isEqualTo(UserDirectoryPort.CONCURRENT_MODIFICATION);
+        verify(userInternalService, never()).changeStatus(anyString(), any());
+
+        when(userInternalService.getById(ID)).thenReturn(userWithSecrets());
+        User updated = userWithSecrets();
+        updated.setStatus(UserStatus.SUSPENDED);
+        when(userInternalService.changeStatus(ID, UserStatus.SUSPENDED)).thenReturn(updated);
+        assertThat(adapter.changeStatus("admin-1", ID, UserStatus.ACTIVE, UserStatus.SUSPENDED).status())
+                .isEqualTo(UserStatus.SUSPENDED);
     }
 }
