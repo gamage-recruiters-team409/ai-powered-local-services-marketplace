@@ -11,6 +11,11 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.slf4j.Logger;
@@ -19,6 +24,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.bson.types.ObjectId;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
@@ -36,6 +42,7 @@ import com.gamagerecruiters.marketplace.modules.messaging.dto.ConversationRespon
 import com.gamagerecruiters.marketplace.modules.messaging.dto.ModerationMessagePageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.ModerationMessageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePageResponse;
+import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePollingResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
@@ -45,6 +52,7 @@ public class MessageServiceImpl implements MessageService {
 
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 50;
+    private static final int POLLING_PAGE_SIZE = 100;
     private static final int MAX_BODY_LENGTH = 2000;
     private static final Set<BookingStatus> CONTACT_VISIBLE_STATUSES = EnumSet.of(
             BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS, BookingStatus.COMPLETION_PENDING,
@@ -55,14 +63,17 @@ public class MessageServiceImpl implements MessageService {
     private final ConversationRepository conversationRepository;
     private final MessageRepository messageRepository;
     private final AdminAccessPolicyService adminAccessPolicyService;
+    private final MongoTemplate mongoTemplate;
 
     public MessageServiceImpl(BookingFacade bookingFacade, ConversationRepository conversationRepository,
                               MessageRepository messageRepository,
-                              AdminAccessPolicyService adminAccessPolicyService) {
+                              AdminAccessPolicyService adminAccessPolicyService,
+                              MongoTemplate mongoTemplate) {
         this.bookingFacade = bookingFacade;
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.adminAccessPolicyService = adminAccessPolicyService;
+        this.mongoTemplate = mongoTemplate;
     }
 
     @Override
@@ -132,7 +143,7 @@ public class MessageServiceImpl implements MessageService {
     }
 
     @Override
-    public MessagePageResponse listMessagesSince(String bookingId, Instant since) {
+    public MessagePollingResponse listMessagesSince(String bookingId, Instant since, String afterId) {
         if (since == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "SINCE_REQUIRED", "The since parameter is required");
         }
@@ -141,16 +152,25 @@ public class MessageServiceImpl implements MessageService {
         assertParticipant(userId, participants);
         Optional<Conversation> conversation = conversationRepository.findByChatKey(chatKey(bookingId, participants));
         if (conversation.isEmpty()) {
-            return new MessagePageResponse(List.of(), 0, MAX_PAGE_SIZE, 0, 0);
+            return new MessagePollingResponse(List.of(), POLLING_PAGE_SIZE, 0, 0, false, null, null);
         }
-        Page<Message> messages = messageRepository
-                .findByConversationIdAndCreatedAtAfterOrderByCreatedAtAsc(
-                        conversation.get().getId(), since, PageRequest.of(0, 100));
+        PageRequest pageRequest = PageRequest.of(0, POLLING_PAGE_SIZE,
+                Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("id")));
+        Object cursorId = afterId == null || afterId.isBlank()
+                ? null : ObjectId.isValid(afterId) ? new ObjectId(afterId) : afterId;
+        Page<Message> messages = cursorId == null
+                ? messageRepository.findByConversationIdAndCreatedAtAfter(
+                        conversation.get().getId(), since, pageRequest)
+                : messageRepository.findAfterCursor(conversation.get().getId(), since, cursorId, pageRequest);
         List<MessageResponse> responses = messages.getContent().stream()
                 .map(message -> toResponse(message, participants.status()))
                 .toList();
-        return new MessagePageResponse(responses, 0, responses.size(), responses.size(),
-                responses.isEmpty() ? 0 : 1);
+        Message lastMessage = messages.getContent().isEmpty()
+                ? null : messages.getContent().get(messages.getNumberOfElements() - 1);
+        return new MessagePollingResponse(responses, messages.getSize(), messages.getTotalElements(),
+                messages.getTotalPages(), messages.hasNext(),
+                lastMessage == null ? null : lastMessage.getCreatedAt(),
+                lastMessage == null ? null : lastMessage.getId());
     }
 
     @Override
@@ -224,7 +244,7 @@ public class MessageServiceImpl implements MessageService {
 
     @Override
     public void flagMessage(String messageId, FlagSource source) {
-        Message message = findMessage(messageId);
+        Message message = findMessageForUpdate(messageId);
         if (message.isFlagged()) {
             return;
         }
@@ -245,7 +265,7 @@ public class MessageServiceImpl implements MessageService {
         if (!authenticatedUserId.equals(moderatorId)) {
             throw new AccessDeniedException("Moderator identity does not match authenticated user");
         }
-        Message message = findMessage(messageId);
+        Message message = findMessageForUpdate(messageId);
         if (message.getStatus() == MessageStatus.HIDDEN) {
             Conversation conversation = conversationRepository.findById(message.getConversationId()).orElse(null);
             return toModerationResponse(message, conversation);
@@ -267,7 +287,7 @@ public class MessageServiceImpl implements MessageService {
     @Override
     @PreAuthorize("@adminAccessPolicyService.canEditArea(authentication, 'MODERATOR')")
     public ModerationMessageResponse clearFlag(String messageId) {
-        Message message = findMessage(messageId);
+        Message message = findMessageForUpdate(messageId);
         message.setFlagged(false);
         message.setFlagSource(null);
         message.setFlaggedAt(null);
@@ -340,6 +360,23 @@ public class MessageServiceImpl implements MessageService {
     private Message findMessage(String messageId) {
         return messageRepository.findById(messageId)
                 .orElseThrow(() -> new ResourceNotFoundException("MESSAGE_NOT_FOUND", "Message not found"));
+    }
+
+    /**
+     * Initializes the version of a pre-optimistic-locking message before a moderation write.
+     * The conditional update is safe under concurrent requests; normal optimistic locking applies
+     * after the document is reloaded.
+     */
+    private Message findMessageForUpdate(String messageId) {
+        Message message = findMessage(messageId);
+        if (message.getVersion() != null) {
+            return message;
+        }
+        Query legacyMessage = Query.query(new Criteria().andOperator(
+                Criteria.where("_id").is(messageId),
+                new Criteria().orOperator(Criteria.where("version").exists(false), Criteria.where("version").is(null))));
+        mongoTemplate.updateFirst(legacyMessage, new Update().set("version", 0L), Message.class);
+        return findMessage(messageId);
     }
 
     private String validateHideReason(String reason) {

@@ -18,6 +18,7 @@ import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.ConversationPageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePageResponse;
+import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePollingResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.SendMessageRequest;
 import com.gamagerecruiters.marketplace.modules.messaging.service.MessageService;
@@ -44,23 +45,36 @@ public class MessagingController {
         return ResponseEntity.ok(messageService.listConversations(parsedPage, parsedSize));
     }
 
-    @GetMapping("/bookings/{bookingId}/messages")
+    @GetMapping(value = "/bookings/{bookingId}/messages", params = "!since")
     @PreAuthorize("hasAnyRole('CUSTOMER', 'PROVIDER')")
     public ResponseEntity<MessagePageResponse> listMessages(
             @PathVariable String bookingId,
             @RequestParam(defaultValue = "0") String page,
             @RequestParam(defaultValue = "20") String size,
-            @RequestParam(required = false) String since) {
-        if (since != null && !since.isBlank()) {
-            Instant parsedSince;
-            try {
-                parsedSince = Instant.parse(since);
-            } catch (DateTimeParseException ex) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_SINCE", "Invalid since timestamp");
-            }
-            return ResponseEntity.ok(messageService.listMessagesSince(bookingId, parsedSince));
-        }
+            @RequestParam(required = false) String afterId) {
+        validateAfterId(afterId, false);
         return ResponseEntity.ok(messageService.listMessages(bookingId, parsePage(page), parseSize(size)));
+    }
+
+    /**
+     * Returns messages created after a cursor in stable {@code (createdAt, id)} order.
+     * Clients must send {@code afterId} together with {@code since} when continuing from a prior
+     * response, using {@code nextSince} and {@code nextMessageId} returned by that response.
+     */
+    @GetMapping(value = "/bookings/{bookingId}/messages", params = "since")
+    @PreAuthorize("hasAnyRole('CUSTOMER', 'PROVIDER')")
+    public ResponseEntity<MessagePollingResponse> pollMessages(
+            @PathVariable String bookingId,
+            @RequestParam String since,
+            @RequestParam(required = false) String afterId) {
+        validateAfterId(afterId, true);
+        Instant parsedSince;
+        try {
+            parsedSince = Instant.parse(since);
+        } catch (DateTimeParseException ex) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_SINCE", "Invalid since timestamp");
+        }
+        return ResponseEntity.ok(messageService.listMessagesSince(bookingId, parsedSince, afterId));
     }
 
     @PostMapping("/bookings/{bookingId}/messages")
@@ -93,6 +107,15 @@ public class MessagingController {
             return size;
         } catch (NumberFormatException ex) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PAGINATION", "Invalid size");
+        }
+    }
+
+    private void validateAfterId(String afterId, boolean sinceProvided) {
+        if (afterId == null || afterId.isBlank()) {
+            return;
+        }
+        if (!sinceProvided || afterId.length() > 64) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_CURSOR", "Invalid polling cursor");
         }
     }
 }

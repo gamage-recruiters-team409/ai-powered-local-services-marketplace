@@ -1,12 +1,14 @@
 package com.gamagerecruiters.marketplace.modules.messaging.controller;
 
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Instant;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -33,6 +35,7 @@ import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.ConversationPageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePageResponse;
+import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePollingResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.service.MessageService;
 
@@ -50,6 +53,7 @@ class MessagingControllerAccessTest {
 
     private static final String MESSAGES = "/api/v1/bookings/booking-1/messages";
     private static final String CONVERSATIONS = "/api/v1/conversations";
+    private static final Instant POLLING_CURSOR = Instant.parse("2026-11-20T08:30:00Z");
 
     @Autowired
     private MockMvc mockMvc;
@@ -106,10 +110,27 @@ class MessagingControllerAccessTest {
                 .andExpect(status().isCreated());
     }
 
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"CUSTOMER", "PROVIDER"})
+    void customerAndProviderCanPollMessages(Role role) throws Exception {
+        when(messageService.listMessagesSince("booking-1", POLLING_CURSOR, "cursor-1"))
+                .thenReturn(pollingResponse());
+
+        mockMvc.perform(get(MESSAGES).param("since", POLLING_CURSOR.toString()).param("afterId", "cursor-1")
+                        .header("Authorization", bearer(role)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.hasMore").value(false))
+                .andExpect(jsonPath("$.nextSince").value(POLLING_CURSOR.toString()))
+                .andExpect(jsonPath("$.nextMessageId").value("cursor-2"));
+
+        verify(messageService).listMessagesSince("booking-1", POLLING_CURSOR, "cursor-1");
+    }
+
     @Test
     void guestGetsUnauthorizedAndServiceIsNotCalled() throws Exception {
         mockMvc.perform(get(CONVERSATIONS)).andExpect(status().isUnauthorized());
         mockMvc.perform(get(MESSAGES)).andExpect(status().isUnauthorized());
+        mockMvc.perform(get(MESSAGES).param("since", POLLING_CURSOR.toString())).andExpect(status().isUnauthorized());
         mockMvc.perform(post(MESSAGES).contentType(MediaType.APPLICATION_JSON).content("{\"body\":\"Hello\"}"))
                 .andExpect(status().isUnauthorized());
         verifyNoInteractions(messageService);
@@ -122,6 +143,8 @@ class MessagingControllerAccessTest {
 
         mockMvc.perform(get(CONVERSATIONS).header("Authorization", auth)).andExpect(status().isForbidden());
         mockMvc.perform(get(MESSAGES).header("Authorization", auth)).andExpect(status().isForbidden());
+        mockMvc.perform(get(MESSAGES).param("since", POLLING_CURSOR.toString()).header("Authorization", auth))
+                .andExpect(status().isForbidden());
         mockMvc.perform(post(MESSAGES).header("Authorization", auth)
                         .contentType(MediaType.APPLICATION_JSON).content("{\"body\":\"Hello\"}"))
                 .andExpect(status().isForbidden());
@@ -134,6 +157,24 @@ class MessagingControllerAccessTest {
                         .header("Authorization", bearer(Role.CUSTOMER)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("INVALID_SINCE"));
+        verifyNoInteractions(messageService);
+    }
+
+    @Test
+    void afterIdWithoutSinceReturns400AndServiceIsNotCalled() throws Exception {
+        mockMvc.perform(get(MESSAGES).param("afterId", "cursor-1")
+                        .header("Authorization", bearer(Role.CUSTOMER)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("INVALID_CURSOR"));
+        verifyNoInteractions(messageService);
+    }
+
+    @Test
+    void afterIdOverSixtyFourCharactersReturns400AndServiceIsNotCalled() throws Exception {
+        mockMvc.perform(get(MESSAGES).param("since", POLLING_CURSOR.toString()).param("afterId", "x".repeat(65))
+                        .header("Authorization", bearer(Role.CUSTOMER)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("INVALID_CURSOR"));
         verifyNoInteractions(messageService);
     }
 
@@ -153,5 +194,9 @@ class MessagingControllerAccessTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("INVALID_PAGINATION"));
         verifyNoInteractions(messageService);
+    }
+
+    private static MessagePollingResponse pollingResponse() {
+        return new MessagePollingResponse(List.of(), 100, 1, 1, false, POLLING_CURSOR, "cursor-2");
     }
 }

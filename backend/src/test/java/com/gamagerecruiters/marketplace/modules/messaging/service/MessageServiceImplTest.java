@@ -28,6 +28,11 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
+import com.mongodb.client.result.UpdateResult;
+import org.bson.types.ObjectId;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -45,6 +50,7 @@ import com.gamagerecruiters.marketplace.modules.messaging.domain.Message;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.MessageStatus;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.FlagSource;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessageResponse;
+import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePollingResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
 import com.gamagerecruiters.marketplace.modules.admin.service.AdminAccessPolicyService;
@@ -71,13 +77,16 @@ class MessageServiceImplTest {
     @Mock
     private AdminAccessPolicyService adminAccessPolicyService;
 
+    @Mock
+    private MongoTemplate mongoTemplate;
+
     private MessageServiceImpl service;
     private BookingParticipants participants;
 
     @BeforeEach
     void setUp() {
         service = new MessageServiceImpl(
-                bookingFacade, conversationRepository, messageRepository, adminAccessPolicyService);
+                bookingFacade, conversationRepository, messageRepository, adminAccessPolicyService, mongoTemplate);
         participants = participants(BookingStatus.PENDING_PROVIDER, null);
         when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenAnswer(invocation -> participants);
         when(conversationRepository.findByChatKey(anyString())).thenReturn(Optional.empty());
@@ -644,24 +653,147 @@ class MessageServiceImplTest {
     }
 
     @Test
-    void listMessagesSinceCallsRepositoryWithOneHundredPageSize() {
+    void listMessagesSinceUsesOneHundredItemPageAndDeterministicSort() {
         Conversation conversation = conversation("conversation-1", BOOKING_ID);
         when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
-        when(messageRepository.findByConversationIdAndCreatedAtAfterOrderByCreatedAtAsc(
+        when(messageRepository.findByConversationIdAndCreatedAtAfter(
                 anyString(), any(Instant.class), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of()));
 
-        service.listMessagesSince(BOOKING_ID, Instant.parse("2026-11-19T10:00:00Z"));
+        service.listMessagesSince(BOOKING_ID, Instant.parse("2026-11-19T10:00:00Z"), null);
 
         ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
-        verify(messageRepository).findByConversationIdAndCreatedAtAfterOrderByCreatedAtAsc(
+        verify(messageRepository).findByConversationIdAndCreatedAtAfter(
                 eq("conversation-1"), eq(Instant.parse("2026-11-19T10:00:00Z")), captor.capture());
         assertThat(captor.getValue().getPageSize()).isEqualTo(100);
+        assertThat(captor.getValue().getSort().toString()).isEqualTo("createdAt: ASC,id: ASC");
+    }
+
+    @Test
+    void pollingResponseReportsContinuationWhenMoreMessagesExist() {
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Instant cursor = Instant.parse("2026-11-19T10:00:00Z");
+        Message last = message("message-100", "conversation-1", "last", MessageStatus.VISIBLE);
+        last.setCreatedAt(cursor.plusSeconds(1));
+        List<Message> firstHundred = java.util.stream.IntStream.rangeClosed(1, 100)
+                .mapToObj(index -> {
+                    Message message = message("message-" + index, "conversation-1", "body", MessageStatus.VISIBLE);
+                    message.setCreatedAt(index == 100 ? last.getCreatedAt() : cursor.plusMillis(index));
+                    return message;
+                }).toList();
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findByConversationIdAndCreatedAtAfter(anyString(), any(Instant.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(firstHundred, Pageable.ofSize(100), 101));
+
+        MessagePollingResponse response = service.listMessagesSince(BOOKING_ID, cursor, null);
+
+        assertThat(response.content()).hasSize(100);
+        assertThat(response.totalElements()).isEqualTo(101);
+        assertThat(response.totalPages()).isEqualTo(2);
+        assertThat(response.hasMore()).isTrue();
+        assertThat(response.nextSince()).isEqualTo(last.getCreatedAt());
+        assertThat(response.nextMessageId()).isEqualTo("message-100");
+    }
+
+    @Test
+    void pollingCursorReturnsMessagesWithMatchingTimestamp() {
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Instant cursor = Instant.parse("2026-11-19T10:00:00Z");
+        Message next = message("message-b", "conversation-1", "next", MessageStatus.VISIBLE);
+        next.setCreatedAt(cursor);
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findAfterCursor(anyString(), any(Instant.class), any(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(next), Pageable.ofSize(100), 1));
+
+        MessagePollingResponse response = service.listMessagesSince(BOOKING_ID, cursor, "message-a");
+
+        assertThat(response.content()).extracting(MessageResponse::id).containsExactly("message-b");
+        assertThat(response.nextSince()).isEqualTo(cursor);
+        assertThat(response.nextMessageId()).isEqualTo("message-b");
+        verify(messageRepository).findAfterCursor(eq("conversation-1"), eq(cursor), eq("message-a"), any(Pageable.class));
+    }
+
+    @Test
+    void validObjectIdCursorReachesRepositoryAsObjectId() {
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Instant cursor = Instant.parse("2026-11-20T08:30:00Z");
+        String afterId = "507f1f77bcf86cd799439011";
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findAfterCursor(anyString(), any(Instant.class), any(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        service.listMessagesSince(BOOKING_ID, cursor, afterId);
+
+        ArgumentCaptor<Object> cursorCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(messageRepository).findAfterCursor(eq("conversation-1"), eq(cursor), cursorCaptor.capture(),
+                any(Pageable.class));
+        assertThat(cursorCaptor.getValue()).isInstanceOf(ObjectId.class);
+        assertThat(cursorCaptor.getValue()).isEqualTo(new ObjectId(afterId));
+    }
+
+    @Test
+    void legacyStringCursorReachesRepositoryAsString() {
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Instant cursor = Instant.parse("2026-11-20T08:30:00Z");
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findAfterCursor(anyString(), any(Instant.class), any(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        service.listMessagesSince(BOOKING_ID, cursor, "legacy-message-a");
+
+        ArgumentCaptor<Object> cursorCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(messageRepository).findAfterCursor(eq("conversation-1"), eq(cursor), cursorCaptor.capture(),
+                any(Pageable.class));
+        assertThat(cursorCaptor.getValue()).isEqualTo("legacy-message-a");
+    }
+
+    @Test
+    void emptyPollingResultHasNoContinuationCursor() {
+        Conversation conversation = conversation("conversation-1", BOOKING_ID);
+        Instant cursor = Instant.parse("2026-11-20T08:30:00Z");
+        when(conversationRepository.findByChatKey(BOOKING_ID)).thenReturn(Optional.of(conversation));
+        when(messageRepository.findByConversationIdAndCreatedAtAfter(anyString(), any(Instant.class), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        MessagePollingResponse response = service.listMessagesSince(BOOKING_ID, cursor, null);
+
+        assertThat(response.hasMore()).isFalse();
+        assertThat(response.nextSince()).isNull();
+        assertThat(response.nextMessageId()).isNull();
+    }
+
+    @Test
+    void versionedMessageDoesNotRequireLegacyVersionInitialization() {
+        Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        message.setVersion(4L);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
+
+        service.flagMessage("message-1", FlagSource.USER_REPORT);
+
+        verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(Message.class));
+        assertThat(message.getVersion()).isEqualTo(4L);
+    }
+
+    @Test
+    void versionlessMessageIsInitializedOnceBeforeModerationUpdate() {
+        Message legacy = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        Message initialized = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        initialized.setVersion(0L);
+        when(messageRepository.findById("message-1")).thenReturn(Optional.of(legacy), Optional.of(initialized));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(Message.class)))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+
+        service.flagMessage("message-1", FlagSource.USER_REPORT);
+
+        verify(mongoTemplate, org.mockito.Mockito.times(1))
+                .updateFirst(any(Query.class), any(Update.class), eq(Message.class));
+        assertThat(initialized.getVersion()).isZero();
     }
 
     @Test
     void flagMessageThrowsConflictWhenSaveHasOptimisticLockFailure() {
         Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        message.setVersion(0L);
         when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
         when(messageRepository.save(message)).thenThrow(new OptimisticLockingFailureException("lost update"));
 
@@ -672,6 +804,7 @@ class MessageServiceImplTest {
     void hideMessageThrowsConflictWhenSaveHasOptimisticLockFailure() {
         loginAs(CUSTOMER_ID);
         Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        message.setVersion(0L);
         when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
         when(messageRepository.save(message)).thenThrow(new OptimisticLockingFailureException("lost update"));
 
@@ -681,6 +814,7 @@ class MessageServiceImplTest {
     @Test
     void clearFlagThrowsConflictWhenSaveHasOptimisticLockFailure() {
         Message message = message("message-1", "conversation-1", "hello", MessageStatus.VISIBLE);
+        message.setVersion(0L);
         when(messageRepository.findById("message-1")).thenReturn(Optional.of(message));
         when(messageRepository.save(message)).thenThrow(new OptimisticLockingFailureException("lost update"));
 

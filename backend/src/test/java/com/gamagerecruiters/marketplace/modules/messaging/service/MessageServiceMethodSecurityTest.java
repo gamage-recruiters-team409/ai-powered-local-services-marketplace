@@ -36,6 +36,7 @@ import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePageRespons
 import com.gamagerecruiters.marketplace.modules.messaging.dto.ModerationMessageResponse;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import java.util.List;
 
 @SpringJUnitConfig(classes = MessageServiceMethodSecurityTest.TestConfig.class)
@@ -49,8 +50,9 @@ class MessageServiceMethodSecurityTest {
         MessageServiceImpl messageService(BookingFacade bookingFacade,
                                           ConversationRepository conversationRepository,
                                           MessageRepository messageRepository,
-                                          AdminAccessPolicyService policy) {
-            return new MessageServiceImpl(bookingFacade, conversationRepository, messageRepository, policy);
+                                          AdminAccessPolicyService policy,
+                                          MongoTemplate mongoTemplate) {
+            return new MessageServiceImpl(bookingFacade, conversationRepository, messageRepository, policy, mongoTemplate);
         }
     }
 
@@ -66,6 +68,9 @@ class MessageServiceMethodSecurityTest {
 
     @MockitoBean
     private MessageRepository messageRepository;
+
+    @MockitoBean
+    private MongoTemplate mongoTemplate;
 
     @AfterEach
     void clearContext() {

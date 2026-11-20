@@ -6,6 +6,7 @@ import com.gamagerecruiters.marketplace.modules.messaging.domain.FlagSource;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.ModerationMessageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.ModerationMessagePageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePageResponse;
+import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePollingResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessageResponse;
 
 public interface MessageService {
@@ -16,7 +17,7 @@ public interface MessageService {
 
     MessagePageResponse listMessages(String bookingId, int page, int size);
 
-    MessagePageResponse listMessagesSince(String bookingId, Instant since);
+    MessagePollingResponse listMessagesSince(String bookingId, Instant since, String afterId);
 
     MessagePageResponse getChatHistory(String bookingId, int page, int size);
 
