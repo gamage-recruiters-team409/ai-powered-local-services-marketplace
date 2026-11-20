@@ -86,7 +86,7 @@ class ReviewControllerTest {
 
     private static ReviewResponse review(ProviderReplyResponse reply) {
         return new ReviewResponse("rev-1", "booking-1", "listing-1", "prov-1", 5, "Great",
-                ReviewStatus.PUBLISHED, reply, false, null, Instant.parse("2026-11-11T10:00:00Z"));
+                ReviewStatus.PUBLISHED, reply, false, null, Instant.parse("2026-11-11T10:00:00Z"), null, null);
     }
 
     @Test
