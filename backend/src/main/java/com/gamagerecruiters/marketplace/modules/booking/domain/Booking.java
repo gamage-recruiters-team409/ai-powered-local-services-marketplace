@@ -45,6 +45,9 @@ public class Booking {
     /** C-02: provider must respond before the earlier of 12 h after the request or 1 h before the start. */
     private Instant responseDeadline;
 
+    /** Price, commission and duration captured from the listing at creation (immutable). */
+    private BookingPriceSnapshot priceSnapshot;
+
     private BookingStatus status;
     private List<BookingStatusChange> timeline = new ArrayList<>();
 
@@ -204,5 +207,13 @@ public class Booking {
 
     public void setVersion(Long version) {
         this.version = version;
+    }
+
+    public BookingPriceSnapshot getPriceSnapshot() {
+        return priceSnapshot;
+    }
+
+    public void setPriceSnapshot(BookingPriceSnapshot priceSnapshot) {
+        this.priceSnapshot = priceSnapshot;
     }
 }

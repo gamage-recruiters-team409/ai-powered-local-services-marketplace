@@ -11,9 +11,11 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,6 +33,7 @@ import org.springframework.transaction.support.TransactionOperations;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
+import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
@@ -39,6 +42,11 @@ import com.gamagerecruiters.marketplace.modules.booking.dto.BookingAddressReques
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingResponse;
 import com.gamagerecruiters.marketplace.modules.booking.dto.CreateBookingRequest;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
+import com.gamagerecruiters.marketplace.modules.listing.domain.PricingModel;
+import com.gamagerecruiters.marketplace.modules.listing.dto.AddOnItemResponse;
+import com.gamagerecruiters.marketplace.modules.listing.dto.PriceSnapshotResponse;
+import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
+import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationFacade;
 import com.mongodb.MongoException;
 
 @ExtendWith(MockitoExtension.class)
@@ -53,6 +61,12 @@ class BookingRequestServiceImplTest {
 
     @Mock
     private BookingRepository bookingRepository;
+
+    @Mock
+    private ListingService listingService;
+
+    @Mock
+    private ProviderVerificationFacade providerVerification;
 
     @Mock
     private SlotService slotService;
@@ -71,8 +85,8 @@ class BookingRequestServiceImplTest {
     }
 
     private BookingRequestServiceImpl service(boolean enabled, TransactionOperations transactions) {
-        return new BookingRequestServiceImpl(bookingRepository, slotService, providerBookingGuard,
-                referenceGenerator, transactions, enabled, Clock.fixed(NOW, ZoneOffset.UTC), 0);
+        return new BookingRequestServiceImpl(bookingRepository, listingService, providerVerification, slotService,
+                providerBookingGuard, referenceGenerator, transactions, enabled, Clock.fixed(NOW, ZoneOffset.UTC), 0);
     }
 
     @AfterEach
@@ -87,9 +101,23 @@ class BookingRequestServiceImplTest {
     }
 
     private static CreateBookingRequest request(String providerId) {
-        return new CreateBookingRequest(providerId, "listing-1", SLOT_START, 60,
+        return new CreateBookingRequest(providerId, "listing-1", SLOT_START, List.of(),
                 new BookingAddressRequest("  12 Temple Road ", null, "Nugegoda", "Colombo", "10250"),
                 "  Gate code 1234 ");
+    }
+
+    /** Listing-1: 60 minutes, LKR 5000, 10% commission, owned by PROVIDER. */
+    private static PriceSnapshotResponse listing(String ownerId, List<AddOnItemResponse> addOns, BigDecimal total,
+                                                 int totalMinutes) {
+        return new PriceSnapshotResponse("listing-1", ownerId, "cat-1", "Home Cleaning", PricingModel.FIXED,
+                new BigDecimal("5000.00"), 60, new BigDecimal("0.10"), addOns, total, totalMinutes,
+                Instant.parse("2026-11-20T02:29:59Z"));
+    }
+
+    private void givenBookableListing() {
+        when(listingService.getListingPriceSnapshot("listing-1", List.of()))
+                .thenReturn(listing(PROVIDER, List.of(), new BigDecimal("5000.00"), 60));
+        when(providerVerification.isApprovedProvider(PROVIDER)).thenReturn(true);
     }
 
     private static UncategorizedMongoDbException writeConflict() {
@@ -107,7 +135,7 @@ class BookingRequestServiceImplTest {
     }
 
     @Test
-    @DisplayName("Gate: creation disabled (default) → 503 BOOKING_CREATION_UNAVAILABLE, nothing touched")
+    @DisplayName("Kill switch: creation disabled → 503 BOOKING_CREATION_UNAVAILABLE, nothing touched")
     void creationDisabledByDefault() {
         loginAs(CUSTOMER, Role.CUSTOMER);
 
@@ -136,6 +164,7 @@ class BookingRequestServiceImplTest {
     @DisplayName("Enabled: creates PENDING_PROVIDER booking; guard claimed before slot re-check")
     void createsBooking() {
         loginAs(CUSTOMER, Role.CUSTOMER);
+        givenBookableListing();
         when(slotService.isSlotAvailable(PROVIDER, SLOT_START, 60)).thenReturn(true);
         when(referenceGenerator.next(NOW)).thenReturn("BK-20261120-ABCDEF");
         givenInsertAssignsId("booking-1");
@@ -151,6 +180,10 @@ class BookingRequestServiceImplTest {
         assertThat(response.responseDeadline()).isEqualTo(Instant.parse("2026-11-20T14:30:00Z"));
         assertThat(response.address().line1()).isEqualTo("12 Temple Road");
         assertThat(response.notes()).isEqualTo("Gate code 1234");
+        assertThat(response.durationMinutes()).isEqualTo(60);
+        assertThat(response.serviceTitle()).isEqualTo("Home Cleaning");
+        assertThat(response.totalPrice()).isEqualByComparingTo("5000.00");
+        assertThat(response.currency()).isEqualTo("LKR");
 
         org.mockito.InOrder order = org.mockito.Mockito.inOrder(providerBookingGuard, slotService, bookingRepository);
         order.verify(providerBookingGuard).ensureExists(PROVIDER, NOW);
@@ -191,6 +224,7 @@ class BookingRequestServiceImplTest {
     @DisplayName("Slot no longer available: 409 SLOT_UNAVAILABLE, nothing saved")
     void slotUnavailable() {
         loginAs(CUSTOMER, Role.CUSTOMER);
+        givenBookableListing();
         when(referenceGenerator.next(NOW)).thenReturn("BK-1");
         when(slotService.isSlotAvailable(PROVIDER, SLOT_START, 60)).thenReturn(false);
 
@@ -204,6 +238,7 @@ class BookingRequestServiceImplTest {
     @DisplayName("Transaction write conflict: retried, then succeeds")
     void writeConflictIsRetried() {
         loginAs(CUSTOMER, Role.CUSTOMER);
+        givenBookableListing();
         when(referenceGenerator.next(NOW)).thenReturn("BK-1", "BK-2");
         when(slotService.isSlotAvailable(PROVIDER, SLOT_START, 60)).thenReturn(true);
         org.mockito.Mockito.doThrow(writeConflict()).doNothing().when(providerBookingGuard).claim(PROVIDER, NOW);
@@ -220,6 +255,7 @@ class BookingRequestServiceImplTest {
     @DisplayName("Write conflict on every attempt: 409 BOOKING_BUSY after the retry budget, nothing saved")
     void persistentConflictReturnsBusy() {
         loginAs(CUSTOMER, Role.CUSTOMER);
+        givenBookableListing();
         when(referenceGenerator.next(NOW)).thenReturn("BK-1");
         org.mockito.Mockito.doThrow(writeConflict()).when(providerBookingGuard).claim(eq(PROVIDER), any(Instant.class));
 
@@ -234,6 +270,7 @@ class BookingRequestServiceImplTest {
     @DisplayName("Reference collision: retried with a new reference")
     void referenceCollisionRetries() {
         loginAs(CUSTOMER, Role.CUSTOMER);
+        givenBookableListing();
         when(slotService.isSlotAvailable(PROVIDER, SLOT_START, 60)).thenReturn(true);
         when(referenceGenerator.next(NOW)).thenReturn("BK-20261120-AAAAAA", "BK-20261120-BBBBBB");
         when(bookingRepository.insert(any(Booking.class)))
@@ -252,5 +289,95 @@ class BookingRequestServiceImplTest {
     void transientDetection() {
         assertThat(BookingRequestServiceImpl.isTransientTransactionError(writeConflict())).isTrue();
         assertThat(BookingRequestServiceImpl.isTransientTransactionError(new RuntimeException("other"))).isFalse();
+    }
+
+    // ---- WP02 / WP03 eligibility and snapshots ----
+
+    @Test
+    @DisplayName("Price snapshot (price, commission, add-ons, duration) is captured from the listing, not the request")
+    void snapshotCapturedFromListing() {
+        loginAs(CUSTOMER, Role.CUSTOMER);
+        AddOnItemResponse addOn = new AddOnItemResponse("ao-1", "Deep clean", new BigDecimal("1500.00"), 30, true);
+        CreateBookingRequest withAddOn = new CreateBookingRequest(PROVIDER, "listing-1", SLOT_START, List.of("ao-1"),
+                new BookingAddressRequest("12 Temple Road", null, "Nugegoda", "Colombo", "10250"), null);
+        when(listingService.getListingPriceSnapshot("listing-1", List.of("ao-1")))
+                .thenReturn(listing(PROVIDER, List.of(addOn), new BigDecimal("6500.00"), 90));
+        when(providerVerification.isApprovedProvider(PROVIDER)).thenReturn(true);
+        when(referenceGenerator.next(NOW)).thenReturn("BK-1");
+        when(slotService.isSlotAvailable(PROVIDER, SLOT_START, 90)).thenReturn(true);
+        givenInsertAssignsId("booking-9");
+
+        BookingResponse response = enabledService.createBookingRequest(withAddOn);
+
+        assertThat(response.durationMinutes()).isEqualTo(90);
+        assertThat(response.slotEnd()).isEqualTo(SLOT_START.plusSeconds(90 * 60));
+        verify(bookingRepository).insert(argThat((Booking b) -> {
+            var snap = b.getPriceSnapshot();
+            return snap != null
+                    && snap.totalPrice().compareTo(new BigDecimal("6500.00")) == 0
+                    && snap.basePrice().compareTo(new BigDecimal("5000.00")) == 0
+                    && snap.commissionRate().compareTo(new BigDecimal("0.10")) == 0
+                    && "LKR".equals(snap.currency())
+                    && "FIXED".equals(snap.pricingModel())
+                    && snap.durationMinutes() == 90
+                    && snap.addOns().size() == 1
+                    && "ao-1".equals(snap.addOns().get(0).addOnId())
+                    && snap.capturedAt().equals(Instant.parse("2026-11-20T02:29:59Z"));
+        }));
+    }
+
+    @Test
+    @DisplayName("Listing not found (WP03 404) → propagated, nothing saved")
+    void listingNotFound() {
+        loginAs(CUSTOMER, Role.CUSTOMER);
+        when(listingService.getListingPriceSnapshot("listing-1", List.of()))
+                .thenThrow(new ResourceNotFoundException("LISTING_NOT_FOUND", "Listing not found"));
+
+        assertThatThrownBy(() -> enabledService.createBookingRequest(request(PROVIDER)))
+                .isInstanceOf(ResourceNotFoundException.class);
+        verifyNoInteractions(providerVerification, providerBookingGuard, slotService, bookingRepository);
+    }
+
+    @Test
+    @DisplayName("Listing not bookable (WP03 409 LISTING_NOT_BOOKABLE) → propagated, nothing saved")
+    void listingNotBookable() {
+        loginAs(CUSTOMER, Role.CUSTOMER);
+        when(listingService.getListingPriceSnapshot("listing-1", List.of()))
+                .thenThrow(new ResourceConflictException("LISTING_NOT_BOOKABLE", "not bookable"));
+
+        assertThatThrownBy(() -> enabledService.createBookingRequest(request(PROVIDER)))
+                .isInstanceOf(ResourceConflictException.class)
+                .satisfies(e -> assertThat(((ApiException) e).getErrorCode()).isEqualTo("LISTING_NOT_BOOKABLE"));
+        verifyNoInteractions(providerVerification, providerBookingGuard, slotService, bookingRepository);
+    }
+
+    @Test
+    @DisplayName("Listing owned by another provider → 400 LISTING_PROVIDER_MISMATCH, nothing saved")
+    void listingProviderMismatch() {
+        loginAs(CUSTOMER, Role.CUSTOMER);
+        when(listingService.getListingPriceSnapshot("listing-1", List.of()))
+                .thenReturn(listing("other-provider", List.of(), new BigDecimal("5000.00"), 60));
+
+        assertThatThrownBy(() -> enabledService.createBookingRequest(request(PROVIDER)))
+                .isInstanceOf(ApiException.class)
+                .satisfies(e -> {
+                    assertThat(((ApiException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(((ApiException) e).getErrorCode()).isEqualTo("LISTING_PROVIDER_MISMATCH");
+                });
+        verifyNoInteractions(providerVerification, providerBookingGuard, slotService, bookingRepository);
+    }
+
+    @Test
+    @DisplayName("Provider not APPROVED (WP02) → 409 PROVIDER_NOT_BOOKABLE, nothing saved")
+    void providerNotApproved() {
+        loginAs(CUSTOMER, Role.CUSTOMER);
+        when(listingService.getListingPriceSnapshot("listing-1", List.of()))
+                .thenReturn(listing(PROVIDER, List.of(), new BigDecimal("5000.00"), 60));
+        when(providerVerification.isApprovedProvider(PROVIDER)).thenReturn(false);
+
+        assertThatThrownBy(() -> enabledService.createBookingRequest(request(PROVIDER)))
+                .isInstanceOf(ResourceConflictException.class)
+                .satisfies(e -> assertThat(((ApiException) e).getErrorCode()).isEqualTo("PROVIDER_NOT_BOOKABLE"));
+        verifyNoInteractions(providerBookingGuard, slotService, bookingRepository);
     }
 }
