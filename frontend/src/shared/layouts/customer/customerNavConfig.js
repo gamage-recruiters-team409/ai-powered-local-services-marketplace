@@ -28,7 +28,7 @@
 export const CUSTOMER_ACCOUNT_PATH = '/customer/account'
 
 /** Profile page opened from the account menu header. Set by WP01 when the page exists. */
-export const CUSTOMER_PROFILE_PATH = null
+export const CUSTOMER_PROFILE_PATH = '/customer/account/profile'
 
 export const CUSTOMER_HEADER_LINKS = Object.freeze([
   { id: 'home', label: 'Home', to: '/', end: true },
@@ -47,12 +47,37 @@ export const CUSTOMER_NAV_SECTIONS = Object.freeze([
         to: '/customer/bookings',
         icon: 'bookings',
       },
+      {
+        id: 'payments',
+        label: 'Payments',
+        to: '/customer/account/payments',
+        icon: 'payments',
+      },
     ],
   },
   {
     id: 'account',
     title: 'My Account',
-    items: [],
+    items: [
+      {
+        id: 'profile',
+        label: 'Profile',
+        to: '/customer/account/profile',
+        icon: 'profile',
+      },
+      {
+        id: 'addresses',
+        label: 'Saved Addresses',
+        to: '/customer/account/addresses',
+        icon: 'address',
+      },
+      {
+        id: 'favorites',
+        label: 'Favorites',
+        to: '/customer/account/favorites',
+        icon: 'favorites',
+      },
+    ],
   },
 ])
 
@@ -64,6 +89,13 @@ export const CUSTOMER_NAV_FOOTER_ITEMS = Object.freeze([
     to: '/help',
     icon: 'help',
   },
+  {
+    id: 'deactivate',
+    label: 'Deactivate Account',
+    to: '/customer/account/deactivate',
+    icon: 'alert',
+    tone: 'danger',
+  },
 ])
 
 export const CUSTOMER_PROFILE_MENU_ITEMS = Object.freeze([
@@ -72,6 +104,12 @@ export const CUSTOMER_PROFILE_MENU_ITEMS = Object.freeze([
     label: 'My Bookings',
     to: '/customer/bookings',
     icon: 'bookings',
+  },
+  {
+    id: 'settings',
+    label: 'Settings',
+    to: '/customer/account/settings',
+    icon: 'settings',
   },
   {
     id: 'help',
