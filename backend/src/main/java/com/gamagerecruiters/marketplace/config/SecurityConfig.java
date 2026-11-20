@@ -87,6 +87,7 @@ public class SecurityConfig {
                                 ApiPaths.API_V1 + "/listings/locations/districts",
                                 ApiPaths.API_V1 + "/listings/*"
                         ).permitAll()
+                        .requestMatchers(HttpMethod.GET, "/ws").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

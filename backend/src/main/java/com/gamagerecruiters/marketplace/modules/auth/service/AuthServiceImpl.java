@@ -4,7 +4,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -27,11 +33,14 @@ import com.gamagerecruiters.marketplace.modules.auth.dto.RefreshTokenRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterResponse;
 import com.gamagerecruiters.marketplace.modules.auth.dto.UserSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.auth.dto.WebSocketPrincipal;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 
 @Service
 public class AuthServiceImpl implements AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthServiceImpl.class);
 
     private static final String GENERIC_BAD_CREDENTIALS_MSG = "Invalid email or password";
 
@@ -40,6 +49,7 @@ public class AuthServiceImpl implements AuthService {
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokenService;
     private final EmailTokenService emailTokenService;
+    private final MongoTemplate mongoTemplate;
 
     private final boolean requireEmailVerification;
     private final int maxFailedLogins;
@@ -52,6 +62,7 @@ public class AuthServiceImpl implements AuthService {
             PasswordEncoder passwordEncoder,
             TokenService tokenService,
             EmailTokenService emailTokenService,
+            MongoTemplate mongoTemplate,
             @Value("${app.auth.require-email-verification:true}") boolean requireEmailVerification,
             @Value("${app.auth.max-failed-logins:5}") int maxFailedLogins,
             @Value("${app.auth.lock-duration-minutes:15}") int lockDurationMinutes,
@@ -62,6 +73,7 @@ public class AuthServiceImpl implements AuthService {
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
         this.emailTokenService = emailTokenService;
+        this.mongoTemplate = mongoTemplate;
         this.requireEmailVerification = requireEmailVerification;
         this.maxFailedLogins = maxFailedLogins;
         this.lockDurationMinutes = lockDurationMinutes;
@@ -209,6 +221,10 @@ public class AuthServiceImpl implements AuthService {
             userRepository.save(user);
         }
 
+        // Record last activity timestamp via targeted update without overwriting the whole document
+        user.setLastActiveAt(Instant.now());
+        recordLastActiveAt(user.getId());
+
         return issueTokens(user);
     }
 
@@ -264,8 +280,26 @@ public class AuthServiceImpl implements AuthService {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "ACCOUNT_NOT_ACTIVE", "User account is not active");
         }
 
+        // Record last activity timestamp via targeted update without overwriting the whole document
+        user.setLastActiveAt(Instant.now());
+        recordLastActiveAt(user.getId());
+
         // Issue new token pair
         return issueTokens(user);
+    }
+
+    private void recordLastActiveAt(String userId) {
+        if (mongoTemplate != null && userId != null) {
+            try {
+                mongoTemplate.updateFirst(
+                        Query.query(Criteria.where("_id").is(userId)),
+                        new Update().set("lastActiveAt", Instant.now()),
+                        User.class
+                );
+            } catch (Exception ex) {
+                log.warn("Failed to record lastActiveAt for user {}: {}", userId, ex.getMessage());
+            }
+        }
     }
 
     @Override
@@ -336,5 +370,49 @@ public class AuthServiceImpl implements AuthService {
                 summary,
                 user.isMustChangePassword()
         );
+    }
+
+    @Override
+    public WebSocketPrincipal validateAccessToken(String token) {
+        if (token == null || token.isBlank()) {
+            throw new BadCredentialsException("Failed to authenticate token");
+        }
+
+        if (!tokenService.validateToken(token)) {
+            throw new BadCredentialsException("Failed to authenticate token");
+        }
+
+        try {
+            String tokenType = tokenService.getTokenType(token);
+            if (tokenType != null && !"ACCESS".equalsIgnoreCase(tokenType) && !"ACCESS_TOKEN".equalsIgnoreCase(tokenType)) {
+                throw new BadCredentialsException("Failed to authenticate token");
+            }
+
+            String userId = tokenService.getUserIdFromToken(token);
+            Role tokenRole = tokenService.getRoleFromToken(token);
+
+            if (userId == null || userId.isBlank() || tokenRole == null) {
+                throw new BadCredentialsException("Failed to authenticate token");
+            }
+
+            User user = userRepository.findById(userId).orElse(null);
+            if (user == null || user.getStatus() != UserStatus.ACTIVE) {
+                throw new BadCredentialsException("Failed to authenticate token");
+            }
+
+            if (user.getRole() != tokenRole) {
+                throw new BadCredentialsException("Failed to authenticate token");
+            }
+
+            if (user.isMustChangePassword()) {
+                throw new BadCredentialsException("Failed to authenticate token");
+            }
+
+            return new WebSocketPrincipal(user.getId(), user.getRole());
+        } catch (BadCredentialsException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new BadCredentialsException("Failed to authenticate token");
+        }
     }
 }

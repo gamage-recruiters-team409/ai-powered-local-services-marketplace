@@ -24,6 +24,7 @@ public class User {
     private Instant lockStartedAt;
     private Instant createdAt;
     private boolean mustChangePassword = false;
+    private Instant lastActiveAt;
 
     public User() {
     }
@@ -146,5 +147,13 @@ public class User {
 
     public void setMustChangePassword(boolean mustChangePassword) {
         this.mustChangePassword = mustChangePassword;
+    }
+
+    public Instant getLastActiveAt() {
+        return lastActiveAt;
+    }
+
+    public void setLastActiveAt(Instant lastActiveAt) {
+        this.lastActiveAt = lastActiveAt;
     }
 }

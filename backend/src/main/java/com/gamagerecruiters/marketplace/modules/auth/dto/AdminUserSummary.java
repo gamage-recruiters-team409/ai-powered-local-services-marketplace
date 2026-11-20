@@ -18,8 +18,24 @@ public record AdminUserSummary(
         String phone,
         Role role,
         UserStatus status,
-        Instant createdAt
+        Instant createdAt,
+        Instant lastActiveAt
 ) {
+    /**
+     * Backward-compatible 7-argument constructor for existing callers and tests.
+     */
+    public AdminUserSummary(
+            String id,
+            String fullName,
+            String email,
+            String phone,
+            Role role,
+            UserStatus status,
+            Instant createdAt
+    ) {
+        this(id, fullName, email, phone, role, status, createdAt, null);
+    }
+
     public static AdminUserSummary fromUser(User user) {
         return new AdminUserSummary(
                 user.getId(),
@@ -28,7 +44,8 @@ public record AdminUserSummary(
                 user.getPhone(),
                 user.getRole(),
                 user.getStatus(),
-                user.getCreatedAt()
+                user.getCreatedAt(),
+                user.getLastActiveAt()
         );
     }
 }

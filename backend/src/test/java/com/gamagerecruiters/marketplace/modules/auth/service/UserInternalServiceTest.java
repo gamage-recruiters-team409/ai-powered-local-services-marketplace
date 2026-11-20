@@ -10,15 +10,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
+import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -31,7 +37,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
@@ -40,11 +49,16 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import com.mongodb.client.result.UpdateResult;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
+import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.domain.TokenType;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
+import com.gamagerecruiters.marketplace.modules.auth.dto.Granularity;
+import com.gamagerecruiters.marketplace.modules.auth.dto.PeriodCount;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
@@ -157,14 +171,21 @@ class UserInternalServiceTest {
         authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
         User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
         User targetCust = createUser("cust-1", Role.CUSTOMER, UserStatus.ACTIVE);
+        User updatedCust = createUser("cust-1", Role.CUSTOMER, UserStatus.SUSPENDED);
 
         when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
-        when(userRepository.findById("cust-1")).thenReturn(Optional.of(targetCust));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById("cust-1"))
+                .thenReturn(Optional.of(targetCust))
+                .thenReturn(Optional.of(targetCust))
+                .thenReturn(Optional.of(updatedCust));
+        UpdateResult updateResult = UpdateResult.acknowledged(1L, 1L, null);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult);
 
         User updated = userInternalService.changeStatus("cust-1", UserStatus.SUSPENDED);
         assertEquals(UserStatus.SUSPENDED, updated.getStatus());
-        verify(userRepository).save(targetCust);
+        verify(authTokenRepository).revokeAllActiveTokensByUserIdAndType("cust-1", TokenType.REFRESH);
+        verify(userRepository, never()).save(any(User.class));
     }
 
     @Test
@@ -173,14 +194,21 @@ class UserInternalServiceTest {
         authenticateAs("super-1", "super@marketplace.local", Role.SUPER_ADMIN);
         User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
         User targetAdmin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User updatedAdmin = createUser("admin-1", Role.ADMIN, UserStatus.SUSPENDED);
 
         when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
-        when(userRepository.findById("admin-1")).thenReturn(Optional.of(targetAdmin));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById("admin-1"))
+                .thenReturn(Optional.of(targetAdmin))
+                .thenReturn(Optional.of(targetAdmin))
+                .thenReturn(Optional.of(updatedAdmin));
+        UpdateResult updateResult = UpdateResult.acknowledged(1L, 1L, null);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult);
 
         User updated = userInternalService.changeStatus("admin-1", UserStatus.SUSPENDED);
         assertEquals(UserStatus.SUSPENDED, updated.getStatus());
-        verify(userRepository).save(targetAdmin);
+        verify(authTokenRepository).revokeAllActiveTokensByUserIdAndType("admin-1", TokenType.REFRESH);
+        verify(userRepository, never()).save(any(User.class));
     }
 
     @Test
@@ -874,5 +902,815 @@ class UserInternalServiceTest {
 
         long count = userInternalService.countByRoleAndStatus("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
         assertEquals(2L, count);
+    }
+
+    // --- Tests for countNewUsers ---
+
+    @Test
+    @DisplayName("countNewUsers: No authentication in SecurityContext throws 401 AUTHENTICATION_REQUIRED")
+    void countNewUsersRejectsUnauthenticated() {
+        SecurityContextHolder.clearContext();
+        Instant from = Instant.parse("2026-11-01T00:00:00Z");
+        Instant to = Instant.parse("2026-11-20T00:00:00Z");
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("u-1", null, from, to, Granularity.WEEK));
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("countNewUsers: Anonymous authentication throws 401 AUTHENTICATION_REQUIRED")
+    void countNewUsersRejectsAnonymous() {
+        AnonymousAuthenticationToken anon = new AnonymousAuthenticationToken(
+                "key", "anonymousUser", List.of(new SimpleGrantedAuthority("ROLE_ANONYMOUS")));
+        SecurityContextHolder.getContext().setAuthentication(anon);
+        Instant from = Instant.parse("2026-11-01T00:00:00Z");
+        Instant to = Instant.parse("2026-11-20T00:00:00Z");
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("u-1", null, from, to, Granularity.WEEK));
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("countNewUsers: Non-UserPrincipal throws 401 AUTHENTICATION_REQUIRED")
+    void countNewUsersRejectsNonAppPrincipal() {
+        UsernamePasswordAuthenticationToken nonAppAuth = new UsernamePasswordAuthenticationToken(
+                "plain-username", null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+        SecurityContextHolder.getContext().setAuthentication(nonAppAuth);
+        Instant from = Instant.parse("2026-11-01T00:00:00Z");
+        Instant to = Instant.parse("2026-11-20T00:00:00Z");
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("u-1", null, from, to, Granularity.WEEK));
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("countNewUsers: Mismatched actorId throws 403 ACTOR_IDENTITY_MISMATCH")
+    void countNewUsersRejectsMismatchedActorId() {
+        authenticateAs("u-1", "u1@marketplace.local", Role.ADMIN);
+        Instant from = Instant.parse("2026-11-01T00:00:00Z");
+        Instant to = Instant.parse("2026-11-20T00:00:00Z");
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("u-2", null, from, to, Granularity.WEEK));
+        assertEquals("ACTOR_IDENTITY_MISMATCH", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("countNewUsers: Null or blank actorId throws 403 ACTOR_NOT_FOUND")
+    void countNewUsersRejectsNullOrBlankActorId() {
+        authenticateAs("actor-1", "actor1@marketplace.local", Role.ADMIN);
+        Instant from = Instant.parse("2026-11-01T00:00:00Z");
+        Instant to = Instant.parse("2026-11-20T00:00:00Z");
+
+        ApiException ex1 = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers(null, null, from, to, Granularity.WEEK));
+        assertEquals("ACTOR_NOT_FOUND", ex1.getErrorCode());
+
+        ApiException ex2 = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("  ", null, from, to, Granularity.WEEK));
+        assertEquals("ACTOR_NOT_FOUND", ex2.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countNewUsers: Unknown actorId throws 403 ACTOR_NOT_FOUND")
+    void countNewUsersRejectsUnknownActorId() {
+        authenticateAs("unknown", "unknown@marketplace.local", Role.ADMIN);
+        when(userRepository.findById("unknown")).thenReturn(Optional.empty());
+        Instant from = Instant.parse("2026-11-01T00:00:00Z");
+        Instant to = Instant.parse("2026-11-20T00:00:00Z");
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("unknown", null, from, to, Granularity.WEEK));
+        assertEquals("ACTOR_NOT_FOUND", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countNewUsers: Inactive actor throws 403 ACTOR_ACCOUNT_INACTIVE")
+    void countNewUsersRejectsInactiveActor() {
+        authenticateAs("actor-1", "actor1@marketplace.local", Role.ADMIN);
+        User inactive = createUser("actor-1", Role.ADMIN, UserStatus.SUSPENDED);
+        when(userRepository.findById("actor-1")).thenReturn(Optional.of(inactive));
+        Instant from = Instant.parse("2026-11-01T00:00:00Z");
+        Instant to = Instant.parse("2026-11-20T00:00:00Z");
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("actor-1", null, from, to, Granularity.WEEK));
+        assertEquals("ACTOR_ACCOUNT_INACTIVE", ex.getErrorCode());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {"SUPPORT_ADMIN", "FINANCE_ADMIN", "MODERATOR", "CUSTOMER", "PROVIDER"})
+    @DisplayName("countNewUsers: Non-permitted actor roles throw 403 ROLE_NOT_PERMITTED")
+    void countNewUsersRejectsNonPermittedActorRoles(Role role) {
+        authenticateAs("actor-1", "actor1@marketplace.local", role);
+        User actor = createUser("actor-1", role, UserStatus.ACTIVE);
+        when(userRepository.findById("actor-1")).thenReturn(Optional.of(actor));
+        Instant from = Instant.parse("2026-11-01T00:00:00Z");
+        Instant to = Instant.parse("2026-11-20T00:00:00Z");
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("actor-1", null, from, to, Granularity.WEEK));
+        assertEquals("ROLE_NOT_PERMITTED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countNewUsers: Invalid date ranges or null parameters throw 400")
+    void countNewUsersRejectsInvalidParameters() {
+        Instant from = Instant.parse("2026-11-20T00:00:00Z");
+        Instant to = Instant.parse("2026-11-01T00:00:00Z");
+
+        // null from
+        ApiException ex1 = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("admin-1", null, null, to, Granularity.WEEK));
+        assertEquals("INVALID_PARAMETERS", ex1.getErrorCode());
+
+        // null to
+        ApiException ex2 = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("admin-1", null, from, null, Granularity.WEEK));
+        assertEquals("INVALID_PARAMETERS", ex2.getErrorCode());
+
+        // null granularity
+        ApiException ex3 = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("admin-1", null, from, to, null));
+        assertEquals("INVALID_PARAMETERS", ex3.getErrorCode());
+
+        // from is after to
+        ApiException ex4 = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("admin-1", null, from, to, Granularity.WEEK));
+        assertEquals("INVALID_DATE_RANGE", ex4.getErrorCode());
+
+        // from equals to
+        ApiException ex5 = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("admin-1", null, from, from, Granularity.WEEK));
+        assertEquals("INVALID_DATE_RANGE", ex5.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countNewUsers: ADMIN requesting non-visible role throws 403 ROLE_NOT_PERMITTED")
+    void countNewUsersAdminRequestingForbiddenRoleThrows() {
+        authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+        Instant from = Instant.parse("2026-11-01T00:00:00Z");
+        Instant to = Instant.parse("2026-11-20T00:00:00Z");
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("admin-1", Set.of(Role.SUPER_ADMIN), from, to, Granularity.WEEK));
+        assertEquals("ROLE_NOT_PERMITTED", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("countNewUsers: Weekly granularity fills empty periods with 0 and orders chronologically")
+    void countNewUsersWeeklyFillsEmptyPeriodsWithZero() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User superAdmin = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(superAdmin));
+
+        // 2026-11-02 (Monday) to 2026-11-23 (Monday): 3 full weeks (starts: Nov 2, Nov 9, Nov 16)
+        Instant from = Instant.parse("2026-11-02T00:00:00Z");
+        Instant to = Instant.parse("2026-11-23T00:00:00Z");
+
+        Instant week1 = Instant.parse("2026-11-02T00:00:00Z");
+        Instant week3 = Instant.parse("2026-11-16T00:00:00Z");
+
+        // Aggregation returns counts for week 1 (count 5) and week 3 (count 2), week 2 has 0
+        List<Document> aggDocs = List.of(
+                new Document("_id", Date.from(week1)).append("count", 5L),
+                new Document("_id", Date.from(week3)).append("count", 2L)
+        );
+        AggregationResults<Document> aggResults = new AggregationResults<>(aggDocs, new Document());
+        when(mongoTemplate.aggregate(any(Aggregation.class), eq(User.class), eq(Document.class)))
+                .thenReturn(aggResults);
+
+        List<PeriodCount> results = userInternalService.countNewUsers("super-1", null, from, to, Granularity.WEEK);
+
+        assertNotNull(results);
+        assertEquals(3, results.size());
+
+        // Period 1 (Nov 2)
+        assertEquals(week1, results.get(0).periodStart());
+        assertEquals(5L, results.get(0).count());
+
+        // Period 2 (Nov 9) - empty period filled with 0
+        assertEquals(Instant.parse("2026-11-09T00:00:00Z"), results.get(1).periodStart());
+        assertEquals(0L, results.get(1).count());
+
+        // Period 3 (Nov 16)
+        assertEquals(week3, results.get(2).periodStart());
+        assertEquals(2L, results.get(2).count());
+    }
+
+    @Test
+    @DisplayName("countNewUsers: Monthly granularity fills empty months with 0")
+    void countNewUsersMonthlyFillsEmptyMonthsWithZero() {
+        authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+
+        // 2026-08-01 to 2026-11-01: 3 months (Aug, Sep, Oct)
+        Instant from = Instant.parse("2026-08-01T00:00:00Z");
+        Instant to = Instant.parse("2026-11-01T00:00:00Z");
+
+        Instant sepMonth = Instant.parse("2026-09-01T00:00:00Z");
+
+        // Aggregation returns data only for September
+        List<Document> aggDocs = List.of(
+                new Document("_id", Date.from(sepMonth)).append("count", 12L)
+        );
+        AggregationResults<Document> aggResults = new AggregationResults<>(aggDocs, new Document());
+        when(mongoTemplate.aggregate(any(Aggregation.class), eq(User.class), eq(Document.class)))
+                .thenReturn(aggResults);
+
+        List<PeriodCount> results = userInternalService.countNewUsers(
+                "admin-1", Set.of(Role.CUSTOMER), from, to, Granularity.MONTH);
+
+        assertNotNull(results);
+        assertEquals(3, results.size());
+
+        // Aug (empty -> 0)
+        assertEquals(Instant.parse("2026-08-01T00:00:00Z"), results.get(0).periodStart());
+        assertEquals(0L, results.get(0).count());
+
+        // Sep (12)
+        assertEquals(sepMonth, results.get(1).periodStart());
+        assertEquals(12L, results.get(1).count());
+
+        // Oct (empty -> 0)
+        assertEquals(Instant.parse("2026-10-01T00:00:00Z"), results.get(2).periodStart());
+        assertEquals(0L, results.get(2).count());
+    }
+
+    // --- Tests for atomic changeStatus(actorId, userId, expectedStatus, newStatus) ---
+
+    @Test
+    @DisplayName("changeStatus atomic: Successfully changes status to SUSPENDED and revokes refresh tokens")
+    void changeStatusAtomicSuccessToSuspended() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User target = createUser("cust-1", Role.CUSTOMER, UserStatus.ACTIVE);
+        User updatedTarget = createUser("cust-1", Role.CUSTOMER, UserStatus.SUSPENDED);
+
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("cust-1"))
+                .thenReturn(Optional.of(target))       // Initial lookup
+                .thenReturn(Optional.of(updatedTarget)); // Post-update lookup
+
+        UpdateResult updateResult = UpdateResult.acknowledged(1L, 1L, null);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult);
+
+        User result = userInternalService.changeStatus("admin-1", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED);
+
+        assertNotNull(result);
+        assertEquals(UserStatus.SUSPENDED, result.getStatus());
+        verify(authTokenRepository).revokeAllActiveTokensByUserIdAndType("cust-1", TokenType.REFRESH);
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Successfully changes status to DEACTIVATED and revokes refresh tokens")
+    void changeStatusAtomicSuccessToDeactivated() {
+        authenticateAs("super-1", "super@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User updatedTarget = createUser("admin-1", Role.ADMIN, UserStatus.DEACTIVATED);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("admin-1"))
+                .thenReturn(Optional.of(target))
+                .thenReturn(Optional.of(updatedTarget));
+
+        UpdateResult updateResult = UpdateResult.acknowledged(1L, 1L, null);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult);
+
+        User result = userInternalService.changeStatus("super-1", "admin-1", UserStatus.ACTIVE, UserStatus.DEACTIVATED);
+
+        assertNotNull(result);
+        assertEquals(UserStatus.DEACTIVATED, result.getStatus());
+        verify(authTokenRepository).revokeAllActiveTokensByUserIdAndType("admin-1", TokenType.REFRESH);
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Successfully changes status to ACTIVE and does NOT revoke tokens")
+    void changeStatusAtomicSuccessToActive() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User target = createUser("cust-1", Role.CUSTOMER, UserStatus.SUSPENDED);
+        User updatedTarget = createUser("cust-1", Role.CUSTOMER, UserStatus.ACTIVE);
+
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("cust-1"))
+                .thenReturn(Optional.of(target))
+                .thenReturn(Optional.of(updatedTarget));
+
+        UpdateResult updateResult = UpdateResult.acknowledged(1L, 1L, null);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult);
+
+        User result = userInternalService.changeStatus("admin-1", "cust-1", UserStatus.SUSPENDED, UserStatus.ACTIVE);
+
+        assertNotNull(result);
+        assertEquals(UserStatus.ACTIVE, result.getStatus());
+        verify(authTokenRepository, never()).revokeAllActiveTokensByUserIdAndType(anyString(), any(TokenType.class));
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Concurrent modification returns 409 CONCURRENT_MODIFICATION")
+    void changeStatusAtomicConcurrentModificationThrows409() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User target = createUser("cust-1", Role.CUSTOMER, UserStatus.ACTIVE);
+
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("cust-1")).thenReturn(Optional.of(target));
+
+        // 0 documents matched because status was changed concurrently
+        UpdateResult updateResult = UpdateResult.acknowledged(0L, 0L, null);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult);
+        when(userRepository.existsById("cust-1")).thenReturn(true);
+
+        ResourceConflictException ex = assertThrows(ResourceConflictException.class,
+                () -> userInternalService.changeStatus("admin-1", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("CONCURRENT_MODIFICATION", ex.getErrorCode());
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertTrue(ex.getMessage().contains("modified concurrently"));
+        verify(authTokenRepository, never()).revokeAllActiveTokensByUserIdAndType(anyString(), any(TokenType.class));
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Target user not found throws 404 USER_NOT_FOUND")
+    void changeStatusAtomicTargetNotFoundThrows404() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("non-existent")).thenReturn(Optional.empty());
+
+        ResourceNotFoundException ex = assertThrows(ResourceNotFoundException.class,
+                () -> userInternalService.changeStatus("admin-1", "non-existent", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("USER_NOT_FOUND", ex.getErrorCode());
+        verifyNoInteractions(mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Actor not found in DB throws 403 ACTOR_NOT_FOUND")
+    void changeStatusAtomicActorNotFoundThrows() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.empty());
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("admin-1", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+        assertEquals("ACTOR_NOT_FOUND", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        verifyNoInteractions(mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Mismatched actorId throws 403 ACTOR_IDENTITY_MISMATCH")
+    void changeStatusAtomicMismatchedActorIdThrows() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("admin-2", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("ACTOR_IDENTITY_MISMATCH", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        verifyNoInteractions(userRepository, mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Null or blank actorId throws 403 ACTOR_NOT_FOUND")
+    void changeStatusAtomicNullOrBlankActorIdThrows() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+
+        ApiException exNull = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus(null, "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+        assertEquals("ACTOR_NOT_FOUND", exNull.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, exNull.getStatus());
+
+        ApiException exBlank = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("  ", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+        assertEquals("ACTOR_NOT_FOUND", exBlank.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, exBlank.getStatus());
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Role hierarchy violation throws 403 ROLE_HIERARCHY_VIOLATION")
+    void changeStatusAtomicRoleHierarchyViolationThrows() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User targetAdmin = createUser("admin-2", Role.ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("admin-2")).thenReturn(Optional.of(targetAdmin));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("admin-1", "admin-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("ROLE_HIERARCHY_VIOLATION", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        verifyNoInteractions(mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Self modification throws 403 CANNOT_MODIFY_SELF")
+    void changeStatusAtomicSelfModificationThrows() {
+        authenticateAs("super-1", "super@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("super-1", "super-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("CANNOT_MODIFY_SELF", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        verifyNoInteractions(mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Target DEACTIVATED throws 403 ACCOUNT_DEACTIVATED")
+    void changeStatusAtomicTargetDeactivatedThrows() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User target = createUser("cust-1", Role.CUSTOMER, UserStatus.DEACTIVATED);
+
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("cust-1")).thenReturn(Optional.of(target));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("admin-1", "cust-1", UserStatus.DEACTIVATED, UserStatus.ACTIVE));
+
+        assertEquals("ACCOUNT_DEACTIVATED", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        verifyNoInteractions(mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("changeStatus atomic: Last remaining ACTIVE SUPER_ADMIN throws 409 LAST_ACTIVE_SUPER_ADMIN")
+    void changeStatusAtomicLastActiveSuperAdminThrows() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User targetSuper = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(targetSuper));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(1L);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("LAST_ACTIVE_SUPER_ADMIN", ex.getErrorCode());
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        verifyNoInteractions(mongoTemplate);
+    }
+
+    // --- F1 Legacy 2-argument changeStatus delegation tests ---
+
+    @Test
+    @DisplayName("legacy changeStatus: Successfully revokes refresh tokens when changing to SUSPENDED")
+    void legacyChangeStatusRevokesTokensOnSuspended() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User targetCust = createUser("cust-1", Role.CUSTOMER, UserStatus.ACTIVE);
+        User updatedCust = createUser("cust-1", Role.CUSTOMER, UserStatus.SUSPENDED);
+
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("cust-1"))
+                .thenReturn(Optional.of(targetCust))
+                .thenReturn(Optional.of(targetCust))
+                .thenReturn(Optional.of(updatedCust));
+        UpdateResult updateResult = UpdateResult.acknowledged(1L, 1L, null);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult);
+
+        User updated = userInternalService.changeStatus("cust-1", UserStatus.SUSPENDED);
+
+        assertNotNull(updated);
+        assertEquals(UserStatus.SUSPENDED, updated.getStatus());
+        verify(authTokenRepository).revokeAllActiveTokensByUserIdAndType("cust-1", TokenType.REFRESH);
+    }
+
+    @Test
+    @DisplayName("legacy changeStatus: Successfully revokes refresh tokens when changing to DEACTIVATED")
+    void legacyChangeStatusRevokesTokensOnDeactivated() {
+        authenticateAs("super-1", "super@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User targetAdmin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User updatedAdmin = createUser("admin-1", Role.ADMIN, UserStatus.DEACTIVATED);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("admin-1"))
+                .thenReturn(Optional.of(targetAdmin))
+                .thenReturn(Optional.of(targetAdmin))
+                .thenReturn(Optional.of(updatedAdmin));
+        UpdateResult updateResult = UpdateResult.acknowledged(1L, 1L, null);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult);
+
+        User updated = userInternalService.changeStatus("admin-1", UserStatus.DEACTIVATED);
+
+        assertNotNull(updated);
+        assertEquals(UserStatus.DEACTIVATED, updated.getStatus());
+        verify(authTokenRepository).revokeAllActiveTokensByUserIdAndType("admin-1", TokenType.REFRESH);
+    }
+
+    @Test
+    @DisplayName("legacy changeStatus: Enforces last active SUPER_ADMIN protection")
+    void legacyChangeStatusEnforcesLastActiveSuperAdmin() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User targetSuper = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(targetSuper));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(1L);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("super-2", UserStatus.SUSPENDED));
+
+        assertEquals("LAST_ACTIVE_SUPER_ADMIN", ex.getErrorCode());
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("legacy changeStatus: Unknown target user throws 404 USER_NOT_FOUND")
+    void legacyChangeStatusTargetNotFoundThrows404() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        when(userRepository.findById("unknown-user")).thenReturn(Optional.empty());
+
+        ResourceNotFoundException ex = assertThrows(ResourceNotFoundException.class,
+                () -> userInternalService.changeStatus("unknown-user", UserStatus.SUSPENDED));
+
+        assertEquals("USER_NOT_FOUND", ex.getErrorCode());
+    }
+
+    // --- F2 Post-update last active SUPER_ADMIN concurrency & compensation tests ---
+
+    @Test
+    @DisplayName("changeStatus F2: Post-update check finds 0 active super admins, triggers compensation and throws 409")
+    void changeStatusPostUpdateZeroSuperAdminsRollsBackAndThrows409() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
+        // Pre-check count is 2 (passes) -> Post-update count is 0 (concurrent thread suspension)
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE))
+                .thenReturn(2L)
+                .thenReturn(0L);
+
+        UpdateResult updateResult = UpdateResult.acknowledged(1L, 1L, null);
+        UpdateResult compResult = UpdateResult.acknowledged(1L, 1L, null);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult)
+                .thenReturn(compResult);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("LAST_ACTIVE_SUPER_ADMIN", ex.getErrorCode());
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        // Verify compensating update was called
+        verify(mongoTemplate, times(2)).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        verify(authTokenRepository, never()).revokeAllActiveTokensByUserIdAndType(anyString(), any(TokenType.class));
+    }
+
+    @Test
+    @DisplayName("changeStatus F2: Post-update compensation failure logs error and still throws 409")
+    void changeStatusPostUpdateCompensationFailureLogsErrorAndThrows409() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE))
+                .thenReturn(2L)
+                .thenReturn(0L);
+
+        UpdateResult updateResult = UpdateResult.acknowledged(1L, 1L, null);
+        UpdateResult compResult = UpdateResult.acknowledged(0L, 0L, null); // Compensation matched 0
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult)
+                .thenReturn(compResult);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("LAST_ACTIVE_SUPER_ADMIN", ex.getErrorCode());
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        verify(mongoTemplate, times(2)).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+    }
+
+    // --- F3 Status update and token revocation consistency tests ---
+
+    @Test
+    @DisplayName("changeStatus F3: Revocation failure rolls back status and throws 503 STATUS_CHANGE_FAILED; retry succeeds")
+    void changeStatusRevocationFailureRollsBackStatusAndRetrySucceeds() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        User actor = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        User target = createUser("cust-1", Role.CUSTOMER, UserStatus.ACTIVE);
+        User updatedCust = createUser("cust-1", Role.CUSTOMER, UserStatus.SUSPENDED);
+
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("cust-1")).thenReturn(Optional.of(target));
+
+        UpdateResult updateResult = UpdateResult.acknowledged(1L, 1L, null);
+        UpdateResult compResult = UpdateResult.acknowledged(1L, 1L, null);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult)
+                .thenReturn(compResult);
+
+        // First attempt: revocation throws runtime exception
+        doThrow(new RuntimeException("Token service down"))
+                .when(authTokenRepository).revokeAllActiveTokensByUserIdAndType("cust-1", TokenType.REFRESH);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("admin-1", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+        // Verify compensating update back to ACTIVE was executed
+        verify(mongoTemplate, times(2)).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+
+        // Subsequent retry: revocation succeeds
+        org.mockito.Mockito.reset(authTokenRepository);
+        when(userRepository.findById("cust-1"))
+                .thenReturn(Optional.of(target))
+                .thenReturn(Optional.of(updatedCust));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(updateResult);
+
+        User retryResult = userInternalService.changeStatus("admin-1", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED);
+        assertNotNull(retryResult);
+        assertEquals(UserStatus.SUSPENDED, retryResult.getStatus());
+        verify(authTokenRepository).revokeAllActiveTokensByUserIdAndType("cust-1", TokenType.REFRESH);
+    }
+
+    // --- F4 Actor identity validation tests ---
+
+    @Test
+    @DisplayName("changeStatus F4: Missing SecurityContext throws 401 AUTHENTICATION_REQUIRED")
+    void changeStatusMissingSecurityContextThrows401() {
+        SecurityContextHolder.clearContext();
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("admin-1", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("changeStatus F4: Unauthenticated SecurityContext throws 401 AUTHENTICATION_REQUIRED")
+    void changeStatusUnauthenticatedSecurityContextThrows401() {
+        UsernamePasswordAuthenticationToken unauth = new UsernamePasswordAuthenticationToken("admin-1", null);
+        unauth.setAuthenticated(false);
+        SecurityContextHolder.getContext().setAuthentication(unauth);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("admin-1", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("changeStatus F4: Anonymous authentication throws 401 AUTHENTICATION_REQUIRED")
+    void changeStatusAnonymousAuthenticationThrows401() {
+        SecurityContextHolder.getContext().setAuthentication(
+                new AnonymousAuthenticationToken("key", "anonymousUser", List.of(new SimpleGrantedAuthority("ROLE_ANONYMOUS"))));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("admin-1", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("changeStatus F4: Non-UserPrincipal authentication throws 401 AUTHENTICATION_REQUIRED")
+    void changeStatusNonUserPrincipalThrows401() {
+        UsernamePasswordAuthenticationToken nonUserPrincipal =
+                new UsernamePasswordAuthenticationToken("just-a-string-principal", null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+        SecurityContextHolder.getContext().setAuthentication(nonUserPrincipal);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("admin-1", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("AUTHENTICATION_REQUIRED", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+    }
+
+    @Test
+    @DisplayName("changeStatus F4: Inactive actor in database throws 403 ACTOR_ACCOUNT_INACTIVE")
+    void changeStatusInactiveActorThrows403() {
+        authenticateAs("admin-1", "admin@marketplace.local", Role.ADMIN);
+        User inactiveActor = createUser("admin-1", Role.ADMIN, UserStatus.SUSPENDED);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(inactiveActor));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("admin-1", "cust-1", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("ACTOR_ACCOUNT_INACTIVE", ex.getErrorCode());
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+    }
+
+    // --- EXTRA 1 countNewUsers maximum range (120 buckets) tests ---
+
+    @Test
+    @DisplayName("countNewUsers: Exactly 120 weekly buckets succeeds")
+    void countNewUsersAtMax120BucketsWeekSucceeds() {
+        authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+
+        Instant from = Instant.parse("2024-01-01T00:00:00Z"); // Monday
+        Instant to = from.plus(Duration.ofDays(120 * 7)); // Exactly 120 weeks
+
+        AggregationResults<Document> aggResults = new AggregationResults<>(List.of(), new Document());
+        when(mongoTemplate.aggregate(any(Aggregation.class), eq(User.class), eq(Document.class)))
+                .thenReturn(aggResults);
+
+        List<PeriodCount> results = userInternalService.countNewUsers(
+                "admin-1", Set.of(Role.CUSTOMER), from, to, Granularity.WEEK);
+
+        assertNotNull(results);
+        assertEquals(120, results.size());
+    }
+
+    @Test
+    @DisplayName("countNewUsers: 121 weekly buckets throws 400 INVALID_DATE_RANGE")
+    void countNewUsersExceeding120BucketsWeekThrows400() {
+        authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+
+        Instant from = Instant.parse("2024-01-01T00:00:00Z"); // Monday
+        Instant to = from.plus(Duration.ofDays(121 * 7)); // 121 weeks
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("admin-1", Set.of(Role.CUSTOMER), from, to, Granularity.WEEK));
+
+        assertEquals("INVALID_DATE_RANGE", ex.getErrorCode());
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        assertTrue(ex.getMessage().contains("120"));
+        verifyNoInteractions(mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("countNewUsers: Exactly 120 monthly buckets succeeds")
+    void countNewUsersAtMax120BucketsMonthSucceeds() {
+        authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+
+        Instant from = Instant.parse("2010-01-01T00:00:00Z");
+        Instant to = Instant.parse("2020-01-01T00:00:00Z"); // Exactly 120 months (10 years)
+
+        AggregationResults<Document> aggResults = new AggregationResults<>(List.of(), new Document());
+        when(mongoTemplate.aggregate(any(Aggregation.class), eq(User.class), eq(Document.class)))
+                .thenReturn(aggResults);
+
+        List<PeriodCount> results = userInternalService.countNewUsers(
+                "admin-1", Set.of(Role.CUSTOMER), from, to, Granularity.MONTH);
+
+        assertNotNull(results);
+        assertEquals(120, results.size());
+    }
+
+    @Test
+    @DisplayName("countNewUsers: 121 monthly buckets throws 400 INVALID_DATE_RANGE")
+    void countNewUsersExceeding120BucketsMonthThrows400() {
+        authenticateAs("admin-1", "admin1@marketplace.local", Role.ADMIN);
+        User admin = createUser("admin-1", Role.ADMIN, UserStatus.ACTIVE);
+        when(userRepository.findById("admin-1")).thenReturn(Optional.of(admin));
+
+        Instant from = Instant.parse("2010-01-01T00:00:00Z");
+        Instant to = Instant.parse("2020-02-01T00:00:00Z"); // 121 months
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.countNewUsers("admin-1", Set.of(Role.CUSTOMER), from, to, Granularity.MONTH));
+
+        assertEquals("INVALID_DATE_RANGE", ex.getErrorCode());
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        assertTrue(ex.getMessage().contains("120"));
+        verifyNoInteractions(mongoTemplate);
     }
 }
