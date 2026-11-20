@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -184,7 +185,7 @@ class ReviewConcurrentUpdateIntegrationTest {
         // Same call the service makes after its own checks passed on an older copy
         Instant now = Instant.now();
         Optional<Review> result = reviewUpdates.applyCustomerEdit(reviewId, CUSTOMER, 1, "Stale",
-                now.minus(Duration.ofHours(48)), now);
+                now.minus(Duration.ofHours(48)), now, ReviewStatus.PUBLISHED, List.of(), null);
 
         assertTrue(result.isEmpty());
         Review review = stored(reviewId);
@@ -220,9 +221,9 @@ class ReviewConcurrentUpdateIntegrationTest {
         String noTimeId = saveReview("booking-no-time", null).getId();
 
         assertTrue(reviewUpdates.applyCustomerEdit(oldId, CUSTOMER, 1, "Late",
-                now.minus(Duration.ofHours(48)), now).isEmpty());
+                now.minus(Duration.ofHours(48)), now, ReviewStatus.PUBLISHED, List.of(), null).isEmpty());
         assertTrue(reviewUpdates.applyCustomerEdit(noTimeId, CUSTOMER, 1, "Late",
-                now.minus(Duration.ofHours(48)), now).isEmpty());
+                now.minus(Duration.ofHours(48)), now, ReviewStatus.PUBLISHED, List.of(), null).isEmpty());
 
         assertEquals(4, stored(oldId).getRating());
         assertEquals(4, stored(noTimeId).getRating());

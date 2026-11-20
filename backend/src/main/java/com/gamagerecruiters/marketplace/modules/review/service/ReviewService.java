@@ -21,7 +21,7 @@ public interface ReviewService {
 
     ReviewPageResponse getMyReviews(String customerId, int page, int size);
 
-    /** Provider's own reviews, any status (they can see if one was removed). */
+    /** Provider's own reviews (S11): PUBLISHED only, so held or removed content is never exposed to the provider. */
     ReviewPageResponse getProviderOwnReviews(String providerId, int page, int size);
 
     /** Provider adds or edits their single reply to a published review. */
