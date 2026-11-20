@@ -117,6 +117,26 @@ public class BookingFacadeImpl implements BookingFacade {
                 BookingStatus.DISPUTED, cleanReason);
     }
 
+    @Override
+    public BookingParticipants assertDisputeEligible(String bookingId, String actorId) {
+        assertActorIsAuthenticatedUser(actorId);
+
+        Booking booking = findBooking(bookingId);
+        assertParticipant(booking, actorId, Participant.CUSTOMER_OR_PROVIDER);
+
+        Instant now = Instant.now(clock);
+        if (booking.getStatus() == BookingStatus.DISPUTED) {
+            assertWithinWindowSince(booking, BookingStatus.DISPUTED, now);
+        } else {
+            assertStartsFrom(booking, DISPUTABLE, BookingStatus.DISPUTED);
+            if (booking.getStatus() == BookingStatus.COMPLETED) {
+                assertWithinDisputeWindow(booking, now);
+            }
+        }
+        // Read-only: nothing is saved.
+        return toParticipants(booking);
+    }
+
     /**
      * Authenticated actor → load → participant check → starting status (+ dispute window) → save.
      * Identity and participant are checked before the status so a non-participant cannot learn it.
@@ -189,10 +209,16 @@ public class BookingFacadeImpl implements BookingFacade {
     }
 
     private void assertWithinDisputeWindow(Booking booking, Instant now) {
-        Instant completedAt = lastChangeTo(booking, BookingStatus.COMPLETED).orElse(null);
-        if (completedAt == null || now.isAfter(completedAt.plus(DISPUTE_WINDOW))) {
+        assertWithinWindowSince(booking, BookingStatus.COMPLETED, now);
+    }
+
+    /** 72 h window from the last time the booking entered {@code status}; missing time fails closed. */
+    private void assertWithinWindowSince(Booking booking, BookingStatus status, Instant now) {
+        Instant since = lastChangeTo(booking, status).orElse(null);
+        if (since == null || now.isAfter(since.plus(DISPUTE_WINDOW))) {
             throw new ResourceConflictException("DISPUTE_WINDOW_CLOSED",
-                    "The dispute window closes 72 hours after completion");
+                    "The dispute window closes 72 hours after " + (status == BookingStatus.COMPLETED
+                            ? "completion" : "the booking was disputed"));
         }
     }
 

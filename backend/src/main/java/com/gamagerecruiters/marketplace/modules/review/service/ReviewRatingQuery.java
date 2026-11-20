@@ -13,8 +13,8 @@ import com.gamagerecruiters.marketplace.modules.review.domain.Review;
 import com.gamagerecruiters.marketplace.modules.review.domain.ReviewStatus;
 
 /**
- * Counts a provider's PUBLISHED reviews per star value with one MongoDB aggregation
- * (uses the providerId+status+createdAt index), instead of loading every review.
+ * Counts PUBLISHED reviews per star value with one MongoDB aggregation, instead of loading every review.
+ * Provider counts use the providerId+status+createdAt index; listing counts the listingId+status index.
  */
 @Component
 public class ReviewRatingQuery {
@@ -25,10 +25,19 @@ public class ReviewRatingQuery {
         this.mongoTemplate = mongoTemplate;
     }
 
-    /** Star value (1–5) -> number of published reviews with that rating. */
+    /** Star value (1–5) -> number of the provider's published reviews with that rating. */
     public Map<Integer, Long> countPublishedByRating(String providerId) {
+        return countPublished("providerId", providerId);
+    }
+
+    /** Star value (1–5) -> number of the listing's published reviews with that rating (FR-REV-004). */
+    public Map<Integer, Long> countPublishedByRatingForListing(String listingId) {
+        return countPublished("listingId", listingId);
+    }
+
+    private Map<Integer, Long> countPublished(String field, String value) {
         Aggregation aggregation = Aggregation.newAggregation(
-                Aggregation.match(Criteria.where("providerId").is(providerId)
+                Aggregation.match(Criteria.where(field).is(value)
                         .and("status").is(ReviewStatus.PUBLISHED.name())),
                 Aggregation.group("rating").count().as("count"));
 

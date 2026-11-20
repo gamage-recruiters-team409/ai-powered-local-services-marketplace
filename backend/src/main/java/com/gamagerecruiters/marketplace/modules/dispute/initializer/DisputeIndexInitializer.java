@@ -25,6 +25,10 @@ import com.mongodb.client.model.Indexes;
  *   <li>{@code status_1_createdAt_-1}: admin list filtered by status.</li>
  *   <li>{@code bookingSyncState_1_createdAt_1} (partial, PENDING only): lets the booking-sync reconciler find
  *       unfinished intent records without scanning the collection. Holds only the few PENDING records.</li>
+ *   <li>{@code status_1_appealDeadline_1} (partial, only documents with an appealDeadline): lets the finalizer find
+ *       RESOLVED disputes whose appeal window has passed.</li>
+ *   <li>{@code settlement.state_1_settlement.lastAttemptAt_1} (partial, only final disputes): lets the finalizer find
+ *       settlements that are PENDING or due for a retry.</li>
  * </ul>
  */
 @Component
@@ -59,6 +63,13 @@ public class DisputeIndexInitializer {
             disputes.createIndex(Indexes.compoundIndex(Indexes.ascending("bookingSyncState"), Indexes.ascending("createdAt")),
                     new IndexOptions().name("bookingSyncState_1_createdAt_1")
                             .partialFilterExpression(new Document("bookingSyncState", "PENDING")));
+            disputes.createIndex(Indexes.compoundIndex(Indexes.ascending("status"), Indexes.ascending("appealDeadline")),
+                    new IndexOptions().name("status_1_appealDeadline_1")
+                            .partialFilterExpression(new Document("appealDeadline", new Document("$exists", true))));
+            disputes.createIndex(Indexes.compoundIndex(Indexes.ascending("settlement.state"),
+                            Indexes.ascending("settlement.lastAttemptAt")),
+                    new IndexOptions().name("settlement.state_1_settlement.lastAttemptAt_1")
+                            .partialFilterExpression(new Document("settlement.state", new Document("$exists", true))));
 
             log.info("Dispute indexes verified on collection {}", DISPUTES);
         } catch (RuntimeException e) {

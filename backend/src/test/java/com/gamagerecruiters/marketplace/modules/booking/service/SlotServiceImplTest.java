@@ -242,6 +242,30 @@ class SlotServiceImplTest {
         assertThat(response.slots().get(0).localEnd()).isEqualTo("17:00");
     }
 
+    @Test
+    @DisplayName("isSlotAvailable: true for an offered slot start, false for an off-grid start")
+    void isSlotAvailableReChecksTheSlot() {
+        givenWeekdaySchedule();
+        givenNotBlocked(MONDAY);
+        givenExistingBookings(List.of());
+
+        // 09:00 Colombo on Monday = 03:30 UTC
+        assertThat(service.isSlotAvailable(PROVIDER, Instant.parse("2026-11-23T03:30:00Z"), 60)).isTrue();
+        // 09:15 is not on the 30-minute grid
+        assertThat(service.isSlotAvailable(PROVIDER, Instant.parse("2026-11-23T03:45:00Z"), 60)).isFalse();
+    }
+
+    @Test
+    @DisplayName("isSlotAvailable: false when an existing booking (plus buffer) overlaps")
+    void isSlotAvailableFalseWhenTaken() {
+        givenWeekdaySchedule();
+        givenNotBlocked(MONDAY);
+        givenExistingBookings(List.of(booking("2026-11-23T06:30:00Z", "2026-11-23T07:30:00Z")));
+
+        // 12:00 Colombo = 06:30 UTC, already booked
+        assertThat(service.isSlotAvailable(PROVIDER, Instant.parse("2026-11-23T06:30:00Z"), 60)).isFalse();
+    }
+
     @ParameterizedTest(name = "providerId={0}, date={1}, duration={2} → 400 {3}")
     @CsvSource({
             "'', 2026-11-23, 60, INVALID_PROVIDER",

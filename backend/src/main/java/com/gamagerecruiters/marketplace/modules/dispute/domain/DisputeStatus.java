@@ -15,6 +15,8 @@ import java.util.Set;
  *   <li>{@link #AWAITING_RESPONSE}: waiting for the other party's response, until {@code responseDueAt}.</li>
  *   <li>{@link #UNDER_REVIEW}: the other party responded (or the window passed); an admin handles it.</li>
  *   <li>{@link #RESOLVED}: an admin decided; the appeal window is still open.</li>
+ *   <li>{@link #APPEALED}: <b>proposed, pending TL approval.</b> A party appealed the decision within the appeal
+ *       window; a different admin reviews it. Leads only to {@link #RESOLVED_FINAL}.</li>
  *   <li>{@link #RESOLVED_FINAL}: decision is final (appeal window passed or appeal decided).</li>
  *   <li>{@link #CLOSED}: closed without a decision (for example withdrawn or invalid).</li>
  * </ul>
@@ -24,14 +26,17 @@ public enum DisputeStatus {
     AWAITING_RESPONSE,
     UNDER_REVIEW,
     RESOLVED,
+    /** Proposed, pending TL approval (see the class comment). */
+    APPEALED,
     RESOLVED_FINAL,
     CLOSED;
 
     /**
-     * Statuses that still block a new dispute for the same booking. RESOLVED is included because the
-     * decision can still be appealed. (Assumption, to be confirmed by the Team Lead.)
+     * Statuses that still block a new dispute for the same booking. RESOLVED and APPEALED are included because the
+     * decision is not final yet. (Assumption, to be confirmed by the Team Lead.)
      */
-    public static final Set<DisputeStatus> ACTIVE = EnumSet.of(OPEN, AWAITING_RESPONSE, UNDER_REVIEW, RESOLVED);
+    public static final Set<DisputeStatus> ACTIVE =
+            EnumSet.of(OPEN, AWAITING_RESPONSE, UNDER_REVIEW, RESOLVED, APPEALED);
 
     public boolean isActive() {
         return ACTIVE.contains(this);

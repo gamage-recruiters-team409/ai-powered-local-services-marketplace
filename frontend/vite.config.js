@@ -6,5 +6,6 @@ export default defineConfig({
   plugins: [react()],
   test: {
     exclude: ['**/node_modules/**', '**/tests/**', '**/apiTokenGuard.test.js'],
+    setupFiles: ['./src/test/setup.js'],
   },
 })

@@ -21,6 +21,13 @@ public final class DisputeAccess {
     public static final String ADMIN_AREA_VIEW =
             "@" + AdminAccessPolicyService.BEAN_NAME + ".canViewArea(authentication, '" + Roles.ADMIN + "')";
 
+    /**
+     * Write access to the disputes admin area (decision, appeal decision): ADMIN only. SUPER_ADMIN can view the
+     * area but not edit it, so it gets 403 here.
+     */
+    public static final String ADMIN_AREA_EDIT =
+            "@" + AdminAccessPolicyService.BEAN_NAME + ".canEditArea(authentication, '" + Roles.ADMIN + "')";
+
     /** A party, or an admin who can view the disputes area. Per-dispute party checks happen in the service. */
     public static final String PARTY_OR_ADMIN_AREA_VIEW = PARTY + " or " + ADMIN_AREA_VIEW;
 
