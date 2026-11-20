@@ -94,7 +94,7 @@ class Wp07DisputeSettlementAdapterTest {
         when(holdRepository.findByDisputeId(DISPUTE_ID))
                 .thenReturn(Optional.of(wrongHold));
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(SettlementRejectedException.class,
                 () -> adapter.settle(
                         instruction(ResolutionAction.RELEASE_TO_PROVIDER, 0, 0)));
 
@@ -103,7 +103,7 @@ class Wp07DisputeSettlementAdapterTest {
 
     @Test
     void refundDecision_rejectsWithoutFinancialWrites() {
-        assertThrows(IllegalStateException.class,
+        assertThrows(SettlementRejectedException.class,
                 () -> adapter.settle(
                         instruction(ResolutionAction.REFUND_FULL, 100, 30)));
 
@@ -117,7 +117,7 @@ class Wp07DisputeSettlementAdapterTest {
                 DISPUTE_ID, BOOKING_ID, CUSTOMER_ID, PROVIDER_ID,
                 ResolutionAction.RELEASE_TO_PROVIDER, 0, 0, "wrong-key");
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(SettlementRejectedException.class,
                 () -> adapter.settle(invalid));
 
         verifyNoInteractions(

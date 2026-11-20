@@ -63,20 +63,20 @@ public class Wp07DisputeSettlementAdapter implements DisputeSettlementPort {
         String expectedKey = "dispute-" + disputeId;
 
         if (!expectedKey.equals(instruction.idempotencyKey())) {
-            throw new IllegalStateException(
+            throw new SettlementRejectedException(
                     "Unexpected settlement idempotency key");
         }
 
         // Do not apply unsupported refund or penalty movements.
         if (instruction.action() != ResolutionAction.RELEASE_TO_PROVIDER) {
-            throw new IllegalStateException(
+            throw new SettlementRejectedException(
                     "Refund settlement requires approved commission allocation "
                     + "and atomic refund accounting");
         }
 
         if (instruction.customerRefundPercent() != 0
                 || instruction.providerPenaltyPercent() != 0) {
-            throw new IllegalStateException(
+            throw new SettlementRejectedException(
                     "Provider release cannot include refund or penalty");
         }
 
@@ -85,12 +85,12 @@ public class Wp07DisputeSettlementAdapter implements DisputeSettlementPort {
         if (!customerId.equals(snapshot.customerId())
                 || !providerId.equals(snapshot.providerId())
                 || !bookingId.equals(snapshot.bookingId())) {
-            throw new IllegalStateException(
+            throw new SettlementRejectedException(
                     "Settlement ownership does not match booking");
         }
 
         if (snapshot.refundedAmount().signum() != 0) {
-            throw new IllegalStateException(
+            throw new SettlementRejectedException(
                     "Provider release is not allowed after a refund");
         }
 
@@ -105,7 +105,7 @@ public class Wp07DisputeSettlementAdapter implements DisputeSettlementPort {
                 || !snapshot.currency().equals(hold.getCurrency())
                 || snapshot.providerEarnings()
                         .compareTo(hold.getAmount()) != 0) {
-            throw new IllegalStateException(
+            throw new SettlementRejectedException(
                     "Settlement does not match original financial hold");
         }
 
