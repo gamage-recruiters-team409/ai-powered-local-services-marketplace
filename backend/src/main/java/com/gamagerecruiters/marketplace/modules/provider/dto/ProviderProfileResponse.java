@@ -1,6 +1,8 @@
+
 package com.gamagerecruiters.marketplace.modules.provider.dto;
 
 import java.time.Instant;
+import java.util.List;
 
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderType;
 
@@ -17,6 +19,8 @@ public class ProviderProfileResponse {
     private String profileImageUrl;
     private Instant createdAt;
     private Instant updatedAt;
+
+    private List<String> categoryIds = List.of();
 
     public ProviderProfileResponse() {
     }
@@ -89,5 +93,15 @@ public class ProviderProfileResponse {
 
     public Instant getUpdatedAt() {
         return updatedAt;
+    }
+
+    public List<String> getCategoryIds() {
+        return categoryIds;
+    }
+
+    public void setCategoryIds(List<String> categoryIds) {
+        this.categoryIds = categoryIds == null
+                ? List.of()
+                : List.copyOf(categoryIds);
     }
 }

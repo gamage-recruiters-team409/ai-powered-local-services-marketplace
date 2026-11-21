@@ -16,6 +16,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import com.gamagerecruiters.marketplace.modules.admin.repository.AdminAuditLogRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
@@ -29,12 +30,22 @@ import com.gamagerecruiters.marketplace.modules.booking.repository.BookingReposi
 import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
+import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerFavouriteRepository;
 import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
+import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
+import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
+import com.gamagerecruiters.marketplace.modules.listing.service.CatalogCategoryLookupAdapter;
+import com.gamagerecruiters.marketplace.modules.listing.service.ProviderVerificationLookupAdapter;
+import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
+import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
+import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.VerificationDocumentRepository;
+import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationFacade;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -53,6 +64,9 @@ class ApplicationContextRealStartupTest {
     private BlockedDateRepository blockedDateRepository;
 
     @MockitoBean
+    private DisputeRepository disputeRepository;
+
+    @MockitoBean
     private CategoryRepository categoryRepository;
 
     @MockitoBean
@@ -60,6 +74,9 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private CustomerAddressRepository customerAddressRepository;
+
+    @MockitoBean
+    private CustomerFavouriteRepository customerFavouriteRepository;
 
     @MockitoBean
     private ProviderProfileRepository providerProfileRepository;
@@ -81,6 +98,25 @@ class ApplicationContextRealStartupTest {
 
     @MockitoBean
     private PaymentRepository paymentRepository;
+
+    @MockitoBean
+    private ListingRepository listingRepository;
+
+    @MockitoBean
+    private ConversationRepository conversationRepository;
+
+    @MockitoBean
+    private MessageRepository messageRepository;
+
+    @MockitoBean
+    private EarningsLedgerRepository earningsLedgerRepository;
+
+    @MockitoBean
+    private ProviderEarningsStateRepository providerEarningsStateRepository;
+
+    // Provides a transaction manager dependency for the startup test context.
+    @MockitoBean
+    private PlatformTransactionManager transactionManager;
 
     @MockitoBean
     private MongoTemplate mongoTemplate;
@@ -117,6 +153,21 @@ class ApplicationContextRealStartupTest {
         assertNotNull(
                 applicationContext.getBean(BookingOpenBookingsChecker.class),
                 "BookingOpenBookingsChecker bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(CatalogCategoryLookupAdapter.class),
+                "CatalogCategoryLookupAdapter bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(ProviderVerificationFacade.class),
+                "ProviderVerificationFacade bean must exist"
+        );
+
+        assertNotNull(
+                applicationContext.getBean(ProviderVerificationLookupAdapter.class),
+                "ProviderVerificationLookupAdapter bean must exist"
         );
     }
 

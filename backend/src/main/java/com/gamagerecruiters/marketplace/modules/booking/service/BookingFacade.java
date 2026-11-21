@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.booking.service;
 
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 
 /**
@@ -68,4 +69,40 @@ public interface BookingFacade {
      * customer or provider.
      */
     BookingParticipants markDisputed(String bookingId, String actorId, String reason);
+
+    /**
+     * Read-only check used by the dispute module before it records a dispute. Changes nothing.
+     * Same identity and participant rules as {@link #markDisputed}; eligible when the booking is
+     * CONFIRMED, IN_PROGRESS or COMPLETION_PENDING; COMPLETED within 72 h of completion (BR-008);
+     * or already DISPUTED within 72 h of the time it moved to DISPUTED (timeline entry).
+     * Errors: 401 UNAUTHORIZED, 404 BOOKING_NOT_FOUND, 403 ACCESS_DENIED,
+     * 409 INVALID_STATUS_TRANSITION, 409 DISPUTE_WINDOW_CLOSED.
+     *
+     * @return the booking's participants and status, for the caller's own records
+     */
+    BookingParticipants assertDisputeEligible(String bookingId, String actorId);
+
+    /**
+     * Final decision of a dispute (WP09): DISPUTED → COMPLETED, REFUNDED or PARTIALLY_REFUNDED.
+     *
+     * <p>Caller (one of two, nothing else):</p>
+     * <ul>
+     *   <li>an authenticated ADMIN – recorded with their user ID;</li>
+     *   <li>the WP09 settlement job, inside {@link TrustedBookingSystemCall#run} with purpose
+     *       {@code DISPUTE_SETTLEMENT} – recorded as SYSTEM.</li>
+     * </ul>
+     * <p>Any other caller is rejected: no authentication (with or without an HTTP request) → 401;
+     * an authenticated non-ADMIN → 403. A missing request context alone never grants SYSTEM.</p>
+     *
+     * <p>{@code reference} must be the WP09 settlement idempotency key ({@code dispute-<disputeId>},
+     * letters, digits, '_' or '-', at most 100 characters). It is stored unchanged on the timeline entry.
+     * A retry with the same final status and the same reference returns the current state and saves
+     * nothing. If the booking was already resolved by a different decision (other reference or other
+     * final status) → 409 DISPUTE_ALREADY_RESOLVED.</p>
+     *
+     * <p>Errors: 400 INVALID_DISPUTE_RESOLUTION, 400 INVALID_DISPUTE_REFERENCE, 401 UNAUTHORIZED,
+     * 403 ACCESS_DENIED, 404 BOOKING_NOT_FOUND, 409 DISPUTE_ALREADY_RESOLVED,
+     * 409 INVALID_STATUS_TRANSITION, 409 BOOKING_UPDATE_CONFLICT (concurrent update; safe to retry).</p>
+     */
+    BookingParticipants resolveDispute(String bookingId, BookingStatus finalStatus, String reference);
 }

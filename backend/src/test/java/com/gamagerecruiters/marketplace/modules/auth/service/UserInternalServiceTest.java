@@ -90,9 +90,25 @@ class UserInternalServiceTest {
         User user = new User();
         user.setId(id);
         user.setEmail(id + "@marketplace.local");
+        user.setName("User " + id);
         user.setRole(role);
         user.setStatus(status);
         return user;
+    }
+
+    @Test
+    @DisplayName("getContactById returns correct UserContact record")
+    void getContactById_returnsUserContact() {
+        User user = createUser("user-1", Role.CUSTOMER, UserStatus.ACTIVE);
+        when(userRepository.findById("user-1")).thenReturn(Optional.of(user));
+
+        UserInternalService.UserContact contact = userInternalService.getContactById("user-1");
+
+        assertNotNull(contact);
+        assertEquals("user-1", contact.id());
+        assertEquals("User user-1", contact.fullName());
+        assertEquals("user-1@marketplace.local", contact.email());
+        assertEquals(UserStatus.ACTIVE, contact.status());
     }
 
     @Test

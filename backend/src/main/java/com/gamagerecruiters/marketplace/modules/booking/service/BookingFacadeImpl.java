@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.EnumSet;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -17,6 +18,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.auth.security.OwnershipChecker;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
@@ -40,6 +42,17 @@ public class BookingFacadeImpl implements BookingFacade {
     private static final Set<BookingStatus> DISPUTABLE = EnumSet.of(
             BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS, BookingStatus.COMPLETION_PENDING,
             BookingStatus.COMPLETED);
+    private static final Set<BookingStatus> FROM_DISPUTED = EnumSet.of(BookingStatus.DISPUTED);
+
+    /** Final statuses an admin dispute decision can set (SRS 5.2). */
+    static final Set<BookingStatus> DISPUTE_FINAL_STATUSES = EnumSet.of(
+            BookingStatus.COMPLETED, BookingStatus.REFUNDED, BookingStatus.PARTIALLY_REFUNDED);
+
+    /** Same role the dispute module requires for decisions (ADMIN area edit). */
+    private static final Role DISPUTE_RESOLVER_ROLE = Role.ADMIN;
+
+    /** WP09 settlement idempotency key: dispute-<disputeId> (SettlementInstruction.idempotencyKey). */
+    private static final Pattern DISPUTE_REFERENCE = Pattern.compile("^dispute-[A-Za-z0-9_-]{1,92}$");
 
     /** Which booking participant the authenticated actor must be. */
     private enum Participant {
@@ -117,6 +130,94 @@ public class BookingFacadeImpl implements BookingFacade {
                 BookingStatus.DISPUTED, cleanReason);
     }
 
+    @Override
+    public BookingParticipants assertDisputeEligible(String bookingId, String actorId) {
+        assertActorIsAuthenticatedUser(actorId);
+
+        Booking booking = findBooking(bookingId);
+        assertParticipant(booking, actorId, Participant.CUSTOMER_OR_PROVIDER);
+
+        Instant now = Instant.now(clock);
+        if (booking.getStatus() == BookingStatus.DISPUTED) {
+            assertWithinWindowSince(booking, BookingStatus.DISPUTED, now);
+        } else {
+            assertStartsFrom(booking, DISPUTABLE, BookingStatus.DISPUTED);
+            if (booking.getStatus() == BookingStatus.COMPLETED) {
+                assertWithinDisputeWindow(booking, now);
+            }
+        }
+        // Read-only: nothing is saved.
+        return toParticipants(booking);
+    }
+
+    @Override
+    public BookingParticipants resolveDispute(String bookingId, BookingStatus finalStatus, String reference) {
+        String changedBy = disputeResolverId();
+
+        if (finalStatus == null || !DISPUTE_FINAL_STATUSES.contains(finalStatus)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_DISPUTE_RESOLUTION",
+                    "A dispute can only be resolved to COMPLETED, REFUNDED or PARTIALLY_REFUNDED");
+        }
+        if (reference == null || !DISPUTE_REFERENCE.matcher(reference).matches()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_DISPUTE_REFERENCE",
+                    "The dispute reference must be the settlement key dispute-<disputeId>");
+        }
+
+        Booking booking = findBooking(bookingId);
+
+        if (booking.getStatus() != BookingStatus.DISPUTED) {
+            BookingStatusChange applied = appliedResolution(booking);
+            if (applied != null) {
+                // Retry of the same decision: return it unchanged, save nothing.
+                if (applied.getToStatus() == finalStatus && reference.equals(applied.getReference())) {
+                    return toParticipants(booking);
+                }
+                throw new ResourceConflictException("DISPUTE_ALREADY_RESOLVED",
+                        "This dispute was already resolved by a different decision");
+            }
+        }
+
+        assertStartsFrom(booking, FROM_DISPUTED, finalStatus);
+
+        booking.changeStatus(finalStatus, changedBy, "Dispute resolved", Instant.now(clock));
+        booking.getTimeline().get(booking.getTimeline().size() - 1).setReference(reference);
+        return save(booking);
+    }
+
+    /**
+     * Authenticated ADMIN → their user ID. The WP09 settlement job inside
+     * {@link TrustedBookingSystemCall#run} (purpose DISPUTE_SETTLEMENT, no HTTP request) → SYSTEM.
+     * No authentication → 401 (also outside HTTP requests); any other role → 403.
+     */
+    private String disputeResolverId() {
+        if (TrustedBookingSystemCall.isActive(TrustedBookingSystemCall.Purpose.DISPUTE_SETTLEMENT)
+                && RequestContextHolder.getRequestAttributes() == null) {
+            return BookingStatusChange.SYSTEM;
+        }
+        if (CurrentUser.isAuthenticated()) {
+            if (CurrentUser.getRole() != DISPUTE_RESOLVER_ROLE) {
+                throw new AccessDeniedException("Access denied: only an admin can resolve a dispute");
+            }
+            return CurrentUser.getUserId();
+        }
+        throw new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required");
+    }
+
+    /**
+     * The applied dispute decision, when the latest timeline entry is DISPUTED → a final status
+     * and the booking is still in that status; otherwise null.
+     */
+    private static BookingStatusChange appliedResolution(Booking booking) {
+        if (booking.getTimeline().isEmpty()) {
+            return null;
+        }
+        BookingStatusChange last = booking.getTimeline().get(booking.getTimeline().size() - 1);
+        boolean resolution = last.getFromStatus() == BookingStatus.DISPUTED
+                && DISPUTE_FINAL_STATUSES.contains(last.getToStatus())
+                && booking.getStatus() == last.getToStatus();
+        return resolution ? last : null;
+    }
+
     /**
      * Authenticated actor → load → participant check → starting status (+ dispute window) → save.
      * Identity and participant are checked before the status so a non-participant cannot learn it.
@@ -141,6 +242,10 @@ public class BookingFacadeImpl implements BookingFacade {
     private BookingParticipants applyAndSave(Booking booking, BookingStatus target, String changedBy,
                                              String reason, Instant now) {
         booking.changeStatus(target, changedBy, reason, now);
+        return save(booking);
+    }
+
+    private BookingParticipants save(Booking booking) {
         try {
             return toParticipants(bookingRepository.save(booking));
         } catch (OptimisticLockingFailureException e) {
@@ -189,10 +294,16 @@ public class BookingFacadeImpl implements BookingFacade {
     }
 
     private void assertWithinDisputeWindow(Booking booking, Instant now) {
-        Instant completedAt = lastChangeTo(booking, BookingStatus.COMPLETED).orElse(null);
-        if (completedAt == null || now.isAfter(completedAt.plus(DISPUTE_WINDOW))) {
+        assertWithinWindowSince(booking, BookingStatus.COMPLETED, now);
+    }
+
+    /** 72 h window from the last time the booking entered {@code status}; missing time fails closed. */
+    private void assertWithinWindowSince(Booking booking, BookingStatus status, Instant now) {
+        Instant since = lastChangeTo(booking, status).orElse(null);
+        if (since == null || now.isAfter(since.plus(DISPUTE_WINDOW))) {
             throw new ResourceConflictException("DISPUTE_WINDOW_CLOSED",
-                    "The dispute window closes 72 hours after completion");
+                    "The dispute window closes 72 hours after " + (status == BookingStatus.COMPLETED
+                            ? "completion" : "the booking was disputed"));
         }
     }
 

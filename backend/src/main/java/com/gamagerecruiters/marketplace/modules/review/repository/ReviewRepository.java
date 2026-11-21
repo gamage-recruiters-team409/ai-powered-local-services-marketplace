@@ -20,8 +20,6 @@ public interface ReviewRepository extends MongoRepository<Review, String> {
 
     Page<Review> findByCustomerId(String customerId, Pageable pageable);
 
-    Page<Review> findByProviderId(String providerId, Pageable pageable);
-
     Page<Review> findByProviderIdAndStatus(String providerId, ReviewStatus status, Pageable pageable);
 
     List<Review> findByProviderIdAndStatus(String providerId, ReviewStatus status);

@@ -15,6 +15,8 @@ public class BookingStatusChange {
     private Instant changedAt;
     private String changedBy;
     private String reason;
+    /** External idempotency key of the operation that made this change (dispute resolutions only), else null. */
+    private String reference;
 
     public BookingStatusChange() {
     }
@@ -66,5 +68,13 @@ public class BookingStatusChange {
 
     public void setReason(String reason) {
         this.reason = reason;
+    }
+
+    public String getReference() {
+        return reference;
+    }
+
+    public void setReference(String reference) {
+        this.reference = reference;
     }
 }
