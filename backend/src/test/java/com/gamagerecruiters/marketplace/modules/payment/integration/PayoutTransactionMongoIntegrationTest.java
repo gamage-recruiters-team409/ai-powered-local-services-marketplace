@@ -9,7 +9,13 @@ import static org.mockito.Mockito.mock;
 import java.math.BigDecimal;
 import java.util.UUID;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
+import org.testcontainers.containers.MongoDBContainer;
 import org.springframework.http.HttpStatus;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -35,12 +41,30 @@ import com.gamagerecruiters.marketplace.modules.payment.service.PayoutTransactio
 /**
  * Verifies payout reservation rollback using a real MongoDB transaction.
  *
- * Runs against the isolated local wp07rs replica set, never the shared
+ * Runs against an isolated Testcontainers MongoDB replica set, never the shared
  * application database.
  */
+@Tag("integration")
+@DisabledIfSystemProperty(named = "SKIP_DOCKER_TESTS", matches = "(?i)true")
+@DisabledIfEnvironmentVariable(named = "SKIP_DOCKER_TESTS", matches = "(?i)true")
 class PayoutTransactionMongoIntegrationTest {
 
-    private static final String LOCAL_URI = "mongodb://127.0.0.1:27018/?replicaSet=wp07rs";
+    private static final MongoDBContainer MONGO =
+            new MongoDBContainer("mongo:7.0");
+
+    @BeforeAll
+    static void startContainer() {
+        if (!MONGO.isRunning()) {
+            MONGO.start();
+        }
+    }
+
+    @AfterAll
+    static void stopContainer() {
+        if (MONGO.isRunning()) {
+            MONGO.stop();
+        }
+    }
 
     @Test
     void insufficientEligibleEarningsRollsBackPersistedPayout() {
@@ -49,7 +73,7 @@ class PayoutTransactionMongoIntegrationTest {
         String databaseName = "wp07_payout_rollback_test_"
                 + UUID.randomUUID().toString().replace("-", "");
 
-        try (MongoClient client = MongoClients.create(LOCAL_URI)) {
+        try (MongoClient client = MongoClients.create(MONGO.getReplicaSetUrl())) {
 
             MongoDatabase database = client.getDatabase(databaseName);
 

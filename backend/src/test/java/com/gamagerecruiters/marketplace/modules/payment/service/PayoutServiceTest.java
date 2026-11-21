@@ -42,7 +42,7 @@ class PayoutServiceTest {
     }
 
     @Test
-    void requestPayoutMapsUserIdToProviderProfileId() {
+    void requestPayoutUsesAuthenticatedUserIdInsteadOfProfileId() {
         when(providerProfileRepository.findByUserId("user-1"))
                 .thenReturn(Optional.of(profile("provider-profile-1")));
         when(transactionService.reserve(any(Payout.class))).thenAnswer(invocation -> {
@@ -54,7 +54,7 @@ class PayoutServiceTest {
         Payout result = service.requestPayout(
                 "user-1", "request-key-1", new BigDecimal("5000.00"));
 
-        assertEquals("provider-profile-1", result.getProviderId());
+        assertEquals("user-1", result.getProviderId());
         assertEquals("LKR", result.getCurrency());
         verify(transactionService).reserve(any(Payout.class));
     }
@@ -75,7 +75,7 @@ class PayoutServiceTest {
                 .thenReturn(Optional.of(profile("provider-profile-1")));
 
         Payout payout = new Payout(
-                "request-key-1", "provider-profile-1",
+                "request-key-1", "user-1",
                 new BigDecimal("5000.00"), "LKR");
         when(transactionService.reserve(any(Payout.class))).thenReturn(payout);
 
@@ -99,16 +99,16 @@ class PayoutServiceTest {
     }
 
     @Test
-    void providerHistoryUsesProfileIdAndExistingPaginationConvention() {
+    void providerHistoryUsesAuthenticatedUserIdAndExistingPaginationConvention() {
         when(providerProfileRepository.findByUserId("user-1"))
                 .thenReturn(Optional.of(profile("provider-profile-1")));
-        when(payoutRepository.findByProviderId(eq("provider-profile-1"), any(Pageable.class)))
+        when(payoutRepository.findByProviderId(eq("user-1"), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(), Pageable.unpaged(), 0));
 
         var result = service.getMyPayoutHistory("user-1", 0, 10);
 
         assertEquals(0, result.getTotalElements());
-        verify(payoutRepository).findByProviderId(eq("provider-profile-1"), any(Pageable.class));
+        verify(payoutRepository).findByProviderId(eq("user-1"), any(Pageable.class));
     }
 
     @Test
@@ -137,7 +137,7 @@ class PayoutServiceTest {
     @Test
     void paidAndFailedLifecycleDelegateWithTrustedAdminId() {
         Payout payout = new Payout(
-                "request-key-1", "provider-profile-1",
+                "request-key-1", "user-1",
                 new BigDecimal("5000.00"), "LKR");
 
         when(transactionService.markPaid("payout-1", "admin-1", "BANK-REF-1"))

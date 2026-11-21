@@ -34,9 +34,9 @@ public class PayoutService {
         this.payoutTransactionService = Objects.requireNonNull(payoutTransactionService);
     }
 
-    /** Creates an LKR payout for the authenticated user's provider profile. */
+    /** Creates an LKR payout using the authenticated provider user ID. */
     public Payout requestPayout(String authenticatedUserId, String requestKey, BigDecimal amount) {
-        String providerId = resolveProviderProfileId(authenticatedUserId);
+        String providerId = resolveFinancialProviderId(authenticatedUserId);
         Payout payout = new Payout(
                 requireText(requestKey, "Request key"),
                 providerId,
@@ -48,13 +48,13 @@ public class PayoutService {
     /** Retrieves paginated payout history for the authenticated provider. */
     public Page<Payout> getMyPayoutHistory(String authenticatedUserId, int page, int size) {
         Pageable pageable = payoutPage(page, size);
-        String providerId = resolveProviderProfileId(authenticatedUserId);
+        String providerId = resolveFinancialProviderId(authenticatedUserId);
         return payoutRepository.findByProviderId(providerId, pageable);
     }
 
     /** Retrieves one payout only when it belongs to the authenticated provider. */
     public Payout getMyPayout(String authenticatedUserId, String payoutId) {
-        String providerId = resolveProviderProfileId(authenticatedUserId);
+        String providerId = resolveFinancialProviderId(authenticatedUserId);
         Payout payout = requirePayout(payoutId);
         if (!providerId.equals(payout.getProviderId())) {
             throw new IllegalStateException("Payout is not owned by the authenticated provider");
@@ -95,14 +95,16 @@ public class PayoutService {
                 requireText(reason, "Failure reason"));
     }
 
-    private String resolveProviderProfileId(String authenticatedUserId) {
+    /**
+     * Resolves the financial provider ID using the authenticated user ID.
+     * Provider profile existence is verified without using its document ID
+     * as the booking and earnings ownership identifier.
+     */
+    private String resolveFinancialProviderId(String authenticatedUserId) {
         String userId = requireText(authenticatedUserId, "Authenticated user ID");
-        ProviderProfile profile = providerProfileRepository.findByUserId(userId)
+        providerProfileRepository.findByUserId(userId)
                 .orElseThrow(() -> new IllegalStateException("Provider profile not found"));
-        if (profile.getId() == null || profile.getId().isBlank()) {
-            throw new IllegalStateException("Provider profile ID is unavailable");
-        }
-        return profile.getId().trim();
+        return userId;
     }
 
     private Payout requirePayout(String payoutId) {

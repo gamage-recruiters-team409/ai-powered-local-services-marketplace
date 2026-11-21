@@ -8,7 +8,13 @@ import java.util.List;
 import java.util.UUID;
 
 import org.bson.Document;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
+import org.testcontainers.containers.MongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 
@@ -21,16 +27,34 @@ import com.mongodb.client.model.IndexOptions;
 import com.mongodb.client.model.Indexes;
 
 /**
- * Verifies WP07 payout uniqueness constraints against a local MongoDB instance.
+ * Verifies WP07 payout uniqueness constraints against isolated Testcontainers MongoDB.
  *
  * <p>
- * Every test uses an isolated temporary database on localhost.
+ * Every test uses an isolated temporary database in the test container.
  * Only that temporary database is dropped during cleanup.
  * </p>
  */
+@Tag("integration")
+@DisabledIfSystemProperty(named = "SKIP_DOCKER_TESTS", matches = "(?i)true")
+@DisabledIfEnvironmentVariable(named = "SKIP_DOCKER_TESTS", matches = "(?i)true")
 class PayoutIndexMongoIntegrationTest {
 
-    private static final String LOCAL_URI = "mongodb://127.0.0.1:27017";
+    private static final MongoDBContainer MONGO =
+            new MongoDBContainer("mongo:7.0");
+
+    @BeforeAll
+    static void startContainer() {
+        if (!MONGO.isRunning()) {
+            MONGO.start();
+        }
+    }
+
+    @AfterAll
+    static void stopContainer() {
+        if (MONGO.isRunning()) {
+            MONGO.stop();
+        }
+    }
 
     /**
      * Verifies index creation, idempotent initialization, and real
@@ -40,7 +64,7 @@ class PayoutIndexMongoIntegrationTest {
     void createsAndEnforcesPayoutUniqueIndexes() {
         String databaseName = temporaryDatabaseName("wp07_payout_indexes_");
 
-        try (MongoClient client = MongoClients.create(LOCAL_URI)) {
+        try (MongoClient client = MongoClients.create(MONGO.getReplicaSetUrl())) {
             MongoTemplate template = template(client, databaseName);
 
             MongoCollection<Document> payouts = collection(
@@ -145,7 +169,7 @@ class PayoutIndexMongoIntegrationTest {
     void rejectsIncompatiblePayoutIndexWithoutDeletingIt() {
         String databaseName = temporaryDatabaseName("wp07_payout_conflict_");
 
-        try (MongoClient client = MongoClients.create(LOCAL_URI)) {
+        try (MongoClient client = MongoClients.create(MONGO.getReplicaSetUrl())) {
             MongoTemplate template = template(client, databaseName);
             MongoCollection<Document> payouts = collection(
                     client, databaseName, "provider_payouts");
@@ -185,7 +209,7 @@ class PayoutIndexMongoIntegrationTest {
     void rejectsIncompatibleAllocationIndexWithoutDeletingIt() {
         String databaseName = temporaryDatabaseName("wp07_allocation_conflict_");
 
-        try (MongoClient client = MongoClients.create(LOCAL_URI)) {
+        try (MongoClient client = MongoClients.create(MONGO.getReplicaSetUrl())) {
             MongoTemplate template = template(client, databaseName);
             MongoCollection<Document> allocations = collection(
                     client, databaseName, "payout_allocations");

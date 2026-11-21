@@ -50,7 +50,7 @@ class ProviderPayoutControllerTest {
     @Test
     void requestPayoutReturnsCreatedAndUsesAuthenticatedUserId() {
         authenticate(Role.PROVIDER);
-        Payout payout = payout("payout-1", "provider-profile-1");
+        Payout payout = payout("payout-1", USER_ID);
         when(payoutService.requestPayout(
                 USER_ID, "request-1", new BigDecimal("5000.00")))
                 .thenReturn(payout);
@@ -68,7 +68,7 @@ class ProviderPayoutControllerTest {
     void getMyPayoutHistoryReturnsOkAndProviderView() {
         authenticate(Role.PROVIDER);
         var page = new PageImpl<>(
-                List.of(payout("payout-1", "provider-profile-1")),
+                List.of(payout("payout-1", USER_ID)),
                 PageRequest.of(0, 10),
                 1);
         when(payoutService.getMyPayoutHistory(USER_ID, 0, 10)).thenReturn(page);
