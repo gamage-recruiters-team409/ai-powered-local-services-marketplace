@@ -39,6 +39,7 @@ import com.gamagerecruiters.marketplace.modules.messaging.domain.Message;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.MessageStatus;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePollingResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePageResponse;
+import com.gamagerecruiters.marketplace.modules.messaging.dto.ConversationPageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.service.MessageService;
@@ -221,6 +222,43 @@ class MessagingMongoIntegrationTest {
         assertThat(ids).containsExactly("history-message-e", "history-message-d", "history-message-c",
                 "history-message-b", "history-message-a");
         assertThat(ids).doesNotHaveDuplicates();
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: same-timestamp conversation pages have no repeats or gaps")
+    void listConversationsWithSameUpdatedAtDoesNotRepeatOrSkipAcrossPages() {
+        Instant timestamp = Instant.parse("2026-11-22T08:00:00Z");
+        List<Conversation> saved = conversationRepository.saveAll(java.util.stream.IntStream.rangeClosed(1, 5)
+                .mapToObj(index -> {
+                    Conversation conversation = conversation(null, "booking-conversation-page-" + index);
+                    conversation.setUpdatedAt(timestamp);
+                    return conversation;
+                })
+                .toList());
+        assertThat(saved).allSatisfy(conversation ->
+                assertThat(org.bson.types.ObjectId.isValid(conversation.getId())).isTrue());
+
+        loginAs("customer-1", Role.CUSTOMER);
+        List<String> firstRun = conversationIdsAcrossPages();
+        List<String> secondRun = conversationIdsAcrossPages();
+        List<String> expectedOrder = saved.stream()
+                .map(Conversation::getId)
+                .sorted(java.util.Comparator.reverseOrder())
+                .toList();
+
+        assertThat(firstRun).containsExactlyElementsOf(expectedOrder);
+        assertThat(firstRun).doesNotHaveDuplicates();
+        assertThat(secondRun).containsExactlyElementsOf(firstRun);
+    }
+
+    private List<String> conversationIdsAcrossPages() {
+        ConversationPageResponse first = messageService.listConversations(0, 2);
+        ConversationPageResponse second = messageService.listConversations(1, 2);
+        ConversationPageResponse third = messageService.listConversations(2, 2);
+        return java.util.stream.Stream.of(first, second, third)
+                .flatMap(response -> response.content().stream())
+                .map(response -> response.id())
+                .toList();
     }
 
     private static Conversation conversation(String id, String bookingId) {

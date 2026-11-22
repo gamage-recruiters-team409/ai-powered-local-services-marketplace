@@ -28,6 +28,7 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -355,6 +356,22 @@ class MessageServiceImplTest {
 
         assertThat(response.body()).isEqualTo("hello");
         verify(messageRepository, org.mockito.Mockito.times(1)).save(any(Message.class));
+    }
+
+    @Test
+    void listConversationsUsesStableSortByUpdatedAtThenId() {
+        when(conversationRepository.findByCustomerIdOrProviderId(
+                anyString(), anyString(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of()));
+
+        service.listConversations(0, 100);
+
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        verify(conversationRepository).findByCustomerIdOrProviderId(
+                eq(CUSTOMER_ID), eq(CUSTOMER_ID), pageableCaptor.capture());
+        Pageable pageable = pageableCaptor.getValue();
+        assertThat(pageable.getPageSize()).isEqualTo(50);
+        assertThat(pageable.getSort()).containsExactly(
+                Sort.Order.desc("updatedAt"), Sort.Order.desc("id"));
     }
 
     @Test

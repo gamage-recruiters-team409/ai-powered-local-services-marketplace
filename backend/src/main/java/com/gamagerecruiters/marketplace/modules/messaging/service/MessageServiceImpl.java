@@ -114,8 +114,8 @@ public class MessageServiceImpl implements MessageService {
         int pageSize = normalizedPageSize(size);
         String userId = requireUser();
         Page<Conversation> conversations = conversationRepository
-                .findByCustomerIdOrProviderIdOrderByUpdatedAtDesc(
-                        userId, userId, PageRequest.of(validPage, pageSize));
+                .findByCustomerIdOrProviderId(userId, userId,
+                        conversationPageRequest(validPage, pageSize));
         List<ConversationResponse> content = conversations.getContent().stream()
                 .map(conversation -> new ConversationResponse(
                         conversation.getId(), conversation.getBookingId(), conversation.getCustomerId(),
@@ -459,6 +459,10 @@ public class MessageServiceImpl implements MessageService {
 
     private PageRequest historyPageRequest(int page, int size) {
         return PageRequest.of(page, size, Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
+    }
+
+    private PageRequest conversationPageRequest(int page, int size) {
+        return PageRequest.of(page, size, Sort.by(Sort.Order.desc("updatedAt"), Sort.Order.desc("id")));
     }
 
     private ApiException messageUpdateConflict() {

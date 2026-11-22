@@ -12,6 +12,9 @@ public interface ConversationRepository extends MongoRepository<Conversation, St
 
     Optional<Conversation> findByChatKey(String chatKey);
 
-    Page<Conversation> findByCustomerIdOrProviderIdOrderByUpdatedAtDesc(
+    /**
+     * Callers must pass a Pageable sorted by updatedAt DESC and id DESC for deterministic pages.
+     */
+    Page<Conversation> findByCustomerIdOrProviderId(
             String customerId, String providerId, Pageable pageable);
 }
