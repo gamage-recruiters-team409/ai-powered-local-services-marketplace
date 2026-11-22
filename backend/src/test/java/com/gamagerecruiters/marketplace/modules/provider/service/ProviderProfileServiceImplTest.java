@@ -12,6 +12,13 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.eq;
+import org.bson.Document;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.List;
@@ -56,6 +63,9 @@ class ProviderProfileServiceImplTest {
     private ProviderProfileRepository providerProfileRepository;
 
     @Mock
+    private MongoTemplate mongoTemplate;
+
+    @Mock
     private CategoryService categoryService;
 
     @Mock
@@ -93,6 +103,24 @@ class ProviderProfileServiceImplTest {
         lenient()
                 .when(districtCatalog.isValidDistrict(anyString()))
                 .thenReturn(true);
+
+        // Simulate findAndModify returning the updated entity without writing
+        // unrelated fields. Focused real-MongoDB tests will validate this
+        // behavior using an actual database.
+        lenient().when(mongoTemplate.findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class)
+        )).thenAnswer(invocation -> {
+            ProviderProfile profile = providerProfileRepository
+                    .findByUserId(USER_ID).orElse(null);
+            if (profile == null) {
+                return null;
+            }
+            Update update = invocation.getArgument(1);
+            Document set = (Document) update.getUpdateObject().get("$set");
+            applyTargetedUpdate(profile, set);
+            return profile;
+        });
     }
 
     @AfterEach
@@ -238,8 +266,9 @@ class ProviderProfileServiceImplTest {
 
         assertEquals("INVALID_DISTRICT", exception.getErrorCode());
 
-        verify(providerProfileRepository, never())
-                .save(any(ProviderProfile.class));
+        verify(mongoTemplate, never()).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
     }
 
     @Test
@@ -278,8 +307,6 @@ class ProviderProfileServiceImplTest {
         when(providerProfileRepository.findByUserId(USER_ID))
                 .thenReturn(Optional.of(existingProfile));
 
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         UpdateProviderProfileRequest request =
                 new UpdateProviderProfileRequest();
@@ -310,8 +337,9 @@ class ProviderProfileServiceImplTest {
 
         assertNotNull(response.getUpdatedAt());
 
-        verify(providerProfileRepository)
-                .save(existingProfile);
+        verify(mongoTemplate).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
 
         // Non-category profile updates must not trigger re-verification.
         verify(providerVerificationReverificationService, never())
@@ -429,8 +457,6 @@ class ProviderProfileServiceImplTest {
         when(categoryService.getCategoryById("category-3"))
                 .thenReturn(activeCategory("category-3"));
 
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         UpdateProviderProfileRequest request =
                 new UpdateProviderProfileRequest();
@@ -450,8 +476,9 @@ class ProviderProfileServiceImplTest {
         verify(categoryService)
                 .getCategoryById("category-3");
 
-        verify(providerProfileRepository)
-                .save(existingProfile);
+        verify(mongoTemplate).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
 
         // The new category must request re-verification.
         verify(providerVerificationReverificationService)
@@ -472,8 +499,6 @@ class ProviderProfileServiceImplTest {
         when(categoryService.getCategoryById("category-2"))
                 .thenReturn(activeCategory("category-2"));
 
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         UpdateProviderProfileRequest request =
                 new UpdateProviderProfileRequest();
@@ -542,8 +567,9 @@ class ProviderProfileServiceImplTest {
         );
 
         // A rejected category update must never persist the profile.
-        verify(providerProfileRepository, never())
-                .save(any(ProviderProfile.class));
+        verify(mongoTemplate, never()).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
     }
 
     @Test
@@ -557,8 +583,6 @@ class ProviderProfileServiceImplTest {
         when(categoryService.getCategoryById("existing-category"))
                 .thenReturn(activeCategory("existing-category"));
 
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         UpdateProviderProfileRequest request =
                 new UpdateProviderProfileRequest();
@@ -594,8 +618,6 @@ class ProviderProfileServiceImplTest {
         when(categoryService.getCategoryById("existing-category"))
                 .thenReturn(activeCategory("existing-category"));
 
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         UpdateProviderProfileRequest request =
                 new UpdateProviderProfileRequest();
@@ -639,8 +661,6 @@ class ProviderProfileServiceImplTest {
         when(profileImageStorageService.upload("profile-1", file))
                 .thenReturn(storedImage);
 
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         ProviderProfileResponse response =
                 providerProfileService.uploadMyProfileImage(file);
@@ -654,7 +674,9 @@ class ProviderProfileServiceImplTest {
         assertNotNull(response.getUpdatedAt());
 
         verify(profileImageStorageService).upload("profile-1", file);
-        verify(providerProfileRepository).save(existingProfile);
+        verify(mongoTemplate).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
         verify(profileImageStorageService, never()).delete(any());
     }
 
@@ -677,8 +699,6 @@ class ProviderProfileServiceImplTest {
         when(profileImageStorageService.upload("profile-1", file))
                 .thenReturn(storedImage);
 
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         ProviderProfileResponse response =
                 providerProfileService.uploadMyProfileImage(file);
@@ -691,11 +711,13 @@ class ProviderProfileServiceImplTest {
 
         var ordered = inOrder(
                 profileImageStorageService,
-                providerProfileRepository
+                mongoTemplate
         );
 
         ordered.verify(profileImageStorageService).upload("profile-1", file);
-        ordered.verify(providerProfileRepository).save(existingProfile);
+        ordered.verify(mongoTemplate).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
         ordered.verify(profileImageStorageService).delete("old-profile-image-id");
     }
 
@@ -718,8 +740,10 @@ class ProviderProfileServiceImplTest {
         when(profileImageStorageService.upload("profile-1", file))
                 .thenReturn(storedImage);
 
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenThrow(new IllegalStateException("Database save failed"));
+        when(mongoTemplate.findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class)
+        )).thenThrow(new IllegalStateException("Database save failed"));
 
         assertThrows(
                 RuntimeException.class,
@@ -742,8 +766,6 @@ class ProviderProfileServiceImplTest {
         when(providerProfileRepository.findByUserId(USER_ID))
                 .thenReturn(Optional.of(existingProfile));
 
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
 
         ProviderProfileResponse response =
                 providerProfileService.removeMyProfileImage();
@@ -754,11 +776,13 @@ class ProviderProfileServiceImplTest {
         assertNotNull(response.getUpdatedAt());
 
         var ordered = inOrder(
-                providerProfileRepository,
+                mongoTemplate,
                 profileImageStorageService
         );
 
-        ordered.verify(providerProfileRepository).save(existingProfile);
+        ordered.verify(mongoTemplate).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
         ordered.verify(profileImageStorageService).delete("old-profile-image-id");
     }
 
@@ -776,7 +800,9 @@ class ProviderProfileServiceImplTest {
         );
 
         verify(profileImageStorageService, never()).upload(any(), any());
-        verify(providerProfileRepository, never()).save(any(ProviderProfile.class));
+        verify(mongoTemplate, never()).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
     }
 
     @Test
@@ -791,7 +817,98 @@ class ProviderProfileServiceImplTest {
         );
 
         verify(profileImageStorageService, never()).delete(any());
-        verify(providerProfileRepository, never()).save(any(ProviderProfile.class));
+        verify(mongoTemplate, never()).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
+    }
+
+    @Test
+    void updateMyProfile_shouldNeverWriteUnrelatedProfileFields() {
+        ProviderProfile existing = createExistingProfile();
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existing));
+        UpdateProviderProfileRequest request = new UpdateProviderProfileRequest();
+        request.setBio("Only bio changes");
+
+        providerProfileService.updateMyProfile(request);
+
+        org.mockito.ArgumentCaptor<Update> captured =
+                org.mockito.ArgumentCaptor.forClass(Update.class);
+        verify(mongoTemplate).findAndModify(
+                any(Query.class), captured.capture(),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
+        Document set = (Document) captured.getValue().getUpdateObject().get("$set");
+        assertEquals(2, set.size());
+        assertEquals("Only bio changes", set.get("bio"));
+        assertEquals(false, set.containsKey("activityStatus"));
+        assertEquals(false, set.containsKey("payoutAccountNumberEncrypted"));
+        assertEquals(false, set.containsKey("profileImagePublicId"));
+    }
+
+    @Test
+    void uploadMyProfileImage_shouldCleanNewAssetIfConcurrentImageUpdateWins() {
+        ProviderProfile original = createExistingProfile();
+        original.setProfileImagePublicId("old-id");
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(original));
+        MockMultipartFile file = profileImageFile();
+        when(profileImageStorageService.upload("profile-1", file)).thenReturn(
+                new StoredProfileImage("new-id", "https://example.com/new.jpg"));
+        when(mongoTemplate.findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class)
+        )).thenReturn(null);
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> providerProfileService.uploadMyProfileImage(file));
+        assertEquals(409, error.getStatusCode().value());
+        verify(profileImageStorageService).delete("new-id");
+        verify(profileImageStorageService, never()).delete("old-id");
+    }
+
+    @Test
+    void removeMyProfileImage_shouldNotDeleteReplacedAssetOnConflict() {
+        ProviderProfile original = createExistingProfile();
+        original.setProfileImagePublicId("old-id");
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(original));
+        when(mongoTemplate.findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class)
+        )).thenReturn(null);
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> providerProfileService.removeMyProfileImage());
+        assertEquals(409, error.getStatusCode().value());
+        verify(profileImageStorageService, never()).delete(any());
+    }
+
+    @SuppressWarnings("unchecked")
+    private void applyTargetedUpdate(ProviderProfile profile, Document setters) {
+        if (setters == null) {
+            return;
+        }
+        for (String field : setters.keySet()) {
+            Object value = setters.get(field);
+            switch (field) {
+                case "providerType" -> profile.setProviderType(
+                        (ProviderType) value);
+                case "displayName" -> profile.setDisplayName((String) value);
+                case "bio" -> profile.setBio((String) value);
+                case "district" -> profile.setDistrict((String) value);
+                case "city" -> profile.setCity((String) value);
+                case "serviceAreaDistricts" -> profile.setServiceAreaDistricts(
+                        (List<String>) value);
+                case "experienceYears" -> profile.setExperienceYears(
+                        (Integer) value);
+                case "categoryIds" -> profile.setCategoryIds((List<String>) value);
+                case "profileImageUrl" -> profile.setProfileImageUrl((String) value);
+                case "profileImagePublicId" -> profile.setProfileImagePublicId(
+                        (String) value);
+                case "updatedAt" -> profile.setUpdatedAt((Instant) value);
+                default -> throw new AssertionError("Unexpected field: " + field);
+            }
+        }
     }
 
     private MockMultipartFile profileImageFile() {

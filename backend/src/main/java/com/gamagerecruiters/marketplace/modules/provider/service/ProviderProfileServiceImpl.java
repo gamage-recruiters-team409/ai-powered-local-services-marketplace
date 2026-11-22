@@ -1,4 +1,3 @@
-
 package com.gamagerecruiters.marketplace.modules.provider.service;
 
 import java.time.Instant;
@@ -6,6 +5,14 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +44,7 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
             LoggerFactory.getLogger(ProviderProfileServiceImpl.class);
 
     private final ProviderProfileRepository providerProfileRepository;
+    private final MongoTemplate mongoTemplate;
     private final CategoryService categoryService;
     private final DistrictCatalog districtCatalog;
     private final ProviderVerificationReverificationService
@@ -49,9 +57,11 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
             DistrictCatalog districtCatalog,
             ProviderVerificationReverificationService
                     providerVerificationReverificationService,
-            ProfileImageStorageService profileImageStorageService
+            ProfileImageStorageService profileImageStorageService,
+            MongoTemplate mongoTemplate
     ) {
         this.providerProfileRepository = providerProfileRepository;
+        this.mongoTemplate = mongoTemplate;
         this.categoryService = categoryService;
         this.districtCatalog = districtCatalog;
         this.providerVerificationReverificationService =
@@ -63,8 +73,9 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
      * Returns the configured service-area districts for a provider.
      *
      * @param providerId the provider's user ID (not the profile document ID)
-     * @return an immutable set of configured district names, or an empty set
-     *         when the provider ID, profile, or service-area selection is missing
+     * @return an immutable set of configured district names. For a legacy
+     *         profile whose selection field is absent, a valid primary district
+     *         is returned; explicit empty selections remain empty.
      */
     @Override
     public Set<String> getServiceAreaDistricts(String providerId) {
@@ -80,14 +91,13 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
             return Set.of();
         }
 
-        List<String> configuredDistricts = profile.getServiceAreaDistricts();
-
-        if (configuredDistricts == null || configuredDistricts.isEmpty()) {
-            return Set.of();
-        }
-
-        // Return a defensive, immutable set and remove any duplicate values.
-        return Set.copyOf(new LinkedHashSet<>(configuredDistricts));
+        // Use the same resolution rule as the profile response and WP05 facade.
+        // A missing legacy field falls back to a valid primary district;
+        // an explicitly stored empty list stays empty.
+        return ProviderServiceAreaResolver.resolveDistrictSet(
+                profile,
+                districtCatalog
+        );
     }
 
     @Override
@@ -164,92 +174,86 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
     public ProviderProfileResponse updateMyProfile(
             UpdateProviderProfileRequest request
     ) {
-
         String userId = requireCurrentUserId();
+        ProviderProfile original = requireProviderProfile(userId);
 
-        ProviderProfile profile = providerProfileRepository
-                .findByUserId(userId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "PROVIDER_PROFILE_NOT_FOUND",
-                        "Provider profile not found"
-                ));
+        // Validate all requested values before changing anything in MongoDB.
+        // Use a targeted update rather than saving a stale ProviderProfile.
+        Update update = new Update();
 
         if (request.getProviderType() != null) {
-            profile.setProviderType(request.getProviderType());
+            update.set("providerType", request.getProviderType());
         }
-
         if (request.getDisplayName() != null) {
-            profile.setDisplayName(request.getDisplayName().trim());
+            update.set("displayName", request.getDisplayName().trim());
         }
-
         if (request.getBio() != null) {
-            profile.setBio(trimToNull(request.getBio()));
+            update.set("bio", trimToNull(request.getBio()));
         }
-
         if (request.getDistrict() != null) {
-            profile.setDistrict(validateDistrict(request.getDistrict()));
+            update.set("district", validateDistrict(request.getDistrict()));
         }
-
         if (request.getCity() != null) {
-            profile.setCity(request.getCity().trim());
+            update.set("city", request.getCity().trim());
         }
-
         if (request.getServiceAreaDistricts() != null) {
-            profile.setServiceAreaDistricts(
-                    validateServiceAreaDistricts(request.getServiceAreaDistricts())
-            );
+            update.set("serviceAreaDistricts",
+                    validateServiceAreaDistricts(request.getServiceAreaDistricts()));
         }
-
         if (request.getExperienceYears() != null) {
-            profile.setExperienceYears(request.getExperienceYears());
+            update.set("experienceYears", request.getExperienceYears());
         }
-
         if (request.getProfileImageUrl() != null) {
-            profile.setProfileImageUrl(
-                    trimToNull(request.getProfileImageUrl())
-            );
+            // Preserve legacy profile-image URL update behavior.
+            update.set("profileImageUrl", trimToNull(request.getProfileImageUrl()));
         }
 
-        /*
-         * Preserve existing categories if categoryIds is omitted.
-         *
-         * Re-verification is requested only when a new category
-         * is added to the existing category selection.
-         */
-        if (request.getCategoryIds() != null) {
-
-            List<String> validatedCategoryIds =
-                    validateCategoryIds(request.getCategoryIds());
-
-            boolean newCategoryAdded = hasNewCategory(
-                    profile.getCategoryIds(),
-                    validatedCategoryIds
-            );
-
-            if (newCategoryAdded) {
-
-                /*
-                 * Coordinate category additions with the verification lifecycle:
-                 *
-                 * - APPROVED providers move to RESUBMISSION_REQUESTED.
-                 * - SUBMITTED and UNDER_REVIEW providers receive a conflict.
-                 * - Other verification statuses retain their existing workflow.
-                 *
-                 * The verification service must complete this check before
-                 * the updated category selection is saved.
-                 */
+        boolean categoriesRequested = request.getCategoryIds() != null;
+        if (categoriesRequested) {
+            List<String> validated = validateCategoryIds(request.getCategoryIds());
+            if (hasNewCategory(original.getCategoryIds(), validated)) {
+                // Retain the existing transactional verification coordination.
+                // A conflict must abort the profile update as before.
                 providerVerificationReverificationService
-                        .requestCategoryReverification(profile.getId());
+                        .requestCategoryReverification(original.getId());
             }
-
-            profile.setCategoryIds(validatedCategoryIds);
+            update.set("categoryIds", validated);
         }
 
-        profile.setUpdatedAt(Instant.now());
+        update.set("updatedAt", Instant.now());
+        Query query = Query.query(Criteria.where("userId").is(userId));
 
-        return toResponse(
-                providerProfileRepository.save(profile)
+        if (categoriesRequested) {
+            // Compare-and-set category selection: do not silently overwrite
+            // a newer concurrent category update based on a stale snapshot.
+            // Older records may have no categoryIds field at all.
+            List<String> previous = original.getCategoryIds();
+            if (previous.isEmpty()) {
+                query.addCriteria(new Criteria().orOperator(
+                        Criteria.where("categoryIds").is(List.of()),
+                        Criteria.where("categoryIds").is(null)
+                ));
+            } else {
+                query.addCriteria(Criteria.where("categoryIds").is(previous));
+            }
+        }
+
+        ProviderProfile updated = mongoTemplate.findAndModify(
+                query,
+                update,
+                FindAndModifyOptions.options().returnNew(true),
+                ProviderProfile.class
         );
+
+        if (updated == null) {
+            // Throwing here rolls back the verification transition in the
+            // existing MongoDB transaction on category additions.
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Provider profile or categories changed. Please refresh and try again"
+            );
+        }
+        return toResponse(updated);
     }
 
     /**
@@ -263,121 +267,110 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
     public ProviderProfileResponse uploadMyProfileImage(
             MultipartFile file
     ) {
-
         String userId = requireCurrentUserId();
+        ProviderProfile original = requireProviderProfile(userId);
 
-        ProviderProfile profile = providerProfileRepository
-                .findByUserId(userId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "PROVIDER_PROFILE_NOT_FOUND",
-                        "Provider profile not found"
-                ));
+        // Keep the old image unchanged while Cloudinary performs the upload.
+        StoredProfileImage uploaded =
+                profileImageStorageService.upload(original.getId(), file);
 
-        // Upload the new image to Cloudinary first.
-        StoredProfileImage uploadedImage =
-                profileImageStorageService.upload(
-                        profile.getId(),
-                        file
-                );
-
-        String previousPublicId =
-                profile.getProfileImagePublicId();
-
-        profile.setProfileImageUrl(
-                uploadedImage.secureUrl()
-        );
-
-        profile.setProfileImagePublicId(
-                uploadedImage.publicId()
-        );
-
-        profile.setUpdatedAt(Instant.now());
-
-        ProviderProfile savedProfile;
+        String previousPublicId = original.getProfileImagePublicId();
+        String previousUrl = original.getProfileImageUrl();
+        ProviderProfile updated;
 
         try {
+            // Only swap image references if no other image request replaced
+            // or removed the old image in the meantime. Other profile fields
+            // (including PAUSED, service area and payout) are never written.
+            Query query = imageCompareAndSetQuery(
+                    userId, previousPublicId, previousUrl);
+            Update update = new Update()
+                    .set("profileImageUrl", uploaded.secureUrl())
+                    .set("profileImagePublicId", uploaded.publicId())
+                    .set("updatedAt", Instant.now());
 
-            // Persist the new Cloudinary references.
-            savedProfile = providerProfileRepository.save(profile);
-
-        } catch (RuntimeException exception) {
-
-            /*
-             * If database persistence fails, attempt to remove
-             * the newly uploaded image.
-             *
-             * The previous profile image remains unchanged in the database.
-             */
-            deleteProfileImageQuietly(
-                    uploadedImage.publicId(),
-                    "cleaning up an unsuccessful upload"
+            updated = mongoTemplate.findAndModify(
+                    query, update,
+                    FindAndModifyOptions.options().returnNew(true),
+                    ProviderProfile.class
             );
-
+            if (updated == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Profile image changed during upload. Please refresh and retry"
+                );
+            }
+        } catch (RuntimeException exception) {
+            // The new Cloudinary image was never made current in MongoDB.
+            deleteProfileImageQuietly(
+                    uploaded.publicId(), "cleaning up an unsuccessful upload");
             throw exception;
         }
 
-        /*
-         * Delete the previous image only after the new image
-         * has been successfully saved.
-         */
+        // Only the winning request may delete the previously referenced asset.
         if (hasText(previousPublicId)
-                && !previousPublicId.equals(uploadedImage.publicId())) {
-
+                && !previousPublicId.equals(uploaded.publicId())) {
             deleteProfileImageQuietly(
-                    previousPublicId,
-                    "replacing the previous profile image"
-            );
+                    previousPublicId, "replacing the previous profile image");
         }
-
-        return toResponse(savedProfile);
+        return toResponse(updated);
     }
 
     /**
-     * Removes the authenticated provider's profile image.
-     *
-     * The database reference is cleared before the old Cloudinary
-     * asset is deleted, avoiding a profile that references an
-     * already-deleted image if database persistence fails.
+     * Clear the current image only if the references still match what was
+     * read. This cannot delete an image that a concurrent upload just saved.
      */
     @Override
     public ProviderProfileResponse removeMyProfileImage() {
-
         String userId = requireCurrentUserId();
+        ProviderProfile original = requireProviderProfile(userId);
+        String previousPublicId = original.getProfileImagePublicId();
+        String previousUrl = original.getProfileImageUrl();
 
-        ProviderProfile profile = providerProfileRepository
-                .findByUserId(userId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "PROVIDER_PROFILE_NOT_FOUND",
-                        "Provider profile not found"
-                ));
-
-        String previousPublicId =
-                profile.getProfileImagePublicId();
-
-        if (!hasText(profile.getProfileImageUrl())
-                && !hasText(previousPublicId)) {
-
-            return toResponse(profile);
+        if (!hasText(previousUrl) && !hasText(previousPublicId)) {
+            return toResponse(original);
         }
 
-        // Clear both image references.
-        profile.setProfileImageUrl(null);
-        profile.setProfileImagePublicId(null);
-        profile.setUpdatedAt(Instant.now());
+        Query query = imageCompareAndSetQuery(
+                userId, previousPublicId, previousUrl);
+        Update update = new Update()
+                .set("profileImageUrl", null)
+                .set("profileImagePublicId", null)
+                .set("updatedAt", Instant.now());
 
-        ProviderProfile savedProfile =
-                providerProfileRepository.save(profile);
-
-        // Remove the old Cloudinary asset after persistence.
-        if (hasText(previousPublicId)) {
-
-            deleteProfileImageQuietly(
-                    previousPublicId,
-                    "removing the provider profile image"
+        ProviderProfile updated = mongoTemplate.findAndModify(
+                query, update,
+                FindAndModifyOptions.options().returnNew(true),
+                ProviderProfile.class
+        );
+        if (updated == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Profile image changed during removal. Please refresh and retry"
             );
         }
 
-        return toResponse(savedProfile);
+        if (hasText(previousPublicId)) {
+            deleteProfileImageQuietly(
+                    previousPublicId, "removing the provider profile image");
+        }
+        return toResponse(updated);
+    }
+
+    private Query imageCompareAndSetQuery(
+            String userId, String expectedPublicId, String expectedUrl
+    ) {
+        Query query = Query.query(Criteria.where("userId").is(userId));
+        // MongoDB `field: null` matches both missing legacy fields and null.
+        query.addCriteria(Criteria.where("profileImagePublicId").is(expectedPublicId));
+        query.addCriteria(Criteria.where("profileImageUrl").is(expectedUrl));
+        return query;
+    }
+
+    private ProviderProfile requireProviderProfile(String userId) {
+        return providerProfileRepository.findByUserId(userId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "PROVIDER_PROFILE_NOT_FOUND", "Provider profile not found"));
     }
 
     /**
@@ -647,12 +640,14 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
 
         response.setCategoryIds(profile.getCategoryIds());
 
-        List<String> serviceAreaDistricts = profile.getServiceAreaDistricts();
-        if (serviceAreaDistricts.isEmpty() && hasText(profile.getDistrict())) {
-            // Backward-compatible response for profiles created before this field existed.
-            serviceAreaDistricts = List.of(profile.getDistrict());
-        }
-        response.setServiceAreaDistricts(serviceAreaDistricts);
+        // Keep the response consistent with the read-only contracts.
+        // Only a missing legacy field receives a validated fallback.
+        response.setServiceAreaDistricts(
+                ProviderServiceAreaResolver.resolveDistricts(
+                        profile,
+                        districtCatalog
+                )
+        );
 
         return response;
     }

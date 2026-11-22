@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -14,13 +15,19 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 
+import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -59,6 +66,10 @@ class ProviderServiceAreaTest {
     @Mock
     private ProfileImageStorageService profileImageStorageService;
 
+    // Required by the targeted MongoDB profile-update implementation.
+    @Mock
+    private MongoTemplate mongoTemplate;
+
     @InjectMocks
     private ProviderProfileServiceImpl providerProfileService;
 
@@ -69,7 +80,6 @@ class ProviderServiceAreaTest {
                 "provider@test.com",
                 Role.PROVIDER
         );
-
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(
                         principal,
@@ -80,7 +90,6 @@ class ProviderServiceAreaTest {
 
         lenient().when(districtCatalog.isValidDistrict(anyString()))
                 .thenReturn(true);
-
         lenient().when(districtCatalog.getAllDistricts())
                 .thenReturn(new LinkedHashSet<>(List.of(
                         "Colombo",
@@ -98,7 +107,6 @@ class ProviderServiceAreaTest {
     void createProfile_shouldSaveMultipleSelectedServiceAreaDistricts() {
         CreateProviderProfileRequest request = createRequest();
         request.setServiceAreaDistricts(List.of("Gampaha", "Galle"));
-
         when(providerProfileRepository.existsByUserId(USER_ID))
                 .thenReturn(false);
         when(providerProfileRepository.save(any(ProviderProfile.class)))
@@ -110,7 +118,6 @@ class ProviderServiceAreaTest {
 
         ProviderProfileResponse response =
                 providerProfileService.createMyProfile(request);
-
         assertEquals(
                 List.of("Gampaha", "Galle"),
                 response.getServiceAreaDistricts()
@@ -120,7 +127,6 @@ class ProviderServiceAreaTest {
     @Test
     void createProfile_shouldUseExistingDistrictWhenLegacyClientOmitsServiceAreas() {
         CreateProviderProfileRequest request = createRequest();
-
         when(providerProfileRepository.existsByUserId(USER_ID))
                 .thenReturn(false);
         when(providerProfileRepository.save(any(ProviderProfile.class)))
@@ -144,7 +150,6 @@ class ProviderServiceAreaTest {
                 .thenReturn(false);
         when(districtCatalog.isValidDistrict("Atlantis"))
                 .thenReturn(false);
-
         ResourceConflictException exception = assertThrows(
                 ResourceConflictException.class,
                 () -> providerProfileService.createMyProfile(request)
@@ -170,7 +175,6 @@ class ProviderServiceAreaTest {
                 ResourceConflictException.class,
                 () -> providerProfileService.createMyProfile(request)
         );
-
         assertEquals(
                 "PROVIDER_SERVICE_AREA_DUPLICATE",
                 exception.getErrorCode()
@@ -183,7 +187,6 @@ class ProviderServiceAreaTest {
     void createProfile_shouldRejectEmptyExplicitServiceAreaSelection() {
         CreateProviderProfileRequest request = createRequest();
         request.setServiceAreaDistricts(List.of());
-
         when(providerProfileRepository.existsByUserId(USER_ID))
                 .thenReturn(false);
 
@@ -191,7 +194,6 @@ class ProviderServiceAreaTest {
                 ResourceConflictException.class,
                 () -> providerProfileService.createMyProfile(request)
         );
-
         assertEquals(
                 "PROVIDER_SERVICE_AREA_REQUIRED",
                 exception.getErrorCode()
@@ -205,8 +207,15 @@ class ProviderServiceAreaTest {
         ProviderProfile profile = existingProfile();
         when(providerProfileRepository.findByUserId(USER_ID))
                 .thenReturn(Optional.of(profile));
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ProviderProfile updatedProfile = existingProfile();
+        updatedProfile.setServiceAreaDistricts(List.of("Gampaha", "Galle"));
+        when(mongoTemplate.findAndModify(
+                any(Query.class),
+                any(Update.class),
+                any(FindAndModifyOptions.class),
+                eq(ProviderProfile.class)
+        )).thenReturn(updatedProfile);
 
         UpdateProviderProfileRequest request =
                 new UpdateProviderProfileRequest();
@@ -219,6 +228,22 @@ class ProviderServiceAreaTest {
                 List.of("Gampaha", "Galle"),
                 response.getServiceAreaDistricts()
         );
+
+        ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
+        verify(mongoTemplate).findAndModify(
+                any(Query.class),
+                updateCaptor.capture(),
+                any(FindAndModifyOptions.class),
+                eq(ProviderProfile.class)
+        );
+
+        Document setFields = (Document) updateCaptor.getValue()
+                .getUpdateObject().get("$set");
+        assertEquals(List.of("Gampaha", "Galle"),
+                setFields.get("serviceAreaDistricts"));
+        assertTrue(!setFields.containsKey("activityStatus"));
+        assertTrue(!setFields.containsKey("payoutAccountNumberEncrypted"));
+        verify(providerProfileRepository, never()).save(any(ProviderProfile.class));
     }
 
     @Test
@@ -226,8 +251,15 @@ class ProviderServiceAreaTest {
         ProviderProfile profile = existingProfile();
         when(providerProfileRepository.findByUserId(USER_ID))
                 .thenReturn(Optional.of(profile));
-        when(providerProfileRepository.save(any(ProviderProfile.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        ProviderProfile updatedProfile = existingProfile();
+        updatedProfile.setBio("Updated bio");
+        when(mongoTemplate.findAndModify(
+                any(Query.class),
+                any(Update.class),
+                any(FindAndModifyOptions.class),
+                eq(ProviderProfile.class)
+        )).thenReturn(updatedProfile);
 
         UpdateProviderProfileRequest request =
                 new UpdateProviderProfileRequest();
@@ -240,6 +272,22 @@ class ProviderServiceAreaTest {
                 List.of("Colombo", "Gampaha"),
                 response.getServiceAreaDistricts()
         );
+        assertEquals("Updated bio", response.getBio());
+
+        ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
+        verify(mongoTemplate).findAndModify(
+                any(Query.class),
+                updateCaptor.capture(),
+                any(FindAndModifyOptions.class),
+                eq(ProviderProfile.class)
+        );
+        Document setFields = (Document) updateCaptor.getValue()
+                .getUpdateObject().get("$set");
+        assertEquals("Updated bio", setFields.get("bio"));
+        assertTrue(!setFields.containsKey("serviceAreaDistricts"));
+        assertTrue(!setFields.containsKey("activityStatus"));
+        assertTrue(!setFields.containsKey("payoutAccountNumberEncrypted"));
+        verify(providerProfileRepository, never()).save(any(ProviderProfile.class));
     }
 
     @Test
@@ -251,7 +299,6 @@ class ProviderServiceAreaTest {
 
         ProviderProfileResponse response =
                 providerProfileService.getMyProfile();
-
         assertEquals(
                 List.of("Colombo"),
                 response.getServiceAreaDistricts()

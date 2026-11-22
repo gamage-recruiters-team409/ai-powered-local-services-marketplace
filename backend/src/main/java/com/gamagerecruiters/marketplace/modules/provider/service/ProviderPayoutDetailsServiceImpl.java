@@ -3,6 +3,11 @@ package com.gamagerecruiters.marketplace.modules.provider.service;
 import java.time.Instant;
 import java.util.Optional;
 
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -26,20 +31,22 @@ public class ProviderPayoutDetailsServiceImpl
 
     private final ProviderProfileRepository providerProfileRepository;
     private final ProviderPayoutEncryptionService encryptionService;
+    private final MongoTemplate mongoTemplate;
 
     public ProviderPayoutDetailsServiceImpl(
             ProviderProfileRepository providerProfileRepository,
-            ProviderPayoutEncryptionService encryptionService
+            ProviderPayoutEncryptionService encryptionService,
+            MongoTemplate mongoTemplate
     ) {
         this.providerProfileRepository = providerProfileRepository;
         this.encryptionService = encryptionService;
+        this.mongoTemplate = mongoTemplate;
     }
 
     @Override
     public ProviderPayoutDetailsResponse getMyPayoutDetails() {
         String userId = requireCurrentUserId();
         ProviderProfile profile = requireProviderProfile(userId);
-
         return toProviderResponse(profile);
     }
 
@@ -55,41 +62,56 @@ public class ProviderPayoutDetailsServiceImpl
         }
 
         String userId = requireCurrentUserId();
-        ProviderProfile profile = requireProviderProfile(userId);
 
         String bankName = requireText(
                 request.getBankName(),
                 "Bank name is required"
         );
-
         String accountHolderName = requireText(
                 request.getAccountHolderName(),
                 "Account holder name is required"
         );
-
         String accountNumber = normalizeAccountNumber(
                 request.getAccountNumber()
         );
 
-        // Encrypt before the account number is persisted in MongoDB.
+        // Account numbers must never be persisted in plaintext.
         String encryptedAccountNumber =
                 encryptionService.encrypt(accountNumber);
+        Instant now = Instant.now();
 
-        profile.setPayoutBankName(bankName);
-        profile.setPayoutAccountHolderName(accountHolderName);
-        profile.setPayoutAccountNumberEncrypted(encryptedAccountNumber);
-        profile.setUpdatedAt(Instant.now());
+        // Atomically change just the payout fields. Never save a previously
+        // loaded full ProviderProfile: doing so could undo a concurrent pause,
+        // image replacement, service-area edit, or other profile update.
+        Query query = Query.query(Criteria.where("userId").is(userId));
+        Update update = new Update()
+                .set("payoutBankName", bankName)
+                .set("payoutAccountHolderName", accountHolderName)
+                .set("payoutAccountNumberEncrypted", encryptedAccountNumber)
+                .set("updatedAt", now);
 
-        ProviderProfile savedProfile =
-                providerProfileRepository.save(profile);
+        ProviderProfile updatedProfile = mongoTemplate.findAndModify(
+                query,
+                update,
+                FindAndModifyOptions.options().returnNew(true),
+                ProviderProfile.class
+        );
 
-        // Use the already-normalized value to build the masked response.
-        return toProviderResponse(savedProfile, accountNumber);
+        if (updatedProfile == null) {
+            throw new ResourceNotFoundException(
+                    "PROVIDER_PROFILE_NOT_FOUND",
+                    "Provider profile not found"
+            );
+        }
+
+        // Return the normalized input masked; do not expose ciphertext or
+        // decrypt another request's concurrent payout update.
+        return toProviderResponse(updatedProfile, accountNumber);
     }
 
     /**
      * Internal read-only integration contract for WP07.
-     * This method accepts the provider USER ID, not the profile document ID.
+     * The providerUserId is the provider USER ID, not the profile document ID.
      */
     @Override
     public Optional<ProviderPayoutDetails> getPayoutDetailsForPayoutProcessing(
@@ -164,7 +186,6 @@ public class ProviderPayoutDetailsServiceImpl
                 VISIBLE_ACCOUNT_NUMBER_DIGITS,
                 accountNumber.length()
         );
-
         int maskedLength = accountNumber.length() - visibleDigits;
 
         return "*".repeat(maskedLength)
@@ -204,7 +225,6 @@ public class ProviderPayoutDetailsServiceImpl
                     message
             );
         }
-
         return value.trim();
     }
 
@@ -222,8 +242,7 @@ public class ProviderPayoutDetailsServiceImpl
         if (!hasText(userId)) {
             throw new AccessDeniedException("Authentication required");
         }
-
-        return userId;
+        return userId.trim();
     }
 
     private boolean hasText(String value) {

@@ -1,4 +1,3 @@
-
 package com.gamagerecruiters.marketplace.modules.verification.service;
 
 import java.time.Instant;
@@ -288,21 +287,27 @@ public class ProviderVerificationServiceImpl
         Set<String> expiredIds =
                 new LinkedHashSet<>(recordedExpiredIds);
 
-        // Backward-compatible fallback if an EXPIRED record does not
-        // contain the explicit expired-document snapshot.
-        if (expiredIds.isEmpty()) {
+        // IMPORTANT: The recorded expired IDs are only a snapshot of the
+        // original expiry event. Additional previously approved documents
+        // may expire before this provider actually resubmits.
+        // Revalidate every document in the exact previous submission against
+        // today's date, including documents not in the original expired list.
+        for (String documentId : previousSnapshotIds) {
 
-            for (String documentId : previousSnapshotIds) {
+            VerificationDocument previousDocument =
+                    documentsById.get(documentId);
 
-                VerificationDocument document =
-                        documentsById.get(documentId);
+            if (previousDocument == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "A previously submitted verification document could not be found"
+                );
+            }
 
-                if (document != null
-                        && document.getExpiryDate() != null
-                        && !document.getExpiryDate().isAfter(today)) {
+            if (previousDocument.getExpiryDate() != null
+                    && !previousDocument.getExpiryDate().isAfter(today)) {
 
-                    expiredIds.add(documentId);
-                }
+                expiredIds.add(documentId);
             }
         }
 

@@ -1,13 +1,12 @@
-
 package com.gamagerecruiters.marketplace.modules.provider.service;
 
 import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.Set;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
+import com.gamagerecruiters.marketplace.modules.customer.service.DistrictCatalog;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfileActivityStatus;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationFacade;
@@ -20,12 +19,28 @@ public class ProviderActivityFacadeImpl
 
     private final ProviderVerificationFacade providerVerificationFacade;
 
+    private final DistrictCatalog districtCatalog;
+
+    @Autowired
+    public ProviderActivityFacadeImpl(
+            ProviderProfileRepository providerProfileRepository,
+            ProviderVerificationFacade providerVerificationFacade,
+            DistrictCatalog districtCatalog
+    ) {
+        this.providerProfileRepository = providerProfileRepository;
+        this.providerVerificationFacade = providerVerificationFacade;
+        this.districtCatalog = districtCatalog;
+    }
+
+    /**
+     * Compatibility constructor for existing unit tests or direct callers.
+     * Spring uses the three-argument constructor above to inject the catalog.
+     */
     public ProviderActivityFacadeImpl(
             ProviderProfileRepository providerProfileRepository,
             ProviderVerificationFacade providerVerificationFacade
     ) {
-        this.providerProfileRepository = providerProfileRepository;
-        this.providerVerificationFacade = providerVerificationFacade;
+        this(providerProfileRepository, providerVerificationFacade, null);
     }
 
     @Override
@@ -71,11 +86,8 @@ public class ProviderActivityFacadeImpl
     }
 
     /**
-     * Returns the configured service-area districts
-     * using the provider USER ID.
-     *
-     * This method is read-only and does not modify
-     * the provider profile.
+     * Read-only WP05 contract using the provider USER ID.
+     * Uses the identical resolution rule as ProviderProfileServiceImpl.
      */
     @Override
     public Set<String> getServiceAreaDistricts(String providerId) {
@@ -86,28 +98,10 @@ public class ProviderActivityFacadeImpl
 
         return providerProfileRepository
                 .findByUserId(providerId.trim())
-                .map(this::extractServiceAreaDistricts)
+                .map(profile -> ProviderServiceAreaResolver.resolveDistrictSet(
+                        profile,
+                        districtCatalog
+                ))
                 .orElseGet(Collections::emptySet);
-    }
-
-    /**
-     * Creates an immutable set containing the configured
-     * district names.
-     */
-    private Set<String> extractServiceAreaDistricts(
-            ProviderProfile profile
-    ) {
-
-        Set<String> districts = new LinkedHashSet<>();
-
-        profile.getServiceAreaDistricts()
-                .stream()
-                .filter(district ->
-                        district != null && !district.isBlank()
-                )
-                .map(String::trim)
-                .forEach(districts::add);
-
-        return Collections.unmodifiableSet(districts);
     }
 }

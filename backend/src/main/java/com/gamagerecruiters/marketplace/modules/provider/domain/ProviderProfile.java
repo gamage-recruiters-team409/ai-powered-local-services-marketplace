@@ -1,4 +1,3 @@
-
 package com.gamagerecruiters.marketplace.modules.provider.domain;
 
 import java.time.Instant;
@@ -30,8 +29,15 @@ public class ProviderProfile {
 
     private String city;
 
-    // Selected service-area districts from the shared Sri Lankan district catalog.
-    private List<String> serviceAreaDistricts = new ArrayList<>();
+    /*
+     * null: field missing in an older persisted MongoDB profile.
+     * empty list: field is present, but explicitly configured as empty.
+     * nonempty list: selected districts from the shared district catalog.
+     *
+     * Do NOT initialize this field with new ArrayList<>(), because doing so
+     * makes a missing legacy field indistinguishable from a stored empty list.
+     */
+    private List<String> serviceAreaDistricts;
 
     // Provider voluntary activity status.
     // Existing MongoDB profiles without this field are treated as ACTIVE.
@@ -133,9 +139,19 @@ public class ProviderProfile {
     public void setServiceAreaDistricts(
             List<String> serviceAreaDistricts
     ) {
+        // Preserve null for documents that do not contain the legacy field.
         this.serviceAreaDistricts = serviceAreaDistricts == null
-                ? new ArrayList<>()
+                ? null
                 : new ArrayList<>(serviceAreaDistricts);
+    }
+
+    /**
+     * True when MongoDB contained a service-area selection, including [].
+     * False only when the field was missing/null in a legacy document.
+     */
+    @JsonIgnore
+    public boolean hasStoredServiceAreaDistricts() {
+        return serviceAreaDistricts != null;
     }
 
     @JsonIgnore

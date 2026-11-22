@@ -1,4 +1,3 @@
-
 package com.gamagerecruiters.marketplace.modules.verification.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -7,6 +6,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -125,6 +126,11 @@ class ProviderVerificationExpiryServiceImplTest {
                 eq(NOW),
                 eq(NOW.plus(Duration.ofDays(10)))
         )).thenReturn(Optional.of(expiredVerification));
+
+        expiredVerification.setExpiryEventPending(true);
+        expiredVerification.setExpiryEventClaimToken("claim-1");
+        when(atomicService.claimNextPendingExpiryEvent(any(), any()))
+                .thenReturn(Optional.of(expiredVerification), Optional.empty());
 
         ProviderProfile profile = new ProviderProfile();
         profile.setId(PROVIDER_ID);
@@ -265,6 +271,56 @@ class ProviderVerificationExpiryServiceImplTest {
         verify(atomicService, never()).expireApprovedIfUnchanged(
                 any(), any(), any(), any(), any()
         );
+    }
+
+    @Test
+    void shouldRetryEventAfterPublisherFailsOnPreviousRun() {
+        ProviderVerification pending = createApprovedVerification();
+        pending.setStatus(ProviderVerificationStatus.EXPIRED);
+        pending.setExpiredAt(NOW);
+        pending.setGracePeriodEndsAt(NOW.plus(Duration.ofDays(10)));
+        pending.setExpiredDocumentIds(List.of("document-expired"));
+        pending.setExpiryEventPending(true);
+        pending.setExpiryEventClaimToken("claim-1");
+
+        when(verificationRepository.findAllByStatusInOrderBySubmittedAtAsc(
+                List.of(ProviderVerificationStatus.APPROVED)))
+                .thenReturn(List.of());
+        when(atomicService.claimNextPendingExpiryEvent(any(), any()))
+                .thenReturn(Optional.of(pending), Optional.empty(),
+                        Optional.of(pending), Optional.empty());
+
+        ProviderProfile profile = new ProviderProfile();
+        profile.setId(PROVIDER_ID);
+        profile.setUserId(USER_ID);
+        when(providerProfileRepository.findById(PROVIDER_ID))
+                .thenReturn(Optional.of(profile));
+        doThrow(new IllegalStateException("temporary listener failure"))
+                .doNothing()
+                .when(eventPublisher).publishEvent(any(ProviderVerificationExpiredEvent.class));
+
+        service.processExpiredVerifications();
+        verify(atomicService).deferExpiryEvent(
+                eq(PROVIDER_ID), eq("claim-1"), eq(NOW.plus(Duration.ofMinutes(1))));
+        verify(atomicService, never()).markExpiryEventPublished(any(), any(), any());
+
+        service.processExpiredVerifications();
+        verify(eventPublisher, times(2)).publishEvent(
+                any(ProviderVerificationExpiredEvent.class));
+        verify(atomicService).markExpiryEventPublished(
+                PROVIDER_ID, "claim-1", NOW);
+    }
+
+    @Test
+    void shouldNotRepublishWhenNoEventIsPending() {
+        when(verificationRepository.findAllByStatusInOrderBySubmittedAtAsc(
+                List.of(ProviderVerificationStatus.APPROVED)))
+                .thenReturn(List.of());
+        when(atomicService.claimNextPendingExpiryEvent(any(), any()))
+                .thenReturn(Optional.empty());
+
+        service.processExpiredVerifications();
+        verify(eventPublisher, never()).publishEvent(any(ProviderVerificationExpiredEvent.class));
     }
 
     private ProviderVerification createApprovedVerification() {
