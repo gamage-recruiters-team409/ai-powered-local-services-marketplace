@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="civilTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F6F7F9" />
+      <stop offset="100%" stop-color="#E1E5EA" />
+    </linearGradient>
+    <linearGradient id="civilBrickGrad" x1="72" y1="68" x2="184" y2="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#A6B0BC" />
+      <stop offset="55%" stop-color="#7E8997" />
+      <stop offset="100%" stop-color="#5B6673" />
+    </linearGradient>
+    <filter id="civilDrop" x="-18%" y="-15%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="4.5" flood-color="#36414F" flood-opacity="0.34" />
+    </filter>
+    <filter id="civilTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#7E8997" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#civilTileBg)" stroke="#CBD2DA" stroke-width="2.5" filter="url(#civilTileShadow)" />
+
+  <g filter="url(#civilDrop)">
+    <rect x="92" y="72" width="72" height="32" rx="10" fill="url(#civilBrickGrad)" />
+    <path d="M100 79 L156 79" stroke="#E4E9EF" stroke-width="3.5" stroke-linecap="round" opacity="0.7" />
+    <rect x="52" y="112" width="72" height="32" rx="10" fill="url(#civilBrickGrad)" />
+    <path d="M60 119 L116 119" stroke="#E4E9EF" stroke-width="3.5" stroke-linecap="round" opacity="0.7" />
+    <rect x="132" y="112" width="72" height="32" rx="10" fill="url(#civilBrickGrad)" />
+    <path d="M140 119 L196 119" stroke="#E4E9EF" stroke-width="3.5" stroke-linecap="round" opacity="0.7" />
+    <rect x="92" y="152" width="72" height="32" rx="10" fill="url(#civilBrickGrad)" />
+    <path d="M100 159 L156 159" stroke="#E4E9EF" stroke-width="3.5" stroke-linecap="round" opacity="0.7" />
+  </g>
+</svg>

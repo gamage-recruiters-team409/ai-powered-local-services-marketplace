@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="applTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFF0E5" />
+      <stop offset="100%" stop-color="#FFD4B8" />
+    </linearGradient>
+    <linearGradient id="applWrenchGrad" x1="76" y1="68" x2="180" y2="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFA57A" />
+      <stop offset="55%" stop-color="#EE7240" />
+      <stop offset="100%" stop-color="#C4481D" />
+    </linearGradient>
+    <filter id="applDrop" x="-18%" y="-15%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#8F300F" flood-opacity="0.34" />
+    </filter>
+    <filter id="applTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#C8754B" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#applTileBg)" stroke="#F6BC96" stroke-width="2.5" filter="url(#applTileShadow)" />
+
+  <g filter="url(#applDrop)" transform="rotate(-45 128 128)">
+    <path d="M52 108 C59 99 71 96 82 100 C88 102 93 107 96 113 L160 113 C163 107 168 102 174 100 C185 96 197 99 204 108 C206 111 204 114 201 114 L183 114 C178 114 175 118 175 123 L175 133 C175 138 178 142 183 142 L201 142 C204 142 206 145 204 148 C197 157 185 160 174 156 C168 154 163 149 160 143 L96 143 C93 149 88 154 82 156 C71 160 59 157 52 148 C50 145 52 142 55 142 L73 142 C78 142 81 138 81 133 L81 123 C81 118 78 114 73 114 L55 114 C52 114 50 111 52 108 Z" fill="url(#applWrenchGrad)" />
+    <path d="M102 122 L154 122" stroke="#FFE6D6" stroke-width="4.5" stroke-linecap="round" opacity="0.7" />
+  </g>
+</svg>

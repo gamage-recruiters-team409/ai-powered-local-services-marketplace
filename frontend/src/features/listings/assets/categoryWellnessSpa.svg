@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="spaTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ECF3EC" />
+      <stop offset="100%" stop-color="#CBE0CB" />
+    </linearGradient>
+    <linearGradient id="spaOuterGrad" x1="128" y1="115" x2="128" y2="172" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#B0CAAE" />
+      <stop offset="100%" stop-color="#6F906E" />
+    </linearGradient>
+    <linearGradient id="spaMidGrad" x1="128" y1="88" x2="128" y2="168" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C0D7BE" />
+      <stop offset="100%" stop-color="#7B9B7A" />
+    </linearGradient>
+    <linearGradient id="spaCenterGrad" x1="128" y1="72" x2="128" y2="168" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#D2E5D0" />
+      <stop offset="55%" stop-color="#9EB99D" />
+      <stop offset="100%" stop-color="#729371" />
+    </linearGradient>
+    <filter id="spaDrop" x="-15%" y="-15%" width="135%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="4.5" flood-color="#405D40" flood-opacity="0.28" />
+    </filter>
+    <filter id="spaTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#5E7E5E" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#spaTileBg)" stroke="#A7C2A7" stroke-width="2.5" filter="url(#spaTileShadow)" />
+
+  <g filter="url(#spaDrop)">
+    <!-- Outer Back Petals -->
+    <path d="M128 166 C90 169 57 154 51 128 C78 124 108 135 128 160 Z" fill="url(#spaOuterGrad)" stroke="#557554" stroke-width="2" stroke-linejoin="round" />
+    <path d="M128 166 C166 169 199 154 205 128 C178 124 148 135 128 160 Z" fill="url(#spaOuterGrad)" stroke="#557554" stroke-width="2" stroke-linejoin="round" />
+
+    <!-- Middle Layered Petals -->
+    <path d="M128 165 C90 156 67 126 70 92 C98 98 119 124 128 160 Z" fill="url(#spaMidGrad)" stroke="#557554" stroke-width="2" stroke-linejoin="round" />
+    <path d="M128 165 C166 156 189 126 186 92 C158 98 137 124 128 160 Z" fill="url(#spaMidGrad)" stroke="#557554" stroke-width="2" stroke-linejoin="round" />
+
+    <!-- Center Tall Petal -->
+    <path d="M128 72 C151 98 153 137 128 166 C103 137 105 98 128 72 Z" fill="url(#spaCenterGrad)" stroke="#557554" stroke-width="2.2" stroke-linejoin="round" />
+    <path d="M128 84 C119 104 118 126 125 148" stroke="#EAF4EA" stroke-width="3" stroke-linecap="round" opacity="0.65" />
+  </g>
+</svg>
