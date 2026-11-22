@@ -1,0 +1,519 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { PUBLIC_CITIES } from '../../../../shared/layouts/public'
+import {
+  HERO_FRAME_CONFIG,
+  ROTATING_PLACEHOLDERS,
+  buildFrameUrl,
+} from '../data/landingContent'
+import { useSpringScrollProgress } from '../hooks/useSpringScrollProgress'
+import {
+  ArrowRightIcon,
+  CheckCircleIcon,
+  SearchIcon,
+  ShieldCheckIcon,
+  ZapIcon,
+} from './LandingIcons'
+import styles from '../styles/publicLanding.module.css'
+
+function clamp01(value) {
+  return Math.min(Math.max(value, 0), 1)
+}
+
+function rangeProgress(value, start, end) {
+  if (end <= start) return value >= end ? 1 : 0
+  return clamp01((value - start) / (end - start))
+}
+
+export function HeroScrollCanvas({
+  selectedCity = 'Colombo',
+  onCityChange,
+  cities = PUBLIC_CITIES,
+}) {
+  const navigate = useNavigate()
+  const containerRef = useRef(null)
+  const canvasRef = useRef(null)
+  const framesRef = useRef([])
+  const posterRef = useRef(null)
+  const latestProgressRef = useRef(0)
+
+  // Direct DOM refs for 60fps zero-re-render beat choreography
+  const beat1Ref = useRef(null)
+  const readabilityGradientRef = useRef(null)
+  const beat2Ref = useRef(null)
+  const badge1Ref = useRef(null)
+  const badge2Ref = useRef(null)
+  const badge3Ref = useRef(null)
+  const handoffOverlayRef = useRef(null)
+  const progressFillRef = useRef(null)
+  const scrollHintRef = useRef(null)
+
+  const [searchQuery, setSearchQuery] = useState('')
+  const [typedPlaceholder, setTypedPlaceholder] = useState(ROTATING_PLACEHOLDERS[0])
+  const [firstPaintReady, setFirstPaintReady] = useState(false)
+  const [preloadPercent, setPreloadPercent] = useState(0)
+
+  const activeCityObj = useMemo(
+    () => cities.find((c) => c.id === selectedCity) || cities[0],
+    [cities, selectedCity]
+  )
+
+  // Animated typing / rotating placeholder in the search input
+  useEffect(() => {
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (prefersReduced) {
+      return undefined
+    }
+
+    let wordIdx = 0
+    let charIdx = ROTATING_PLACEHOLDERS[0].length
+    let deleting = true
+    let timerId = null
+
+    const tick = () => {
+      const currentWord = ROTATING_PLACEHOLDERS[wordIdx]
+      if (!deleting) {
+        charIdx += 1
+        setTypedPlaceholder(currentWord.slice(0, charIdx))
+        if (charIdx === currentWord.length) {
+          deleting = true
+          timerId = window.setTimeout(tick, 1800)
+          return
+        }
+        timerId = window.setTimeout(tick, 68)
+      } else {
+        charIdx -= 1
+        setTypedPlaceholder(currentWord.slice(0, Math.max(charIdx, 0)))
+        if (charIdx <= 0) {
+          deleting = false
+          wordIdx = (wordIdx + 1) % ROTATING_PLACEHOLDERS.length
+          timerId = window.setTimeout(tick, 280)
+          return
+        }
+        timerId = window.setTimeout(tick, 34)
+      }
+    }
+
+    timerId = window.setTimeout(tick, 2000)
+    return () => {
+      if (timerId !== null) window.clearTimeout(timerId)
+    }
+  }, [])
+
+  // Draw the current frame (or high-DPI cinematic zoom/pan over poster fallback) onto the canvas
+  const drawCanvasFrame = useCallback((progress) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext?.('2d')
+    if (!ctx) return
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const cssWidth = canvas.clientWidth || window.innerWidth || 1280
+    const cssHeight = canvas.clientHeight || window.innerHeight || 720
+    const targetW = Math.round(cssWidth * dpr)
+    const targetH = Math.round(cssHeight * dpr)
+
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW
+      canvas.height = targetH
+    }
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, cssWidth, cssHeight)
+
+    const { frameCount } = HERO_FRAME_CONFIG
+    let img = null
+    let isPosterFallback = false
+
+    if (frameCount > 0) {
+      const exactIdx = Math.min(
+        frameCount - 1,
+        Math.max(0, Math.round(progress * (frameCount - 1)))
+      )
+      img = framesRef.current[exactIdx]
+      // Fall back to nearest already-loaded frame while progressive loading finishes
+      if (!img || !img.complete || !img.naturalWidth) {
+        for (let offset = 1; offset < frameCount; offset += 1) {
+          const prev = framesRef.current[exactIdx - offset]
+          if (prev && prev.complete && prev.naturalWidth) {
+            img = prev
+            break
+          }
+          const next = framesRef.current[exactIdx + offset]
+          if (next && next.complete && next.naturalWidth) {
+            img = next
+            break
+          }
+        }
+      }
+    }
+
+    if (!img || !img.complete || !img.naturalWidth) {
+      img = posterRef.current
+      isPosterFallback = true
+    }
+
+    if (!img || !img.complete || !img.naturalWidth) {
+      // Soft architectural mint-white backdrop while frame 1 / poster is still decoding
+      const bg = ctx.createLinearGradient(0, 0, cssWidth, cssHeight)
+      bg.addColorStop(0, '#ffffff')
+      bg.addColorStop(0.55, '#f0fdfa')
+      bg.addColorStop(1, '#ccfbf1')
+      ctx.fillStyle = bg
+      ctx.fillRect(0, 0, cssWidth, cssHeight)
+      return
+    }
+
+    // Cover-fit math (zero stretching on any aspect ratio)
+    const baseScale = Math.max(cssWidth / img.naturalWidth, cssHeight / img.naturalHeight)
+    // Gentle Apple-style dolly-in zoom so the technician's full head & smile stay cleanly framed
+    const cinematicZoom = isPosterFallback ? 1.01 + progress * 0.06 : 1 + progress * 0.03
+    const scale = baseScale * cinematicZoom
+    const drawW = img.naturalWidth * scale
+    const drawH = img.naturalHeight * scale
+    const isDesktop = cssWidth >= 900
+    const horizontalBias =
+      isPosterFallback && isDesktop
+        ? Math.min(cssWidth * 0.13 * (1 - progress * 0.55), (drawW - cssWidth) * 0.45 + cssWidth * 0.13)
+        : 0
+    const drawX = (cssWidth - drawW) * 0.5 + horizontalBias
+    // Anchor close to the top (0.04) so the technician's forehead & hair always have generous headroom below the navbar
+    const drawY = Math.min(0, (cssHeight - drawH) * 0.04)
+
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(img, drawX, drawY, drawW, drawH)
+  }, [])
+
+  // Preload poster + first 15 numbered frames immediately, then progressively load remaining frames
+  useEffect(() => {
+    let cancelled = false
+    const { frameCount, eagerPreloadCount, posterUrl } = HERO_FRAME_CONFIG
+
+    const poster = new window.Image()
+    poster.decoding = 'async'
+    poster.onload = () => {
+      if (cancelled) return
+      posterRef.current = poster
+      setFirstPaintReady(true)
+      setPreloadPercent(frameCount === 0 ? 100 : 15)
+      drawCanvasFrame(latestProgressRef.current)
+    }
+    poster.onerror = () => {
+      if (cancelled) return
+      setFirstPaintReady(true)
+      setPreloadPercent(100)
+    }
+    poster.src = posterUrl
+
+    if (frameCount <= 0) {
+      return () => {
+        cancelled = true
+      }
+    }
+
+    framesRef.current = new Array(frameCount)
+    let loadedCount = 0
+    const eagerCount = Math.min(eagerPreloadCount, frameCount)
+
+    const loadFrame = (index) =>
+      new Promise((resolve) => {
+        const img = new window.Image()
+        img.decoding = 'async'
+        img.onload = () => {
+          if (cancelled) return resolve()
+          framesRef.current[index] = img
+          loadedCount += 1
+          setPreloadPercent(Math.round((loadedCount / frameCount) * 100))
+          if (index === 0) {
+            setFirstPaintReady(true)
+          }
+          drawCanvasFrame(latestProgressRef.current)
+          resolve()
+        }
+        img.onerror = () => resolve()
+        img.src = buildFrameUrl(index)
+      })
+
+    const loadAll = async () => {
+      await Promise.all(Array.from({ length: eagerCount }, (_, i) => loadFrame(i)))
+      // Progressively preload remaining frames in gentle batches of 8
+      for (let start = eagerCount; start < frameCount && !cancelled; start += 8) {
+        const batch = []
+        for (let i = start; i < Math.min(start + 8, frameCount); i += 1) {
+          batch.push(loadFrame(i))
+        }
+        await Promise.all(batch)
+      }
+    }
+
+    loadAll()
+
+    return () => {
+      cancelled = true
+    }
+  }, [drawCanvasFrame])
+
+  // Redraw canvas cleanly on viewport resize
+  useEffect(() => {
+    const onResize = () => drawCanvasFrame(latestProgressRef.current)
+    window.addEventListener('resize', onResize, { passive: true })
+    return () => window.removeEventListener('resize', onResize)
+  }, [drawCanvasFrame])
+
+  // Apply 3 choreographed scroll beats at 60fps directly on DOM refs + canvas
+  const handleSpringProgress = useCallback(
+    (progress) => {
+      latestProgressRef.current = progress
+      drawCanvasFrame(progress)
+
+      // Beat 1: 0% – 30% (fully visible at 0%, glides upward & fades out between 16% and 32%)
+      const beat1Out = rangeProgress(progress, 0.14, 0.32)
+      const beat1Opacity = 1 - beat1Out
+      if (beat1Ref.current) {
+        beat1Ref.current.style.opacity = String(beat1Opacity)
+        beat1Ref.current.style.transform = `translate3d(0, ${-beat1Out * 48}px, 0)`
+        beat1Ref.current.style.pointerEvents = beat1Opacity > 0.15 ? 'auto' : 'none'
+      }
+      if (readabilityGradientRef.current) {
+        readabilityGradientRef.current.style.opacity = String(0.14 + beat1Opacity * 0.86)
+      }
+
+      // Beat 2: 24% – 74% (3 separate frosted-glass trust cards glide smoothly in one-by-one)
+      const beat2FadeOut = rangeProgress(progress, 0.72, 0.88)
+      const badgeConfigs = [
+        { ref: badge1Ref, start: 0.22, end: 0.36 },
+        { ref: badge2Ref, start: 0.29, end: 0.43 },
+        { ref: badge3Ref, start: 0.36, end: 0.5 },
+      ]
+      let anyBadgeVisible = false
+      badgeConfigs.forEach(({ ref, start, end }) => {
+        if (!ref.current) return
+        const enter = rangeProgress(progress, start, end)
+        const opacity = enter * (1 - beat2FadeOut)
+        if (opacity > 0.05) anyBadgeVisible = true
+        const translateY = (1 - enter) * 28 - beat2FadeOut * 18
+        const scale = 0.96 + enter * 0.04
+        ref.current.style.opacity = String(opacity)
+        ref.current.style.transform = `translate3d(0, ${translateY}px, 0) scale(${scale})`
+      })
+      if (beat2Ref.current) {
+        beat2Ref.current.style.pointerEvents = anyBadgeVisible ? 'auto' : 'none'
+      }
+
+      // Beat 3: 72% – 100% (smooth white gradient handoff into the Trust Metrics Strip below)
+      const handoff = rangeProgress(progress, 0.72, 0.98)
+      if (handoffOverlayRef.current) {
+        handoffOverlayRef.current.style.opacity = String(handoff)
+      }
+
+      // Slim vertical scroll-progress indicator
+      if (progressFillRef.current) {
+        progressFillRef.current.style.transform = `scaleY(${Math.max(progress, 0.04)})`
+      }
+
+      // Fade out bottom "Scroll to explore" cue once scrolling starts
+      if (scrollHintRef.current) {
+        scrollHintRef.current.style.opacity = String(1 - rangeProgress(progress, 0.02, 0.14))
+      }
+    },
+    [drawCanvasFrame]
+  )
+
+  useSpringScrollProgress(containerRef, handleSpringProgress, {
+    stiffness: 180,
+    damping: 30,
+  })
+
+  const handleSearchSubmit = (event) => {
+    event.preventDefault()
+    const params = new URLSearchParams()
+    if (searchQuery.trim()) {
+      params.set('q', searchQuery.trim())
+    }
+    if (selectedCity && selectedCity !== 'Other City') {
+      params.set('city', selectedCity)
+    }
+    const qs = params.toString()
+    navigate(qs ? `/search?${qs}` : '/search')
+  }
+
+  return (
+    <section
+      ref={containerRef}
+      className={styles.heroScrollTrack}
+      aria-label="LocalServe Verified Home Services Showcase"
+    >
+      <div className={styles.heroStickyViewport}>
+        {/* High-DPI Full-Bleed Canvas */}
+        <canvas
+          ref={canvasRef}
+          className={styles.heroCanvas}
+          aria-hidden="true"
+        />
+
+        {/* Minimal First-Paint Loader */}
+        {!firstPaintReady && (
+          <div className={styles.heroLoader} role="status" aria-label="Loading visual scene">
+            <span className={styles.heroLoaderWordmark}>
+              <span className={styles.wordmarkNavy}>Local</span>
+              <span className={styles.wordmarkTeal}>Serve</span>
+            </span>
+            <div className={styles.heroLoaderTrack}>
+              <div
+                className={styles.heroLoaderFill}
+                style={{ width: `${Math.max(preloadPercent, 18)}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Left-to-Right Readability Gradient Overlay for Beat 1 */}
+        <div
+          ref={readabilityGradientRef}
+          className={styles.heroReadabilityGradient}
+          aria-hidden="true"
+        />
+
+        {/* BEAT 1 (0% – 30%): Immediately Interactive Hero Block */}
+        <div className={styles.heroContentShell}>
+          <div ref={beat1Ref} className={styles.heroBeat1}>
+            <div className={styles.heroEyebrow}>
+              <span className={styles.liveDot} aria-hidden="true" />
+              <span>
+                {activeCityObj.availablePros} vetted pros available in{' '}
+                <strong>{activeCityObj.label}</strong> today
+              </span>
+            </div>
+
+            <h1 className={styles.heroHeadline}>
+              Hire <span className={styles.heroUnderline}>verified pros</span> with absolute
+              certainty.
+            </h1>
+
+            <p className={styles.heroSubtext}>
+              Direct rates, verified profiles, and escrow payment protection up to{' '}
+              <strong>Rs. 1,000,000</strong> across Colombo, Kandy, Galle and suburbs.
+            </p>
+
+            {/* Elevated Interactive Search Bar */}
+            <form
+              className={styles.heroSearchCard}
+              onSubmit={handleSearchSubmit}
+              role="search"
+              aria-label="Find a verified local service"
+            >
+              <div className={styles.heroSearchInputRow}>
+                <SearchIcon size={20} className={styles.heroSearchIcon} />
+                <div className={styles.heroSearchFieldWrap}>
+                  <label htmlFor="hero-service-search" className={styles.heroSearchMiniLabel}>
+                    SERVICE, TRADE, OR ISSUE
+                  </label>
+                  <input
+                    id="hero-service-search"
+                    type="text"
+                    className={styles.heroSearchInput}
+                    placeholder={typedPlaceholder || 'Electrician...'}
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
+                <button type="submit" className={styles.heroSearchSubmit}>
+                  <span>Find Service</span>
+                  <ArrowRightIcon size={16} />
+                </button>
+              </div>
+
+              {/* Interactive City Filter Pills */}
+              <div className={styles.heroCityRow}>
+                <span className={styles.heroCityLabel}>Coverage:</span>
+                <div className={styles.heroCityPills} role="group" aria-label="Select service city">
+                  {cities.map((city) => {
+                    const active = city.id === selectedCity
+                    return (
+                      <button
+                        key={city.id}
+                        type="button"
+                        className={`${styles.heroCityPill} ${active ? styles.heroCityPillActive : ''}`}
+                        aria-pressed={active}
+                        onClick={() => onCityChange?.(city.id)}
+                      >
+                        {city.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className={styles.heroTrustCaption}>
+                <CheckCircleIcon size={15} className={styles.heroTrustIcon} />
+                <span>
+                  <strong>Government NIC &amp; NVQ Validated</strong> · Direct booking with zero
+                  hidden contractor markups
+                </span>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        {/* BEAT 2 (24% – 74%): 3 Staggered Frosted-Glass Trust Cards Docked Cleanly Over Full-Bleed Scene */}
+        <div ref={beat2Ref} className={styles.heroBeat2Layer} aria-label="Platform trust highlights">
+          <div className={styles.heroBeat2Dock}>
+            <div ref={badge1Ref} className={styles.glassBadge}>
+              <span className={styles.glassBadgeIcon}>
+                <CheckCircleIcon size={20} />
+              </span>
+              <div>
+                <p className={styles.glassBadgeTitle}>100% NIC &amp; NVQ Verified Pros</p>
+                <p className={styles.glassBadgeSub}>Every identity &amp; trade certificate manually audited</p>
+              </div>
+            </div>
+
+            <div ref={badge2Ref} className={styles.glassBadge}>
+              <span className={styles.glassBadgeIcon}>
+                <ShieldCheckIcon size={20} />
+              </span>
+              <div>
+                <p className={styles.glassBadgeTitle}>Rs. 1,000,000 Escrow Cover</p>
+                <p className={styles.glassBadgeSub}>Funds locked securely until you inspect &amp; sign off</p>
+              </div>
+            </div>
+
+            <div ref={badge3Ref} className={styles.glassBadge}>
+              <span className={styles.glassBadgeIcon}>
+                <ZapIcon size={20} />
+              </span>
+              <div>
+                <p className={styles.glassBadgeTitle}>0% Middleman Markup — Direct Rates</p>
+                <p className={styles.glassBadgeSub}>Published fixed &amp; hourly rates across 25 districts</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* BEAT 3 (68% – 100%): Smooth Bottom White Handoff Blend */}
+        <div
+          ref={handoffOverlayRef}
+          className={styles.heroHandoffBlend}
+          aria-hidden="true"
+        />
+
+        {/* Right-Edge Slim Scroll Progress Indicator */}
+        <div className={styles.scrollProgressRail} aria-hidden="true">
+          <div ref={progressFillRef} className={styles.scrollProgressFill} />
+        </div>
+
+        {/* Scroll Cue (Fades cleanly once scrolling starts) */}
+        <div ref={scrollHintRef} className={styles.scrollCue} aria-hidden="true">
+          <span className={styles.scrollCueMouse}>
+            <span className={styles.scrollCueWheel} />
+          </span>
+          <span>Scroll to explore</span>
+        </div>
+      </div>
+    </section>
+  )
+}
