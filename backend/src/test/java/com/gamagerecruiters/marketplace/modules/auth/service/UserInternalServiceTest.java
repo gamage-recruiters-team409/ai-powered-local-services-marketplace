@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -24,6 +25,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import org.bson.Document;
 import org.slf4j.LoggerFactory;
@@ -34,6 +36,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
@@ -1569,7 +1572,9 @@ class UserInternalServiceTest {
                 .thenReturn(Optional.of(updated));
         when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
         when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
-                .thenReturn(new Document("owner", "lock-uuid-success"));
+                .thenReturn(new Document("owner", "lock-uuid-success").append("fence", 1L));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
                 .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
 
@@ -1577,8 +1582,8 @@ class UserInternalServiceTest {
 
         assertNotNull(result);
         assertEquals(UserStatus.SUSPENDED, result.getStatus());
-        // Verify guard release was executed on auth_locks
-        verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq("auth_locks"));
+        // Verify guard renewal and release executed on auth_locks
+        verify(mongoTemplate, atLeastOnce()).updateFirst(any(Query.class), any(Update.class), eq("auth_locks"));
     }
 
     @Test
@@ -1592,7 +1597,7 @@ class UserInternalServiceTest {
         when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
         when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(1L);
         when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
-                .thenReturn(new Document("owner", "lock-uuid-policy"));
+                .thenReturn(new Document("owner", "lock-uuid-policy").append("fence", 1L));
 
         ApiException ex = assertThrows(ApiException.class,
                 () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
@@ -1614,7 +1619,9 @@ class UserInternalServiceTest {
         when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
         when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
         when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
-                .thenReturn(new Document("owner", "lock-uuid-ex"));
+                .thenReturn(new Document("owner", "lock-uuid-ex").append("fence", 1L));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
                 .thenThrow(new RuntimeException("Mongo connection dropped"));
 
@@ -1623,8 +1630,201 @@ class UserInternalServiceTest {
 
         assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
-        // Verify guard release was executed on auth_locks
-        verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq("auth_locks"));
+        // Verify guard renewal and release executed on auth_locks
+        verify(mongoTemplate, atLeastOnce()).updateFirst(any(Query.class), any(Update.class), eq("auth_locks"));
+    }
+
+    @Test
+    @DisplayName("changeStatus Guard: Proof failure before Step 1 throws 503 without token revocation or user update")
+    void changeStatusGuardProofFailsBeforeStep1Throws503() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
+        when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
+                .thenReturn(new Document("owner", "lock-uuid-p1").append("fence", 1L));
+        // Proof point (b) fails: updateFirst on auth_locks matches 0 documents (lease expired/overtaken)
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
+                .thenReturn(UpdateResult.acknowledged(0L, 0L, null));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+        assertEquals("The status change could not be completed safely. No status was changed. Please reload and retry.", ex.getMessage());
+        verify(authTokenRepository, never()).revokeAllActiveTokensByUserIdAndType(anyString(), any(TokenType.class));
+        verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+    }
+
+    @Test
+    @DisplayName("changeStatus Guard: Proof failure before Step 2 throws 503 without user update")
+    void changeStatusGuardProofFailsBeforeStep2Throws503() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
+        when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
+                .thenReturn(new Document("owner", "lock-uuid-p2").append("fence", 1L));
+        // Proof (b) succeeds, but proof (c) fails
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null))
+                .thenReturn(UpdateResult.acknowledged(0L, 0L, null));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+        assertEquals("The status change could not be completed safely. No status was changed. Please reload and retry.", ex.getMessage());
+        // Step 1 token revoke executed once before proof (c) failed
+        verify(authTokenRepository, times(1)).revokeAllActiveTokensByUserIdAndType("super-2", TokenType.REFRESH);
+        verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+    }
+
+    @Test
+    @DisplayName("changeStatus Guard: Policy recheck before Step 2 finds one active SUPER_ADMIN throws 409")
+    void changeStatusPolicyRecheckBeforeStep2FindsOneActiveSuperAdminThrows409() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
+        // Initial policy check passes (2 active), recheck before Step 2 finds 1 active
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE))
+                .thenReturn(2L)
+                .thenReturn(1L);
+        when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
+                .thenReturn(new Document("owner", "lock-uuid-recheck").append("fence", 1L));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("LAST_ACTIVE_SUPER_ADMIN", ex.getErrorCode());
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        // Step 1 revoked tokens once
+        verify(authTokenRepository, times(1)).revokeAllActiveTokensByUserIdAndType("super-2", TokenType.REFRESH);
+        // Step 2 DB update was never executed
+        verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+    }
+
+    @Test
+    @DisplayName("changeStatus Guard: Local time bound exceeded before Step 2 throws 503")
+    void changeStatusLocalTimeBoundExceededBeforeStep2Throws503() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
+        when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
+                .thenReturn(new Document("owner", "lock-uuid-timeout").append("fence", 1L));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+
+        // Configure safety margin >= lease so maxAllowedNanos <= 0, causing time bound check to fail immediately
+        userInternalService.setSuperAdminLockLeaseMs(10000L);
+        userInternalService.setSuperAdminLockSafetyMarginMs(10000L);
+        try {
+            ApiException ex = assertThrows(ApiException.class,
+                    () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+            assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+            assertEquals("The status change could not be completed safely. No status was changed. Please reload and retry.", ex.getMessage());
+            verify(authTokenRepository, times(1)).revokeAllActiveTokensByUserIdAndType("super-2", TokenType.REFRESH);
+            verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        } finally {
+            userInternalService.setSuperAdminLockSafetyMarginMs(3000L);
+        }
+    }
+
+    @Test
+    @DisplayName("changeStatus Guard: Post-update count zero restores status and throws 409")
+    void changeStatusPostUpdateCountZeroRestoresStatusAndThrows409() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
+        // Policy check 1 -> 2L, Policy recheck before step 2 -> 2L, Post-update check -> 0L
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE))
+                .thenReturn(2L)
+                .thenReturn(2L)
+                .thenReturn(0L);
+        when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
+                .thenReturn(new Document("owner", "lock-uuid-restore").append("fence", 1L));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+
+        ResourceConflictException ex = assertThrows(ResourceConflictException.class,
+                () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("CONCURRENT_MODIFICATION", ex.getErrorCode());
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertTrue(ex.getMessage().contains("status has been restored"));
+
+        // Verify that 2 updates were performed on User.class: the update and the compensating restore
+        verify(mongoTemplate, times(2)).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        // Verify Step 3 token revocation was NOT performed
+        verify(authTokenRepository, times(1)).revokeAllActiveTokensByUserIdAndType("super-2", TokenType.REFRESH);
+    }
+
+    @Test
+    @DisplayName("changeStatus Guard: Guard released in finally with matching owner and fence")
+    void changeStatusGuardReleasedInFinallyWithMatchingOwnerAndFence() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User updated = createUser("super-2", Role.SUPER_ADMIN, UserStatus.SUSPENDED);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2"))
+                .thenReturn(Optional.of(target))
+                .thenReturn(Optional.of(updated));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
+        when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
+                .thenReturn(new Document("owner", "lock-uuid").append("fence", 42L));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+
+        userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED);
+
+        // 1. Capture the owner the service actually used when acquiring the guard in findAndModify
+        ArgumentCaptor<Update> acquireUpdateCaptor = ArgumentCaptor.forClass(Update.class);
+        verify(mongoTemplate).findAndModify(any(), acquireUpdateCaptor.capture(), any(), eq(Document.class), eq("auth_locks"));
+        Document setDoc = (Document) acquireUpdateCaptor.getValue().getUpdateObject().get("$set");
+        String acquiredOwner = setDoc.getString("owner");
+
+        // 2. Assert the owner is a valid UUID
+        assertNotNull(acquiredOwner);
+        assertDoesNotThrow(() -> UUID.fromString(acquiredOwner));
+
+        // 3. Capture the release query (last updateFirst on auth_locks) and verify matching _id, owner, and fence
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate, atLeastOnce()).updateFirst(queryCaptor.capture(), any(Update.class), eq("auth_locks"));
+
+        List<Query> capturedQueries = queryCaptor.getAllValues();
+        Query releaseQuery = capturedQueries.get(capturedQueries.size() - 1);
+        Document queryObject = releaseQuery.getQueryObject();
+        assertEquals("super-admin-status", queryObject.get("_id"));
+        assertEquals(acquiredOwner, queryObject.get("owner"));
+        assertEquals(42L, queryObject.get("fence"));
     }
 
     // --- F3 Status update and token revocation consistency tests (No rollback) ---

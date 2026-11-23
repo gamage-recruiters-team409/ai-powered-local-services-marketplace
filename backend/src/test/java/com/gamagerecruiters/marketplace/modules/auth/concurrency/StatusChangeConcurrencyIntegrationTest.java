@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
 
@@ -17,8 +18,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.bson.Document;
@@ -35,6 +39,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
@@ -58,6 +63,7 @@ import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenReposit
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
+import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalServiceImpl;
 
 @SpringBootTest
 @ActiveProfiles("integration-test")
@@ -573,6 +579,200 @@ class StatusChangeConcurrencyIntegrationTest {
             assertEquals(UserStatus.SUSPENDED, finalUser2.getStatus());
         } finally {
             reset(authTokenRepository);
+        }
+    }
+
+    @Test
+    @DisplayName("F2 Real MongoDB Testcontainers: Guard lease expiry takeover during held operation preserves single active SUPER_ADMIN invariant")
+    void testLeaseExpiryTakeoverDuringHeldOperationLeavesOneActiveSuperAdmin() throws Exception {
+        User superAdminX = createUserRecord("super-x-lease", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        userRepository.save(superAdminX);
+
+        User superAdminY = createUserRecord("super-y-lease", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        userRepository.save(superAdminY);
+
+        AuthToken tokenX = new AuthToken(
+                superAdminX.getId(),
+                TokenType.REFRESH,
+                "token-hash-x-lease",
+                Instant.now().plusSeconds(3600),
+                Instant.now()
+        );
+        authTokenRepository.save(tokenX);
+
+        AuthToken tokenY = new AuthToken(
+                superAdminY.getId(),
+                TokenType.REFRESH,
+                "token-hash-y-lease",
+                Instant.now().plusSeconds(3600),
+                Instant.now()
+        );
+        authTokenRepository.save(tokenY);
+
+        CountDownLatch operationAHeld = new CountDownLatch(1);
+        CountDownLatch proceedOperationA = new CountDownLatch(1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        try {
+            // Hook into token revocation for superAdminX (Step 1 of Operation A) to pause Operation A
+            doAnswer(invocation -> {
+                operationAHeld.countDown();
+                proceedOperationA.await(10, TimeUnit.SECONDS);
+                return invocation.callRealMethod();
+            }).when(authTokenRepository).revokeAllActiveTokensByUserIdAndType(eq(superAdminX.getId()), eq(TokenType.REFRESH));
+
+            // Launch Operation A: Actor Y tries to suspend X
+            Future<?> futureA = executor.submit(() -> {
+                authenticateAs(superAdminY.getId(), superAdminY.getEmail(), Role.SUPER_ADMIN);
+                return userInternalService.changeStatus(superAdminY.getId(), superAdminX.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED);
+            });
+
+            // Wait until Operation A acquires the guard and is paused in Step 1
+            assertTrue(operationAHeld.await(5, TimeUnit.SECONDS), "Operation A should reach Step 1 latch within timeout");
+
+            // Inspect guard acquired by Operation A
+            Document initialGuardDoc = mongoTemplate.findById("super-admin-status", Document.class, "auth_locks");
+            assertNotNull(initialGuardDoc, "auth_locks document must exist");
+            String ownerA = initialGuardDoc.getString("owner");
+            Number fenceA = (Number) initialGuardDoc.get("fence");
+            assertNotNull(ownerA);
+            assertNotNull(fenceA);
+
+            // Force guard expiry while Operation A is still held
+            Query expireQuery = new Query(Criteria.where("_id").is("super-admin-status"));
+            Update expireUpdate = new Update().set("expiresAt", Instant.now().minusSeconds(60));
+            mongoTemplate.updateFirst(expireQuery, expireUpdate, "auth_locks");
+
+            // Run Operation B on main thread: Actor X suspends Y
+            authenticateAs(superAdminX.getId(), superAdminX.getEmail(), Role.SUPER_ADMIN);
+            User updatedY = userInternalService.changeStatus(superAdminX.getId(), superAdminY.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED);
+            assertNotNull(updatedY);
+            assertEquals(UserStatus.SUSPENDED, updatedY.getStatus());
+
+            // Release Operation A to proceed to Step 2
+            proceedOperationA.countDown();
+
+            // Operation A should fail at Proof point (c) because guard was overtaken/expired
+            ExecutionException execEx = assertThrows(ExecutionException.class, () -> futureA.get(5, TimeUnit.SECONDS));
+            Throwable cause = execEx.getCause();
+            assertTrue(cause instanceof ApiException, "Cause should be ApiException but was " + cause);
+            ApiException apiEx = (ApiException) cause;
+            assertEquals("STATUS_CHANGE_FAILED", apiEx.getErrorCode());
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, apiEx.getStatus());
+
+            // Verify final state: exactly 1 active SUPER_ADMIN remains (X is ACTIVE, Y is SUSPENDED)
+            User persistedX = userRepository.findById(superAdminX.getId()).orElse(null);
+            assertNotNull(persistedX);
+            assertEquals(UserStatus.ACTIVE, persistedX.getStatus(), "SuperAdmin X must remain ACTIVE");
+
+            User persistedY = userRepository.findById(superAdminY.getId()).orElse(null);
+            assertNotNull(persistedY);
+            assertEquals(UserStatus.SUSPENDED, persistedY.getStatus(), "SuperAdmin Y must be SUSPENDED");
+
+            long activeSuperAdmins = userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            assertEquals(1L, activeSuperAdmins, "Exactly 1 active SUPER_ADMIN must remain");
+
+            // Guard document in auth_locks is not owned by A, and fence has advanced
+            Document finalGuardDoc = mongoTemplate.findById("super-admin-status", Document.class, "auth_locks");
+            assertNotNull(finalGuardDoc);
+            assertFalse(ownerA.equals(finalGuardDoc.getString("owner")), "Guard must no longer be owned by Operation A");
+            Number finalFence = (Number) finalGuardDoc.get("fence");
+            assertNotNull(finalFence);
+            assertTrue(finalFence.longValue() > fenceA.longValue(), "Fence must have advanced past Operation A");
+        } finally {
+            proceedOperationA.countDown();
+            executor.shutdownNow();
+            reset(authTokenRepository);
+        }
+    }
+
+    @Test
+    @DisplayName("F2 Real MongoDB Testcontainers: Shortened lease naturally expires during delay and takeover leaves one active SUPER_ADMIN")
+    void testShortenedLeaseNaturallyExpiresDuringDelayAndTakeoverLeavesOneActiveSuperAdmin() throws Exception {
+        User superAdminX = createUserRecord("super-x-short", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        userRepository.save(superAdminX);
+
+        User superAdminY = createUserRecord("super-y-short", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        userRepository.save(superAdminY);
+
+        AuthToken tokenX = new AuthToken(
+                superAdminX.getId(),
+                TokenType.REFRESH,
+                "token-hash-x-short",
+                Instant.now().plusSeconds(3600),
+                Instant.now()
+        );
+        authTokenRepository.save(tokenX);
+
+        AuthToken tokenY = new AuthToken(
+                superAdminY.getId(),
+                TokenType.REFRESH,
+                "token-hash-y-short",
+                Instant.now().plusSeconds(3600),
+                Instant.now()
+        );
+        authTokenRepository.save(tokenY);
+
+        UserInternalServiceImpl serviceImpl = org.springframework.test.util.AopTestUtils.getTargetObject(userInternalService);
+        // Shorten lease to 300 ms, safety margin to 100 ms (maxAllowed = 200 ms)
+        serviceImpl.setSuperAdminLockLeaseMs(300L);
+        serviceImpl.setSuperAdminLockSafetyMarginMs(100L);
+
+        CountDownLatch operationAHeld = new CountDownLatch(1);
+        CountDownLatch proceedOperationA = new CountDownLatch(1);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        try {
+            doAnswer(invocation -> {
+                operationAHeld.countDown();
+                proceedOperationA.await(10, TimeUnit.SECONDS);
+                return invocation.callRealMethod();
+            }).when(authTokenRepository).revokeAllActiveTokensByUserIdAndType(eq(superAdminX.getId()), eq(TokenType.REFRESH));
+
+            Future<?> futureA = executor.submit(() -> {
+                authenticateAs(superAdminY.getId(), superAdminY.getEmail(), Role.SUPER_ADMIN);
+                return userInternalService.changeStatus(superAdminY.getId(), superAdminX.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED);
+            });
+
+            assertTrue(operationAHeld.await(5, TimeUnit.SECONDS), "Operation A should reach Step 1 latch within timeout");
+
+            // Sleep past the 300ms lease duration so the lease naturally expires in real time
+            Thread.sleep(400);
+
+            // Operation B acquires the naturally expired lease without test intervention
+            authenticateAs(superAdminX.getId(), superAdminX.getEmail(), Role.SUPER_ADMIN);
+            User updatedY = userInternalService.changeStatus(superAdminX.getId(), superAdminY.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED);
+            assertNotNull(updatedY);
+            assertEquals(UserStatus.SUSPENDED, updatedY.getStatus());
+
+            // Release Operation A
+            proceedOperationA.countDown();
+
+            // Operation A aborts with 503
+            ExecutionException execEx = assertThrows(ExecutionException.class, () -> futureA.get(5, TimeUnit.SECONDS));
+            Throwable cause = execEx.getCause();
+            assertTrue(cause instanceof ApiException, "Cause should be ApiException but was " + cause);
+            ApiException apiEx = (ApiException) cause;
+            assertEquals("STATUS_CHANGE_FAILED", apiEx.getErrorCode());
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, apiEx.getStatus());
+
+            // Exactly 1 active SUPER_ADMIN remains
+            User persistedX = userRepository.findById(superAdminX.getId()).orElse(null);
+            assertNotNull(persistedX);
+            assertEquals(UserStatus.ACTIVE, persistedX.getStatus(), "SuperAdmin X must remain ACTIVE");
+
+            User persistedY = userRepository.findById(superAdminY.getId()).orElse(null);
+            assertNotNull(persistedY);
+            assertEquals(UserStatus.SUSPENDED, persistedY.getStatus(), "SuperAdmin Y must be SUSPENDED");
+
+            long activeSuperAdmins = userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            assertEquals(1L, activeSuperAdmins, "Exactly 1 active SUPER_ADMIN must remain");
+        } finally {
+            proceedOperationA.countDown();
+            executor.shutdownNow();
+            reset(authTokenRepository);
+            serviceImpl.setSuperAdminLockLeaseMs(10000L);
+            serviceImpl.setSuperAdminLockSafetyMarginMs(3000L);
         }
     }
 }
