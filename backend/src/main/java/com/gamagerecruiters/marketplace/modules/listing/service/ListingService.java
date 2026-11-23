@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.listing.service;
 
+import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
 
@@ -50,6 +51,27 @@ public interface ListingService {
      * excluding suspension-hidden listings ({@code hiddenByProviderSuspension = true}, BR-010).
      */
     List<ListingResponse> getListingsByIds(Collection<String> ids);
+
+    default Page<ListingResponse> searchPublicListings(
+            String q,
+            String location,
+            String categoryId,
+            BigDecimal maxPrice,
+            Pageable pageable
+    ) {
+        return searchPublicListings(q, location, categoryId, maxPrice, null, pageable);
+    }
+
+    Page<ListingResponse> searchPublicListings(
+            String q,
+            String location,
+            String categoryId,
+            BigDecimal maxPrice,
+            Collection<String> providerIds,
+            Pageable pageable
+    );
+
+    List<ListingResponse> getPublicListingsByProviderId(String providerId);
 
     ListingResponse getListingForViewer(String id, String currentUserIdOrNull, Role currentRoleOrNull);
 
