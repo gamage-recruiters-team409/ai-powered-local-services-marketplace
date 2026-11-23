@@ -17,7 +17,6 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -53,6 +52,7 @@ import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDisputeStats
 import com.gamagerecruiters.marketplace.modules.adminusers.port.stub.StubUserBookingStatsAdapter;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
+import com.gamagerecruiters.marketplace.modules.auth.dto.Granularity;
 
 class AdminUsersQueryServiceTest {
 
@@ -97,15 +97,14 @@ class AdminUsersQueryServiceTest {
         when(bookings.cancellations(anyString(), any())).thenReturn(Optional.of(new UserBookingStatsPort.Cancellations(2, 1, 1)));
         when(bookings.queued(anyString(), any(), anyInt())).thenReturn(Optional.of(List.of(
                 new UserBookingStatsPort.QueuedBooking("b-1", "Deep cleaning", "CONFIRMED", NOW.plusSeconds(3600), "c-9", "Nimal", new java.math.BigDecimal("8500"), "LKR"))));
-        when(reviews.rating(anyString())).thenReturn(Optional.of(new ProviderReviewStatsPort.Rating(4.6, 12, Map.of(5, 9L))));
+        when(reviews.rating(anyString())).thenReturn(Optional.of(new ProviderReviewStatsPort.Rating(4.6, 12)));
         when(profiles.verified(anyString())).thenReturn(Optional.of(true));
-        when(profiles.serviceArea(anyString())).thenReturn(Optional.of(new ProviderProfilePort.ServiceArea("Colombo", "Dehiwala")));
+        when(profiles.serviceArea(anyString())).thenReturn(Optional.of(new ProviderProfilePort.ServiceArea(List.of("Colombo", "Gampaha"))));
         when(profiles.pro(anyString())).thenReturn(Optional.of(true));
-        when(listings.hiddenListings(anyString(), anyInt())).thenReturn(Optional.of(
-                new ProviderListingPort.HiddenListings(1, 0, 2, List.of())));
+        org.mockito.Mockito.doReturn(new ProviderListingPort.ListingCounts(9, 4, 2, 1, 1, 1, 0)).when(listings)
+                .counts(anyString());
         when(disputes.stats(anyString(), anyInt())).thenReturn(Optional.of(new UserDisputeStatsPort.DisputeStats(3, 1, List.of())));
         when(audit.recentForTarget(anyString(), anyInt())).thenReturn(Optional.of(List.of()));
-        when(directory.lastActiveAt(anyString())).thenReturn(Optional.of(NOW.minusSeconds(60)));
     }
 
     // ---------- account details ----------
@@ -120,15 +119,17 @@ class AdminUsersQueryServiceTest {
 
         assertThat(d.profile().email()).isEqualTo("nimal@example.test");
         assertThat(d.profile().providerVerified().data()).isTrue();
-        assertThat(d.profile().serviceArea().data().district()).isEqualTo("Colombo");
+        assertThat(d.profile().serviceArea().data().districts()).containsExactly("Colombo", "Gampaha");
         assertThat(d.profile().lastActive().available()).isTrue();
+        assertThat(d.profile().lastActive().data()).as("never signed in -> available, no date").isNull();
         assertThat(d.bookingStats().data().total()).isEqualTo(10);
         assertThat(d.bookingsPerMonth().data()).hasSize(1);
         assertThat(d.bookingOutcomes().available()).isTrue();
         assertThat(d.rating().data().averageRating()).isEqualTo(4.6);
+        assertThat(d.rating().data().reviewCount()).isEqualTo(12);
         assertThat(d.cancellations().data().total()).isEqualTo(2);
         assertThat(d.disputes().data().open()).isEqualTo(1);
-        assertThat(d.hiddenListings().data().paused()).isEqualTo(2);
+        assertThat(d.listings().data()).isEqualTo(new ProviderListingPort.ListingCounts(9, 4, 2, 1, 1, 1, 0));
         assertThat(d.queuedBookings().data()).hasSize(1);
         assertThat(d.adminActions().available()).isTrue();
         verify(bookings).bookingsPerMonth(eq(PROVIDER_ID), eq(Role.PROVIDER), eq(List.of(
@@ -149,13 +150,14 @@ class AdminUsersQueryServiceTest {
         }, mock(ProviderListingPort.class), (id, limit) -> Optional.empty(), new AccountActionAuditPort() {
             public Ticket begin(StatusChange change) { throw new UnsupportedOperationException(); }
             public Optional<List<AdminAction>> recentForTarget(String id, int limit) { return Optional.empty(); }
+            public void listingVisibilityResynced(String id) { }
         }, Clock.fixed(NOW, ZoneOffset.UTC));
 
         AdminUserDetailResponse d = service.detail(PROVIDER_ID, ACTOR, Role.ADMIN);
 
         for (Section<?> s : List.of(d.bookingStats(), d.bookingsPerMonth(), d.bookingOutcomes(), d.rating(),
-                d.cancellations(), d.disputes(), d.hiddenListings(), d.queuedBookings(), d.adminActions(),
-                d.profile().lastActive(), d.profile().providerVerified(), d.profile().serviceArea(), d.profile().pro())) {
+                d.cancellations(), d.disputes(), d.queuedBookings(), d.adminActions(),
+                d.profile().providerVerified(), d.profile().serviceArea(), d.profile().pro())) {
             assertThat(s.available()).isFalse();
             assertThat(s.reason()).isEqualTo(Section.NOT_CONNECTED);
             assertThat(s.data()).isNull();
@@ -184,9 +186,9 @@ class AdminUsersQueryServiceTest {
         assertThat(d.rating().available()).isTrue();
 
         allPortsAvailable();
-        when(listings.hiddenListings(anyString(), anyInt())).thenReturn(Optional.empty());
+        when(listings.counts(anyString())).thenThrow(new IllegalStateException("listing down"));
         d = service.detail(PROVIDER_ID, ACTOR, Role.ADMIN);
-        assertThat(d.hiddenListings().reason()).isEqualTo(Section.NOT_CONNECTED);
+        assertThat(d.listings().reason()).isEqualTo(Section.SOURCE_ERROR);
         assertThat(d.disputes().available()).isTrue();
 
         allPortsAvailable();
@@ -201,11 +203,11 @@ class AdminUsersQueryServiceTest {
         when(audit.recentForTarget(anyString(), anyInt())).thenReturn(Optional.empty());
         d = service.detail(PROVIDER_ID, ACTOR, Role.ADMIN);
         assertThat(d.adminActions().reason()).isEqualTo(Section.NOT_CONNECTED);
-        assertThat(d.hiddenListings().available()).isTrue();
+        assertThat(d.listings().available()).isTrue();
     }
 
     @Test
-    @DisplayName("detail of a customer: rating, hidden listings and provider profile parts are NOT_APPLICABLE (not asked)")
+    @DisplayName("detail of a customer: rating, listings and provider profile parts are NOT_APPLICABLE (not asked)")
     void customerProviderOnlySections() {
         when(directory.findById(CUSTOMER_ID)).thenReturn(Optional.of(account(CUSTOMER_ID, Role.CUSTOMER, UserStatus.ACTIVE)));
         allPortsAvailable();
@@ -213,11 +215,13 @@ class AdminUsersQueryServiceTest {
         AdminUserDetailResponse d = service.detail(CUSTOMER_ID, ACTOR, Role.ADMIN);
 
         assertThat(d.rating().reason()).isEqualTo(Section.NOT_APPLICABLE);
-        assertThat(d.hiddenListings().reason()).isEqualTo(Section.NOT_APPLICABLE);
+        assertThat(d.listings().reason()).isEqualTo(Section.NOT_APPLICABLE);
+        assertThat(d.profile().serviceArea().reason()).isEqualTo(Section.NOT_APPLICABLE);
         assertThat(d.profile().providerVerified().reason()).isEqualTo(Section.NOT_APPLICABLE);
         assertThat(d.bookingStats().available()).isTrue();
         verify(reviews, never()).rating(anyString());
-        verify(listings, never()).hiddenListings(anyString(), anyInt());
+        verify(listings, never()).counts(anyString());
+        verify(profiles, never()).serviceArea(anyString());
     }
 
     @Test
@@ -263,140 +267,74 @@ class AdminUsersQueryServiceTest {
     }
 
     @Test
-    @DisplayName("actions: ADMIN may suspend an active / reactivate a suspended account and review a provider's "
-            + "listings; SUPER_ADMIN and the admin's own account get nothing")
+    @DisplayName("actions: ADMIN may suspend an active / reactivate a suspended account and retry a provider's listing "
+            + "visibility; SUPER_ADMIN and the admin's own account get nothing; listings are never editable")
     void actions() {
         UserAccount activeProvider = account(PROVIDER_ID, Role.PROVIDER, UserStatus.ACTIVE);
-        assertThat(AdminUsersQueryService.actions(activeProvider, ACTOR, Role.ADMIN, true))
+        assertThat(AdminUsersQueryService.actions(activeProvider, ACTOR, Role.ADMIN))
                 .isEqualTo(new AdminUserDetailResponse.Actions(true, false, true));
-        assertThat(AdminUsersQueryService.actions(activeProvider, ACTOR, Role.ADMIN, false))
-                .as("listing decisions not supported -> no review action")
-                .isEqualTo(new AdminUserDetailResponse.Actions(true, false, false));
         assertThat(AdminUsersQueryService.actions(account(CUSTOMER_ID, Role.CUSTOMER, UserStatus.SUSPENDED), ACTOR,
-                Role.ADMIN, true)).isEqualTo(new AdminUserDetailResponse.Actions(false, true, false));
+                Role.ADMIN)).isEqualTo(new AdminUserDetailResponse.Actions(false, true, false));
         assertThat(AdminUsersQueryService.actions(account(CUSTOMER_ID, Role.CUSTOMER, UserStatus.DEACTIVATED), ACTOR,
-                Role.ADMIN, true)).isEqualTo(new AdminUserDetailResponse.Actions(false, false, false));
-        assertThat(AdminUsersQueryService.actions(activeProvider, ACTOR, Role.SUPER_ADMIN, true))
+                Role.ADMIN)).isEqualTo(new AdminUserDetailResponse.Actions(false, false, false));
+        assertThat(AdminUsersQueryService.actions(activeProvider, ACTOR, Role.SUPER_ADMIN))
                 .as("read-only").isEqualTo(new AdminUserDetailResponse.Actions(false, false, false));
-        assertThat(AdminUsersQueryService.actions(activeProvider, PROVIDER_ID, Role.ADMIN, true))
+        assertThat(AdminUsersQueryService.actions(activeProvider, PROVIDER_ID, Role.ADMIN))
                 .as("own account").isEqualTo(new AdminUserDetailResponse.Actions(false, false, false));
     }
 
     @Test
-    @DisplayName("detail: canReviewListings follows the listing port's real capability (false today -> read-only "
-            + "review); a failing capability check also means false")
-    void canReviewListingsFollowsPortCapability() {
-        when(directory.findById(PROVIDER_ID)).thenReturn(Optional.of(account(PROVIDER_ID, Role.PROVIDER, UserStatus.ACTIVE)));
+    @DisplayName("detail: last sign-in from the user directory (WP01 lastActiveAt) is available with its date")
+    void lastSignedIn() {
+        Instant signedIn = NOW.minusSeconds(3600);
+        when(directory.findById(PROVIDER_ID)).thenReturn(Optional.of(new UserAccount(PROVIDER_ID, "Nimal Perera",
+                "nimal@example.test", null, Role.PROVIDER, UserStatus.ACTIVE, true, NOW.minusSeconds(86400), signedIn)));
         allPortsAvailable();
 
-        when(listings.supportsListingReview()).thenReturn(false);
-        assertThat(service.detail(PROVIDER_ID, ACTOR, Role.ADMIN).actions().canReviewListings()).isFalse();
+        AdminUserDetailResponse d = service.detail(PROVIDER_ID, ACTOR, Role.ADMIN);
 
-        when(listings.supportsListingReview()).thenReturn(true);
-        assertThat(service.detail(PROVIDER_ID, ACTOR, Role.ADMIN).actions().canReviewListings()).isTrue();
-
-        when(listings.supportsListingReview()).thenThrow(new IllegalStateException("down"));
-        assertThat(service.detail(PROVIDER_ID, ACTOR, Role.ADMIN).actions().canReviewListings()).isFalse();
+        assertThat(d.profile().lastActive().available()).isTrue();
+        assertThat(d.profile().lastActive().data()).isEqualTo(signedIn);
     }
 
     @Test
-    @DisplayName("admin actions: actor name resolved once per admin, suspension reason code split from the note")
-    void adminActionsEnriched() {
-        when(directory.findById(PROVIDER_ID)).thenReturn(Optional.of(account(PROVIDER_ID, Role.PROVIDER, UserStatus.ACTIVE)));
-        when(directory.findById("admin-9")).thenReturn(Optional.of(
-                new UserAccount("admin-9", "Alex Dawson", "a@example.test", null, Role.ADMIN, UserStatus.ACTIVE, true, NOW)));
-        when(directory.findById("gone")).thenReturn(Optional.empty());
+    @DisplayName("detail JSON: a provider's listing counts, rating and service area are available; booking stats stay "
+            + "NOT_CONNECTED (WP05 stub); an audit record carries its listingVisibilitySync marker")
+    void detailJson() throws Exception {
+        when(directory.findById(PROVIDER_ID)).thenReturn(Optional.of(account(PROVIDER_ID, Role.PROVIDER, UserStatus.SUSPENDED)));
         allPortsAvailable();
+        service = new AdminUsersQueryService(directory, new StubUserBookingStatsAdapter(), reviews, profiles, listings,
+                disputes, audit, Clock.fixed(NOW, ZoneOffset.UTC));
         when(audit.recentForTarget(anyString(), anyInt())).thenReturn(Optional.of(List.of(
-                new AccountActionAuditPort.AdminAction("a3", "admin-9", "ADMIN_STATUS_CHANGED", UserStatus.SUSPENDED,
-                        UserStatus.ACTIVE, "Appeal accepted after review", "SUCCESS", NOW),
-                new AccountActionAuditPort.AdminAction("a2", "admin-9", "ADMIN_STATUS_CHANGED", UserStatus.ACTIVE,
-                        UserStatus.SUSPENDED, "OFF_PLATFORM_CONTACT: Shared a phone number", "SUCCESS", NOW.minusSeconds(60)),
-                new AccountActionAuditPort.AdminAction("a1", "gone", "ADMIN_STATUS_CHANGED", UserStatus.ACTIVE,
-                        UserStatus.SUSPENDED, "POLICY_VIOLATION", "SUCCESS", NOW.minusSeconds(120)))));
+                new AccountActionAuditPort.AdminAction("a1", null, "ADMIN_STATUS_CHANGED", UserStatus.ACTIVE,
+                        UserStatus.SUSPENDED, "POLICY_VIOLATION", "SUCCESS", NOW, "FAILED"))));
 
-        List<AdminUserDetailResponse.AdminActionView> actions = service.detail(PROVIDER_ID, ACTOR, Role.ADMIN)
-                .adminActions().data();
+        JsonNode body = json.readTree(json.writeValueAsString(service.detail(PROVIDER_ID, ACTOR, Role.ADMIN)));
 
-        assertThat(actions.get(0).action()).isEqualTo("REACTIVATED");
-        assertThat(actions.get(0).note()).isEqualTo("Appeal accepted after review");
-        assertThat(actions.get(0).reasonCode()).isNull();
-        assertThat(actions.get(0).actorName()).isEqualTo("Alex Dawson");
-        assertThat(actions.get(1).action()).isEqualTo("SUSPENDED");
-        assertThat(actions.get(1).reasonCode()).isEqualTo("OFF_PLATFORM_CONTACT");
-        assertThat(actions.get(1).note()).isEqualTo("Shared a phone number");
-        assertThat(actions.get(2).reasonCode()).isEqualTo("POLICY_VIOLATION");
-        assertThat(actions.get(2).note()).isNull();
-        assertThat(actions.get(2).actorName()).as("unknown admin").isNull();
-        verify(directory, org.mockito.Mockito.times(1)).findById("admin-9");
-    }
-
-    // ---------- list ----------
-
-    @Test
-    @DisplayName("list: defaults to customers + providers, newest joined first; q is passed as plain text; pro omitted")
-    void listDefaults() {
-        when(directory.search(eq(ACTOR), any(), isNull(), eq("nimal (50%)"), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(account(PROVIDER_ID, Role.PROVIDER, UserStatus.ACTIVE)),
-                        PageRequest.of(0, 8), 1));
-        when(profiles.pro(anyString())).thenReturn(Optional.empty());
-
-        AdminPageResponse<AdminUserRow> page = service.list(ACTOR, "  nimal (50%) ", null, null, 0, 8);
-
-        assertThat(page.content()).singleElement().satisfies(row -> {
-            assertThat(row.id()).isEqualTo(PROVIDER_ID);
-            assertThat(row.pro()).isNull();
-        });
-        verify(directory).search(eq(ACTOR), eq(Set.of(Role.CUSTOMER, Role.PROVIDER)), isNull(), eq("nimal (50%)"),
-                eq(PageRequest.of(0, 8, AdminUsersQueryService.newestFirst())));
-    }
-
-    @Test
-    @DisplayName("list: q that is a user id is an exact id lookup, still filtered by role and status")
-    void listById() {
-        when(directory.findById(CUSTOMER_ID)).thenReturn(Optional.of(account(CUSTOMER_ID, Role.CUSTOMER, UserStatus.ACTIVE)));
-
-        assertThat(service.list(ACTOR, CUSTOMER_ID, null, null, 0, 8).totalElements()).isEqualTo(1);
-        assertThat(service.list(ACTOR, CUSTOMER_ID, "PROVIDER", null, 0, 8).totalElements()).isZero();
-        assertThat(service.list(ACTOR, CUSTOMER_ID, null, "SUSPENDED", 0, 8).totalElements()).isZero();
-        verify(directory, never()).search(any(), any(), any(), any(), any());
-
-        when(directory.findById(PROVIDER_ID)).thenReturn(Optional.of(account(PROVIDER_ID, Role.ADMIN, UserStatus.ACTIVE)));
-        assertThat(service.list(ACTOR, PROVIDER_ID, null, null, 0, 8).totalElements()).as("admin not listed").isZero();
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"role=ADMIN", "role=SUPER_ADMIN", "role=nobody", "status=LOCKED", "status=DEACTIVATED",
-            "status=nope"})
-    @DisplayName("list: role other than CUSTOMER/PROVIDER or status other than ACTIVE/SUSPENDED/PENDING -> 400")
-    void listBadFilters(String filter) {
-        String[] kv = filter.split("=");
-        Throwable thrown = catchThrowable(() -> service.list(ACTOR, null,
-                kv[0].equals("role") ? kv[1] : null, kv[0].equals("status") ? kv[1] : null, 0, 8));
-        assertApiError(thrown, HttpStatus.BAD_REQUEST, "INVALID_FILTER");
-    }
-
-    @Test
-    @DisplayName("list: q over 100 characters and bad paging -> 400")
-    void listLimits() {
-        assertApiError(catchThrowable(() -> service.list(ACTOR, "q".repeat(101), null, null, 0, 8)),
-                HttpStatus.BAD_REQUEST, "INVALID_SEARCH_TEXT");
-        assertApiError(catchThrowable(() -> service.list(ACTOR, null, null, null, -1, 8)),
-                HttpStatus.BAD_REQUEST, "INVALID_PAGE_REQUEST");
-        assertApiError(catchThrowable(() -> service.list(ACTOR, null, null, null, 0, 101)),
-                HttpStatus.BAD_REQUEST, "INVALID_PAGE_REQUEST");
+        assertThat(body.at("/listings/available").asBoolean()).isTrue();
+        assertThat(body.at("/listings/data/paused").asLong()).isEqualTo(2);
+        assertThat(body.at("/rating/data/averageRating").asDouble()).isEqualTo(4.6);
+        assertThat(body.at("/rating/data/reviewCount").asLong()).isEqualTo(12);
+        assertThat(body.at("/rating/data").has("ratingCounts")).isFalse();
+        assertThat(body.at("/profile/serviceArea/data/districts").toString()).isEqualTo("[\"Colombo\",\"Gampaha\"]");
+        assertThat(body.at("/bookingStats/available").asBoolean()).isFalse();
+        assertThat(body.at("/bookingStats/reason").asText()).isEqualTo(Section.NOT_CONNECTED);
+        assertThat(body.at("/adminActions/data/0/listingVisibilitySync").asText()).isEqualTo("FAILED");
+        assertThat(body.at("/actions").has("canReviewListings")).isFalse();
+        assertThat(body.has("hiddenListings")).isFalse();
     }
 
     // ---------- summary ----------
 
     @Test
-    @DisplayName("summary: real counts; suspended = suspended customers + providers; joinedLast7Days NOT_CONNECTED")
+    @DisplayName("summary: real counts; suspended = suspended customers + providers; joinedLast7Days NOT_CONNECTED "
+            + "when the source cannot count by date")
     void summary() {
         when(directory.count(ACTOR, Role.CUSTOMER, null)).thenReturn(120L);
         when(directory.count(ACTOR, Role.PROVIDER, null)).thenReturn(40L);
         when(directory.count(ACTOR, Role.CUSTOMER, UserStatus.SUSPENDED)).thenReturn(3L);
         when(directory.count(ACTOR, Role.PROVIDER, UserStatus.SUSPENDED)).thenReturn(2L);
-        when(directory.joinedSince(anyString(), any(), any())).thenReturn(Optional.empty());
+        when(directory.joinedBetween(anyString(), any(), any(), any())).thenReturn(Optional.empty());
 
         AdminUsersSummaryResponse s = service.summary(ACTOR);
 
@@ -405,7 +343,7 @@ class AdminUsersQueryServiceTest {
         assertThat(s.suspended().data().total()).isEqualTo(5);
         assertThat(s.customers().data().joinedLast7Days().reason()).isEqualTo(Section.NOT_CONNECTED);
         assertThat(s.customers().data().joinedLast7Days().data()).isNull();
-        verify(directory).joinedSince(ACTOR, Role.CUSTOMER, Instant.parse("2026-11-12T10:00:00Z"));
+        verify(directory).joinedBetween(ACTOR, Role.CUSTOMER, Instant.parse("2026-11-12T10:00:00Z"), NOW);
     }
 
     @Test
@@ -413,7 +351,7 @@ class AdminUsersQueryServiceTest {
     void summaryFailingCount() {
         when(directory.count(ACTOR, Role.CUSTOMER, null)).thenThrow(new IllegalStateException("db"));
         when(directory.count(ACTOR, Role.PROVIDER, null)).thenReturn(40L);
-        when(directory.joinedSince(anyString(), any(), any())).thenReturn(Optional.of(4L));
+        when(directory.joinedBetween(anyString(), any(), any(), any())).thenReturn(Optional.of(4L));
 
         AdminUsersSummaryResponse s = service.summary(ACTOR);
 
@@ -426,7 +364,7 @@ class AdminUsersQueryServiceTest {
     @Test
     @DisplayName("registrations: source cannot count by date -> available=false, no buckets")
     void registrationsNotConnected() {
-        when(directory.registrations(anyString(), anyList())).thenReturn(Optional.empty());
+        when(directory.registrations(anyString(), any(), anyList())).thenReturn(Optional.empty());
 
         RegistrationsResponse r = service.registrations(ACTOR, "weeks");
 
@@ -439,8 +377,8 @@ class AdminUsersQueryServiceTest {
     @Test
     @DisplayName("registrations: available -> the source's numbers per bucket; unknown period -> 400")
     void registrationsAvailable() {
-        when(directory.registrations(anyString(), anyList())).thenAnswer(inv -> {
-            List<UserDirectoryPort.Bucket> buckets = inv.getArgument(1);
+        when(directory.registrations(anyString(), any(), anyList())).thenAnswer(inv -> {
+            List<UserDirectoryPort.Bucket> buckets = inv.getArgument(2);
             return Optional.of(buckets.stream()
                     .map(b -> new UserDirectoryPort.RegistrationCount(b.start(), b.end(), 2, 1)).toList());
         });
@@ -449,6 +387,9 @@ class AdminUsersQueryServiceTest {
         assertThat(r.available()).isTrue();
         assertThat(r.buckets()).hasSize(6);
         assertThat(r.buckets().get(5).customers()).isEqualTo(2);
+        verify(directory).registrations(eq(ACTOR), eq(Granularity.MONTH), anyList());
+        service.registrations(ACTOR, "WEEKS");
+        verify(directory).registrations(eq(ACTOR), eq(Granularity.WEEK), anyList());
 
         assertApiError(catchThrowable(() -> service.registrations(ACTOR, "DAYS")), HttpStatus.BAD_REQUEST,
                 "INVALID_PARAMETER");

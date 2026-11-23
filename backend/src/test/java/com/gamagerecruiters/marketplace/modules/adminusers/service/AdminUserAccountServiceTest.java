@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -36,6 +38,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -46,10 +49,12 @@ import com.gamagerecruiters.marketplace.common.exception.ResourceConflictExcepti
 import com.gamagerecruiters.marketplace.modules.adminusers.domain.SuspensionReason;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AccountActionResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.AccountActionAuditPort;
+import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDirectoryPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDirectoryPort.UserAccount;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
+import com.gamagerecruiters.marketplace.modules.auth.dto.Granularity;
 
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -66,6 +71,7 @@ class AdminUserAccountServiceTest {
     private UserDirectoryPort directory;
     private AccountActionAuditPort audit;
     private AccountActionAuditPort.Ticket ticket;
+    private ProviderListingPort listings;
     private AdminUserAccountService service;
     private ListAppender<ILoggingEvent> logs;
     private Logger logger;
@@ -78,7 +84,8 @@ class AdminUserAccountServiceTest {
         when(ticket.auditLogId()).thenReturn("audit-1");
         when(audit.begin(any())).thenReturn(ticket);
         when(directory.supportsAccountActions()).thenReturn(true);
-        service = new AdminUserAccountService(directory, audit);
+        listings = mock(ProviderListingPort.class);
+        service = new AdminUserAccountService(directory, audit, listings);
         logger = (Logger) LoggerFactory.getLogger(AdminUserAccountService.class);
         logs = new ListAppender<>();
         logs.start();
@@ -300,7 +307,7 @@ class AdminUserAccountServiceTest {
 
     private static AccountActionAuditPort.AdminAction suspension(UserStatus from, String outcome) {
         return new AccountActionAuditPort.AdminAction("a", ACTOR, "ADMIN_STATUS_CHANGED", from, UserStatus.SUSPENDED,
-                CODE, outcome, Instant.parse("2026-11-01T00:00:00Z"));
+                CODE, outcome, Instant.parse("2026-11-01T00:00:00Z"), null);
     }
 
     @Test
@@ -375,6 +382,141 @@ class AdminUserAccountServiceTest {
         }
     }
 
+    // ---------- provider listing visibility (agreed with WP03) ----------
+
+    @Test
+    @DisplayName("provider suspend: listings hidden (true) only AFTER the status change and its SUCCESS record")
+    void providerSuspendHidesListingsAfterStatusChange() {
+        target(Role.PROVIDER, UserStatus.ACTIVE);
+        changeReturns(Role.PROVIDER, UserStatus.SUSPENDED);
+
+        AccountActionResponse result = suspend(CODE, NOTE);
+
+        InOrder order = inOrder(directory, ticket, listings);
+        order.verify(directory).changeStatus(ACTOR, TARGET, UserStatus.ACTIVE, UserStatus.SUSPENDED);
+        order.verify(ticket).succeeded();
+        order.verify(listings).updateSuspensionVisibility(TARGET, true);
+        assertThat(result.listingVisibilitySynced()).isTrue();
+        verify(ticket, never()).listingVisibilityFailed();
+    }
+
+    @Test
+    @DisplayName("provider reactivate: listings restored (false) only after the user is saved ACTIVE")
+    void providerReactivateRestoresListingsAfterActive() {
+        target(Role.PROVIDER, UserStatus.SUSPENDED);
+        changeReturns(Role.PROVIDER, UserStatus.ACTIVE);
+
+        AccountActionResponse result = service.reactivate(ACTOR, Role.ADMIN, TARGET, NOTE);
+
+        InOrder order = inOrder(directory, listings);
+        order.verify(directory).changeStatus(ACTOR, TARGET, UserStatus.SUSPENDED, UserStatus.ACTIVE);
+        order.verify(listings).updateSuspensionVisibility(TARGET, false);
+        assertThat(result.listingVisibilitySynced()).isTrue();
+    }
+
+    @Test
+    @DisplayName("customer suspend / reactivate: the listing module is never called, no listingVisibilitySynced")
+    void customerNeverTouchesListings() {
+        target(Role.CUSTOMER, UserStatus.ACTIVE);
+        changeReturns(Role.CUSTOMER, UserStatus.SUSPENDED);
+        assertThat(suspend(CODE, NOTE).listingVisibilitySynced()).isNull();
+
+        target(Role.CUSTOMER, UserStatus.SUSPENDED);
+        changeReturns(Role.CUSTOMER, UserStatus.ACTIVE);
+        service.reactivate(ACTOR, Role.ADMIN, TARGET, NOTE);
+
+        verifyNoInteractions(listings);
+    }
+
+    @Test
+    @DisplayName("status change fails (409 / auth error) or is a no-op: the listing module is never called")
+    void failedOrIdempotentChangeNeverTouchesListings() {
+        target(Role.PROVIDER, UserStatus.ACTIVE);
+        when(directory.changeStatus(ACTOR, TARGET, UserStatus.ACTIVE, UserStatus.SUSPENDED)).thenThrow(
+                new ResourceConflictException(UserDirectoryPort.CONCURRENT_MODIFICATION, "changed"));
+        assertThat(catchThrowable(() -> suspend(CODE, NOTE))).isInstanceOf(ResourceConflictException.class);
+
+        target(Role.PROVIDER, UserStatus.SUSPENDED);
+        assertThat(suspend(CODE, NOTE).changed()).isFalse();
+
+        verifyNoInteractions(listings);
+    }
+
+    @Test
+    @DisplayName("listing update throws: status change kept (no rollback, SUCCESS), audit marked "
+            + "listingVisibilitySync FAILED, response listingVisibilitySynced=false, log has ids only")
+    void listingFailureKeepsStatus() {
+        target(Role.PROVIDER, UserStatus.ACTIVE);
+        changeReturns(Role.PROVIDER, UserStatus.SUSPENDED);
+        doThrow(new IllegalStateException("listing db at host-123 down")).when(listings)
+                .updateSuspensionVisibility(TARGET, true);
+
+        AccountActionResponse result = suspend(CODE, NOTE);
+
+        assertThat(result.changed()).isTrue();
+        assertThat(result.status()).isEqualTo(UserStatus.SUSPENDED);
+        assertThat(result.listingVisibilitySynced()).isFalse();
+        verify(ticket).succeeded();
+        verify(ticket).listingVisibilityFailed();
+        verify(ticket, never()).failed(anyString());
+        verify(directory, never()).changeStatus(ACTOR, TARGET, UserStatus.SUSPENDED, UserStatus.ACTIVE);
+        assertThat(logs.list).anySatisfy(e -> assertThat(e.getFormattedMessage())
+                .contains("ADMIN_USER_LISTING_VISIBILITY_FAILED").contains(TARGET)
+                .contains("IllegalStateException").doesNotContain("host-123"));
+    }
+
+    @Test
+    @DisplayName("sync endpoint: re-applies the value for the CURRENT status and clears the FAILED markers; idempotent")
+    void syncReappliesCurrentStatus() {
+        target(Role.PROVIDER, UserStatus.SUSPENDED);
+        AccountActionResponse first = service.syncListingVisibility(ACTOR, TARGET);
+        AccountActionResponse second = service.syncListingVisibility(ACTOR, TARGET);
+
+        assertThat(first.listingVisibilitySynced()).isTrue();
+        assertThat(first.changed()).isFalse();
+        assertThat(second).isEqualTo(first);
+        verify(listings, org.mockito.Mockito.times(2)).updateSuspensionVisibility(TARGET, true);
+        verify(audit, org.mockito.Mockito.times(2)).listingVisibilityResynced(TARGET);
+
+        target(Role.PROVIDER, UserStatus.ACTIVE);
+        service.syncListingVisibility(ACTOR, TARGET);
+        verify(listings).updateSuspensionVisibility(TARGET, false);
+        verify(directory, never()).changeStatus(anyString(), anyString(), any(), any());
+        verify(audit, never()).begin(any());
+    }
+
+    @Test
+    @DisplayName("sync after a failed listing update fixes it: the earlier failure, then the retry succeeds")
+    void syncFixesEarlierFailure() {
+        target(Role.PROVIDER, UserStatus.ACTIVE);
+        changeReturns(Role.PROVIDER, UserStatus.SUSPENDED);
+        doThrow(new IllegalStateException("down")).doNothing().when(listings).updateSuspensionVisibility(TARGET, true);
+        assertThat(suspend(CODE, NOTE).listingVisibilitySynced()).isFalse();
+
+        target(Role.PROVIDER, UserStatus.SUSPENDED);
+        assertThat(service.syncListingVisibility(ACTOR, TARGET).listingVisibilitySynced()).isTrue();
+        verify(audit).listingVisibilityResynced(TARGET);
+    }
+
+    @Test
+    @DisplayName("sync: listing module still failing -> 503 LISTING_VISIBILITY_SYNC_FAILED, markers kept; customer "
+            + "-> 403; unknown -> 404")
+    void syncErrors() {
+        target(Role.PROVIDER, UserStatus.SUSPENDED);
+        doThrow(new IllegalStateException("down")).when(listings).updateSuspensionVisibility(TARGET, true);
+        assertApiError(catchThrowable(() -> service.syncListingVisibility(ACTOR, TARGET)),
+                HttpStatus.SERVICE_UNAVAILABLE, "LISTING_VISIBILITY_SYNC_FAILED");
+        verify(audit, never()).listingVisibilityResynced(anyString());
+
+        target(Role.CUSTOMER, UserStatus.SUSPENDED);
+        assertApiError(catchThrowable(() -> service.syncListingVisibility(ACTOR, TARGET)),
+                HttpStatus.FORBIDDEN, "USER_ACTION_NOT_ALLOWED");
+
+        when(directory.findById("missing")).thenReturn(Optional.empty());
+        assertApiError(catchThrowable(() -> service.syncListingVisibility(ACTOR, "missing")),
+                HttpStatus.NOT_FOUND, "USER_NOT_FOUND");
+    }
+
     // ---------- concurrent status changes (WP01 atomic status-change contract) ----------
 
     @Test
@@ -410,7 +552,8 @@ class AdminUserAccountServiceTest {
         AtomicDirectory atomicDirectory = new AtomicDirectory(UserStatus.ACTIVE);
         // Both requests read ACTIVE and write their PENDING record before either change is applied.
         RacingAudit racingAudit = new RacingAudit(new CyclicBarrier(2));
-        AdminUserAccountService racing = new AdminUserAccountService(atomicDirectory, racingAudit);
+        AdminUserAccountService racing = new AdminUserAccountService(atomicDirectory, racingAudit,
+                mock(ProviderListingPort.class));
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
@@ -486,17 +629,13 @@ class AdminUserAccountServiceTest {
         }
 
         @Override
-        public Optional<Long> joinedSince(String actorId, Role role, Instant since) {
+        public Optional<Long> joinedBetween(String actorId, Role role, Instant from, Instant to) {
             return Optional.empty();
         }
 
         @Override
-        public Optional<List<RegistrationCount>> registrations(String actorId, List<Bucket> buckets) {
-            return Optional.empty();
-        }
-
-        @Override
-        public Optional<Instant> lastActiveAt(String userId) {
+        public Optional<List<RegistrationCount>> registrations(String actorId, Granularity granularity,
+                                                               List<Bucket> buckets) {
             return Optional.empty();
         }
     }
@@ -532,12 +671,21 @@ class AdminUserAccountServiceTest {
                 public void failed(String failureCode) {
                     outcomes.add("FAILED:" + failureCode);
                 }
+
+                @Override
+                public void listingVisibilityFailed() {
+                    outcomes.add("LISTING_VISIBILITY_FAILED");
+                }
             };
         }
 
         @Override
         public Optional<List<AdminAction>> recentForTarget(String targetUserId, int limit) {
             return Optional.of(List.of());
+        }
+
+        @Override
+        public void listingVisibilityResynced(String targetUserId) {
         }
     }
 }

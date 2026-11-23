@@ -5,22 +5,22 @@ import java.util.Optional;
 import org.springframework.stereotype.Component;
 
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderReviewStatsPort;
-import com.gamagerecruiters.marketplace.modules.review.dto.RatingSummaryResponse;
-import com.gamagerecruiters.marketplace.modules.review.service.ReviewService;
+import com.gamagerecruiters.marketplace.modules.review.dto.RatingAggregate;
+import com.gamagerecruiters.marketplace.modules.review.service.ReviewRatingFacade;
 
-/** ProviderReviewStatsPort through ReviewService.getRatingSummary (published reviews only). */
+/** ProviderReviewStatsPort through ReviewRatingFacade.getProviderRating (stored aggregate, published reviews only). */
 @Component
 public class ReviewServiceRatingAdapter implements ProviderReviewStatsPort {
 
-    private final ReviewService reviewService;
+    private final ReviewRatingFacade ratingFacade;
 
-    public ReviewServiceRatingAdapter(ReviewService reviewService) {
-        this.reviewService = reviewService;
+    public ReviewServiceRatingAdapter(ReviewRatingFacade ratingFacade) {
+        this.ratingFacade = ratingFacade;
     }
 
     @Override
     public Optional<Rating> rating(String providerUserId) {
-        RatingSummaryResponse summary = reviewService.getRatingSummary(providerUserId);
-        return Optional.of(new Rating(summary.averageRating(), summary.reviewCount(), summary.ratingCounts()));
+        RatingAggregate aggregate = ratingFacade.getProviderRating(providerUserId);
+        return Optional.of(new Rating(aggregate.ratingAvg(), aggregate.ratingCount()));
     }
 }

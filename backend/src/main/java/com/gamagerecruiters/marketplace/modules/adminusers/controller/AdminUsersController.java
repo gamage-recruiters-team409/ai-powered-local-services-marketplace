@@ -23,7 +23,6 @@ import com.gamagerecruiters.marketplace.modules.adminusers.dto.AccountActionResp
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUserDetailResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUserRow;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUsersSummaryResponse;
-import com.gamagerecruiters.marketplace.modules.adminusers.dto.ListingReviewRequest;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.ReactivateRequest;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.RegistrationsResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.Section;
@@ -37,8 +36,8 @@ import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUsersQue
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 
 /**
- * Admin users (customers and providers). Reads: ADMIN, and SUPER_ADMIN read-only. Suspend / reactivate: ADMIN only
- * (canEditArea), so SUPER_ADMIN gets 403. A method-level @PreAuthorize replaces the class-level one. The actor is
+ * Admin users (customers and providers). Reads: ADMIN, and SUPER_ADMIN read-only. Suspend / reactivate and the
+ * listing visibility retry: ADMIN only (canEditArea), so SUPER_ADMIN gets 403. Listings are read-only for everyone. A method-level @PreAuthorize replaces the class-level one. The actor is
  * always the logged-in admin, never a request value.
  */
 @RestController
@@ -117,20 +116,30 @@ public class AdminUsersController {
         return ResponseEntity.ok(accountService.reactivate(currentUserId(), CurrentUser.getRole(), id, request.note()));
     }
 
-    /** The review modal's listing. {@code available: false} when the listing source cannot provide it. */
+    /**
+     * Re-applies the provider's listing visibility for the account's current status (after a suspend / reactivate
+     * whose listing update failed). Idempotent. ADMIN only.
+     */
+    @PostMapping("/{id}/listing-visibility/sync")
+    @PreAuthorize(AdminUsersAccess.ADMIN_AREA_EDIT)
+    public ResponseEntity<AccountActionResponse> syncListingVisibility(@PathVariable String id) {
+        return ResponseEntity.ok(accountService.syncListingVisibility(currentUserId(), id));
+    }
+
+    /** The provider's listings, read-only, every status, most recently updated first. */
+    @GetMapping("/{id}/listings")
+    public ResponseEntity<Section<AdminPageResponse<ProviderListingPort.ListingRow>>> listings(
+            @PathVariable String id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "" + AdminUsersRules.LISTINGS_PAGE_SIZE) int size) {
+        return ResponseEntity.ok(listingService.page(id, page, size));
+    }
+
+    /** The read-only "View listing details" modal. {@code available: false} when the listing source cannot say. */
     @GetMapping("/{id}/listings/{listingId}")
     public ResponseEntity<Section<ProviderListingPort.ListingDetail>> listing(@PathVariable String id,
                                                                           @PathVariable String listingId) {
         return ResponseEntity.ok(listingService.detail(id, listingId));
-    }
-
-    /** KEEP_HIDDEN or MAKE_VISIBLE with a note. 503 LISTING_ACTION_UNAVAILABLE until the listing module supports it. */
-    @PostMapping("/{id}/listings/{listingId}/review")
-    @PreAuthorize(AdminUsersAccess.ADMIN_AREA_EDIT)
-    public ResponseEntity<Void> reviewListing(@PathVariable String id, @PathVariable String listingId,
-                                              @RequestBody ListingReviewRequest request) {
-        listingService.review(currentUserId(), id, listingId, request.decision(), request.note());
-        return ResponseEntity.noContent().build();
     }
 
     private static String currentUserId() {

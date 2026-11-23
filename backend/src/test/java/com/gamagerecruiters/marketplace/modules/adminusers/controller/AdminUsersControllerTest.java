@@ -42,6 +42,7 @@ import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUserRow;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUsersSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.RegistrationsResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.Section;
+import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUserAccountService;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUserListingService;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUsersCsvExporter;
@@ -75,6 +76,7 @@ class AdminUsersControllerTest {
             "{\"reasonCode\":\"REPEATED_CANCELLATIONS\",\"note\":\"Repeated no-shows reported by customers\"}";
     private static final String REACTIVATE_BODY = "{\"note\":\"Appeal accepted after reviewing bookings\"}";
     private static final String REVIEW_BODY = "{\"decision\":\"MAKE_VISIBLE\",\"note\":\"Contact details were removed\"}";
+    private static final String SYNC = "/listing-visibility/sync";
     private static final String LISTING_ID = "65f1c0aa11bb22cc33a1aaaa";
 
     @Autowired
@@ -131,6 +133,9 @@ class AdminUsersControllerTest {
                 .thenReturn(new RegistrationsResponse("WEEKS", false, Section.NOT_CONNECTED, null));
         when(queryService.detail(eq(ID), anyString(), any())).thenReturn(detail());
         when(listingService.detail(ID, LISTING_ID)).thenReturn(Section.notConnected());
+        when(listingService.page(eq(ID), anyInt(), anyInt())).thenReturn(Section.of(new AdminPageResponse<>(List.of(
+                new ProviderListingPort.ListingRow(LISTING_ID, "Deep Cleaning", "Cleaning", null, "FIXED", "PAUSED",
+                        List.of(), Instant.parse("2026-10-24T00:00:00Z"))), 0, 5, 1, 1)));
         when(csvExporter.export(anyString(), any(), any(), any())).thenReturn(new AdminUsersCsvExporter.Export(
                 "﻿id,name,email,role,joined,status\r\n".getBytes(StandardCharsets.UTF_8), "users-2026-11-19.csv",
                 0, 0, false));
@@ -151,8 +156,8 @@ class AdminUsersControllerTest {
         mockMvc.perform(post(BASE + "/" + ID + "/reactivate").contentType(MediaType.APPLICATION_JSON).content(REACTIVATE_BODY))
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get(BASE + "/" + ID + "/listings/" + LISTING_ID)).andExpect(status().isUnauthorized());
-        mockMvc.perform(post(BASE + "/" + ID + "/listings/" + LISTING_ID + "/review")
-                .contentType(MediaType.APPLICATION_JSON).content(REVIEW_BODY)).andExpect(status().isUnauthorized());
+        mockMvc.perform(get(BASE + "/" + ID + "/listings")).andExpect(status().isUnauthorized());
+        mockMvc.perform(post(BASE + "/" + ID + SYNC)).andExpect(status().isUnauthorized());
         verifyNoInteractions(queryService, csvExporter, accountService, listingService);
     }
 
@@ -204,6 +209,12 @@ class AdminUsersControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.available").value(false))
                 .andExpect(jsonPath("$.reason").value("NOT_CONNECTED"));
+        mockMvc.perform(get(BASE + "/" + ID + "/listings").header("Authorization", auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.available").value(true))
+                .andExpect(jsonPath("$.data.content[0].status").value("PAUSED"))
+                .andExpect(jsonPath("$.data.totalElements").value(1));
+        verify(listingService).page(ID, 0, 5);
     }
 
     @ParameterizedTest
@@ -221,13 +232,15 @@ class AdminUsersControllerTest {
         mockMvc.perform(get(BASE + "/" + ID).header("Authorization", auth)).andExpect(status().isForbidden());
         mockMvc.perform(get(BASE + "/" + ID + "/listings/" + LISTING_ID).header("Authorization", auth))
                 .andExpect(status().isForbidden());
+        mockMvc.perform(get(BASE + "/" + ID + "/listings").header("Authorization", auth))
+                .andExpect(status().isForbidden());
         verifyNoInteractions(queryService, csvExporter, accountService, listingService);
     }
 
     // ---------- writes ----------
 
     @Test
-    @DisplayName("suspend / reactivate: ADMIN -> 200, as the logged-in admin with its role")
+    @DisplayName("suspend / reactivate / listing visibility sync: ADMIN -> 200, as the logged-in admin with its role")
     void adminCanWrite() throws Exception {
         when(accountService.suspend(eq("user-ADMIN"), eq(Role.ADMIN), eq(ID), anyString(), anyString())).thenReturn(
                 new AccountActionResponse(ID, Role.PROVIDER, UserStatus.ACTIVE, UserStatus.SUSPENDED, true, "audit-1"));
@@ -247,16 +260,46 @@ class AdminUsersControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"));
         verify(accountService).reactivate("user-ADMIN", Role.ADMIN, ID, "Appeal accepted after reviewing bookings");
-        mockMvc.perform(post(BASE + "/" + ID + "/listings/" + LISTING_ID + "/review").header("Authorization", auth)
-                        .contentType(MediaType.APPLICATION_JSON).content(REVIEW_BODY))
-                .andExpect(status().isNoContent());
-        verify(listingService).review("user-ADMIN", ID, LISTING_ID, "MAKE_VISIBLE", "Contact details were removed");
+        when(accountService.syncListingVisibility("user-ADMIN", ID)).thenReturn(new AccountActionResponse(ID,
+                Role.PROVIDER, UserStatus.SUSPENDED, UserStatus.SUSPENDED, false, null, true));
+        mockMvc.perform(post(BASE + "/" + ID + SYNC).header("Authorization", auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.listingVisibilitySynced").value(true))
+                .andExpect(jsonPath("$.changed").value(false));
+        verify(accountService).syncListingVisibility("user-ADMIN", ID);
+    }
+
+    @Test
+    @DisplayName("suspend of a provider whose listing update failed: 200 with listingVisibilitySynced=false")
+    void listingVisibilityNotSynced() throws Exception {
+        when(accountService.suspend(eq("user-ADMIN"), eq(Role.ADMIN), eq(ID), anyString(), anyString())).thenReturn(
+                new AccountActionResponse(ID, Role.PROVIDER, UserStatus.ACTIVE, UserStatus.SUSPENDED, true, "audit-1",
+                        false));
+
+        mockMvc.perform(post(BASE + "/" + ID + "/suspend").header("Authorization", bearer(Role.ADMIN))
+                        .contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUSPENDED"))
+                .andExpect(jsonPath("$.listingVisibilitySynced").value(false));
+    }
+
+    @Test
+    @DisplayName("the removed listing decision endpoint answers 404 (for ADMIN and SUPER_ADMIN) and calls nothing")
+    void listingDecisionEndpointRemoved() throws Exception {
+        for (Role role : List.of(Role.ADMIN, Role.SUPER_ADMIN)) {
+            mockMvc.perform(post(BASE + "/" + ID + "/listings/" + LISTING_ID + "/review")
+                            .header("Authorization", bearer(role))
+                            .contentType(MediaType.APPLICATION_JSON).content(REVIEW_BODY))
+                    .andExpect(status().isNotFound());
+        }
+        verifyNoInteractions(accountService, listingService);
     }
 
     @ParameterizedTest
     @EnumSource(value = Role.class, names = {"SUPER_ADMIN", "SUPPORT_ADMIN", "MODERATOR", "FINANCE_ADMIN", "CUSTOMER",
             "PROVIDER"})
-    @DisplayName("suspend / reactivate: SUPER_ADMIN (read-only), other admins, customers and providers -> 403")
+    @DisplayName("suspend / reactivate / listing visibility sync: SUPER_ADMIN (read-only), other admins, customers "
+            + "and providers -> 403")
     void othersCannotWrite(Role role) throws Exception {
         String auth = bearer(role);
 
@@ -267,31 +310,39 @@ class AdminUsersControllerTest {
         mockMvc.perform(post(BASE + "/" + ID + "/reactivate").header("Authorization", auth)
                         .contentType(MediaType.APPLICATION_JSON).content(REACTIVATE_BODY))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(post(BASE + "/" + ID + "/listings/" + LISTING_ID + "/review").header("Authorization", auth)
-                        .contentType(MediaType.APPLICATION_JSON).content(REVIEW_BODY))
-                .andExpect(status().isForbidden());
+        mockMvc.perform(post(BASE + "/" + ID + SYNC).header("Authorization", auth))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
         verifyNoInteractions(accountService, listingService);
     }
 
     // ---------- error codes ----------
 
     @Test
-    @DisplayName("service errors keep their status and code: 503, 403, 404, 400; bad page / missing body -> 400")
+    @DisplayName("service errors keep their status and code: 409, 503, 403, 404, 400; bad page / missing body -> 400")
     void errorCodes() throws Exception {
         String auth = bearer(Role.ADMIN);
         when(accountService.suspend(anyString(), any(), eq("stub"), anyString(), anyString())).thenThrow(new ApiException(
                 HttpStatus.SERVICE_UNAVAILABLE, "USER_ACCOUNT_ACTION_UNAVAILABLE", "x"));
         when(accountService.suspend(anyString(), any(), eq("admin"), anyString(), anyString())).thenThrow(new ApiException(
                 HttpStatus.FORBIDDEN, "USER_ACTION_NOT_ALLOWED", "x"));
-        org.mockito.Mockito.doThrow(new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "LISTING_ACTION_UNAVAILABLE", "x"))
-                .when(listingService).review(anyString(), eq(ID), eq(LISTING_ID), anyString(), anyString());
+        when(accountService.suspend(anyString(), any(), eq("raced"), anyString(), anyString())).thenThrow(
+                new com.gamagerecruiters.marketplace.common.exception.ResourceConflictException("CONCURRENT_MODIFICATION",
+                        "The account status was changed by someone else. Reload the account and try again"));
+        when(accountService.syncListingVisibility(anyString(), eq(ID))).thenThrow(new ApiException(
+                HttpStatus.SERVICE_UNAVAILABLE, "LISTING_VISIBILITY_SYNC_FAILED", "x"));
         when(queryService.detail(eq("missing"), anyString(), any())).thenThrow(new com.gamagerecruiters.marketplace.common.exception
                 .ResourceNotFoundException("USER_NOT_FOUND", "User not found"));
 
-        mockMvc.perform(post(BASE + "/" + ID + "/listings/" + LISTING_ID + "/review").header("Authorization", auth)
-                        .contentType(MediaType.APPLICATION_JSON).content(REVIEW_BODY))
+        mockMvc.perform(post(BASE + "/raced/suspend").header("Authorization", auth)
+                        .contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("CONCURRENT_MODIFICATION"))
+                .andExpect(jsonPath("$.message")
+                        .value("The account status was changed by someone else. Reload the account and try again"));
+        mockMvc.perform(post(BASE + "/" + ID + SYNC).header("Authorization", auth))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.error").value("LISTING_ACTION_UNAVAILABLE"));
+                .andExpect(jsonPath("$.error").value("LISTING_VISIBILITY_SYNC_FAILED"));
         mockMvc.perform(post(BASE + "/stub/suspend").header("Authorization", auth)
                         .contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
                 .andExpect(status().isServiceUnavailable())

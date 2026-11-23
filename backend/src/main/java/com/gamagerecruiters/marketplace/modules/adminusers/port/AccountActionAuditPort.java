@@ -28,10 +28,17 @@ public interface AccountActionAuditPort {
 
         /** The change was rejected (nothing changed). Never throws. */
         void failed(String failureCode);
+
+        /**
+         * The (applied) change's listing visibility update failed: recorded as listingVisibilitySync = FAILED on this
+         * record. Never throws.
+         */
+        void listingVisibilityFailed();
     }
 
+    /** {@code listingVisibilitySync}: null, FAILED, or SUCCESS once a retry applied it. */
     record AdminAction(String auditLogId, String actorId, String action, UserStatus fromStatus, UserStatus toStatus,
-                       String reason, String outcome, Instant createdAt) {
+                       String reason, String outcome, Instant createdAt, String listingVisibilitySync) {
     }
 
     /** @throws RuntimeException if the PENDING record cannot be written (the change must then not run) */
@@ -39,4 +46,7 @@ public interface AccountActionAuditPort {
 
     /** Newest first. */
     Optional<List<AdminAction>> recentForTarget(String targetUserId, int limit);
+
+    /** A listing visibility retry succeeded: the account's FAILED markers become SUCCESS. Never throws. */
+    void listingVisibilityResynced(String targetUserId);
 }

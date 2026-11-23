@@ -14,6 +14,7 @@ import com.gamagerecruiters.marketplace.modules.adminusers.domain.AdminUsersRule
 import com.gamagerecruiters.marketplace.modules.adminusers.domain.SuspensionReason;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AccountActionResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.AccountActionAuditPort;
+import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDirectoryPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDirectoryPort.UserAccount;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
@@ -34,9 +35,14 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
  *       409 USER_STATUS_NOT_CHANGEABLE</li>
  * </ol>
  * Then the admin audit flow: PENDING record (actor, action, reason, from/to status, time) before the change, the
- * auth module applies it with its own rules and only while the account still has the status read here (its errors,
- * including 409 CONCURRENT_MODIFICATION when another admin changed it first, are recorded as FAILED and passed
- * through), then SUCCESS.
+ * auth module applies it atomically with its own rules and only while the account still has the status read here
+ * (its errors, including 409 CONCURRENT_MODIFICATION when another admin changed it first, are recorded as FAILED and
+ * passed through), then SUCCESS.
+ *
+ * <p>For a PROVIDER, once the status change has succeeded (never before, never after a failure) the provider's
+ * listings follow it: hidden after a suspension, restored after the account is saved ACTIVE again. If that listing
+ * update fails the status change is NOT rolled back: the audit record gets listingVisibilitySync = FAILED, the
+ * response says {@code listingVisibilitySynced: false}, and {@link #syncListingVisibility} re-applies it.</p>
  * The audit reason is {@code CODE} or {@code CODE: note} for a suspension and the note for a reactivation. "Ban" is
  * SUSPENDED; LOCKED and DEACTIVATED are never set here. Logs contain ids and statuses only, never notes.
  */
@@ -46,6 +52,7 @@ public class AdminUserAccountService {
     public static final String ACTION_UNAVAILABLE = "USER_ACCOUNT_ACTION_UNAVAILABLE";
     public static final String ACTION_NOT_ALLOWED = "USER_ACTION_NOT_ALLOWED";
     public static final String STATUS_NOT_CHANGEABLE = "USER_STATUS_NOT_CHANGEABLE";
+    public static final String LISTING_VISIBILITY_SYNC_FAILED = "LISTING_VISIBILITY_SYNC_FAILED";
 
     /** Status-change records read to find the latest suspension (the audit read's maximum). */
     static final int AUDIT_LOOKBACK = 100;
@@ -54,10 +61,13 @@ public class AdminUserAccountService {
 
     private final UserDirectoryPort directory;
     private final AccountActionAuditPort audit;
+    private final ProviderListingPort listings;
 
-    public AdminUserAccountService(UserDirectoryPort directory, AccountActionAuditPort audit) {
+    public AdminUserAccountService(UserDirectoryPort directory, AccountActionAuditPort audit,
+                                   ProviderListingPort listings) {
         this.directory = directory;
         this.audit = audit;
+        this.listings = listings;
     }
 
     public AccountActionResponse suspend(String actorId, Role actorRole, String userId, String reasonCode,
@@ -134,8 +144,54 @@ public class AdminUserAccountService {
         ticket.succeeded();
         log.info("event=ADMIN_USER_STATUS_CHANGED userId={} actorId={} from={} to={} auditLogId={}",
                 target.id(), actorId, target.status(), updated.status(), ticket.auditLogId());
+        Boolean listingsSynced = null;
+        if (target.role() == Role.PROVIDER && updated.status() == newStatus) {
+            listingsSynced = applyListingVisibility(updated.id(), newStatus == UserStatus.SUSPENDED);
+            if (!listingsSynced) {
+                ticket.listingVisibilityFailed();
+            }
+        }
         return new AccountActionResponse(updated.id(), updated.role(), target.status(), updated.status(), true,
-                ticket.auditLogId());
+                ticket.auditLogId(), listingsSynced);
+    }
+
+    /**
+     * Re-applies the provider's listing visibility for the account's CURRENT status (SUSPENDED: hidden; any other:
+     * restored, which the listing module only does for an eligible ACTIVE provider). Idempotent. Customers: 403
+     * USER_ACTION_NOT_ALLOWED. Listing module failure: 503 LISTING_VISIBILITY_SYNC_FAILED, nothing else changes.
+     */
+    public AccountActionResponse syncListingVisibility(String actorId, String userId) {
+        if (userId == null || userId.isBlank() || userId.length() > AdminUsersRules.MAX_USER_ID_LENGTH) {
+            throw AdminUsersQueryService.notFound();
+        }
+        UserAccount target = directory.findById(userId)
+                .filter(u -> AdminUsersRules.MANAGED_ROLES.contains(u.role()))
+                .orElseThrow(AdminUsersQueryService::notFound);
+        if (target.role() != Role.PROVIDER) {
+            throw new ApiException(HttpStatus.FORBIDDEN, ACTION_NOT_ALLOWED,
+                    "Listing visibility applies to provider accounts only");
+        }
+        if (!applyListingVisibility(target.id(), target.status() == UserStatus.SUSPENDED)) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, LISTING_VISIBILITY_SYNC_FAILED,
+                    "Listing visibility could not be updated. Try again later");
+        }
+        audit.listingVisibilityResynced(target.id());
+        log.info("event=ADMIN_USER_LISTING_VISIBILITY_SYNCED userId={} actorId={} status={}",
+                target.id(), actorId, target.status());
+        return new AccountActionResponse(target.id(), target.role(), target.status(), target.status(), false, null,
+                true);
+    }
+
+    /** True when applied. A failure is logged with the id and the exception type only, never rethrown. */
+    private boolean applyListingVisibility(String providerUserId, boolean suspended) {
+        try {
+            listings.updateSuspensionVisibility(providerUserId, suspended);
+            return true;
+        } catch (RuntimeException e) {
+            log.error("event=ADMIN_USER_LISTING_VISIBILITY_FAILED userId={} suspended={} cause={}",
+                    providerUserId, suspended, e.getClass().getSimpleName());
+            return false;
+        }
     }
 
     /** The status the account had when it was last suspended (latest SUCCESS suspension record) was PENDING. */

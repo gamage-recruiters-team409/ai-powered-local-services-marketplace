@@ -271,8 +271,11 @@ class AdminUsersMongoIntegrationTest {
         assertThat(detail.adminActions().data().get(1).actorName()).as("admin name resolved").isEqualTo("User 0009");
         assertThat(detail.actions().canSuspend()).isTrue();
         assertThat(detail.actions().canReactivate()).isFalse();
-        assertThat(detail.actions().canReviewListings())
-                .as("the real listing adapter does not support admin decisions yet").isFalse();
+        assertThat(detail.actions().canSyncListingVisibility()).as("ADMIN on a provider").isTrue();
+        assertThat(detail.listings().available()).as("real WP03 counts").isTrue();
+        assertThat(detail.listings().data().total()).isZero();
+        assertThat(suspended.listingVisibilitySynced()).as("provider: listings updated after the change").isTrue();
+        assertThat(detail.profile().lastActive().available()).isTrue();
         assertThat(detail.disputes().data().lifetime()).isZero();
         assertThat(detail.bookingStats().available()).as("booking stats are a stub").isFalse();
     }

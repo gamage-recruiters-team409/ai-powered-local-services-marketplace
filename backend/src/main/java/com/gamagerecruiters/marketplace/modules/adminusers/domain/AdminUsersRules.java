@@ -32,7 +32,9 @@ public final class AdminUsersRules {
     public static final int REGISTRATION_MONTHS = 6;
     public static final int BOOKING_MONTHS = 6;
     public static final int RECENT_DISPUTES = 5;
-    public static final int FLAGGED_LISTINGS = 5;
+    /** The account page's listings section: page size (default) and the largest page accepted. */
+    public static final int LISTINGS_PAGE_SIZE = 5;
+    public static final int MAX_LISTINGS_PAGE_SIZE = 20;
     public static final int QUEUED_BOOKINGS = 3;
     public static final int ADMIN_ACTIONS = 10;
 

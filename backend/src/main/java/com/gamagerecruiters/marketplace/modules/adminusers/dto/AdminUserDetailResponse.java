@@ -3,7 +3,7 @@ package com.gamagerecruiters.marketplace.modules.adminusers.dto;
 import java.time.Instant;
 import java.util.List;
 
-import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort.HiddenListings;
+import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort.ListingCounts;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderProfilePort.ServiceArea;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderReviewStatsPort.Rating;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.UserBookingStatsPort.BookingOutcomes;
@@ -28,7 +28,7 @@ public record AdminUserDetailResponse(
         Section<Rating> rating,
         Section<Cancellations> cancellations,
         Section<DisputeStats> disputes,
-        Section<HiddenListings> hiddenListings,
+        Section<ListingCounts> listings,
         Section<List<QueuedBooking>> queuedBookings,
         Section<List<AdminActionView>> adminActions,
         Actions actions
@@ -36,19 +36,22 @@ public record AdminUserDetailResponse(
 
     /**
      * What the logged-in admin may do on this page, decided by the backend (the frontend has no user id): ADMIN only
-     * (SUPER_ADMIN is read-only), never on the admin's own account. {@code canReviewListings} is true only when the
-     * listing source supports admin decisions (today it does not). The endpoints check every rule again.
+     * (SUPER_ADMIN is read-only), never on the admin's own account. {@code canSyncListingVisibility}: retry the
+     * provider's listing visibility update. Listings are read-only for every role. The endpoints check every rule
+     * again.
      */
-    public record Actions(boolean canSuspend, boolean canReactivate, boolean canReviewListings) {
+    public record Actions(boolean canSuspend, boolean canReactivate, boolean canSyncListingVisibility) {
     }
 
     /**
      * One audit record. {@code action}: SUSPENDED, REACTIVATED or STATUS_CHANGED. {@code actorName} is null when the
      * admin account cannot be read. {@code reasonCode} is set for suspensions; {@code note} is the admin's note.
+     * {@code listingVisibilitySync}: null, FAILED (the provider's listings were not updated) or SUCCESS (fixed by a
+     * retry).
      */
     public record AdminActionView(String auditLogId, String actorId, String actorName, String action,
                                   UserStatus fromStatus, UserStatus toStatus, String reasonCode, String note,
-                                  String outcome, Instant createdAt) {
+                                  String outcome, Instant createdAt, String listingVisibilitySync) {
     }
 
     public record Profile(

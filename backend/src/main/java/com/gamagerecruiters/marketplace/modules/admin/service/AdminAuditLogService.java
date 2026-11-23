@@ -95,6 +95,36 @@ public class AdminAuditLogService {
     }
 
     /**
+     * Records the result of a provider status change's listing visibility update on its (completed) record. Only this
+     * field is written; outcome, reason and statuses are never touched.
+     *
+     * @return true if the record was found and updated
+     */
+    public boolean markListingVisibilitySync(String auditLogId, AuditOutcome result) {
+        if (auditLogId == null || result == AuditOutcome.PENDING) {
+            return false;
+        }
+        Query query = Query.query(Criteria.where(AdminAuditLog.FIELD_ID).is(auditLogId)
+                .and(AdminAuditLog.FIELD_ACTION).is(AdminAuditAction.ADMIN_STATUS_CHANGED));
+        return mongoTemplate.updateFirst(query,
+                new Update().set(AdminAuditLog.FIELD_LISTING_VISIBILITY_SYNC, result), AdminAuditLog.class)
+                .getModifiedCount() == 1;
+    }
+
+    /**
+     * After a successful listing visibility retry: every status-change record of that account still marked FAILED
+     * becomes SUCCESS (idempotent: nothing to change answers 0).
+     */
+    public long markListingVisibilityResynced(String targetUserId) {
+        Query query = Query.query(Criteria.where(AdminAuditLog.FIELD_TARGET_USER_ID).is(targetUserId)
+                .and(AdminAuditLog.FIELD_ACTION).is(AdminAuditAction.ADMIN_STATUS_CHANGED)
+                .and(AdminAuditLog.FIELD_LISTING_VISIBILITY_SYNC).is(AuditOutcome.FAILED));
+        return mongoTemplate.updateMulti(query,
+                new Update().set(AdminAuditLog.FIELD_LISTING_VISIBILITY_SYNC, AuditOutcome.SUCCESS), AdminAuditLog.class)
+                .getModifiedCount();
+    }
+
+    /**
      * Sets the outcome only while the record is still PENDING (atomic conditional update), so a record
      * can be completed once and never changed again.
      *

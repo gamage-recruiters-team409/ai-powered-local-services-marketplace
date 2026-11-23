@@ -50,6 +50,7 @@ import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDirectoryPor
 import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDisputeStatsPort;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
+import com.gamagerecruiters.marketplace.modules.auth.dto.Granularity;
 
 /**
  * Read side of the admin users screens. This module owns no user data: it aggregates the ports, and every part
@@ -194,9 +195,10 @@ public class AdminUsersQueryService {
     }
 
     private Section<AdminUsersSummaryResponse.Count> roleCount(String actorId, Role role, Instant since) {
+        Instant now = clock.instant();
         return guarded(null, "count:" + role, () -> new AdminUsersSummaryResponse.Count(
                 directory.count(actorId, role, null),
-                section(null, "joinedSince:" + role, () -> directory.joinedSince(actorId, role, since))));
+                section(null, "joinedLast7Days:" + role, () -> directory.joinedBetween(actorId, role, since, now))));
     }
 
     // ---------------------------------------------------------------- registrations
@@ -207,8 +209,9 @@ public class AdminUsersQueryService {
             throw badRequest("INVALID_PARAMETER", "period must be WEEKS or MONTHS");
         }
         List<UserDirectoryPort.Bucket> buckets = buckets(parsed, clock.instant());
+        Granularity granularity = parsed == Period.WEEKS ? Granularity.WEEK : Granularity.MONTH;
         Section<List<UserDirectoryPort.RegistrationCount>> counts =
-                section(null, "registrations", () -> directory.registrations(actorId, buckets));
+                section(null, "registrations", () -> directory.registrations(actorId, granularity, buckets));
         if (!counts.available()) {
             return new RegistrationsResponse(parsed.name(), false, counts.reason(), null);
         }
@@ -260,7 +263,7 @@ public class AdminUsersQueryService {
 
         AdminUserDetailResponse.Profile profile = new AdminUserDetailResponse.Profile(
                 id, user.displayName(), role, user.status(), user.email(), user.phone(), user.joinedAt(),
-                section(id, "lastActive", () -> directory.lastActiveAt(id)),
+                Section.of(user.lastActiveAt()),
                 user.emailVerified(),
                 provider ? section(id, "providerVerified", () -> profiles.verified(id)) : Section.notApplicable(),
                 provider ? section(id, "serviceArea", () -> profiles.serviceArea(id)) : Section.notApplicable(),
@@ -275,39 +278,22 @@ public class AdminUsersQueryService {
                 provider ? section(id, "rating", () -> reviews.rating(id)) : Section.notApplicable(),
                 section(id, "cancellations", () -> bookings.cancellations(id, role)),
                 section(id, "disputes", () -> disputes.stats(id, AdminUsersRules.RECENT_DISPUTES)),
-                provider ? section(id, "hiddenListings", () -> listings.hiddenListings(id, AdminUsersRules.FLAGGED_LISTINGS))
-                        : Section.notApplicable(),
+                provider ? guarded(id, "listings", () -> listings.counts(id)) : Section.notApplicable(),
                 section(id, "queuedBookings", () -> bookings.queued(id, role, AdminUsersRules.QUEUED_BOOKINGS)),
                 section(id, "adminActions", () -> audit.recentForTarget(id, AdminUsersRules.ADMIN_ACTIONS)
                         .map(this::withActorNames)),
-                actions(user, actorId, actorRole, provider && listingReviewSupported()));
+                actions(user, actorId, actorRole));
     }
 
-    /**
-     * ADMIN edits the ADMIN area; SUPER_ADMIN reads it only. Never on the admin's own account.
-     * {@code canReviewListings} also needs the listing source to actually support decisions, so the UI never offers
-     * an action that can only answer 503 (it shows the listing read-only instead).
-     */
-    static AdminUserDetailResponse.Actions actions(UserAccount user, String actorId, Role actorRole,
-                                                   boolean listingReviewSupported) {
+    /** ADMIN edits the ADMIN area; SUPER_ADMIN reads it only. Never on the admin's own account. */
+    static AdminUserDetailResponse.Actions actions(UserAccount user, String actorId, Role actorRole) {
         boolean editor = actorRole == Role.ADMIN && actorId != null && !actorId.equals(user.id());
         boolean suspendable = user.status() == UserStatus.ACTIVE || user.status() == UserStatus.PENDING_VERIFICATION
                 || user.status() == UserStatus.LOCKED;
         return new AdminUserDetailResponse.Actions(
                 editor && suspendable,
                 editor && user.status() == UserStatus.SUSPENDED,
-                editor && user.role() == Role.PROVIDER && listingReviewSupported);
-    }
-
-    /** A failing capability check means "not supported": the review stays read-only. */
-    private boolean listingReviewSupported() {
-        try {
-            return listings.supportsListingReview();
-        } catch (RuntimeException e) {
-            log.warn("event=ADMIN_USERS_SECTION_FAILED section=listingReviewSupport cause={}",
-                    e.getClass().getSimpleName());
-            return false;
-        }
+                editor && user.role() == Role.PROVIDER);
     }
 
     /** Audit records with the admin's display name, and a suspension's reason code split from its note. */
@@ -321,7 +307,8 @@ public class AdminUsersQueryService {
             String reasonCode = suspension ? SuspensionReason.codeOf(r.reason()).map(Enum::name).orElse(null) : null;
             String note = suspension ? SuspensionReason.noteOf(r.reason()) : r.reason();
             return new AdminUserDetailResponse.AdminActionView(r.auditLogId(), r.actorId(), actorName, action,
-                    r.fromStatus(), r.toStatus(), reasonCode, note, r.outcome(), r.createdAt());
+                    r.fromStatus(), r.toStatus(), reasonCode, note, r.outcome(), r.createdAt(),
+                    r.listingVisibilitySync());
         }).toList();
     }
 
@@ -351,7 +338,7 @@ public class AdminUsersQueryService {
     // ---------------------------------------------------------------- helpers
 
     /** Authorization failures are never hidden as SOURCE_ERROR: they propagate (401 / 403). */
-    private <T> Section<T> section(String userId, String name, Supplier<Optional<T>> source) {
+    <T> Section<T> section(String userId, String name, Supplier<Optional<T>> source) {
         try {
             return source.get().map(Section::of).orElseGet(Section::notConnected);
         } catch (AccessDeniedException e) {
@@ -369,7 +356,7 @@ public class AdminUsersQueryService {
         }
     }
 
-    private <T> Section<T> guarded(String userId, String name, Supplier<T> source) {
+    <T> Section<T> guarded(String userId, String name, Supplier<T> source) {
         return section(userId, name, () -> Optional.of(source.get()));
     }
 

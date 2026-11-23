@@ -17,18 +17,18 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.NullSource;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.gamagerecruiters.marketplace.modules.admin.dto.AdminPageResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.Section;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.AccountActionAuditPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort.ListingDetail;
-import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort.ReviewDecision;
+import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderListingPort.ListingRow;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderProfilePort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.ProviderReviewStatsPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.UserBookingStatsPort;
@@ -42,7 +42,6 @@ class AdminUserListingServiceTest {
 
     private static final String PROVIDER = "65f1c0aa11bb22cc33a1b2c3";
     private static final String LISTING = "65f1c0aa11bb22cc33a1aaaa";
-    private static final String NOTE = "Contact details removed by the provider";
 
     private UserDirectoryPort directory;
     private ProviderListingPort listings;
@@ -79,7 +78,7 @@ class AdminUserListingServiceTest {
     // ---------- detail ----------
 
     @Test
-    @DisplayName("detail: this provider's listing -> available with its data; hiddenSince stays null when not recorded")
+    @DisplayName("detail: this provider's listing -> available with its data; moderatedAt stays null when not recorded")
     void detail() {
         when(listings.listingDetail(LISTING)).thenReturn(Optional.of(listing(PROVIDER)));
 
@@ -87,7 +86,7 @@ class AdminUserListingServiceTest {
 
         assertThat(result.available()).isTrue();
         assertThat(result.data().title()).isEqualTo("Commercial Deep Cleaning");
-        assertThat(result.data().hiddenSince()).isNull();
+        assertThat(result.data().moderatedAt()).isNull();
     }
 
     @Test
@@ -127,51 +126,47 @@ class AdminUserListingServiceTest {
         verify(listings, never()).listingDetail(anyString());
     }
 
-    // ---------- review ----------
+    // ---------- listings page (read-only) ----------
 
     @Test
-    @DisplayName("review while the listing port cannot apply decisions -> 503 LISTING_ACTION_UNAVAILABLE, nothing changed")
-    void reviewUnavailable() {
-        when(listings.supportsListingReview()).thenReturn(false);
+    @DisplayName("page: the provider's listings of every status through the listing port, paginated")
+    void page() {
+        ListingRow row = new ListingRow(LISTING, "Commercial Deep Cleaning", "Cleaning", new BigDecimal("12000"),
+                "FIXED", "PAUSED", List.of(), Instant.parse("2026-10-24T00:00:00Z"));
+        when(listings.listings(PROVIDER, PageRequest.of(1, 5))).thenReturn(new PageImpl<>(List.of(row),
+                PageRequest.of(1, 5), 6));
 
-        assertApiError(catchThrowable(() -> service.review("admin-1", PROVIDER, LISTING, "MAKE_VISIBLE", NOTE)),
-                HttpStatus.SERVICE_UNAVAILABLE, "LISTING_ACTION_UNAVAILABLE");
-        assertApiError(catchThrowable(() -> service.review("admin-1", PROVIDER, LISTING, "KEEP_HIDDEN", NOTE)),
-                HttpStatus.SERVICE_UNAVAILABLE, "LISTING_ACTION_UNAVAILABLE");
-        verify(listings, never()).reviewListing(any(), any(), any(), any());
+        Section<AdminPageResponse<ListingRow>> result = service.page(PROVIDER, 1, 5);
+
+        assertThat(result.available()).isTrue();
+        assertThat(result.data().content()).containsExactly(row);
+        assertThat(result.data().totalElements()).isEqualTo(6);
+        assertThat(result.data().totalPages()).isEqualTo(2);
     }
 
     @Test
-    @DisplayName("review when supported: decision and trimmed note are passed for this provider's listing only")
-    void reviewSupported() {
-        when(listings.supportsListingReview()).thenReturn(true);
+    @DisplayName("page: listing source fails -> SOURCE_ERROR (no data); bad paging -> 400; customer -> 404")
+    void pageErrors() {
+        when(listings.listings(any(), any())).thenThrow(new IllegalStateException("down"));
+        assertThat(service.page(PROVIDER, 0, 5).reason()).isEqualTo(Section.SOURCE_ERROR);
+
+        assertApiError(catchThrowable(() -> service.page(PROVIDER, -1, 5)), HttpStatus.BAD_REQUEST,
+                "INVALID_PAGE_REQUEST");
+        assertApiError(catchThrowable(() -> service.page(PROVIDER, 0, 21)), HttpStatus.BAD_REQUEST,
+                "INVALID_PAGE_REQUEST");
+        account("cust", Role.CUSTOMER);
+        assertApiError(catchThrowable(() -> service.page("cust", 0, 5)), HttpStatus.NOT_FOUND, "LISTING_NOT_FOUND");
+    }
+
+    @Test
+    @DisplayName("read-only: viewing listings never writes to the listing module (no visibility or moderation call)")
+    void readOnly() {
         when(listings.listingDetail(LISTING)).thenReturn(Optional.of(listing(PROVIDER)));
+        when(listings.listings(any(), any())).thenReturn(new PageImpl<>(List.of()));
 
-        service.review("admin-1", PROVIDER, LISTING, "make_visible", "  " + NOTE + " ");
-        verify(listings).reviewListing("admin-1", LISTING, ReviewDecision.MAKE_VISIBLE, NOTE);
+        service.detail(PROVIDER, LISTING);
+        service.page(PROVIDER, 0, 5);
 
-        when(listings.listingDetail(LISTING)).thenReturn(Optional.of(listing("someone-else")));
-        assertApiError(catchThrowable(() -> service.review("admin-1", PROVIDER, LISTING, "KEEP_HIDDEN", NOTE)),
-                HttpStatus.NOT_FOUND, "LISTING_NOT_FOUND");
-    }
-
-    @ParameterizedTest
-    @NullSource
-    @ValueSource(strings = {"", "APPROVE", "hide"})
-    @DisplayName("review: decision missing or not KEEP_HIDDEN / MAKE_VISIBLE -> 400 VALIDATION_FAILED")
-    void reviewBadDecision(String decision) {
-        assertApiError(catchThrowable(() -> service.review("admin-1", PROVIDER, LISTING, decision, NOTE)),
-                HttpStatus.BAD_REQUEST, "VALIDATION_FAILED");
-    }
-
-    @ParameterizedTest
-    @NullSource
-    @ValueSource(strings = {"", "short", "         "})
-    @DisplayName("review: note required, 10 to 500 characters -> 400 VALIDATION_FAILED")
-    void reviewNoteRequired(String note) {
-        assertApiError(catchThrowable(() -> service.review("admin-1", PROVIDER, LISTING, "KEEP_HIDDEN", note)),
-                HttpStatus.BAD_REQUEST, "VALIDATION_FAILED");
-        assertApiError(catchThrowable(() -> service.review("admin-1", PROVIDER, LISTING, "KEEP_HIDDEN", "n".repeat(501))),
-                HttpStatus.BAD_REQUEST, "VALIDATION_FAILED");
+        verify(listings, never()).updateSuspensionVisibility(anyString(), org.mockito.ArgumentMatchers.anyBoolean());
     }
 }

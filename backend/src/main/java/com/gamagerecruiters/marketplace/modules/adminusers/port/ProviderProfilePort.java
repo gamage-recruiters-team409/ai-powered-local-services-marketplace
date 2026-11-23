@@ -1,15 +1,17 @@
 package com.gamagerecruiters.marketplace.modules.adminusers.port;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
  * Provider profile facts (provider + verification modules). The real adapter answers {@link #verified} through
- * ProviderVerificationFacade. Service area and PRO have no cross-module method (ProviderProfileService only reads
- * the logged-in provider's own profile; there is no PRO / subscription concept yet), so they answer empty.
+ * ProviderVerificationFacade and {@link #serviceArea} through ProviderActivityFacade.getServiceAreaDistricts.
+ * PRO answers empty: the provider module has no PRO / subscription flag yet.
  */
 public interface ProviderProfilePort {
 
-    record ServiceArea(String district, String city) {
+    /** Districts the provider serves, sorted; empty when none are configured. */
+    record ServiceArea(List<String> districts) {
     }
 
     Optional<Boolean> verified(String providerUserId);

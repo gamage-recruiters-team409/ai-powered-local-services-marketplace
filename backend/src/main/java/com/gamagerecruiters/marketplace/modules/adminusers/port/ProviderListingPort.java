@@ -5,30 +5,40 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
-/** A provider's listings that are not publicly visible (WP03, listing module). Real adapter: ListingService. */
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
+/**
+ * A provider's listings (WP03, listing module). Real adapter: ListingService. Read-only for the account page, plus the
+ * one agreed write: hiding / restoring the provider's listings when the account is suspended / reactivated.
+ * Listing moderation (approve / reject flagged listings) is not here: it stays in the MODERATOR workflow.
+ */
 public interface ProviderListingPort {
 
-    record HiddenListing(String id, String title, String status, List<String> moderationFlags, Instant createdAt) {
+    /** Number of the provider's listings per status. */
+    record ListingCounts(long total, long active, long paused, long draft, long flagged, long archived,
+                         long rejected) {
     }
 
-    /** {@code flagged}: listings flagged by moderation (shown first in {@code recentFlagged}). */
-    record HiddenListings(long flagged, long rejected, long paused, List<HiddenListing> recentFlagged) {
+    /** One row of the account page's listings section. */
+    record ListingRow(String id, String title, String categoryName, BigDecimal basePrice, String pricingModel,
+                      String status, List<String> moderationFlags, Instant updatedAt) {
     }
 
     /**
-     * One listing for the review modal. {@code hiddenSince} is the moderation time and is null when the listing
-     * module has not recorded one (it is never guessed from other dates); {@code lastUpdatedAt} is the listing's
-     * own last change. {@code hiddenReason} is the moderation reason, if any; {@code moderationFlags} the automatic
+     * One listing for the read-only "View listing details" modal. {@code moderatedAt} / {@code moderationReason} are
+     * the moderation time and reason (null when there was none, never guessed); {@code moderationFlags} the automatic
      * screening flags.
      */
     record ListingDetail(String id, String providerId, String title, String categoryName, BigDecimal basePrice,
-                         String pricingModel, String status, Instant hiddenSince, Instant lastUpdatedAt,
-                         String hiddenReason, List<String> moderationFlags, String description, String imageUrl) {
+                         String pricingModel, String status, Instant moderatedAt, Instant lastUpdatedAt,
+                         String moderationReason, List<String> moderationFlags, String description, String imageUrl) {
     }
 
-    enum ReviewDecision { KEEP_HIDDEN, MAKE_VISIBLE }
+    ListingCounts counts(String providerUserId);
 
-    Optional<HiddenListings> hiddenListings(String providerUserId, int limit);
+    /** Most recently updated first. */
+    Page<ListingRow> listings(String providerUserId, Pageable pageable);
 
     /**
      * The listing, or empty when the source cannot provide it.
@@ -37,8 +47,9 @@ public interface ProviderListingPort {
      */
     Optional<ListingDetail> listingDetail(String listingId);
 
-    /** False while an admin listing decision cannot be applied (stub): the API answers 503 and changes nothing. */
-    boolean supportsListingReview();
-
-    void reviewListing(String actorId, String listingId, ReviewDecision decision, String note);
+    /**
+     * {@code true}: the provider was suspended, hide their active listings. {@code false}: the provider is ACTIVE
+     * again, restore the listings hidden by the suspension. Idempotent.
+     */
+    void updateSuspensionVisibility(String providerUserId, boolean suspended);
 }

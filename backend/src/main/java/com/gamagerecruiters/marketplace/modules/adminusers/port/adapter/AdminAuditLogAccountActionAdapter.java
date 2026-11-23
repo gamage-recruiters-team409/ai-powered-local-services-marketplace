@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import com.gamagerecruiters.marketplace.modules.admin.domain.AdminAuditAction;
 import com.gamagerecruiters.marketplace.modules.admin.domain.AdminAuditLog;
+import com.gamagerecruiters.marketplace.modules.admin.domain.AuditOutcome;
 import com.gamagerecruiters.marketplace.modules.admin.service.AdminAuditLogService;
 import com.gamagerecruiters.marketplace.modules.admin.service.AuditCompletionException;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.AccountActionAuditPort;
@@ -49,8 +50,19 @@ public class AdminAuditLogAccountActionAdapter implements AccountActionAuditPort
         return Optional.of(auditLogService.recentStatusChangesForTarget(targetUserId, limit).stream()
                 .map(r -> new AdminAction(r.getId(), r.getActorId(), r.getAction().name(), r.getFromStatus(),
                         r.getToStatus(), r.getReason(), r.getOutcome() == null ? null : r.getOutcome().name(),
-                        r.getCreatedAt()))
+                        r.getCreatedAt(),
+                        r.getListingVisibilitySync() == null ? null : r.getListingVisibilitySync().name()))
                 .toList());
+    }
+
+    @Override
+    public void listingVisibilityResynced(String targetUserId) {
+        try {
+            auditLogService.markListingVisibilityResynced(targetUserId);
+        } catch (RuntimeException e) {
+            log.error("event=AUDIT_LISTING_VISIBILITY_MARK_FAILED targetUserId={} result=SUCCESS cause={}",
+                    targetUserId, causeType(e));
+        }
     }
 
     private final class AuditTicket implements Ticket {
@@ -93,6 +105,16 @@ public class AdminAuditLogAccountActionAdapter implements AccountActionAuditPort
             } catch (RuntimeException e) {
                 log.error("event=AUDIT_FAILED_MARK_FAILED auditLogId={} failureCode={} cause={}",
                         pending.getId(), failureCode, causeType(e));
+            }
+        }
+
+        @Override
+        public void listingVisibilityFailed() {
+            try {
+                auditLogService.markListingVisibilitySync(pending.getId(), AuditOutcome.FAILED);
+            } catch (RuntimeException e) {
+                log.error("event=AUDIT_LISTING_VISIBILITY_MARK_FAILED auditLogId={} result=FAILED cause={}",
+                        pending.getId(), causeType(e));
             }
         }
     }
