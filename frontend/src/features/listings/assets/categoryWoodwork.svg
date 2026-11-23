@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="woodTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFF6D6" />
+      <stop offset="100%" stop-color="#FFE09C" />
+    </linearGradient>
+    <linearGradient id="woodBladeGrad" x1="78" y1="62" x2="188" y2="176" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FAD06A" />
+      <stop offset="55%" stop-color="#E79E20" />
+      <stop offset="100%" stop-color="#B87008" />
+    </linearGradient>
+    <linearGradient id="woodHandleGrad" x1="56" y1="138" x2="108" y2="196" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#EEAA2C" />
+      <stop offset="100%" stop-color="#AD6704" />
+    </linearGradient>
+    <filter id="woodDrop" x="-18%" y="-15%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#7D4A03" flood-opacity="0.34" />
+    </filter>
+    <filter id="woodTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#C69128" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#woodTileBg)" stroke="#F4CD7B" stroke-width="2.5" filter="url(#woodTileShadow)" />
+
+  <g filter="url(#woodDrop)" transform="rotate(-38 128 128)">
+    <path d="M98 104 L198 112 C202 112 204 115 204 119 L204 140 L195 148 L186 140 L177 148 L168 140 L159 148 L150 140 L141 148 L132 140 L123 148 L114 140 L105 148 L98 142 Z" fill="url(#woodBladeGrad)" />
+    <path d="M104 112 L196 119" stroke="#FFF2C6" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M62 100 L96 100 C102 100 106 105 106 111 L106 147 C106 153 102 158 96 158 L62 158 C54 158 48 151 48 143 L48 115 C48 107 54 100 62 100 Z M66 115 C64 115 62 117 62 119 L62 139 C62 141 64 143 66 143 L80 143 C82 143 84 141 84 139 L84 119 C84 117 82 115 80 115 Z" fill="url(#woodHandleGrad)" />
+  </g>
+</svg>

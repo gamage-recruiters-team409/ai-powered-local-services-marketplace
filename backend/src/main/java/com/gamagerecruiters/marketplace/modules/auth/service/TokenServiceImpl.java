@@ -136,6 +136,20 @@ public class TokenServiceImpl implements TokenService {
     }
 
     @Override
+    public String getTokenType(String token) {
+        try {
+            Claims claims = parseClaims(token);
+            Object type = claims.get("type");
+            if (type == null) {
+                type = claims.get("token_type");
+            }
+            return type != null ? String.valueOf(type) : null;
+        } catch (JwtException | IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    @Override
     public long getAccessTokenExpirationSeconds() {
         return accessTokenExpirationSeconds;
     }

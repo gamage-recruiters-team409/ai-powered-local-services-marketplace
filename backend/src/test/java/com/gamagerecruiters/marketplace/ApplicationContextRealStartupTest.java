@@ -1,8 +1,8 @@
-
 package com.gamagerecruiters.marketplace;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -32,17 +32,22 @@ import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCom
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerFavouriteRepository;
 import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
+import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
 import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
 import com.gamagerecruiters.marketplace.modules.listing.service.CatalogCategoryLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.listing.service.ProviderVerificationLookupAdapter;
-import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
-import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
-import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
-import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
-import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.DisputePayoutHoldRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutAllocationRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
+import com.gamagerecruiters.marketplace.modules.payment.service.DisputePayoutHoldAdapter;
+import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
+import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.VerificationDocumentRepository;
 import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationFacade;
@@ -51,153 +56,149 @@ import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVer
 @ActiveProfiles("test")
 class ApplicationContextRealStartupTest {
 
-    @MockitoBean
-    private UserRepository userRepository;
+        @MockitoBean
+        private UserRepository userRepository;
 
-    @MockitoBean
-    private AuthTokenRepository authTokenRepository;
+        @MockitoBean
+        private AuthTokenRepository authTokenRepository;
 
-    @MockitoBean
-    private AvailabilityRuleRepository availabilityRuleRepository;
+        @MockitoBean
+        private AvailabilityRuleRepository availabilityRuleRepository;
 
-    @MockitoBean
-    private BlockedDateRepository blockedDateRepository;
+        @MockitoBean
+        private BlockedDateRepository blockedDateRepository;
 
-    @MockitoBean
-    private DisputeRepository disputeRepository;
+        @MockitoBean
+        private DisputeRepository disputeRepository;
 
-    @MockitoBean
-    private CategoryRepository categoryRepository;
+        @MockitoBean
+        private CategoryRepository categoryRepository;
 
-    @MockitoBean
-    private BookingRepository bookingRepository;
+        @MockitoBean
+        private BookingRepository bookingRepository;
 
-    @MockitoBean
-    private CustomerAddressRepository customerAddressRepository;
+        @MockitoBean
+        private CustomerAddressRepository customerAddressRepository;
 
-    @MockitoBean
-    private CustomerFavouriteRepository customerFavouriteRepository;
+        @MockitoBean
+        private CustomerFavouriteRepository customerFavouriteRepository;
 
-    @MockitoBean
-    private ProviderProfileRepository providerProfileRepository;
+        @MockitoBean
+        private ProviderProfileRepository providerProfileRepository;
 
-    @MockitoBean
-    private AdminAuditLogRepository adminAuditLogRepository;
+        @MockitoBean
+        private AdminAuditLogRepository adminAuditLogRepository;
 
-    @MockitoBean
-    private ServiceCompletionRepository serviceCompletionRepository;
+        @MockitoBean
+        private ServiceCompletionRepository serviceCompletionRepository;
 
-    @MockitoBean
-    private ReviewRepository reviewRepository;
+        @MockitoBean
+        private ReviewRepository reviewRepository;
 
-    @MockitoBean
-    private VerificationDocumentRepository verificationDocumentRepository;
+        @MockitoBean
+        private VerificationDocumentRepository verificationDocumentRepository;
 
-    @MockitoBean
-    private ProviderVerificationRepository providerVerificationRepository;
+        @MockitoBean
+        private ProviderVerificationRepository providerVerificationRepository;
 
-    @MockitoBean
-    private PaymentRepository paymentRepository;
+        @MockitoBean
+        private PaymentRepository paymentRepository;
 
-    @MockitoBean
-    private ListingRepository listingRepository;
+        @MockitoBean
+        private DisputePayoutHoldRepository disputePayoutHoldRepository;
 
-    @MockitoBean
-    private ConversationRepository conversationRepository;
+        @MockitoBean
+        private ListingRepository listingRepository;
 
-    @MockitoBean
-    private MessageRepository messageRepository;
+        @MockitoBean
+        private ConversationRepository conversationRepository;
 
-    @MockitoBean
-    private EarningsLedgerRepository earningsLedgerRepository;
+        @MockitoBean
+        private MessageRepository messageRepository;
 
-    @MockitoBean
-    private ProviderEarningsStateRepository providerEarningsStateRepository;
+        @MockitoBean
+        private EarningsLedgerRepository earningsLedgerRepository;
 
-    // Provides a transaction manager dependency for the startup test context.
-    @MockitoBean
-    private PlatformTransactionManager transactionManager;
+        @MockitoBean
+        private ProviderEarningsStateRepository providerEarningsStateRepository;
 
-    @MockitoBean
-    private MongoTemplate mongoTemplate;
+        @MockitoBean
+        private PayoutRepository payoutRepository;
 
-    @Autowired
-    private ApplicationContext applicationContext;
+        @MockitoBean
+        private PayoutAllocationRepository payoutAllocationRepository;
 
-    @Test
-    @DisplayName(
-            "Verify real Spring context loads without circular dependencies and key security beans exist"
-    )
-    void contextLoadsAndKeySecurityBeansExist() {
+        // Provides a transaction manager dependency for the startup test context.
+        @MockitoBean
+        private PlatformTransactionManager transactionManager;
 
-        assertNotNull(
-                applicationContext.getBean(PasswordEncoder.class),
-                "PasswordEncoder bean must exist"
-        );
+        @MockitoBean
+        private MongoTemplate mongoTemplate;
 
-        assertNotNull(
-                applicationContext.getBean(JwtAuthenticationFilter.class),
-                "JwtAuthenticationFilter bean must exist"
-        );
+        @Autowired
+        private ApplicationContext applicationContext;
 
-        assertNotNull(
-                applicationContext.getBean(SecurityFilterChain.class),
-                "SecurityFilterChain bean must exist"
-        );
+        @Test
+        @DisplayName("Verify real Spring context loads without circular dependencies and key security beans exist")
+        void contextLoadsAndKeySecurityBeansExist() {
+                assertNotNull(
+                                applicationContext.getBean(PasswordEncoder.class),
+                                "PasswordEncoder bean must exist");
 
-        assertNotNull(
-                applicationContext.getBean(RateLimitService.class),
-                "RateLimitService bean must exist"
-        );
+                assertNotNull(
+                                applicationContext.getBean(JwtAuthenticationFilter.class),
+                                "JwtAuthenticationFilter bean must exist");
 
-        assertNotNull(
-                applicationContext.getBean(BookingOpenBookingsChecker.class),
-                "BookingOpenBookingsChecker bean must exist"
-        );
+                assertNotNull(
+                                applicationContext.getBean(SecurityFilterChain.class),
+                                "SecurityFilterChain bean must exist");
 
-        assertNotNull(
-                applicationContext.getBean(CatalogCategoryLookupAdapter.class),
-                "CatalogCategoryLookupAdapter bean must exist"
-        );
+                assertNotNull(
+                                applicationContext.getBean(RateLimitService.class),
+                                "RateLimitService bean must exist");
 
-        assertNotNull(
-                applicationContext.getBean(ProviderVerificationFacade.class),
-                "ProviderVerificationFacade bean must exist"
-        );
+                assertNotNull(
+                                applicationContext.getBean(BookingOpenBookingsChecker.class),
+                                "BookingOpenBookingsChecker bean must exist");
 
-        assertNotNull(
-                applicationContext.getBean(ProviderVerificationLookupAdapter.class),
-                "ProviderVerificationLookupAdapter bean must exist"
-        );
-    }
+                assertNotNull(
+                                applicationContext.getBean(CatalogCategoryLookupAdapter.class),
+                                "CatalogCategoryLookupAdapter bean must exist");
 
-    @Test
-    @DisplayName(
-            "RateLimitService bean uses real default properties (5 requests per 15 minutes for sensitive)"
-    )
-    void rateLimitServiceUsesDefaultSensitiveProperties() {
+                assertNotNull(
+                                applicationContext.getBean(ProviderVerificationFacade.class),
+                                "ProviderVerificationFacade bean must exist");
 
-        RateLimitService rateLimiter =
-                applicationContext.getBean(RateLimitService.class);
+                assertNotNull(
+                                applicationContext.getBean(ProviderVerificationLookupAdapter.class),
+                                "ProviderVerificationLookupAdapter bean must exist");
 
-        assertNotNull(
-                rateLimiter,
-                "RateLimitService bean must exist"
-        );
-
-        String testUserId = "real-props-sensitive-user";
-
-        for (int i = 0; i < 5; i++) {
-            assertDoesNotThrow(
-                    () -> rateLimiter.checkSensitive(testUserId)
-            );
+                assertInstanceOf(
+                                DisputePayoutHoldAdapter.class,
+                                applicationContext.getBean(PayoutHoldPort.class),
+                                "WP06 must use the real WP07 payout hold adapter");
         }
 
-        RateLimitExceededException ex = assertThrows(
-                RateLimitExceededException.class,
-                () -> rateLimiter.checkSensitive(testUserId)
-        );
+        @Test
+        @DisplayName("RateLimitService bean uses real default properties (5 requests per 15 minutes for sensitive)")
+        void rateLimitServiceUsesDefaultSensitiveProperties() {
+                RateLimitService rateLimiter = applicationContext.getBean(RateLimitService.class);
 
-        assertEquals("RATE_LIMITED", ex.getErrorCode());
-    }
+                assertNotNull(
+                                rateLimiter,
+                                "RateLimitService bean must exist");
+
+                String testUserId = "real-props-sensitive-user";
+
+                for (int i = 0; i < 5; i++) {
+                        assertDoesNotThrow(
+                                        () -> rateLimiter.checkSensitive(testUserId));
+                }
+
+                RateLimitExceededException ex = assertThrows(
+                                RateLimitExceededException.class,
+                                () -> rateLimiter.checkSensitive(testUserId));
+
+                assertEquals("RATE_LIMITED", ex.getErrorCode());
+        }
 }

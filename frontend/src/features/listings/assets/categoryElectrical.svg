@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="elecTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E7FDF2" />
+      <stop offset="100%" stop-color="#C3F5DD" />
+    </linearGradient>
+    <linearGradient id="elecBoltGrad" x1="94" y1="54" x2="156" y2="204" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#66DFAB" />
+      <stop offset="55%" stop-color="#2BB57D" />
+      <stop offset="100%" stop-color="#148557" />
+    </linearGradient>
+    <filter id="elecDrop" x="-18%" y="-15%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#0D633F" flood-opacity="0.34" />
+    </filter>
+    <filter id="elecTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#48A87E" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#elecTileBg)" stroke="#9BE4C3" stroke-width="2.5" filter="url(#elecTileShadow)" />
+
+  <g filter="url(#elecDrop)">
+    <path d="M139 54 C144 54 147 59 144 64 L123 108 L156 108 C162 108 165 115 161 120 L113 197 C109 203 100 199 102 192 L117 137 L92 137 C86 137 83 130 87 125 L132 58 C134 55 136 54 139 54 Z" fill="url(#elecBoltGrad)" />
+    <path d="M135 64 L100 118" stroke="#DEFFF0" stroke-width="5" stroke-linecap="round" opacity="0.8" />
+  </g>
+</svg>

@@ -73,3 +73,68 @@ The user interface implements the 15 high-fidelity visual designs matching the L
 2. **Referrer Protection:** Token handling pages dynamically attach `<meta name="referrer" content="no-referrer">` while mounted to prevent token leakage via outgoing HTTP Referer headers.
 3. **No Sensitive Data Logging:** Passwords, tokens, and raw credentials are never logged to console or telemetry.
 4. **React 19 StrictMode Guard:** Uses idempotency refs to prevent double-firing single-use tokens during component mounting.
+
+---
+
+## 6. WebSocket Authentication
+
+- **Handshake Subprotocol Format:** Browsers cannot send custom `Authorization` headers during WebSocket handshakes. The client connects specifying the subprotocol array:
+  ```javascript
+  const ws = new WebSocket(wsUrl, ["bearer", accessToken]);
+  ```
+- **Server Subprotocol Echo:** The server handshake interceptor validates the subprotocol and echoes `"bearer"` back to the client upon successful validation.
+- **Connect-Time Access Token Validation:** Handshake interceptors call `AuthService.validateAccessToken(token)` from the auth module to validate the access token. Validation occurs once at connect time; clients refresh tokens via HTTP and reconnect after token expiry.
+- **Handshake Route Security:** `SecurityConfig` allows unauthenticated `GET /ws` handshakes through the security filter chain, delegating authentication to the handshake interceptor. Non-GET methods and subpaths remain strictly protected.
+
+---
+
+## 7. Admin User Management & Analytics (WP09 Integration)
+
+### 7.1 New User Registration Analytics (`countNewUsers`)
+- **Signature:** `List<PeriodCount> countNewUsers(String actorId, Set<Role> roles, Instant from, Instant to, Granularity granularity)`
+- **Aggregation Pipeline:** Executes a single MongoDB aggregation (`$match` -> `$group` via `$dateTrunc` -> `$sort` by `_id`) grouping by week (`monday` start of week) or month in UTC.
+- **Bounded Range Generation:** Date ranges are limited to `MAX_NEW_USER_BUCKETS = 120` buckets. `generatePeriodStarts` checks against this limit inside its bounded generation loop, terminating immediately (at most 121 iterations) with HTTP 400 `INVALID_DATE_RANGE` before running any MongoDB aggregation or allocating oversized lists. Extreme inputs (e.g. `Instant.EPOCH` to year 9999, or `Instant.MIN`/`Instant.MAX`) are safely caught and rejected with HTTP 400 without overflow exceptions or 500 errors.
+- **Empty Period Zero-Filling:** All periods within `[from, to)` are generated and empty periods are guaranteed to be present with `count: 0`, ordered chronologically.
+- **Actor Binding & Scoping:** Strict validation identical to `searchUsers`: requires valid authenticated session matching `actorId`, active actor account, and restricts queries to the actor's permitted role hierarchy (`AdminRolePolicy.visibleRoles`).
+- **Legacy Records Handling:** Users lacking a `createdAt` field (or where `createdAt` is null) are excluded from period counts by the `$gte: from` date criteria. No additional indexes are introduced.
+
+### 7.2 User Activity Tracking (`lastActiveAt`)
+- **Entity Field:** `private Instant lastActiveAt` on `User.java`.
+- **Update Frequency:** Updated **strictly** on successful password login (`AuthServiceImpl.login`) and on successful token refresh (`AuthServiceImpl.refresh`) via targeted MongoDB `$set` updates (`mongoTemplate.updateFirst`). It is **intentionally NOT updated on every API request** to avoid high-frequency write contention and database write amplification.
+- **Resilience & Safe Logging:** Targeted `lastActiveAt` writes are wrapped in a try-catch block. A write failure logs a warning containing the fixed message, the `userId`, and `ex.getClass().getSimpleName()` only (never tokens, emails, raw DB exception text, causes, or stack traces) and does NOT fail the login or refresh request.
+- **Summary Exposure:** Exposed via `AdminUserSummary.lastActiveAt()`.
+- **Backward Compatibility:** Preserves an overloaded 7-argument constructor on `AdminUserSummary` setting `lastActiveAt = null` to maintain binary and source compatibility for existing services and tests.
+
+### 7.3 Atomic Optimistic Status Modification (`changeStatus`)
+- **Signature:** `User changeStatus(String actorId, String userId, UserStatus expectedStatus, UserStatus newStatus)`
+- **Legacy Delegation:** The deprecated 2-argument `User changeStatus(String userId, UserStatus status)` safely resolves `actorId = CurrentUser.getUserId()`, reads the target's current status as `expectedStatus`, and delegates directly to the 4-argument atomic method.
+- **Fail-Closed Actor Validation:** Strict validation ensures a valid security context with a `UserPrincipal`, matching `actorId` (preventing actor spoofing), existing database record, and `ACTIVE` actor status.
+- **Concurrency-Safe Guard with Fencing Token, Lease Renewal, & Transactional Coupling for SUPER_ADMIN:**
+  - Whenever modifying a `SUPER_ADMIN` to a non-active status (`newStatus != ACTIVE`), an atomic lease-based guard is acquired in collection `auth_locks` with `_id: "super-admin-status"`.
+  - **Fencing Token (`fence`) & Monotonic Ownership:** Every successful acquisition does an atomic upsert/`findAndModify` setting `owner` (random UUID), `expiresAt = now + lease`, `$unset: { lockedUntil: "" }` (safely migrating legacy documents while prioritizing modern `expiresAt`), and `$inc: { fence: 1 }` returning the new document (`owner`, `fence`). If another operation holds an unexpired lease, it retries with short backoffs (5 x 50ms) before returning HTTP 409 `CONCURRENT_MODIFICATION`.
+  - **Ownership Proof & Periodic Lease Renewal (`verifyAndRenewGuard`):** Before performing critical operations, the service verifies guard ownership and renews the lease via a single atomic conditional update:
+    `{ _id: "super-admin-status", owner: guard.owner, fence: guard.fence, expiresAt: { $gt: now } } -> $set expiresAt = now + lease`.
+    If 0 documents match (indicating lease expired or was taken over by another operation), it immediately aborts with HTTP 503 `STATUS_CHANGE_FAILED` ("The status change could not be completed safely. No status was changed. Please reload and retry.").
+  - **Proof Points in Lifecycle:**
+    1. *Acquisition:* Held immediately upon acquiring guard with `$unset lockedUntil`.
+    2. *Proof Point (b):* Immediately before Step 1 token revocation.
+    3. *Step 2 Pre-Transaction Time Bound:* Checks local monotonic elapsed time (`System.nanoTime() - guard.lastProofNanoTime()`). If elapsed time exceeds `lease - safetyMargin` (e.g. 10s - 3s = 7s), aborts with HTTP 503 `STATUS_CHANGE_FAILED` without touching the user document.
+    4. *Atomic Transaction Coupling:* The final guard proof write, policy recheck (verifying at least 1 other active SUPER_ADMIN exists), and user status update are coupled into **ONE MongoDB multi-document transaction** (`TransactionTemplate` / `PlatformTransactionManager`):
+       - (a) Guard proof write in transaction: `{ _id: "super-admin-status", owner: guard.owner, fence: guard.fence, expiresAt: { $gt: now } } -> $set expiresAt = now + lease` on `auth_locks`. If 0 documents match, transaction rolls back and aborts with 503.
+       - (b) Policy recheck inside transaction: `AdminRolePolicy.validateStatusChange(actor, target, newStatus, userRepository)`.
+       - (c) User status update in transaction: `{ _id: userId, status: expectedStatus } -> $set status = newStatus` on `User.class`.
+       - If transient transaction error / write conflict occurs (Mongo error code 112 or error label `TransientTransactionError`), maps to HTTP 409 `CONCURRENT_MODIFICATION`.
+  - **Release in Finally:** The guard is released in a `finally` block matching `_id`, `owner`, and `fence` (`{ _id: "super-admin-status", owner: guard.owner, fence: guard.fence }`), preventing an expired operation from accidentally wiping a successor's active lock.
+  - **MongoDB Replica Set Requirement:** SUPER_ADMIN status changes **REQUIRE** MongoDB replica set transactions. On standalone deployments where transactions are unsupported (Mongo error code 20 / `IllegalOperation`), the operation strictly **fails closed** with HTTP 503 `STATUS_CHANGE_FAILED` ("The status change could not be completed safely. No status was changed. Please reload and retry.") and never falls back to an unsafe non-transactional mutation.
+    To start a single-node replica set for local development or testing:
+    ```bash
+    docker run -d --name mongo-rs -p 27017:27017 mongo:7.0 mongod --replSet rs0 --bind_ip_all
+    docker exec mongo-rs mongosh --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+    ```
+- **Ordered Execution & No Compensating Rollback:**
+  - **Early Stale-View Check:** Prior to Step 1, if the target user's status loaded from the database differs from `expectedStatus`, it rejects immediately with HTTP 409 `CONCURRENT_MODIFICATION` without revoking tokens or modifying database state.
+  - **Step 1 (Pre-Update Revocation):** When `newStatus` is `SUSPENDED` or `DEACTIVATED`, refresh tokens are revoked first via `authTokenRepository.revokeAllActiveTokensByUserIdAndType(userId, TokenType.REFRESH)`. If revocation fails, no database state has changed, and it returns HTTP 503 `STATUS_CHANGE_FAILED` with 'The status was not changed because sessions could not be revoked. Please retry.'
+  - **Step 2 (Atomic Conditional Update):** Executes `mongoTemplate.updateFirst(query, update, User.class)` matching `{ _id: userId, status: expectedStatus }`. If nothing matched, returns HTTP 409 `CONCURRENT_MODIFICATION` (if user exists) or HTTP 404 `USER_NOT_FOUND`. (In the narrow race where status matched at load time but changed before Step 2, sessions were already revoked by Step 1; the user's status remains unchanged by this call and they simply have to log in again.) If the database write throws an exception, returns HTTP 503 `STATUS_CHANGE_FAILED` with 'The status change could not be confirmed. Please reload the user and retry.' No rollback is assumed or attempted, preserving unrelated authentication fields (`failedLoginCount`, `lockStartedAt`).
+  - **Step 3 (Post-Update Revocation):** After a successful status update, revokes refresh tokens once more best-effort to cover tokens issued between Step 1 and Step 2. Failure is logged safely (`userId` and exception class name only) and does not fail the request.
+  - Both `JwtAuthenticationFilter` and `AuthServiceImpl.refresh()` explicitly verify `user.getStatus() == UserStatus.ACTIVE` on every request/refresh, ensuring inactive users cannot execute authenticated operations even during transient intermediate states.
+  - When transitioned to `ACTIVE`, resets `failedLoginCount` to 0 and unsets `lockStartedAt`.

@@ -108,6 +108,28 @@ class CategoryServiceImplTest {
     }
 
     @Test
+    @DisplayName("createCategory persists inactive category atomically when active is false")
+    void createCategory_whenActiveFalse_persistsInactiveAtomically() {
+        CreateCategoryRequest request = new CreateCategoryRequest(
+                "Hidden Draft Category", "hidden-draft-category", "Not published yet", "shield", null, new BigDecimal("0.12"), false);
+
+        when(categoryRepository.existsBySlug("hidden-draft-category")).thenReturn(false);
+        when(categoryRepository.save(any(Category.class))).thenAnswer(inv -> {
+            Category c = inv.getArgument(0);
+            c.setId("inactive-id");
+            return c;
+        });
+
+        CategoryResponse response = categoryService.createCategory(request);
+
+        ArgumentCaptor<Category> captor = ArgumentCaptor.forClass(Category.class);
+        verify(categoryRepository).save(captor.capture());
+        assertThat(captor.getValue().isActive()).isFalse();
+        assertThat(response.id()).isEqualTo("inactive-id");
+        assertThat(response.active()).isFalse();
+    }
+
+    @Test
     @DisplayName("createCategory throws ResourceConflictException when slug already exists")
     void createCategory_whenDuplicateSlug_throwsConflict() {
         CreateCategoryRequest request = new CreateCategoryRequest(
