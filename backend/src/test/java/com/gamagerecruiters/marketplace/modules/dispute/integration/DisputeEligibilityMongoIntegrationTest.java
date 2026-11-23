@@ -35,6 +35,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.MongoDBContainer;
 
@@ -53,6 +54,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
+import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 
 /**
  * Raise flow with the REAL eligibility check: real booking documents in a throw-away Testcontainers MongoDB, the real
@@ -107,6 +109,14 @@ class DisputeEligibilityMongoIntegrationTest {
     /** The real Booking module; spied only to verify that markDisputed is (not) called. */
     @MockitoSpyBean
     private BookingFacade bookingFacade;
+    /**
+     * WP07's real payout hold (@Primary DisputePayoutHoldAdapter) needs a captured payment, earnings ledger entries and
+     * a provider balance. This test covers the dispute flow, not WP07 money movement (tested in the payment module),
+     * so the hold is a no-op here, as in the dispute unit and web tests.
+     */
+    @MockitoBean
+    private PayoutHoldPort payoutHoldPort;
+
     @Autowired
     private DisputeService disputeService;
     @Autowired
