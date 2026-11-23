@@ -170,6 +170,27 @@ class AdminCategoryControllerTest {
     }
 
     @Test
+    @DisplayName("ADMIN role can POST create an inactive category atomically (active=false, returns 201)")
+    void shouldAllowAdminToCreateInactiveCategoryAtomically() throws Exception {
+        mockAdminToken("admin-token", "admin-1");
+
+        CreateCategoryRequest request = new CreateCategoryRequest(
+                "Seasonal Promo", "seasonal-promo", "Hidden until launch", "shield", null, new BigDecimal("0.12"), false);
+        CategoryResponse response = new CategoryResponse(
+                "cat-seasonal", "Seasonal Promo", "seasonal-promo", "Hidden until launch", "shield", null, new BigDecimal("0.12"), false, Instant.now(), Instant.now());
+
+        when(categoryService.createCategory(eq(request))).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/admin/categories")
+                        .header("Authorization", "Bearer admin-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value("cat-seasonal"))
+                .andExpect(jsonPath("$.active").value(false));
+    }
+
+    @Test
     @DisplayName("POST create category with invalid payload returns 400 VALIDATION_FAILED")
     void shouldReturn400OnInvalidPayload() throws Exception {
         mockAdminToken("admin-token", "admin-1");

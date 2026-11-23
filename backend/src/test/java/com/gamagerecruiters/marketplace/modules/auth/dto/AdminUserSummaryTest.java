@@ -27,7 +27,7 @@ class AdminUserSummaryTest {
                 .toList();
 
         assertThat(componentNames).containsExactlyInAnyOrder(
-                "id", "fullName", "email", "phone", "role", "status", "createdAt"
+                "id", "fullName", "email", "phone", "role", "status", "createdAt", "lastActiveAt"
         );
 
         List<String> fieldNames = Arrays.stream(AdminUserSummary.class.getDeclaredFields())
@@ -56,6 +56,7 @@ class AdminUserSummaryTest {
         user.setRole(Role.ADMIN);
         user.setStatus(UserStatus.ACTIVE);
         user.setCreatedAt(now);
+        user.setLastActiveAt(now);
 
         AdminUserSummary summary = AdminUserSummary.fromUser(user);
 
@@ -66,5 +67,17 @@ class AdminUserSummaryTest {
         assertEquals(Role.ADMIN, summary.role());
         assertEquals(UserStatus.ACTIVE, summary.status());
         assertEquals(now, summary.createdAt());
+        assertEquals(now, summary.lastActiveAt());
+    }
+
+    @Test
+    @DisplayName("Backward-compatible 7-arg constructor sets lastActiveAt to null")
+    void backwardCompatibleConstructorSetsLastActiveAtNull() {
+        Instant now = Instant.now();
+        AdminUserSummary summary = new AdminUserSummary(
+                "u-1", "Name", "email@example.com", "+94771234567", Role.CUSTOMER, UserStatus.ACTIVE, now
+        );
+        assertEquals(now, summary.createdAt());
+        assertThat(summary.lastActiveAt()).isNull();
     }
 }

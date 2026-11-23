@@ -31,6 +31,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -48,9 +52,14 @@ import com.gamagerecruiters.marketplace.modules.auth.dto.LogoutRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RefreshTokenRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RegisterResponse;
+import com.gamagerecruiters.marketplace.modules.auth.dto.WebSocketPrincipal;
 import com.gamagerecruiters.marketplace.modules.auth.repository.AuthTokenRepository;
 import com.gamagerecruiters.marketplace.modules.auth.repository.UserRepository;
 import com.gamagerecruiters.marketplace.modules.auth.service.EmailTokenService;
+
+import org.springframework.http.HttpStatus;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
@@ -70,6 +79,9 @@ class AuthServiceTest {
     @Mock
     private EmailTokenService emailTokenService;
 
+    @Mock
+    private MongoTemplate mongoTemplate;
+
     private AuthServiceImpl authService;
 
     @BeforeEach
@@ -80,6 +92,7 @@ class AuthServiceTest {
                 passwordEncoder,
                 tokenService,
                 emailTokenService,
+                mongoTemplate,
                 false, // requireEmailVerification = false for dev
                 5,     // maxFailedLogins = 5
                 15,    // lockDurationMinutes = 15
@@ -130,6 +143,7 @@ class AuthServiceTest {
                 passwordEncoder,
                 tokenService,
                 emailTokenService,
+                mongoTemplate,
                 true, // requireEmailVerification = true
                 5,
                 15,
@@ -594,5 +608,411 @@ class AuthServiceTest {
         assertTrue(ownerToken.isRevoked());
         assertNotNull(ownerToken.getRevokedAt());
         verify(authTokenRepository).save(ownerToken);
+    }
+
+    // =========================================================================
+    // WebSocket Access Token Validation Tests
+    // =========================================================================
+
+    @Test
+    @DisplayName("validateAccessToken: Should succeed and return WebSocketPrincipal with userId and current role for valid token")
+    void validateAccessToken_validToken_shouldSucceed() {
+        String token = "valid-token";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn(null);
+        when(tokenService.getUserIdFromToken(token)).thenReturn("user-1");
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.CUSTOMER);
+
+        User user = new User();
+        user.setId("user-1");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setMustChangePassword(false);
+        when(userRepository.findById("user-1")).thenReturn(Optional.of(user));
+
+        WebSocketPrincipal principal = authService.validateAccessToken(token);
+
+        assertNotNull(principal);
+        assertEquals("user-1", principal.userId());
+        assertEquals("user-1", principal.getUserId());
+        assertEquals(Role.CUSTOMER, principal.role());
+        assertEquals(Role.CUSTOMER, principal.getRole());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject null and blank tokens with generic 401 error message")
+    void validateAccessToken_nullOrBlank_shouldThrow() {
+        BadCredentialsException exNull = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(null));
+        assertEquals("Failed to authenticate token", exNull.getMessage());
+
+        BadCredentialsException exBlank = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken("   "));
+        assertEquals("Failed to authenticate token", exBlank.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject expired token with generic 401 error message")
+    void validateAccessToken_expiredToken_shouldThrow() {
+        String token = "expired-token";
+        when(tokenService.validateToken(token)).thenReturn(false);
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject badly signed token with generic 401 error message")
+    void validateAccessToken_badSignature_shouldThrow() {
+        String token = "bad-sig-token";
+        when(tokenService.validateToken(token)).thenReturn(false);
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject malformed token with generic 401 error message")
+    void validateAccessToken_malformedToken_shouldThrow() {
+        String token = "malformed.jwt.token";
+        when(tokenService.validateToken(token)).thenReturn(false);
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject token carrying REFRESH type claim with generic 401 error message")
+    void validateAccessToken_refreshTypeToken_shouldThrow() {
+        String token = "refresh-token-in-jwt";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn("REFRESH");
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject unknown user not found in database with generic 401 error message")
+    void validateAccessToken_unknownUser_shouldThrow() {
+        String token = "valid-token-unknown-user";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn(null);
+        when(tokenService.getUserIdFromToken(token)).thenReturn("unknown-user");
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.CUSTOMER);
+
+        when(userRepository.findById("unknown-user")).thenReturn(Optional.empty());
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject user with non-ACTIVE status (PENDING_VERIFICATION, LOCKED, SUSPENDED, DEACTIVATED)")
+    void validateAccessToken_nonActiveStatuses_shouldThrow() {
+        for (UserStatus nonActiveStatus : List.of(
+                UserStatus.PENDING_VERIFICATION,
+                UserStatus.LOCKED,
+                UserStatus.SUSPENDED,
+                UserStatus.DEACTIVATED)) {
+
+            String token = "token-" + nonActiveStatus;
+            when(tokenService.validateToken(token)).thenReturn(true);
+            when(tokenService.getTokenType(token)).thenReturn(null);
+            when(tokenService.getUserIdFromToken(token)).thenReturn("u-" + nonActiveStatus);
+            when(tokenService.getRoleFromToken(token)).thenReturn(Role.CUSTOMER);
+
+            User user = new User();
+            user.setId("u-" + nonActiveStatus);
+            user.setRole(Role.CUSTOMER);
+            user.setStatus(nonActiveStatus);
+            when(userRepository.findById("u-" + nonActiveStatus)).thenReturn(Optional.of(user));
+
+            BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                    () -> authService.validateAccessToken(token),
+                    "Expected rejection for status: " + nonActiveStatus);
+            assertEquals("Failed to authenticate token", ex.getMessage());
+        }
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject user with mustChangePassword = true with generic 401 error message")
+    void validateAccessToken_mustChangePassword_shouldThrow() {
+        String token = "must-change-pass-token";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn(null);
+        when(tokenService.getUserIdFromToken(token)).thenReturn("user-must-change");
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.CUSTOMER);
+
+        User user = new User();
+        user.setId("user-must-change");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setMustChangePassword(true);
+        when(userRepository.findById("user-must-change")).thenReturn(Optional.of(user));
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should reject token when role was changed in database after token was issued")
+    void validateAccessToken_roleChangedInDatabase_shouldThrow() {
+        String token = "stale-admin-token";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn(null);
+        when(tokenService.getUserIdFromToken(token)).thenReturn("user-demoted");
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.ADMIN);
+
+        User user = new User();
+        user.setId("user-demoted");
+        user.setRole(Role.CUSTOMER); // demoted in database
+        user.setStatus(UserStatus.ACTIVE);
+        user.setMustChangePassword(false);
+        when(userRepository.findById("user-demoted")).thenReturn(Optional.of(user));
+
+        BadCredentialsException ex = assertThrows(BadCredentialsException.class,
+                () -> authService.validateAccessToken(token));
+        assertEquals("Failed to authenticate token", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("validateAccessToken: Should succeed when emailVerified is false but status is ACTIVE (dev bypass rule)")
+    void validateAccessToken_activeStatusWithUnverifiedEmail_shouldSucceed() {
+        String token = "bypass-token";
+        when(tokenService.validateToken(token)).thenReturn(true);
+        when(tokenService.getTokenType(token)).thenReturn(null);
+        when(tokenService.getUserIdFromToken(token)).thenReturn("user-bypass");
+        when(tokenService.getRoleFromToken(token)).thenReturn(Role.PROVIDER);
+
+        User user = new User();
+        user.setId("user-bypass");
+        user.setRole(Role.PROVIDER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setEmailVerified(false); // unverified email with active status via bypass
+        user.setMustChangePassword(false);
+        when(userRepository.findById("user-bypass")).thenReturn(Optional.of(user));
+
+        WebSocketPrincipal principal = authService.validateAccessToken(token);
+
+        assertNotNull(principal);
+        assertEquals("user-bypass", principal.userId());
+        assertEquals(Role.PROVIDER, principal.role());
+    }
+
+    @Test
+    @DisplayName("lastActiveAt: Successful login sets lastActiveAt timestamp on user")
+    void shouldSetLastActiveAtOnSuccessfulLogin() {
+        LoginRequest request = new LoginRequest("active-user@marketplace.local", "Password123!");
+
+        User user = new User();
+        user.setId("u-active-1");
+        user.setName("Active User");
+        user.setEmail("active-user@marketplace.local");
+        user.setPasswordHash("hashedPass");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        assertNull(user.getLastActiveAt(), "lastActiveAt must initially be null");
+
+        when(userRepository.findByEmail("active-user@marketplace.local")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("Password123!", "hashedPass")).thenReturn(true);
+        when(tokenService.generateAccessToken("u-active-1", "active-user@marketplace.local", Role.CUSTOMER)).thenReturn("jwt");
+        when(tokenService.generateRefreshToken()).thenReturn("refresh-token");
+        when(tokenService.hashToken("refresh-token")).thenReturn("hash");
+        when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
+        when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
+
+        Instant beforeLogin = Instant.now().minusSeconds(1);
+        authService.login(request);
+        Instant afterLogin = Instant.now().plusSeconds(1);
+
+        assertNotNull(user.getLastActiveAt(), "lastActiveAt must be set on successful login");
+        assertTrue(user.getLastActiveAt().isAfter(beforeLogin) && user.getLastActiveAt().isBefore(afterLogin),
+                "lastActiveAt must be set to current timestamp");
+        verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        verify(userRepository, never()).save(user);
+    }
+
+    @Test
+    @DisplayName("lastActiveAt: Successful token refresh sets lastActiveAt timestamp on user")
+    void shouldSetLastActiveAtOnSuccessfulRefresh() {
+        RefreshTokenRequest request = new RefreshTokenRequest("valid-refresh-token");
+        String tokenHash = "token-hash-123";
+
+        AuthToken validToken = new AuthToken("u-refresh-1", TokenType.REFRESH, tokenHash,
+                Instant.now().plusSeconds(3600), Instant.now());
+
+        User user = new User();
+        user.setId("u-refresh-1");
+        user.setName("Refresh User");
+        user.setEmail("refresh-user@marketplace.local");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        assertNull(user.getLastActiveAt(), "lastActiveAt must initially be null");
+
+        when(tokenService.hashToken("valid-refresh-token")).thenReturn(tokenHash);
+        when(authTokenRepository.findAndConsumeValidToken(eq(tokenHash), any(Instant.class)))
+                .thenReturn(Optional.of(validToken));
+        when(userRepository.findById("u-refresh-1")).thenReturn(Optional.of(user));
+        when(tokenService.generateAccessToken("u-refresh-1", "refresh-user@marketplace.local", Role.CUSTOMER)).thenReturn("jwt");
+        when(tokenService.generateRefreshToken()).thenReturn("new-refresh-token");
+        when(tokenService.hashToken("new-refresh-token")).thenReturn("new-hash");
+        when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
+        when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
+
+        Instant beforeRefresh = Instant.now().minusSeconds(1);
+        authService.refresh(request);
+        Instant afterRefresh = Instant.now().plusSeconds(1);
+
+        assertNotNull(user.getLastActiveAt(), "lastActiveAt must be set on successful refresh");
+        assertTrue(user.getLastActiveAt().isAfter(beforeRefresh) && user.getLastActiveAt().isBefore(afterRefresh),
+                "lastActiveAt must be set to current timestamp");
+        verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        verify(userRepository, never()).save(user);
+    }
+
+    @Test
+    @DisplayName("F3: Token refresh rejects inactive user with 401 ACCOUNT_NOT_ACTIVE")
+    void shouldRejectRefreshWhenUserIsNotActive() {
+        RefreshTokenRequest request = new RefreshTokenRequest("valid-refresh-token");
+        String tokenHash = "token-hash-inactive";
+
+        AuthToken validToken = new AuthToken("u-inactive", TokenType.REFRESH, tokenHash,
+                Instant.now().plusSeconds(3600), Instant.now());
+
+        User user = new User();
+        user.setId("u-inactive");
+        user.setName("Inactive User");
+        user.setEmail("inactive-user@marketplace.local");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.SUSPENDED);
+
+        when(tokenService.hashToken("valid-refresh-token")).thenReturn(tokenHash);
+        when(authTokenRepository.findAndConsumeValidToken(eq(tokenHash), any(Instant.class)))
+                .thenReturn(Optional.of(validToken));
+        when(userRepository.findById("u-inactive")).thenReturn(Optional.of(user));
+
+        ApiException ex = assertThrows(ApiException.class, () -> authService.refresh(request));
+
+        assertEquals("ACCOUNT_NOT_ACTIVE", ex.getErrorCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        verifyNoInteractions(mongoTemplate);
+    }
+
+    @Test
+    @DisplayName("EXTRA 2: Login succeeds even when lastActiveAt targeted write fails and logs safely without secrets")
+    void shouldSucceedLoginEvenWhenLastActiveAtUpdateThrows() {
+        ch.qos.logback.classic.Logger serviceLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AuthServiceImpl.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> listAppender = new ch.qos.logback.core.read.ListAppender<>();
+        listAppender.start();
+        serviceLogger.addAppender(listAppender);
+
+        try {
+            LoginRequest request = new LoginRequest("active-user@marketplace.local", "Password123!");
+
+            User user = new User();
+            user.setId("u-active-2");
+            user.setName("Active User 2");
+            user.setEmail("active-user2@marketplace.local");
+            user.setPasswordHash("hashedPass");
+            user.setRole(Role.CUSTOMER);
+            user.setStatus(UserStatus.ACTIVE);
+
+            when(userRepository.findByEmail("active-user@marketplace.local")).thenReturn(Optional.of(user));
+            when(passwordEncoder.matches("Password123!", "hashedPass")).thenReturn(true);
+            when(tokenService.generateAccessToken("u-active-2", "active-user2@marketplace.local", Role.CUSTOMER)).thenReturn("jwt");
+            when(tokenService.generateRefreshToken()).thenReturn("refresh-token");
+            when(tokenService.hashToken("refresh-token")).thenReturn("hash");
+            when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
+            when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
+
+            String fakeSecret = "mongodb://user:super_secret_credentials@host:27017";
+            when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                    .thenThrow(new RuntimeException(fakeSecret));
+
+            AuthResponse response = assertDoesNotThrow(() -> authService.login(request));
+
+            assertNotNull(response);
+            assertEquals("jwt", response.accessToken());
+            assertEquals("refresh-token", response.refreshToken());
+
+            boolean foundWarning = false;
+            for (ch.qos.logback.classic.spi.ILoggingEvent event : listAppender.list) {
+                String formatted = event.getFormattedMessage();
+                assertFalse(formatted.contains(fakeSecret), "Log message must not contain secret");
+                assertFalse(formatted.contains("super_secret_credentials"), "Log message must not contain raw credentials");
+                assertNull(event.getThrowableProxy(), "Throwable proxy must not be attached to log event");
+                if (formatted.contains("Failed to record lastActiveAt for user u-active-2: RuntimeException")) {
+                    foundWarning = true;
+                }
+            }
+            assertTrue(foundWarning, "Expected warning log with userId and RuntimeException simple name");
+        } finally {
+            serviceLogger.detachAppender(listAppender);
+        }
+    }
+
+    @Test
+    @DisplayName("EXTRA 2: Refresh succeeds even when lastActiveAt targeted write fails and logs safely without secrets")
+    void shouldSucceedRefreshEvenWhenLastActiveAtUpdateThrows() {
+        ch.qos.logback.classic.Logger serviceLogger = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(AuthServiceImpl.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> listAppender = new ch.qos.logback.core.read.ListAppender<>();
+        listAppender.start();
+        serviceLogger.addAppender(listAppender);
+
+        try {
+            RefreshTokenRequest request = new RefreshTokenRequest("valid-refresh-token");
+            String tokenHash = "token-hash-error";
+
+            AuthToken validToken = new AuthToken("u-refresh-2", TokenType.REFRESH, tokenHash,
+                    Instant.now().plusSeconds(3600), Instant.now());
+
+            User user = new User();
+            user.setId("u-refresh-2");
+            user.setName("Refresh User 2");
+            user.setEmail("refresh-user2@marketplace.local");
+            user.setRole(Role.CUSTOMER);
+            user.setStatus(UserStatus.ACTIVE);
+
+            when(tokenService.hashToken("valid-refresh-token")).thenReturn(tokenHash);
+            when(authTokenRepository.findAndConsumeValidToken(eq(tokenHash), any(Instant.class)))
+                    .thenReturn(Optional.of(validToken));
+            when(userRepository.findById("u-refresh-2")).thenReturn(Optional.of(user));
+            when(tokenService.generateAccessToken("u-refresh-2", "refresh-user2@marketplace.local", Role.CUSTOMER)).thenReturn("jwt");
+            when(tokenService.generateRefreshToken()).thenReturn("new-refresh-token");
+            when(tokenService.hashToken("new-refresh-token")).thenReturn("new-hash");
+            when(tokenService.getAccessTokenExpirationSeconds()).thenReturn(900L);
+            when(tokenService.getRefreshTokenExpirationSeconds()).thenReturn(604800L);
+
+            String fakeSecret = "mongodb://user:super_secret_credentials@host:27017";
+            when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                    .thenThrow(new RuntimeException(fakeSecret));
+
+            AuthResponse response = assertDoesNotThrow(() -> authService.refresh(request));
+
+            assertNotNull(response);
+            assertEquals("jwt", response.accessToken());
+            assertEquals("new-refresh-token", response.refreshToken());
+
+            boolean foundWarning = false;
+            for (ch.qos.logback.classic.spi.ILoggingEvent event : listAppender.list) {
+                String formatted = event.getFormattedMessage();
+                assertFalse(formatted.contains(fakeSecret), "Log message must not contain secret");
+                assertFalse(formatted.contains("super_secret_credentials"), "Log message must not contain raw credentials");
+                assertNull(event.getThrowableProxy(), "Throwable proxy must not be attached to log event");
+                if (formatted.contains("Failed to record lastActiveAt for user u-refresh-2: RuntimeException")) {
+                    foundWarning = true;
+                }
+            }
+            assertTrue(foundWarning, "Expected warning log with userId and RuntimeException simple name");
+        } finally {
+            serviceLogger.detachAppender(listAppender);
+        }
     }
 }
