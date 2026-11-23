@@ -82,7 +82,10 @@ export async function getUser(id, signal) {
   return data
 }
 
-/** POST /admin/users/{id}/suspend { reasonCode, note } -> { userId, status, changed, auditLogId? } */
+/**
+ * POST /admin/users/{id}/suspend { reasonCode, note } -> { userId, status, changed, auditLogId?, listingVisibilitySynced? }
+ * listingVisibilitySynced is present for a provider: false when the account changed but its listings did not.
+ */
 export async function suspendUser(id, { reasonCode, note }) {
   const { data } = await usersHttp.post(`${userPath(id)}/suspend`, { reasonCode, note: note || null })
   return data
@@ -100,9 +103,16 @@ export async function getUserListing(id, listingId, signal) {
   return data
 }
 
-/** POST /admin/users/{id}/listings/{listingId}/review { decision: KEEP_HIDDEN | MAKE_VISIBLE, note } -> 204 */
-export async function reviewUserListing(id, listingId, { decision, note }) {
-  await usersHttp.post(`${userPath(id)}/listings/${encodeURIComponent(listingId)}/review`, { decision, note })
+/** POST /admin/users/{id}/listing-visibility/sync -> { userId, status, listingVisibilitySynced: true } (idempotent) */
+export async function syncListingVisibility(id) {
+  const { data } = await usersHttp.post(`${userPath(id)}/listing-visibility/sync`)
+  return data
+}
+
+/** GET /admin/users/{id}/listings?page&size -> section { available, reason?, data?: page of listing rows } */
+export async function getUserListings(id, { page = 0, size } = {}, signal) {
+  const { data } = await usersHttp.get(`${userPath(id)}/listings`, { params: cleanParams({ page, size }), signal })
+  return data
 }
 
 export function isRequestCancelled(error) {

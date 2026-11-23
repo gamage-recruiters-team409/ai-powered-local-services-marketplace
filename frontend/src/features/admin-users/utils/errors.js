@@ -3,7 +3,8 @@ const CODE_MESSAGES = Object.freeze({
   USER_NOT_FOUND: 'This account could not be found.',
   LISTING_NOT_FOUND: 'This listing could not be found for this provider.',
   USER_ACCOUNT_ACTION_UNAVAILABLE: 'Account actions are not available yet — the accounts service is not connected.',
-  LISTING_ACTION_UNAVAILABLE: 'Listing decisions are not available yet — the listing service is not connected.',
+  CONCURRENT_MODIFICATION: 'The account status was changed by someone else. Reload the account and try again.',
+  LISTING_VISIBILITY_SYNC_FAILED: 'Listing visibility could not be updated. Try again later.',
   USER_ACTION_NOT_ALLOWED: 'This action is not allowed for this account.',
   USER_STATUS_NOT_CHANGEABLE: null, // the backend message explains which rule applies
   ACCESS_DENIED: 'You do not have permission to do this.',

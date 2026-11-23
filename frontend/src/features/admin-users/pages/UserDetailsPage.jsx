@@ -1,15 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 
-import { PageError, Skeleton } from '../../../shared/components/feedback'
-import { Button } from '../../../shared/components/forms'
+import { PageError, Skeleton, useToast } from '../../../shared/components/feedback'
+import { Button, Pagination } from '../../../shared/components/forms'
 import { AdminPage } from '../../../shared/layouts/admin'
-import { useAreaAccess } from '../../disputes-admin/access/useAdminAccess'
 import { categoryLabel } from '../../disputes/config/disputeStatus'
 import { ReactivateDialog, SuspendDialog } from '../components/AccountDialogs'
 import { BarChart, DonutChart } from '../components/Charts'
 import { Panel, PanelSkeleton, Unavailable } from '../components/Panel'
-import { ReviewListingDialog } from '../components/ReviewListingDialog'
+import { ViewListingDialog } from '../components/ViewListingDialog'
 import {
   AdminActionChip,
   Avatar,
@@ -23,8 +22,18 @@ import {
   VerifiedChip,
 } from '../components/UserChips'
 import { UsersIcon } from '../components/UsersIcon'
-import { reasonLabel, ROLE, shortId, shortUserId, userPaths } from '../config/usersConfig'
-import { getUser, isRequestCancelled } from '../services/adminUsersService'
+import {
+  LIMITS,
+  LISTING_COUNT_CHIPS,
+  LISTING_STATUS_META,
+  reasonLabel,
+  ROLE,
+  shortId,
+  shortUserId,
+  USER_STATUS,
+  userPaths,
+} from '../config/usersConfig'
+import { getUser, getUserListings, isRequestCancelled, syncListingVisibility } from '../services/adminUsersService'
 import { parseApiError } from '../utils/errors'
 import { formatDate, formatDateTime, formatLkr, formatMonth, formatNumber, percent, plural } from '../utils/format'
 import styles from '../adminUsers.module.css'
@@ -70,9 +79,11 @@ function ProfileCard({ user }) {
   const facts = [
     { label: 'User ID', value: shortUserId(p.id, p.role) },
     { label: 'Member since', value: formatDate(p.memberSince) },
-    p.lastActive?.available ? { label: 'Last active', value: formatDateTime(p.lastActive.data) } : null,
+    p.lastActive?.available
+      ? { label: 'Last signed in', value: p.lastActive.data ? formatDateTime(p.lastActive.data) : '—' }
+      : null,
     provider && p.serviceArea?.available
-      ? { label: 'Service area', value: [p.serviceArea.data.city, p.serviceArea.data.district].filter(Boolean).join(', ') }
+      ? { label: 'Service area', value: p.serviceArea.data.districts?.length ? p.serviceArea.data.districts.join(', ') : '—' }
       : null,
   ].filter((f) => f && f.value)
 
@@ -246,35 +257,139 @@ function BookingOutcomes({ section }) {
   )
 }
 
-function HiddenListings({ section, onReview }) {
-  if (!section.available) {
-    return <Unavailable what="Hidden listings" service={SERVICE.listings} reason={section.reason} />
-  }
-  const items = section.data.recentFlagged
-  if (items.length === 0) {
-    return <p className={styles.emptyLine}>No flagged listings.</p>
-  }
+/** Count chips from the listing summary: Active, Paused, Draft, Flagged, Archived (Rejected only when present). */
+function ListingCounts({ counts }) {
+  const chips = [...LISTING_COUNT_CHIPS]
+  if (counts.rejected > 0) chips.push({ key: 'rejected', status: 'REJECTED' })
   return (
-    <ul className={styles.rowList}>
-      {items.map((l) => (
-        <li key={l.id}>
-          <div>
-            <p className={styles.rowTitle}>{l.title}</p>
-            <p className={styles.subtle}>
-              Service ID {shortId(l.id)}
-              {l.moderationFlags?.length > 0 && ` · Flagged: ${l.moderationFlags.join(', ').replaceAll('_', ' ').toLowerCase()}`}
-            </p>
-          </div>
-          <div className={styles.rowEnd}>
-            <ListingStatusChip status={l.status} />
-            <Button variant="outline" size="small" onClick={() => onReview(l)} aria-label={`Review ${l.title}`}>
-              Review
-            </Button>
-          </div>
+    <ul className={styles.chipRow} aria-label="Listings by status">
+      {chips.map(({ key, status }) => (
+        <li key={key}>
+          <Chip tone={LISTING_STATUS_META[status].tone}>
+            {LISTING_STATUS_META[status].label} {formatNumber(counts[key])}
+          </Chip>
         </li>
       ))}
     </ul>
   )
+}
+
+/**
+ * The provider's listings, read-only, one page at a time. The listing module does not say which paused listings were
+ * paused by the suspension, so every paused listing shows "Paused", with one note while the account is suspended.
+ */
+function ProviderListings({ userId, counts, suspended, onView }) {
+  const [page, setPage] = useState(1)
+  const [result, setResult] = useState({ page: null, section: null, error: null })
+  const loading = result.page !== page
+
+  useEffect(() => {
+    const controller = new AbortController()
+    getUserListings(userId, { page: page - 1, size: LIMITS.LISTINGS_PAGE_SIZE }, controller.signal)
+      .then((section) => setResult({ page, section, error: null }))
+      .catch((error) => {
+        if (!isRequestCancelled(error)) setResult({ page, section: null, error: parseApiError(error) })
+      })
+    return () => controller.abort()
+  }, [userId, page])
+
+  if (!counts.available) {
+    return <Unavailable what="Listings" service={SERVICE.listings} reason={counts.reason} />
+  }
+  const rows = !loading && result.section?.available ? result.section.data : null
+  return (
+    <>
+      <ListingCounts counts={counts.data} />
+      {suspended && (
+        <p className={styles.listingNote} role="note">
+          <UsersIcon name="info" size={14} />
+          Listings are paused while this account is suspended.
+        </p>
+      )}
+      {loading ? (
+        <PanelSkeleton rows={3} />
+      ) : result.error ? (
+        <p className={styles.inlineError} role="alert">
+          {result.error.message}
+        </p>
+      ) : !rows ? (
+        <Unavailable what="Listings" service={SERVICE.listings} reason={result.section?.reason} />
+      ) : rows.content.length === 0 ? (
+        <p className={styles.emptyLine}>No listings yet.</p>
+      ) : (
+        <>
+          <ul className={styles.rowList}>
+            {rows.content.map((l) => (
+              <li key={l.id}>
+                <div>
+                  <p className={styles.rowTitle}>{l.title}</p>
+                  <p className={styles.subtle}>
+                    {[`Service ID ${shortId(l.id)}`, l.categoryName, l.updatedAt && `Updated ${formatDate(l.updatedAt)}`]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                </div>
+                <div className={styles.rowEnd}>
+                  <ListingStatusChip status={l.status} />
+                  <Button variant="outline" size="small" onClick={() => onView(l)} aria-label={`View ${l.title}`}>
+                    View
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {rows.totalPages > 1 && (
+            <div className={styles.paginationRow}>
+              <Pagination currentPage={page} totalPages={rows.totalPages} onPageChange={setPage} disabled={loading} />
+            </div>
+          )}
+        </>
+      )}
+    </>
+  )
+}
+
+/**
+ * The account was changed but the provider's listings were not (the response said so, or the latest status change in
+ * the audit log is still marked FAILED). Retry re-applies the listing visibility for the current status.
+ */
+function ListingVisibilityWarning({ userId, canRetry, onFixed }) {
+  const toast = useToast()
+  const [state, setState] = useState({ busy: false, error: null })
+
+  const retry = async () => {
+    if (state.busy) return
+    setState({ busy: true, error: null })
+    try {
+      await syncListingVisibility(userId)
+      toast.success('Listing visibility was updated.')
+      setState({ busy: false, error: null })
+      onFixed()
+    } catch (error) {
+      setState({ busy: false, error: parseApiError(error) })
+    }
+  }
+
+  return (
+    <div className={styles.warningBanner} role="alert">
+      <UsersIcon name="alertTriangle" size={16} />
+      <span>
+        Account updated, but listing visibility could not be updated.
+        {state.error && ` ${state.error.message}`}
+      </span>
+      {canRetry && (
+        <Button variant="outline" size="small" onClick={retry} loading={state.busy} disabled={state.busy}>
+          Retry
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/** The newest applied status change still marked FAILED for the listing update. */
+function listingSyncPending(user) {
+  const latest = user.adminActions?.available ? user.adminActions.data.find((a) => a.outcome === 'SUCCESS') : null
+  return latest?.listingVisibilitySync === 'FAILED'
 }
 
 function QueuedBookings({ section }) {
@@ -443,13 +558,13 @@ export function UserDetailsPage() {
 }
 
 function AccountDetails({ id }) {
-  const { canEdit } = useAreaAccess()
   const location = useLocation()
   const listLink = userPaths.list(location.state?.listSearch?.replace(/^\?/, '') ?? '')
   const [reloadKey, setReloadKey] = useState(0)
   const [result, setResult] = useState({ key: null, data: null, error: null })
   const [dialog, setDialog] = useState(null)
-  const [reviewing, setReviewing] = useState(null)
+  const [viewing, setViewing] = useState(null)
+  const [visibilityFailed, setVisibilityFailed] = useState(false)
   const requestKey = `${id}|${reloadKey}`
   const loading = result.key !== requestKey
 
@@ -464,6 +579,14 @@ function AccountDetails({ id }) {
   }, [id, requestKey])
 
   const reload = () => setReloadKey((k) => k + 1)
+  const closeAndReload = () => {
+    setDialog(null)
+    reload()
+  }
+  const afterStatusChange = (result) => {
+    setVisibilityFailed(result?.listingVisibilitySynced === false)
+    closeAndReload()
+  }
   const breadcrumbs = ['Operations', { label: 'Users', to: listLink }, 'Account details']
   // Only data from the current request: never an earlier response while a reload or another account is loading.
   const user = loading ? null : result.data
@@ -514,6 +637,16 @@ function AccountDetails({ id }) {
         <DetailsSkeleton />
       ) : (
         <div className={styles.details}>
+          {user.profile.role === ROLE.PROVIDER && (visibilityFailed || listingSyncPending(user)) && (
+            <ListingVisibilityWarning
+              userId={user.profile.id}
+              canRetry={Boolean(actions.canSyncListingVisibility)}
+              onFixed={() => {
+                setVisibilityFailed(false)
+                reload()
+              }}
+            />
+          )}
           <ProfileCard user={user} />
           <Metrics user={user} />
 
@@ -527,13 +660,18 @@ function AccountDetails({ id }) {
           </div>
 
           <div className={styles.twoCol}>
-            {shown(user.hiddenListings) && (
+            {shown(user.listings) && (
               <Panel
-                title="Hidden listings"
-                icon="eyeOff"
-                count={user.hiddenListings.available ? user.hiddenListings.data.flagged : undefined}
+                title="Listings"
+                icon="eye"
+                count={user.listings.available ? user.listings.data.total : undefined}
               >
-                <HiddenListings section={user.hiddenListings} onReview={setReviewing} />
+                <ProviderListings
+                  userId={user.profile.id}
+                  counts={user.listings}
+                  suspended={user.profile.status === USER_STATUS.SUSPENDED}
+                  onView={setViewing}
+                />
               </Panel>
             )}
             <Panel
@@ -569,32 +707,22 @@ function AccountDetails({ id }) {
             open={dialog === 'suspend'}
             user={user.profile}
             onClose={() => setDialog(null)}
-            onDone={() => {
-              setDialog(null)
-              reload()
-            }}
+            onDone={afterStatusChange}
+            onReload={closeAndReload}
           />
           <ReactivateDialog
             open={dialog === 'reactivate'}
             user={user.profile}
             onClose={() => setDialog(null)}
-            onDone={() => {
-              setDialog(null)
-              reload()
-            }}
+            onDone={afterStatusChange}
+            onReload={closeAndReload}
           />
-          <ReviewListingDialog
-            open={Boolean(reviewing)}
+          <ViewListingDialog
+            open={Boolean(viewing)}
             userId={user.profile.id}
             providerName={user.profile.displayName}
-            listing={reviewing ?? { id: '' }}
-            canReview={Boolean(actions.canReviewListings)}
-            readOnlyReason={canEdit ? 'unavailable' : 'viewOnly'}
-            onClose={() => setReviewing(null)}
-            onDone={() => {
-              setReviewing(null)
-              reload()
-            }}
+            listing={viewing ?? { id: '' }}
+            onClose={() => setViewing(null)}
           />
         </>
       )}

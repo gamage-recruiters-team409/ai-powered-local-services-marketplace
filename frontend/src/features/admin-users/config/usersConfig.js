@@ -11,7 +11,7 @@ export const USER_STATUS = Object.freeze({
 })
 
 /** Same limits as the backend AdminUsersRules. */
-export const LIMITS = Object.freeze({ PAGE_SIZE: 8, SEARCH: 100, NOTE_MIN: 10, NOTE_MAX: 500 })
+export const LIMITS = Object.freeze({ PAGE_SIZE: 8, LISTINGS_PAGE_SIZE: 5, SEARCH: 100, NOTE_MIN: 10, NOTE_MAX: 500 })
 
 export const ROLE_LABEL = Object.freeze({ CUSTOMER: 'Customer', PROVIDER: 'Provider' })
 
@@ -52,7 +52,14 @@ export function reasonLabel(code) {
   return SUSPENSION_REASONS.find((r) => r.value === code)?.label ?? null
 }
 
-export const LISTING_DECISION = Object.freeze({ KEEP_HIDDEN: 'KEEP_HIDDEN', MAKE_VISIBLE: 'MAKE_VISIBLE' })
+/** Listing count chips on the account page, in this order (Rejected is shown only when there are any). */
+export const LISTING_COUNT_CHIPS = Object.freeze([
+  { key: 'active', status: 'ACTIVE' },
+  { key: 'paused', status: 'PAUSED' },
+  { key: 'draft', status: 'DRAFT' },
+  { key: 'flagged', status: 'FLAGGED' },
+  { key: 'archived', status: 'ARCHIVED' },
+])
 
 export const LISTING_STATUS_META = Object.freeze({
   FLAGGED: { label: 'Flagged', tone: 'danger' },

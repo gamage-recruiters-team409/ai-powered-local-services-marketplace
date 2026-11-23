@@ -1363,3 +1363,59 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ---------- final corrections: 409 reload, listing visibility warning, listings section ---------- */
+
+.alertAction {
+  margin-left: auto;
+  flex: none;
+}
+
+.warningBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #fdf6e3;
+  border: 1px solid #f2dfa7;
+  border-radius: 10px;
+  color: #5c3d03;
+  font-size: 0.875rem;
+}
+
+.warningBanner > svg {
+  flex: none;
+}
+
+.warningBanner > span {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.listingNote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--adm-color-danger-soft);
+  border-radius: 8px;
+  color: var(--adm-color-danger);
+  font-size: 0.8125rem;
+}
+
+.chartNote {
+  margin: 8px 0 0;
+  color: var(--adm-color-text-muted, #6b7280);
+  font-size: 0.75rem;
+}

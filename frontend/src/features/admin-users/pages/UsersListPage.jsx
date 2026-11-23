@@ -114,16 +114,21 @@ function RegistrationsChart() {
           Registration data could not be loaded. {result.error.message}
         </p>
       ) : buckets ? (
-        <BarChart
-          data={buckets.map((b) => ({
-            label: bucketLabel(b.start, period),
-            title: `${period === 'WEEKS' ? 'Week of' : ''} ${bucketLabel(b.start, period)}`.trim(),
-            values: { customers: b.customers, providers: b.providers },
-          }))}
-          series={SERIES}
-          caption={`New users per ${unit}`}
-          summary={`New users per ${unit}: ${formatNumber(totals.c)} customers and ${formatNumber(totals.p)} providers in total`}
-        />
+        <>
+          <BarChart
+            data={buckets.map((b) => ({
+              label: bucketLabel(b.start, period),
+              title: `${period === 'WEEKS' ? 'Week of' : ''} ${bucketLabel(b.start, period)}`.trim(),
+              values: { customers: b.customers, providers: b.providers },
+            }))}
+            series={SERIES}
+            caption={`New users per ${unit}`}
+            summary={`New users per ${unit}: ${formatNumber(totals.c)} customers and ${formatNumber(totals.p)} providers in total`}
+          />
+          <p className={styles.chartNote}>
+            {period === 'WEEKS' ? 'Weeks start on Monday (UTC). ' : ''}Accounts without a sign-up date are not counted.
+          </p>
+        </>
       ) : (
         <div className={styles.chartEmpty}>
           <UsersIcon name="barChart" size={22} />

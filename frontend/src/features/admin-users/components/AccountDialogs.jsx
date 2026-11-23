@@ -11,13 +11,23 @@ import { NoteField } from './NoteField'
 import { UsersIcon } from './UsersIcon'
 import styles from '../adminUsers.module.css'
 
-function ServerError({ error }) {
+/**
+ * The server's error. 409 CONCURRENT_MODIFICATION (another admin changed the status first, nothing was changed here)
+ * also offers "Reload", which closes the dialog and loads the account's current state.
+ */
+function ServerError({ error, onReload }) {
   if (!error) return null
+  const stale = error.code === 'CONCURRENT_MODIFICATION'
   return (
-    <p className={styles.dialogError} role="alert">
+    <div className={styles.dialogError} role="alert">
       <UsersIcon name="alertTriangle" size={15} />
-      {error.message}
-    </p>
+      <span>{error.message}</span>
+      {stale && onReload && (
+        <Button variant="outline" size="small" onClick={onReload} className={styles.alertAction}>
+          Reload
+        </Button>
+      )}
+    </div>
   )
 }
 
@@ -43,7 +53,7 @@ function useSingleSubmit() {
 }
 
 /** Modal A: suspend with a reason code; the note is required for "Other". */
-function SuspendForm({ user, onClose, onDone }) {
+function SuspendForm({ user, onClose, onDone, onReload }) {
   const toast = useToast()
   const reasonId = useId()
   const textId = useId()
@@ -96,7 +106,7 @@ function SuspendForm({ user, onClose, onDone }) {
       <p id={textId} className={styles.dialogText}>
         Suspend <strong>{user.displayName}</strong>? They won&apos;t be able to book or accept bookings.
       </p>
-      <ServerError error={serverError} />
+      <ServerError error={serverError} onReload={onReload} />
       <div className={styles.field}>
         <label htmlFor={reasonId} className={styles.fieldLabel}>
           Reason
@@ -149,7 +159,7 @@ function SuspendForm({ user, onClose, onDone }) {
 }
 
 /** Modal B: reactivate with a required note. */
-function ReactivateForm({ user, onClose, onDone }) {
+function ReactivateForm({ user, onClose, onDone, onReload }) {
   const toast = useToast()
   const textId = useId()
   const [note, setNote] = useState('')
@@ -195,7 +205,7 @@ function ReactivateForm({ user, onClose, onDone }) {
       <p id={textId} className={styles.dialogText}>
         Reactivate <strong>{user.displayName}</strong>? They will be able to use the platform again.
       </p>
-      <ServerError error={serverError} />
+      <ServerError error={serverError} onReload={onReload} />
       <NoteField
         label="Administrative note"
         value={note}

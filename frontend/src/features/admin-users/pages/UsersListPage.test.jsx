@@ -85,6 +85,23 @@ describe('Users list', () => {
     expect(within(chart).getByText('Customers: 12')).toBeTruthy()
   })
 
+  it('registrations from real counts: empty weeks are 0 and the note says accounts without a sign-up date are not counted', async () => {
+    getRegistrations.mockResolvedValue({
+      period: 'WEEKS',
+      available: true,
+      buckets: [
+        { start: '2026-11-09T00:00:00Z', end: '2026-11-16T00:00:00Z', customers: 0, providers: 0 },
+        { start: '2026-11-16T00:00:00Z', end: '2026-11-23T00:00:00Z', customers: 4, providers: 1 },
+      ],
+    })
+    renderUsers(BASE)
+
+    const chart = await screen.findByRole('group', { name: /4 customers and 1 providers in total/ })
+    expect(within(chart).getByRole('button', { name: 'Week of Nov 9: Customers 0, Providers 0' })).toBeTruthy()
+    expect(screen.getByText('Weeks start on Monday (UTC). Accounts without a sign-up date are not counted.')).toBeTruthy()
+    expect(screen.queryByText('Registration data will appear when the accounts service is connected.')).toBeNull()
+  })
+
   it('table: avatar name, short id, role, email, joined date, status chip and View; PRO only when the API says so', async () => {
     listUsers.mockResolvedValue(page([
       row(),

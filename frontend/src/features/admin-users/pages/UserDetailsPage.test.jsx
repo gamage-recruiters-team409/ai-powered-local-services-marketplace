@@ -6,15 +6,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   getUser,
   getUserListing,
+  getUserListings,
   reactivateUser,
-  reviewUserListing,
   suspendUser,
+  syncListingVisibility,
 } from '../services/adminUsersService'
 import {
   apiError,
   BASE,
   CUSTOMER_ID,
   customerDetail,
+  listingsPage,
   notConnected,
   PROVIDER_ID,
   providerDetail,
@@ -27,7 +29,8 @@ vi.mock('../services/adminUsersService', () => ({
   suspendUser: vi.fn(),
   reactivateUser: vi.fn(),
   getUserListing: vi.fn(),
-  reviewUserListing: vi.fn(),
+  getUserListings: vi.fn(),
+  syncListingVisibility: vi.fn(),
   listUsers: vi.fn(),
   getUsersSummary: vi.fn(),
   getRegistrations: vi.fn(),
@@ -43,13 +46,19 @@ const LISTING = {
   basePrice: 12000,
   pricingModel: 'FIXED',
   status: 'FLAGGED',
-  hiddenSince: '2026-10-24T00:00:00Z',
+  moderatedAt: '2026-10-24T00:00:00Z',
   lastUpdatedAt: '2026-10-24T00:00:00Z',
-  hiddenReason: 'Flagged for review: the description contains contact details.',
+  moderationReason: 'Flagged for review: the description contains contact details.',
   moderationFlags: ['CONTACT_DETAILS'],
   description: 'Deep cleaning for offices. <img src=x onerror="alert(1)"> Contact +94 77 123 4567 or book@clean.lk today.',
   imageUrl: null,
 }
+
+const ROWS = [
+  { id: LISTING.id, title: 'Commercial Deep Cleaning', categoryName: 'Cleaning', basePrice: 12000, pricingModel: 'FIXED', status: 'FLAGGED', moderationFlags: ['CONTACT_DETAILS'], updatedAt: '2026-10-24T00:00:00Z' },
+  { id: '65f1c0aa11bb22cc33a1bbbb', title: 'Window Washing', categoryName: 'Cleaning', basePrice: 4000, pricingModel: 'FIXED', status: 'PAUSED', moderationFlags: [], updatedAt: '2026-10-20T00:00:00Z' },
+]
+const STALE = 'The account status was changed by someone else. Reload the account and try again'
 
 const openPage = async (detail = providerDetail(), options) => {
   getUser.mockResolvedValue(detail)
@@ -72,7 +81,8 @@ beforeEach(() => {
   suspendUser.mockReset()
   reactivateUser.mockReset()
   getUserListing.mockReset().mockResolvedValue({ available: true, data: LISTING })
-  reviewUserListing.mockReset()
+  getUserListings.mockReset().mockResolvedValue(listingsPage(ROWS))
+  syncListingVisibility.mockReset()
 })
 
 describe('Account details', () => {
@@ -83,7 +93,8 @@ describe('Account details', () => {
     expect(screen.getByText('Verified')).toBeTruthy()
     expect(screen.getByText('sarah.smith@example.test')).toBeTruthy()
     expect(screen.getByText('#PRO-0002')).toBeTruthy()
-    expect(screen.getByText('Dehiwala, Colombo')).toBeTruthy()
+    expect(screen.getByText('Colombo, Gampaha')).toBeTruthy()
+    expect(screen.getByText('Last signed in')).toBeTruthy()
     // metrics, computed only from the returned numbers
     expect(screen.getByText('128')).toBeTruthy()
     // 123 / 128: completion rate card, the donut's success centre and the "Completed" outcome row
@@ -98,7 +109,7 @@ describe('Account details', () => {
     expect(screen.getByRole('img', { name: /Completed 123, Cancelled 3, Disputed 2/ })).toBeTruthy()
     expect(screen.getByText('128 orders total')).toBeTruthy()
     // lists and tables
-    expect(screen.getByText('Commercial Deep Cleaning')).toBeTruthy()
+    expect(await screen.findByText('Commercial Deep Cleaning')).toBeTruthy()
     expect(screen.getByText(/Deep Cleaning \(4 hrs\)/)).toBeTruthy()
     expect(screen.getByText('Awaiting provider')).toBeTruthy()
     expect(screen.getByText(/8,500/)).toBeTruthy()
@@ -117,7 +128,7 @@ describe('Account details', () => {
     expect(screen.getByText('Bookings per month will appear when the booking service is connected.')).toBeTruthy()
     expect(screen.getByText('Booking outcomes will appear when the booking service is connected.')).toBeTruthy()
     expect(screen.getByText('Queued bookings will appear when the booking service is connected.')).toBeTruthy()
-    expect(screen.getByText('Hidden listings will appear when the listing service is connected.')).toBeTruthy()
+    expect(screen.getByText('Listings will appear when the listing service is connected.')).toBeTruthy()
     expect(screen.getByText('Recent disputes will appear when the dispute service is connected.')).toBeTruthy()
     expect(screen.getByText('Admin actions will appear when the audit log is connected.')).toBeTruthy()
     expect(screen.getAllByText('Not available yet').length).toBe(5)
@@ -125,7 +136,7 @@ describe('Account details', () => {
     expect(screen.queryByText(/completed$/)).toBeNull()
     expect(screen.queryByText('Verified')).toBeNull()
     expect(screen.queryByText('Service area')).toBeNull()
-    expect(screen.queryByText('Last active')).toBeNull()
+    expect(screen.queryByText('Last signed in')).toBeNull()
   })
 
   it('a section whose source failed says it could not be loaded', async () => {
@@ -134,11 +145,12 @@ describe('Account details', () => {
     expect(screen.getByText('Recent disputes could not be loaded right now. Try again later.')).toBeTruthy()
   })
 
-  it('customer: no rating card, no hidden listings and no provider-only profile facts', async () => {
+  it('customer: no rating card, no listings and no provider-only profile facts', async () => {
     await openPage(customerDetail())
 
     expect(screen.queryByText('Avg. rating')).toBeNull()
-    expect(screen.queryByText('Hidden listings')).toBeNull()
+    expect(screen.queryByRole('heading', { name: /^Listings/ })).toBeNull()
+    expect(getUserListings).not.toHaveBeenCalled()
     expect(screen.queryByText('Verified')).toBeNull()
     expect(screen.queryByText('Service area')).toBeNull()
     expect(screen.getByText('Total bookings')).toBeTruthy()
@@ -151,13 +163,13 @@ describe('Account details', () => {
   })
 
   it('Reactivate is shown when allowed', async () => {
-    await openPage(providerDetail({ profile: { ...providerDetail().profile, status: 'SUSPENDED' }, actions: { canSuspend: false, canReactivate: true, canReviewListings: true } }))
+    await openPage(providerDetail({ profile: { ...providerDetail().profile, status: 'SUSPENDED' }, actions: { canSuspend: false, canReactivate: true, canSyncListingVisibility: true } }))
     expect(screen.getByRole('button', { name: 'Reactivate account' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Suspend account' })).toBeNull()
   })
 
   it('SUPER_ADMIN, an admin target or your own account (actions all false): no account buttons', async () => {
-    await openPage(providerDetail({ actions: { canSuspend: false, canReactivate: false, canReviewListings: false } }), { canEdit: false })
+    await openPage(providerDetail({ actions: { canSuspend: false, canReactivate: false, canSyncListingVisibility: false } }), { canEdit: false })
     expect(screen.queryByRole('button', { name: 'Suspend account' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Reactivate account' })).toBeNull()
   })
@@ -190,11 +202,11 @@ describe('Navigating between accounts', () => {
     expect(screen.queryByText('sarah.smith@example.test')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Suspend account' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Reactivate account' })).toBeNull()
-    expect(screen.queryByRole('button', { name: /Review/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /View Commercial/ })).toBeNull()
     expect(screen.getByLabelText('Loading account')).toBeTruthy()
     expect(getUser).toHaveBeenLastCalledWith(CUSTOMER_ID, expect.anything())
 
-    await resolve(customerDetail({ actions: { canSuspend: false, canReactivate: true, canReviewListings: false } }))
+    await resolve(customerDetail({ actions: { canSuspend: false, canReactivate: true, canSyncListingVisibility: false } }))
     expect(await screen.findByRole('heading', { name: 'Nimal Perera' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Reactivate account' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Suspend account' })).toBeNull()
@@ -213,16 +225,15 @@ describe('Navigating between accounts', () => {
     expect(suspendUser).not.toHaveBeenCalled()
   })
 
-  it('an open review modal for the previous account closes on navigation', async () => {
+  it('an open listing modal for the previous account closes on navigation', async () => {
     const router = await openPage()
-    fireEvent.click(screen.getByRole('button', { name: 'Review Commercial Deep Cleaning' }))
-    expect(screen.getByRole('dialog', { name: 'Review listing' })).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: 'View Commercial Deep Cleaning' }))
+    expect(screen.getByRole('dialog', { name: 'View listing details' })).toBeTruthy()
     pendingNextAccount()
 
     await act(async () => router.navigate(`${BASE}/${CUSTOMER_ID}`))
 
     expect(screen.queryByRole('dialog')).toBeNull()
-    expect(reviewUserListing).not.toHaveBeenCalled()
   })
 })
 
@@ -290,7 +301,7 @@ describe('Suspend account modal', () => {
 
 describe('Reactivate account modal', () => {
   const open = async () => {
-    await openPage(providerDetail({ profile: { ...providerDetail().profile, status: 'SUSPENDED' }, actions: { canSuspend: false, canReactivate: true, canReviewListings: true } }))
+    await openPage(providerDetail({ profile: { ...providerDetail().profile, status: 'SUSPENDED' }, actions: { canSuspend: false, canReactivate: true, canSyncListingVisibility: true } }))
     fireEvent.click(screen.getByRole('button', { name: 'Reactivate account' }))
     return screen.getByRole('dialog', { name: 'Reactivate account' })
   }
@@ -314,97 +325,207 @@ describe('Reactivate account modal', () => {
   })
 })
 
-describe('Review listing modal', () => {
+describe('409 CONCURRENT_MODIFICATION', () => {
+  it('suspend: shows the message with Reload; Reload closes the modal and loads the current account', async () => {
+    suspendUser.mockRejectedValue(apiError(409, 'CONCURRENT_MODIFICATION', STALE))
+    await openPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Suspend account' }))
+    const dialog = screen.getByRole('dialog', { name: 'Suspend account' })
+    fireEvent.change(within(dialog).getByRole('combobox', { name: /Reason/ }), { target: { value: 'POLICY_VIOLATION' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Suspend account' }))
+
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert.textContent).toContain('The account status was changed by someone else. Reload the account and try again.')
+    fireEvent.click(within(alert).getByRole('button', { name: 'Reload' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(getUser).toHaveBeenCalledTimes(2))
+  })
+
+  it('reactivate: same message and Reload action', async () => {
+    reactivateUser.mockRejectedValue(apiError(409, 'CONCURRENT_MODIFICATION', STALE))
+    await openPage(providerDetail({ profile: { ...providerDetail().profile, status: 'SUSPENDED' }, actions: { canSuspend: false, canReactivate: true, canSyncListingVisibility: true } }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reactivate account' }))
+    const dialog = screen.getByRole('dialog', { name: 'Reactivate account' })
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Administrative note/ }), { target: { value: 'Appeal accepted after review' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate' }))
+
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert.textContent).toContain('Reload the account and try again')
+    expect(within(alert).getByRole('button', { name: 'Reload' })).toBeTruthy()
+  })
+
+  it('other errors have no Reload action', async () => {
+    suspendUser.mockRejectedValue(apiError(403, 'CANNOT_MODIFY_SELF', 'Self status modification is not allowed'))
+    await openPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Suspend account' }))
+    const dialog = screen.getByRole('dialog', { name: 'Suspend account' })
+    fireEvent.change(within(dialog).getByRole('combobox', { name: /Reason/ }), { target: { value: 'POLICY_VIOLATION' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Suspend account' }))
+
+    const alert = await within(dialog).findByRole('alert')
+    expect(within(alert).queryByRole('button', { name: 'Reload' })).toBeNull()
+  })
+})
+
+describe('Listing visibility after suspend / reactivate', () => {
+  const WARNING = 'Account updated, but listing visibility could not be updated.'
+
+  it('listingVisibilitySynced=false: warning with Retry; Retry re-applies it, toasts and reloads', async () => {
+    suspendUser.mockResolvedValue({ userId: PROVIDER_ID, status: 'SUSPENDED', changed: true, auditLogId: 'a9', listingVisibilitySynced: false })
+    syncListingVisibility.mockResolvedValue({ userId: PROVIDER_ID, status: 'SUSPENDED', listingVisibilitySynced: true })
+    await openPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Suspend account' }))
+    const dialog = screen.getByRole('dialog', { name: 'Suspend account' })
+    fireEvent.change(within(dialog).getByRole('combobox', { name: /Reason/ }), { target: { value: 'POLICY_VIOLATION' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Suspend account' }))
+
+    expect(await screen.findByText(WARNING)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await waitFor(() => expect(syncListingVisibility).toHaveBeenCalledWith(PROVIDER_ID))
+    expect(await screen.findByText('Listing visibility was updated.')).toBeTruthy()
+    await waitFor(() => expect(screen.queryByText(WARNING)).toBeNull())
+    await waitFor(() => expect(getUser).toHaveBeenCalledTimes(3))
+  })
+
+  it('Retry still failing: the warning stays with the reason', async () => {
+    syncListingVisibility.mockRejectedValue(apiError(503, 'LISTING_VISIBILITY_SYNC_FAILED'))
+    const failed = providerDetail()
+    failed.adminActions = { available: true, data: [{ ...failed.adminActions.data[0], listingVisibilitySync: 'FAILED' }] }
+    await openPage(failed)
+
+    expect(screen.getByText(WARNING)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText(/Listing visibility could not be updated\. Try again later\./)).toBeTruthy()
+  })
+
+  it('the latest change still marked FAILED in the audit log shows the warning on load; view-only admins get no Retry', async () => {
+    const failed = providerDetail({ actions: { canSuspend: false, canReactivate: false, canSyncListingVisibility: false } })
+    failed.adminActions = { available: true, data: [{ ...failed.adminActions.data[0], listingVisibilitySync: 'FAILED' }] }
+    await openPage(failed, { canEdit: false })
+
+    expect(screen.getByText(WARNING)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('synced (or a customer): no warning', async () => {
+    suspendUser.mockResolvedValue({ userId: PROVIDER_ID, status: 'SUSPENDED', changed: true, listingVisibilitySynced: true })
+    await openPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Suspend account' }))
+    const dialog = screen.getByRole('dialog', { name: 'Suspend account' })
+    fireEvent.change(within(dialog).getByRole('combobox', { name: /Reason/ }), { target: { value: 'POLICY_VIOLATION' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Suspend account' }))
+    await waitFor(() => expect(getUser).toHaveBeenCalledTimes(2))
+    await screen.findByRole('heading', { name: 'Sarah Smith' })
+
+    expect(screen.queryByText(WARNING)).toBeNull()
+  })
+})
+
+describe('Listings section', () => {
+  it('count chips from the listing summary, rows with status chips (Paused for paused listings) and View', async () => {
+    await openPage()
+
+    const chips = screen.getByRole('list', { name: 'Listings by status' })
+    expect(within(chips).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Active 2', 'Paused 2', 'Draft 1', 'Flagged 1', 'Archived 1',
+    ])
+    expect(await screen.findByText('Window Washing')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'View Window Washing' })).toBeTruthy()
+    expect(getUserListings).toHaveBeenCalledWith(PROVIDER_ID, { page: 0, size: 5 }, expect.anything())
+    expect(screen.queryByText('Listings are paused while this account is suspended.')).toBeNull()
+  })
+
+  it('suspended provider: one note above the list', async () => {
+    await openPage(providerDetail({ profile: { ...providerDetail().profile, status: 'SUSPENDED' }, actions: { canSuspend: false, canReactivate: true, canSyncListingVisibility: true } }))
+
+    expect(screen.getByText('Listings are paused while this account is suspended.')).toBeTruthy()
+    expect(screen.getAllByText('Listings are paused while this account is suspended.').length).toBe(1)
+  })
+
+  it('paginated: the next page is requested from the listing endpoint', async () => {
+    getUserListings.mockResolvedValue(listingsPage(ROWS, 12))
+    await openPage()
+    await screen.findByText('Window Washing')
+
+    fireEvent.click(screen.getByRole('button', { name: /next/i }))
+
+    await waitFor(() => expect(getUserListings).toHaveBeenLastCalledWith(PROVIDER_ID, { page: 1, size: 5 }, expect.anything()))
+  })
+
+  it('no listings: an empty line instead of rows', async () => {
+    getUserListings.mockResolvedValue(listingsPage([]))
+    await openPage()
+    expect(await screen.findByText('No listings yet.')).toBeTruthy()
+  })
+})
+
+describe('View listing details modal', () => {
   const open = async (detail, options) => {
     await openPage(detail, options)
-    fireEvent.click(screen.getByRole('button', { name: 'Review Commercial Deep Cleaning' }))
-    const dialog = screen.getByRole('dialog', { name: 'Review listing' })
+    fireEvent.click(await screen.findByRole('button', { name: 'View Commercial Deep Cleaning' }))
+    const dialog = screen.getByRole('dialog', { name: 'View listing details' })
     await within(dialog).findByText(/Deep cleaning for offices/)
     return dialog
   }
 
-  it('shows the listing facts, the reason and the description with contact details highlighted as text only', async () => {
+  it('shows the facts, the flag reason and the description with contact details highlighted as text only', async () => {
     const dialog = await open()
 
     expect(getUserListing).toHaveBeenCalledWith(PROVIDER_ID, LISTING.id, expect.anything())
     expect(within(dialog).getByText('Cleaning')).toBeTruthy()
     expect(within(dialog).getByText(/12,000/)).toBeTruthy()
-    expect(within(dialog).getByText('Reason hidden')).toBeTruthy()
+    expect(within(dialog).getByText('Reason flagged')).toBeTruthy()
+    expect(within(dialog).getByText(LISTING.moderationReason)).toBeTruthy()
     const marks = dialog.querySelectorAll('mark')
     expect([...marks].map((m) => m.textContent)).toEqual(['+94 77 123 4567', 'book@clean.lk'])
     expect(dialog.querySelector('img')).toBeNull()
     expect(within(dialog).getByText(/<img src=x onerror="alert\(1\)">/)).toBeTruthy()
   })
 
-  it('note is required for a decision', async () => {
-    const dialog = await open()
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Make visible' }))
-    expect(within(dialog).getByText('Enter a note.')).toBeTruthy()
-    expect(reviewUserListing).not.toHaveBeenCalled()
-  })
+  it.each([
+    ['ADMIN', true],
+    ['SUPER_ADMIN', false],
+  ])('read-only for %s: no note field and no decision buttons, only Close', async (_role, canEdit) => {
+    const dialog = await open(providerDetail(), { canEdit })
 
-  it('Keep hidden and Make visible send their decision with the note', async () => {
-    reviewUserListing.mockResolvedValue()
-    let dialog = await open()
-    fireEvent.change(within(dialog).getByRole('textbox', { name: /Admin note/ }), { target: { value: 'Contact details still present' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep hidden' }))
-    await waitFor(() => expect(reviewUserListing).toHaveBeenCalledWith(PROVIDER_ID, LISTING.id, {
-      decision: 'KEEP_HIDDEN', note: 'Contact details still present',
-    }))
-    expect(await screen.findByText('"Commercial Deep Cleaning" stays hidden.')).toBeTruthy()
-
+    expect(within(dialog).queryByRole('textbox')).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: /Keep hidden|Make visible|Approve|Reject/ })).toBeNull()
+    expect(within(dialog).getByText(/View only\. Flagged listings are approved or rejected by moderators\./)).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    await screen.findByRole('button', { name: 'Review Commercial Deep Cleaning' })
-    fireEvent.click(screen.getByRole('button', { name: 'Review Commercial Deep Cleaning' }))
-    dialog = screen.getByRole('dialog', { name: 'Review listing' })
-    fireEvent.change(within(dialog).getByRole('textbox', { name: /Admin note/ }), { target: { value: 'Contact details were removed' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Make visible' }))
-    await waitFor(() => expect(reviewUserListing).toHaveBeenLastCalledWith(PROVIDER_ID, LISTING.id, {
-      decision: 'MAKE_VISIBLE', note: 'Contact details were removed',
-    }))
   })
 
-  it('503: "Listing decisions are not available yet"', async () => {
-    reviewUserListing.mockRejectedValue(apiError(503, 'LISTING_ACTION_UNAVAILABLE'))
+  it('a paused listing has no flag reason', async () => {
+    getUserListing.mockResolvedValue({ available: true, data: { ...LISTING, status: 'PAUSED', moderationFlags: [], moderationReason: null } })
     const dialog = await open()
-    fireEvent.change(within(dialog).getByRole('textbox', { name: /Admin note/ }), { target: { value: 'Contact details were removed' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Make visible' }))
 
-    expect(await within(dialog).findByText('Listing decisions are not available yet — the listing service is not connected.')).toBeTruthy()
-  })
-
-  it('read-only for SUPER_ADMIN (canReviewListings false): no note and no decision buttons', async () => {
-    const dialog = await open(
-      providerDetail({ actions: { canSuspend: false, canReactivate: false, canReviewListings: false } }),
-      { canEdit: false },
-    )
-
-    expect(within(dialog).queryByRole('button', { name: 'Keep hidden' })).toBeNull()
-    expect(within(dialog).queryByRole('button', { name: 'Make visible' })).toBeNull()
-    expect(within(dialog).queryByRole('textbox')).toBeNull()
-    expect(within(dialog).getByText(/View only/)).toBeTruthy()
-  })
-
-  it('ADMIN while listing decisions are not supported (canReviewListings false): listing shown read-only with a '
-    + '"not available yet" note, no actionable buttons', async () => {
-    const dialog = await open(providerDetail({ actions: { canSuspend: true, canReactivate: false, canReviewListings: false } }))
-
-    expect(within(dialog).getByText('Commercial Deep Cleaning')).toBeTruthy()
-    expect(dialog.querySelectorAll('mark').length).toBe(2)
-    expect(within(dialog).queryByRole('button', { name: 'Keep hidden' })).toBeNull()
-    expect(within(dialog).queryByRole('button', { name: 'Make visible' })).toBeNull()
-    expect(within(dialog).queryByRole('textbox')).toBeNull()
-    expect(within(dialog).getByText(/Listing decisions are not available yet — the listing service is not connected\./)).toBeTruthy()
-    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeTruthy()
-    expect(reviewUserListing).not.toHaveBeenCalled()
+    expect(within(dialog).queryByText('Reason flagged')).toBeNull()
+    expect(within(dialog).getByText('Paused')).toBeTruthy()
   })
 
   it('listing details not connected: placeholder instead of the description', async () => {
     getUserListing.mockResolvedValue(notConnected())
     await openPage()
-    fireEvent.click(screen.getByRole('button', { name: 'Review Commercial Deep Cleaning' }))
-    const dialog = screen.getByRole('dialog', { name: 'Review listing' })
+    fireEvent.click(await screen.findByRole('button', { name: 'View Commercial Deep Cleaning' }))
+    const dialog = screen.getByRole('dialog', { name: 'View listing details' })
 
     expect(await within(dialog).findByText('Listing details will appear when the listing service is connected.')).toBeTruthy()
+  })
+})
+
+describe('Profile facts from WP01 / WP02 / WP08', () => {
+  it('never signed in: "Last signed in" shows a dash; no service area districts: a dash', async () => {
+    const d = providerDetail()
+    await openPage(providerDetail({ profile: { ...d.profile, lastActive: { available: true }, serviceArea: { available: true, data: { districts: [] } } } }))
+
+    const facts = screen.getByText('Last signed in').closest('dl')
+    expect(within(facts).getAllByText('—').length).toBe(2)
+  })
+
+  it('rating with no reviews: dash and "No reviews yet"', async () => {
+    await openPage(providerDetail({ rating: { available: true, data: { averageRating: 0, reviewCount: 0 } } }))
+    expect(screen.getByText('No reviews yet')).toBeTruthy()
   })
 })

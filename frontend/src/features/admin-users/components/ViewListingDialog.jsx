@@ -1,15 +1,12 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 
-import { Skeleton, useToast } from '../../../shared/components/feedback'
+import { Skeleton } from '../../../shared/components/feedback'
 import { Button } from '../../../shared/components/forms'
 import { AnnouncementDialog } from '../../admin-announcements/components/AnnouncementDialog'
-import { LISTING_DECISION } from '../config/usersConfig'
-import { getUserListing, isRequestCancelled, reviewUserListing } from '../services/adminUsersService'
+import { getUserListing, isRequestCancelled } from '../services/adminUsersService'
 import { isContactReason, splitContacts } from '../utils/contactHighlight'
 import { parseApiError } from '../utils/errors'
 import { formatDate, formatLkr } from '../utils/format'
-import { noteError } from '../utils/validation'
-import { NoteField } from './NoteField'
 import { Unavailable } from './Panel'
 import { ListingStatusChip } from './UserChips'
 import { UsersIcon } from './UsersIcon'
@@ -45,19 +42,12 @@ function HighlightedText({ text, highlight }) {
 }
 
 /**
- * canReview: the backend says decisions are possible (ADMIN, and the listing service supports them).
- * readOnlyReason when not: 'unavailable' (an ADMIN, but listing decisions are not connected yet) or 'viewOnly'
- * (SUPER_ADMIN). The listing itself is always shown.
+ * Read-only for every role: facts, status, the reason when flagged, and the description. There is no note and no
+ * decision here; approving or rejecting a flagged listing is done in the moderators' listing workflow.
  */
-function ReviewForm({ userId, providerName, listing: summary, canReview, readOnlyReason = 'viewOnly', onClose, onDone }) {
-  const toast = useToast()
+function ListingDetails({ userId, providerName, listing: summary, onClose }) {
   const descriptionId = useId()
   const [result, setResult] = useState({ loading: true, section: null, error: null })
-  const [note, setNote] = useState('')
-  const [noteErr, setNoteErr] = useState(null)
-  const [serverError, setServerError] = useState(null)
-  const [saving, setSaving] = useState(null)
-  const inFlight = useRef(false)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -73,68 +63,22 @@ function ReviewForm({ userId, providerName, listing: summary, canReview, readOnl
   const title = detail?.title ?? summary.title
   const status = detail?.status ?? summary.status
   const flags = detail?.moderationFlags ?? summary.moderationFlags ?? []
-  const reason = detail?.hiddenReason || flagText(flags)
-  const highlight = isContactReason(detail?.hiddenReason, flags)
-
-  const decide = async (decision) => {
-    if (inFlight.current) return
-    const found = noteError(note, { required: true })
-    setNoteErr(found)
-    if (found) return
-    inFlight.current = true
-    setSaving(decision)
-    setServerError(null)
-    try {
-      await reviewUserListing(userId, summary.id, { decision, note: note.trim() })
-      toast.success(decision === LISTING_DECISION.MAKE_VISIBLE ? `"${title}" is visible again.` : `"${title}" stays hidden.`)
-      onDone()
-    } catch (error) {
-      setServerError(parseApiError(error))
-    } finally {
-      inFlight.current = false
-      setSaving(null)
-    }
-  }
-
-  const busy = saving !== null
-  const footer = canReview ? (
-    <>
-      <Button variant="secondary" size="small" onClick={onClose} disabled={busy}>
-        Cancel
-      </Button>
-      <Button
-        variant="outline"
-        size="small"
-        onClick={() => decide(LISTING_DECISION.KEEP_HIDDEN)}
-        loading={saving === LISTING_DECISION.KEEP_HIDDEN}
-        disabled={busy}
-      >
-        Keep hidden
-      </Button>
-      <Button
-        size="small"
-        onClick={() => decide(LISTING_DECISION.MAKE_VISIBLE)}
-        loading={saving === LISTING_DECISION.MAKE_VISIBLE}
-        disabled={busy}
-      >
-        Make visible
-      </Button>
-    </>
-  ) : (
-    <Button variant="secondary" size="small" onClick={onClose}>
-      Close
-    </Button>
-  )
+  const flagged = status === 'FLAGGED' || status === 'REJECTED'
+  const reason = flagged ? detail?.moderationReason || flagText(flags) : ''
+  const highlight = isContactReason(detail?.moderationReason, flags)
 
   return (
     <AnnouncementDialog
       open
-      title="Review listing"
+      title="View listing details"
       icon="eye"
-      busy={busy}
       onClose={onClose}
       describedBy={descriptionId}
-      footer={footer}
+      footer={
+        <Button variant="secondary" size="small" onClick={onClose}>
+          Close
+        </Button>
+      }
     >
       <div className={styles.listingHead}>
         {detail?.imageUrl ? (
@@ -166,10 +110,16 @@ function ReviewForm({ userId, providerName, listing: summary, canReview, readOnl
                 <dd>{formatLkr(detail.basePrice)}</dd>
               </div>
             )}
-            {detail?.hiddenSince && (
+            {detail?.lastUpdatedAt && (
               <div>
-                <dt>Hidden since</dt>
-                <dd>{formatDate(detail.hiddenSince)}</dd>
+                <dt>Last updated</dt>
+                <dd>{formatDate(detail.lastUpdatedAt)}</dd>
+              </div>
+            )}
+            {flagged && detail?.moderatedAt && (
+              <div>
+                <dt>Flagged since</dt>
+                <dd>{formatDate(detail.moderatedAt)}</dd>
               </div>
             )}
           </dl>
@@ -180,7 +130,7 @@ function ReviewForm({ userId, providerName, listing: summary, canReview, readOnl
         <div className={styles.reasonBox} role="note">
           <UsersIcon name="alertTriangle" size={15} />
           <div>
-            <strong>Reason hidden</strong>
+            <strong>Reason flagged</strong>
             <p>{reason}</p>
           </div>
         </div>
@@ -204,40 +154,15 @@ function ReviewForm({ userId, providerName, listing: summary, canReview, readOnl
         )}
       </div>
 
-      {serverError && (
-        <p className={styles.dialogError} role="alert">
-          <UsersIcon name="alertTriangle" size={15} />
-          {serverError.message}
-        </p>
-      )}
-
-      {canReview ? (
-        <NoteField
-          label="Admin note"
-          value={note}
-          onChange={(value) => {
-            setNote(value)
-            setNoteErr(null)
-          }}
-          error={noteErr}
-          required
-          disabled={busy}
-          placeholder="Add administrative justification, policy decision notes, or instructions for the provider..."
-          hint="Required for either decision."
-        />
-      ) : (
-        <p className={styles.readOnlyNote}>
-          <UsersIcon name={readOnlyReason === 'unavailable' ? 'info' : 'lock'} size={13} />
-          {readOnlyReason === 'unavailable'
-            ? 'Listing decisions are not available yet — the listing service is not connected. You can review the listing details.'
-            : 'View only. Listing decisions are made by admins.'}
-        </p>
-      )}
+      <p className={styles.readOnlyNote}>
+        <UsersIcon name="lock" size={13} />
+        View only. Flagged listings are approved or rejected by moderators.
+      </p>
     </AnnouncementDialog>
   )
 }
 
-/** Modal C. Mounted only while open, so each listing starts with a fresh form. */
-export function ReviewListingDialog({ open, ...props }) {
-  return open ? <ReviewForm {...props} /> : null
+/** Mounted only while open, so each listing loads fresh. */
+export function ViewListingDialog({ open, ...props }) {
+  return open ? <ListingDetails {...props} /> : null
 }

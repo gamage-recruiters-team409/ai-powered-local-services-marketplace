@@ -69,7 +69,7 @@ export function providerDetail(overrides = {}) {
       lastActive: available('2026-11-19T05:12:00Z'),
       emailVerified: true,
       providerVerified: available(true),
-      serviceArea: available({ district: 'Colombo', city: 'Dehiwala' }),
+      serviceArea: available({ districts: ['Colombo', 'Gampaha'] }),
       pro: notConnected(),
     },
     bookingStats: available({ total: 128, completed: 123, cancelled: 3, disputed: 2 }),
@@ -82,7 +82,7 @@ export function providerDetail(overrides = {}) {
       { month: '2026-11', start: '2026-11-01T00:00:00Z', bookings: 29 },
     ]),
     bookingOutcomes: available({ completed: 123, cancelledByCustomer: 2, cancelledByProvider: 1, disputed: 2, otherClosed: 0 }),
-    rating: available({ averageRating: 4.7, reviewCount: 112, ratingCounts: { 5: 90 } }),
+    rating: available({ averageRating: 4.7, reviewCount: 112 }),
     cancellations: available({ total: 3, last30Days: 1, cancelledByThisUser: 1 }),
     disputes: available({
       lifetime: 2,
@@ -91,21 +91,14 @@ export function providerDetail(overrides = {}) {
         { id: 'dsp00000001042', bookingId: 'bk000000008902', status: 'UNDER_REVIEW', category: 'POOR_QUALITY', side: 'PROVIDER', createdAt: '2026-04-12T00:00:00Z' },
       ],
     }),
-    hiddenListings: available({
-      flagged: 1,
-      rejected: 0,
-      paused: 0,
-      recentFlagged: [
-        { id: '65f1c0aa11bb22cc33a1aaaa', title: 'Commercial Deep Cleaning', status: 'FLAGGED', moderationFlags: ['CONTACT_DETAILS'], createdAt: '2026-10-24T00:00:00Z' },
-      ],
-    }),
+    listings: available({ total: 7, active: 2, paused: 2, draft: 1, flagged: 1, archived: 1, rejected: 0 }),
     queuedBookings: available([
       { bookingId: 'bk000000008902', serviceTitle: 'Deep Cleaning (4 hrs)', status: 'PENDING_PROVIDER', scheduledStart: '2026-11-20T04:30:00Z', counterpartyId: 'c1', counterpartyName: 'Nimal Perera', amount: 8500, currency: 'LKR' },
     ]),
     adminActions: available([
-      { auditLogId: 'a1', actorId: 'admin-9', actorName: 'Alex Dawson', action: 'SUSPENDED', fromStatus: 'ACTIVE', toStatus: 'SUSPENDED', reasonCode: 'OFF_PLATFORM_CONTACT', note: 'Shared a phone number in a listing', outcome: 'SUCCESS', createdAt: '2026-04-14T00:00:00Z' },
+      { auditLogId: 'a1', actorId: 'admin-9', actorName: 'Alex Dawson', action: 'SUSPENDED', fromStatus: 'ACTIVE', toStatus: 'SUSPENDED', reasonCode: 'OFF_PLATFORM_CONTACT', note: 'Shared a phone number in a listing', outcome: 'SUCCESS', createdAt: '2026-04-14T00:00:00Z', listingVisibilitySync: null },
     ]),
-    actions: { canSuspend: true, canReactivate: false, canReviewListings: true },
+    actions: { canSuspend: true, canReactivate: false, canSyncListingVisibility: true },
     ...overrides,
   }
 }
@@ -122,7 +115,7 @@ export function stubbedDetail(overrides = {}) {
     rating: notConnected(),
     cancellations: notConnected(),
     disputes: notConnected(),
-    hiddenListings: notConnected(),
+    listings: notConnected(),
     queuedBookings: notConnected(),
     adminActions: notConnected(),
     ...overrides,
@@ -135,10 +128,15 @@ export function customerDetail(overrides = {}) {
     ...d,
     profile: { ...d.profile, id: CUSTOMER_ID, displayName: 'Nimal Perera', role: 'CUSTOMER', providerVerified: notApplicable(), serviceArea: notApplicable(), pro: notApplicable() },
     rating: notApplicable(),
-    hiddenListings: notApplicable(),
-    actions: { canSuspend: true, canReactivate: false, canReviewListings: false },
+    listings: notApplicable(),
+    actions: { canSuspend: true, canReactivate: false, canSyncListingVisibility: false },
     ...overrides,
   }
+}
+
+/** One page of the provider's listings (GET /admin/users/{id}/listings), as a section. */
+export function listingsPage(content, totalElements = content.length, number = 0, size = 5) {
+  return available({ content, page: number, size, totalElements, totalPages: Math.max(1, Math.ceil(totalElements / size)) })
 }
 
 export function apiError(status, error, message = error) {
