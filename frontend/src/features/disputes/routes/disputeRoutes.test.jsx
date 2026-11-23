@@ -78,15 +78,23 @@ function dispute(overrides = {}) {
   }
 }
 
-function signedInCustomer() {
+function signedIn(role, user) {
   return {
-    user: { id: 'u-1', name: 'Nimal Perera', email: 'nimal@example.com', role: 'CUSTOMER' },
+    user: { ...user, role },
     isLoading: false,
     isAuthenticated: true,
     mustChangePassword: false,
-    hasRole: (roles) => (Array.isArray(roles) ? roles.includes('CUSTOMER') : roles === 'CUSTOMER'),
+    hasRole: (roles) => (Array.isArray(roles) ? roles.includes(role) : roles === role),
     logout: vi.fn().mockResolvedValue(undefined),
   }
+}
+
+function signedInCustomer() {
+  return signedIn('CUSTOMER', { id: 'u-1', name: 'Nimal Perera', email: 'nimal@example.com' })
+}
+
+function signedInProvider() {
+  return signedIn('PROVIDER', { id: 'p-1', name: 'Kamal Silva', email: 'kamal@example.com' })
 }
 
 /** The app's route table for these areas, plus a catch-all that shows where a link went. */
@@ -229,8 +237,40 @@ describe('provider dispute screen inside the shared ProviderLayout', () => {
   const providerDisputePath = `/provider/disputes/${DISPUTE_ID}`
 
   beforeEach(() => {
-    fetchCurrentUser.mockResolvedValue({ id: 'p-1', role: 'PROVIDER' })
+    auth.current = signedInProvider()
     fetchDispute.mockResolvedValue(dispute({ raisedBy: 'u-1', raisedByRole: 'CUSTOMER' }))
+  })
+
+  it('after a page reload it waits for the session instead of sending the provider to login', async () => {
+    auth.current = { ...signedInProvider(), isLoading: true, isAuthenticated: false }
+    const router = renderApp(['/provider/disputes'])
+
+    expect(router.state.location.pathname).toBe('/provider/disputes')
+    expect(fetchMyDisputes).not.toHaveBeenCalled()
+    cleanup()
+
+    auth.current = signedInProvider()
+    const restored = renderApp(['/provider/disputes'])
+    expect(await screen.findByRole('heading', { level: 1, name: 'My Disputes' })).toBeTruthy()
+    expect(restored.state.location.pathname).toBe('/provider/disputes')
+    expect(fetchCurrentUser).not.toHaveBeenCalled()
+  })
+
+  it('a signed-out visitor goes to /login (and comes back after signing in)', () => {
+    auth.current = { ...signedInProvider(), user: null, isAuthenticated: false, hasRole: () => false }
+    const router = renderApp(['/provider/disputes'])
+
+    expect(screen.getByText('Login page')).toBeTruthy()
+    expect(router.state.location.state).toEqual({ from: '/provider/disputes' })
+  })
+
+  it('a signed-in customer on a provider dispute page sees "Access denied", not a missing page', async () => {
+    auth.current = signedInCustomer()
+    renderApp([providerDisputePath])
+
+    expect(await screen.findByText(/do not have access/i)).toBeTruthy()
+    expect(screen.queryByText('Other page')).toBeNull()
+    expect(fetchDispute).not.toHaveBeenCalled()
   })
 
   it('renders inside the provider layout with "My Disputes" active (the WP08 "View dispute" link lands here)', async () => {
