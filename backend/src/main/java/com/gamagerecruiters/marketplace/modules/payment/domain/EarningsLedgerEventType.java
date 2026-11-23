@@ -22,14 +22,29 @@ public enum EarningsLedgerEventType {
     // Earnings transferred from pending to available.
     EARNING_AVAILABLE,
 
-    // Available earnings temporarily moved into a hold.
+    // Available earnings temporarily moved into a dispute hold.
     EARNING_HOLD,
+
+    // Pending earnings reserved for an active booking dispute.
+    EARNING_HOLD_FROM_PENDING,
 
     // Held earnings returned to the available balance.
     EARNING_RELEASE,
 
-    // Available earnings deducted for a payout.
+    // Held earnings returned to pending after dispute resolution.
+    EARNING_RELEASE_TO_PENDING,
+
+    // Legacy direct payout debit: available earnings become paid out.
     PAYOUT_DEBIT,
+
+    // Available earnings reserved for a pending manual payout.
+    PAYOUT_RESERVE,
+
+    // Reserved payout funds returned to available earnings.
+    PAYOUT_RELEASE,
+
+    // Reserved funds settled after confirmed external bank transfer.
+    PAYOUT_SETTLE,
 
     // Refund deducted from earnings awaiting availability.
     REFUND_FROM_PENDING,

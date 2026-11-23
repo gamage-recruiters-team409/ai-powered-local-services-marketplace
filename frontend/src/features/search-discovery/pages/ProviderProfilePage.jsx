@@ -19,6 +19,7 @@ import {
   formatCancellationPolicy,
   formatDistanceArea,
   formatInclusions,
+  formatListingPrice,
   formatNextAvailable,
   formatPrice,
   formatProviderLocation,
@@ -29,6 +30,7 @@ import {
 } from '../utils/providerComparison.js';
 import {
   getProviderAvailabilityState,
+  getProviderListingServiceOptions,
   getProviderReviewState,
   getProviderServiceOptions,
   getRatingStarStates,
@@ -435,8 +437,13 @@ function ServicesPanel({ provider, serviceOptions, onBook }) {
       </p>
 
       <div className="provider-profile-service-list">
+        {serviceOptions.length === 0 && (
+          <p className="provider-profile-service-unavailable">
+            Service details are not provided for this provider.
+          </p>
+        )}
         {serviceOptions.map((service) => {
-          const servicePrice = formatPrice(service.pricing);
+          const servicePrice = formatListingPrice(service.pricing);
           const serviceInclusions = formatInclusions(service.inclusions);
           const hasServicePrice = servicePrice !== NOT_PROVIDED;
           const hasServiceInclusions = serviceInclusions !== NOT_PROVIDED;
@@ -608,8 +615,8 @@ function AvailabilityPanel({ availability, onBook }) {
 /**
  * Public provider profile page.
  *
- * Fixture mode is explicit. In live mode the adapter reports that public
- * profiles are unavailable, so this page never presents sample data as live.
+ * Fixture mode is explicit and clearly labelled. Live mode reads the public
+ * provider endpoint, so this page never presents sample data as live.
  */
 export function ProviderProfilePage() {
   const { providerId } = useParams();
@@ -735,7 +742,9 @@ export function ProviderProfilePage() {
   };
 
   const serviceOptions = provider
-    ? getProviderServiceOptions(provider)
+    ? isFixture
+      ? getProviderServiceOptions(provider)
+      : getProviderListingServiceOptions(provider)
     : [];
   const reviewState = provider
     ? getProviderReviewState(provider)
@@ -798,8 +807,7 @@ export function ProviderProfilePage() {
                   className="search-demo-notice provider-profile-demo-notice"
                   role="status"
                 >
-                  Demo mode: this provider profile uses sample data while live
-                  public profiles are not connected.
+                  Demo mode: this provider profile uses sample data.
                 </p>
               )}
 

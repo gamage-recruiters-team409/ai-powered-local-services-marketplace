@@ -1,15 +1,20 @@
+
 package com.gamagerecruiters.marketplace.modules.provider.controller;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.provider.dto.CreateProviderProfileRequest;
@@ -27,7 +32,9 @@ public class ProviderProfileController {
 
     private final ProviderProfileService providerProfileService;
 
-    public ProviderProfileController(ProviderProfileService providerProfileService) {
+    public ProviderProfileController(
+            ProviderProfileService providerProfileService
+    ) {
         this.providerProfileService = providerProfileService;
     }
 
@@ -56,6 +63,34 @@ public class ProviderProfileController {
     ) {
         return ResponseEntity.ok(
                 providerProfileService.updateMyProfile(request)
+        );
+    }
+
+    /**
+     * Uploads or replaces the authenticated provider's profile image.
+     *
+     * Request: multipart/form-data
+     * Field: file
+     */
+    @PostMapping(
+            value = "/me/profile-image",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE
+    )
+    public ResponseEntity<ProviderProfileResponse> uploadMyProfileImage(
+            @RequestParam("file") MultipartFile file
+    ) {
+        return ResponseEntity.ok(
+                providerProfileService.uploadMyProfileImage(file)
+        );
+    }
+
+    /**
+     * Removes the authenticated provider's profile image.
+     */
+    @DeleteMapping("/me/profile-image")
+    public ResponseEntity<ProviderProfileResponse> removeMyProfileImage() {
+        return ResponseEntity.ok(
+                providerProfileService.removeMyProfileImage()
         );
     }
 }

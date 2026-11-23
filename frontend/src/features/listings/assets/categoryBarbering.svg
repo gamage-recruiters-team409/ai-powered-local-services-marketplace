@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="barberTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#EEF3FA" />
+      <stop offset="100%" stop-color="#CFDCF0" />
+    </linearGradient>
+    <linearGradient id="barberBladeGrad" x1="72" y1="62" x2="128" y2="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#9EB2CE" />
+      <stop offset="55%" stop-color="#6F85A5" />
+      <stop offset="100%" stop-color="#4A5F7E" />
+    </linearGradient>
+    <linearGradient id="barberCombGrad" x1="142" y1="64" x2="182" y2="192" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#8FA4C2" />
+      <stop offset="100%" stop-color="#536888" />
+    </linearGradient>
+    <filter id="barberDrop" x="-15%" y="-15%" width="135%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#354762" flood-opacity="0.28" />
+    </filter>
+    <filter id="barberTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#5D7496" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#barberTileBg)" stroke="#B2C4DE" stroke-width="2.5" filter="url(#barberTileShadow)" />
+
+  <g filter="url(#barberDrop)">
+    <!-- Scissors Right-to-Left Blade + Lower Right Finger Ring -->
+    <path d="M119 64 L85 154 C81 154 76 156 72 160 C66 167 66 178 73 185 C80 191 91 190 97 183 C103 176 102 166 96 159 L126 70 C127 65 122 61 119 64 Z" fill="url(#barberBladeGrad)" stroke="#3D506C" stroke-width="2" stroke-linejoin="round" />
+    <circle cx="84.5" cy="172" r="8" fill="#DFEAFA" stroke="#3D506C" stroke-width="2" />
+
+    <!-- Scissors Left-to-Right Blade + Lower Right Finger Ring -->
+    <path d="M79 64 C76 61 71 65 72 70 L102 159 C96 166 95 176 101 183 C106 189 115 190 122 186 L128 192 C130 194 133 192 132 189 L128 182 C132 174 130 164 123 158 C120 155 117 154 113 154 L79 64 Z" fill="url(#barberBladeGrad)" stroke="#3D506C" stroke-width="2" stroke-linejoin="round" />
+    <circle cx="113.5" cy="172" r="8" fill="#DFEAFA" stroke="#3D506C" stroke-width="2" />
+    <circle cx="99" cy="132" r="3" fill="#DDE7F7" stroke="#3D506C" stroke-width="1.5" />
+
+    <!-- Grooming Comb -->
+    <path d="M167 64 L173 64 C178 64 182 68 182 73 L182 183 C182 188 178 192 173 192 L167 192 C164 192 162 190 162 187 L162 185 L146 185 C143 185 142 182 146 180 L162 180 L162 174 L146 174 C143 174 142 170 146 169 L162 169 L162 163 L146 163 C143 163 142 159 146 158 L162 158 L162 152 L146 152 C143 152 142 148 146 147 L162 147 L162 141 L146 141 C143 141 142 137 146 136 L162 136 L162 130 L146 130 C143 130 142 126 146 125 L162 125 L162 119 L146 119 C143 119 142 115 146 114 L162 114 L162 108 L146 108 C143 108 142 104 146 103 L162 103 L162 97 L146 97 C143 97 142 93 146 92 L162 92 L162 86 L146 86 C143 86 142 82 146 81 L162 81 L162 75 L146 75 C143 75 142 71 146 70 L162 70 L162 69 C162 66 164 64 167 64 Z" fill="url(#barberCombGrad)" stroke="#3D506C" stroke-width="2" stroke-linejoin="round" />
+    <line x1="173" y1="73" x2="173" y2="182" stroke="#D3E0F2" stroke-width="2.5" stroke-linecap="round" opacity="0.6" />
+  </g>
+</svg>
