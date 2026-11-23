@@ -557,5 +557,19 @@ class ReviewServiceImplTest {
             assertEquals(0.0, summary.averageRating());
             assertNull(summary.ratingCounts().get(6));
         }
+
+        @Test
+        @DisplayName("Batch rating summaries delegate once to ReviewRatingQuery")
+        void batchSummaries() {
+            Map<String, RatingSummaryResponse> expected = Map.of(
+                    PROVIDER, new RatingSummaryResponse(PROVIDER, 4.5, 2, Map.of(5, 2L)),
+                    "prov-2", new RatingSummaryResponse("prov-2", 0.0, 0, Map.of()));
+            when(ratingQuery.getRatingSummaries(List.of(PROVIDER, "prov-2"))).thenReturn(expected);
+
+            Map<String, RatingSummaryResponse> actual = service.getRatingSummaries(List.of(PROVIDER, "prov-2"));
+
+            assertEquals(expected, actual);
+            verify(ratingQuery).getRatingSummaries(List.of(PROVIDER, "prov-2"));
+        }
     }
 }

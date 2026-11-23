@@ -32,6 +32,26 @@ export function formatPrice(pricing) {
   return base;
 }
 
+export function formatListingPrice(pricing) {
+  const formattedPrice = formatPrice(pricing);
+  if (formattedPrice !== NOT_PROVIDED) {
+    return formattedPrice;
+  }
+
+  const amount = pricing?.amount;
+  if (typeof amount === 'number' && Number.isFinite(amount)) {
+    const modelLabel =
+      pricing.model === 'HOURLY'
+        ? 'hourly'
+        : pricing.model === 'FIXED'
+          ? 'fixed price'
+          : null;
+    return `From ${amount}${modelLabel ? ` (${modelLabel})` : ''}`;
+  }
+
+  return NOT_PROVIDED;
+}
+
 export function formatRating(rating) {
   return typeof rating === 'number' ? `${rating.toFixed(1)}/5` : NOT_PROVIDED;
 }
