@@ -50,6 +50,14 @@ function fixtureResponse(provider) {
   };
 }
 
+function liveResponse(provider) {
+  return {
+    isFixture: false,
+    isLive: true,
+    provider,
+  };
+}
+
 function renderProfile(path = '/providers/prv-001') {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -226,6 +234,52 @@ describe('ProviderProfilePage service presentation', () => {
     expect(
       within(panel).getAllByText('Package-specific inclusions not provided.'),
     ).toHaveLength(2);
+  });
+
+  it('renders live service cards from actual listings with authoritative details', async () => {
+    const liveProvider = {
+      ...maya,
+      providerId: 'user-1',
+      category: 'Electrical',
+      serviceTypes: [
+        'Electrical',
+        'Wiring Repair',
+        'Painting',
+        'Interior Painting',
+      ],
+      listings: [
+        {
+          id: 'listing-1',
+          title: 'Wiring Repair',
+          description: 'Licensed electrical repair.',
+          categoryName: 'Electrical',
+          pricing: { amount: 3000, model: 'FIXED' },
+        },
+        {
+          id: 'listing-2',
+          title: 'Interior Painting',
+          description: 'Two-room painting package.',
+          categoryName: 'Painting',
+          pricing: { amount: 1500, model: 'FIXED' },
+        },
+      ],
+    };
+
+    fetchProviderProfile.mockResolvedValueOnce(liveResponse(liveProvider));
+    renderProfile('/providers/user-1?tab=services');
+
+    const panel = await screen.findByRole('region', {
+      name: 'Services & packages',
+    });
+    const cards = await within(panel).findAllByRole('article');
+
+    expect(cards).toHaveLength(2);
+    expect(within(panel).getByText('Wiring Repair')).toBeTruthy();
+    expect(within(panel).getByText('Interior Painting')).toBeTruthy();
+    expect(within(panel).getByText('Licensed electrical repair.')).toBeTruthy();
+    expect(within(panel).getByText('Two-room painting package.')).toBeTruthy();
+    expect(within(panel).getByText('From 3000 (fixed price)')).toBeTruthy();
+    expect(within(panel).getByText('From 1500 (fixed price)')).toBeTruthy();
   });
 
   it('renders package-specific details only when supplied', async () => {

@@ -1,5 +1,8 @@
 package com.gamagerecruiters.marketplace.modules.review.service;
 
+import java.util.Collection;
+import java.util.Map;
+
 import com.gamagerecruiters.marketplace.modules.review.dto.CreateReviewRequest;
 import com.gamagerecruiters.marketplace.modules.review.dto.ProviderReplyRequest;
 import com.gamagerecruiters.marketplace.modules.review.dto.RatingSummaryResponse;
@@ -18,7 +21,7 @@ public interface ReviewService {
 
     ReviewPageResponse getMyReviews(String customerId, int page, int size);
 
-    /** Provider's own reviews, any status (they can see if one was removed). */
+    /** Provider's own reviews (S11): PUBLISHED only, so held or removed content is never exposed to the provider. */
     ReviewPageResponse getProviderOwnReviews(String providerId, int page, int size);
 
     /** Provider adds or edits their single reply to a published review. */
@@ -28,4 +31,6 @@ public interface ReviewService {
     ReviewPageResponse getPublishedReviews(String providerId, int page, int size);
 
     RatingSummaryResponse getRatingSummary(String providerId);
+
+    Map<String, RatingSummaryResponse> getRatingSummaries(Collection<String> providerIds);
 }

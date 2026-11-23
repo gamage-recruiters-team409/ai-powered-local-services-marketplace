@@ -63,6 +63,29 @@ public class Payment {
 
     private Instant updatedAt;
 
+    /**
+     * Receipt identifier assigned by a trusted payment workflow.
+     * Null until a receipt is actually issued.
+     */
+    private String receiptReference;
+
+    /**
+     * Refund identifier assigned by a trusted refund workflow.
+     */
+    private String refundReference;
+
+    /**
+     * Customer-visible refund processing state.
+     * Null when no verified refund state is available.
+     */
+    private String refundStatus;
+
+    /**
+     * Verified payment capture timestamp.
+     * Must not be inferred from creation or update timestamps.
+     */
+    private Instant paidAt;
+
     public Payment() {
     }
 
@@ -176,5 +199,37 @@ public class Payment {
 
     public void setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public String getReceiptReference() {
+        return receiptReference;
+    }
+
+    public void setReceiptReference(String receiptReference) {
+        this.receiptReference = receiptReference;
+    }
+
+    public String getRefundReference() {
+        return refundReference;
+    }
+
+    public void setRefundReference(String refundReference) {
+        this.refundReference = refundReference;
+    }
+
+    public String getRefundStatus() {
+        return refundStatus;
+    }
+
+    public void setRefundStatus(String refundStatus) {
+        this.refundStatus = refundStatus;
+    }
+
+    public Instant getPaidAt() {
+        return paidAt;
+    }
+
+    public void setPaidAt(Instant paidAt) {
+        this.paidAt = paidAt;
     }
 }

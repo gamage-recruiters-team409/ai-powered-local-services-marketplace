@@ -17,11 +17,13 @@ import org.springframework.stereotype.Service;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.OwnershipChecker;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
 import com.gamagerecruiters.marketplace.modules.completion.domain.CompletionConfirmationType;
+import com.gamagerecruiters.marketplace.modules.completion.domain.IssueType;
 import com.gamagerecruiters.marketplace.modules.completion.domain.ServiceCompletion;
 import com.gamagerecruiters.marketplace.modules.completion.dto.MarkCompletedRequest;
 import com.gamagerecruiters.marketplace.modules.completion.dto.NoShowReportResponse;
@@ -30,6 +32,7 @@ import com.gamagerecruiters.marketplace.modules.completion.dto.ReportNoShowReque
 import com.gamagerecruiters.marketplace.modules.completion.dto.ServiceCompletionResponse;
 import com.gamagerecruiters.marketplace.modules.completion.mapper.ServiceCompletionMapper;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 
 /**
  * Completion rules live here; the booking status and its transition checks are owned by
@@ -65,21 +68,31 @@ public class ServiceCompletionServiceImpl implements ServiceCompletionService {
     private final BookingFacade bookingFacade;
     private final CompletionAtomicUpdates atomicUpdates;
     private final CompletionTransactions transactions;
+    private final CompletionDisputes disputes;
     private final Clock clock;
 
     @Autowired
     public ServiceCompletionServiceImpl(ServiceCompletionRepository completionRepository, BookingFacade bookingFacade,
-                                        CompletionAtomicUpdates atomicUpdates, CompletionTransactions transactions) {
-        this(completionRepository, bookingFacade, atomicUpdates, transactions, Clock.systemUTC());
+                                        CompletionAtomicUpdates atomicUpdates, CompletionTransactions transactions,
+                                        CompletionDisputes disputes) {
+        this(completionRepository, bookingFacade, atomicUpdates, transactions, disputes, Clock.systemUTC());
+    }
+
+    /** Without the WP09 dispute link (unit tests of the completion rules). */
+    ServiceCompletionServiceImpl(ServiceCompletionRepository completionRepository, BookingFacade bookingFacade,
+                                 CompletionAtomicUpdates atomicUpdates, CompletionTransactions transactions,
+                                 Clock clock) {
+        this(completionRepository, bookingFacade, atomicUpdates, transactions, CompletionDisputes.none(), clock);
     }
 
     ServiceCompletionServiceImpl(ServiceCompletionRepository completionRepository, BookingFacade bookingFacade,
                                  CompletionAtomicUpdates atomicUpdates, CompletionTransactions transactions,
-                                 Clock clock) {
+                                 CompletionDisputes disputes, Clock clock) {
         this.completionRepository = completionRepository;
         this.bookingFacade = bookingFacade;
         this.atomicUpdates = atomicUpdates;
         this.transactions = transactions;
+        this.disputes = disputes;
         this.clock = clock;
     }
 
@@ -159,7 +172,7 @@ public class ServiceCompletionServiceImpl implements ServiceCompletionService {
 
     @Override
     public ServiceCompletionResponse raiseIssue(String bookingId, String customerId, RaiseIssueRequest request) {
-        return transactions.inTransaction(() -> {
+        ServiceCompletionResponse raised = transactions.inTransaction(() -> {
             BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
             requireCustomer(booking, customerId);
             requireStatus(booking, BookingStatus.COMPLETION_PENDING, "An issue can only be raised while completion is pending");
@@ -179,11 +192,58 @@ public class ServiceCompletionServiceImpl implements ServiceCompletionService {
             bookingFacade.markDisputed(bookingId, customerId, "CUSTOMER_ISSUE: " + request.reason().trim());
             return ServiceCompletionMapper.toResponse(saved);
         });
+
+        // After commit: open the WP09 dispute case for the now DISPUTED booking and keep its ID
+        String disputeId = disputes.openDispute(bookingId, customerId, Role.CUSTOMER,
+                disputeCategoryFor(request.issueType()), request.reason().trim());
+        if (disputeId == null) {
+            return raised;
+        }
+        return linkDispute(raised, disputeId);
+    }
+
+    /**
+     * Stores the dispute ID on the completion. The issue, the booking change and the WP09 case are already
+     * committed at this point, so a failure here must not turn the request into an error (a retry would be
+     * rejected because the booking is no longer COMPLETION_PENDING). The response still carries the dispute ID,
+     * and {@link CompletionDisputeLinkReconciler} stores the missing link later by looking the case up in WP09
+     * (read-only, so no second dispute is opened).
+     */
+    private ServiceCompletionResponse linkDispute(ServiceCompletionResponse raised, String disputeId) {
+        String bookingId = raised.bookingId();
+        try {
+            return atomicUpdates.recordDisputeId(bookingId, disputeId, clock.instant())
+                    .map(ServiceCompletionMapper::toResponse)
+                    .orElseGet(() -> withDisputeId(raised, disputeId));
+        } catch (RuntimeException ex) {
+            log.warn("event=COMPLETION_DISPUTE_LINK_PENDING bookingId={} disputeId={} cause={}",
+                    bookingId, disputeId, ex.getClass().getSimpleName());
+            return withDisputeId(raised, disputeId);
+        }
+    }
+
+    private static ServiceCompletionResponse withDisputeId(ServiceCompletionResponse response, String disputeId) {
+        return new ServiceCompletionResponse(response.id(), response.bookingId(), response.startedAt(),
+                response.completionNote(), response.photoUrls(), response.markedCompletedAt(), response.confirmedAt(),
+                response.confirmationType(), response.issueRaisedAt(), disputeId);
+    }
+
+    /** Agreed with WP09: DIFFERENT_SERVICE has no own category yet and is sent as OTHER. */
+    static DisputeCategory disputeCategoryFor(IssueType issueType) {
+        if (issueType == null) {
+            return DisputeCategory.OTHER;
+        }
+        return switch (issueType) {
+            case NOT_COMPLETED -> DisputeCategory.SERVICE_NOT_DELIVERED;
+            case POOR_QUALITY -> DisputeCategory.POOR_QUALITY;
+            case DAMAGE -> DisputeCategory.PROPERTY_DAMAGE;
+            case DIFFERENT_SERVICE, OTHER -> DisputeCategory.OTHER;
+        };
     }
 
     @Override
     public NoShowReportResponse reportNoShow(String bookingId, String userId, ReportNoShowRequest request) {
-        return transactions.inTransaction(() -> {
+        NoShowReportResponse reported = transactions.inTransaction(() -> {
             BookingParticipants booking = bookingFacade.getBookingParticipants(bookingId);
 
             String type;
@@ -214,6 +274,17 @@ public class ServiceCompletionServiceImpl implements ServiceCompletionService {
                     updated != null && updated.status() != null ? updated.status().name() : BookingStatus.DISPUTED.name(),
                     now);
         });
+
+        // After commit: open the WP09 dispute case (category NO_SHOW)
+        boolean byProvider = "NO_SHOW_BY_CUSTOMER".equals(reported.type());
+        String note = trimToNull(request == null ? null : request.note());
+        String description = note != null ? note
+                : byProvider ? "The customer was not available for the booking."
+                : "The provider did not arrive for the booking.";
+        String disputeId = disputes.openDispute(bookingId, userId, byProvider ? Role.PROVIDER : Role.CUSTOMER,
+                DisputeCategory.NO_SHOW, description);
+        return new NoShowReportResponse(reported.bookingId(), reported.type(), reported.bookingStatus(),
+                reported.reportedAt(), disputeId);
     }
 
     @Override

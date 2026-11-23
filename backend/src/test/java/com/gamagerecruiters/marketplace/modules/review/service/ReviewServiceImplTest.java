@@ -44,6 +44,9 @@ import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
 import com.gamagerecruiters.marketplace.modules.completion.service.CompletionLookup;
+import com.gamagerecruiters.marketplace.modules.review.domain.ModerationAction;
+import com.gamagerecruiters.marketplace.modules.review.domain.ModerationEntry;
+import com.gamagerecruiters.marketplace.modules.review.domain.ModerationFlag;
 import com.gamagerecruiters.marketplace.modules.review.domain.ProviderReply;
 import com.gamagerecruiters.marketplace.modules.review.domain.Review;
 import com.gamagerecruiters.marketplace.modules.review.domain.ReviewStatus;
@@ -53,6 +56,7 @@ import com.gamagerecruiters.marketplace.modules.review.dto.RatingSummaryResponse
 import com.gamagerecruiters.marketplace.modules.review.dto.ReviewPageResponse;
 import com.gamagerecruiters.marketplace.modules.review.dto.ReviewResponse;
 import com.gamagerecruiters.marketplace.modules.review.dto.UpdateReviewRequest;
+import com.gamagerecruiters.marketplace.modules.review.moderation.ReviewContentChecker;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
 
 @ExtendWith(MockitoExtension.class)
@@ -78,12 +82,22 @@ class ReviewServiceImplTest {
     @Mock
     private ReviewAtomicUpdates reviewUpdates;
 
+    // Default mock answers: check() -> no flags, namesOf() -> no names, recompute() -> nothing
+    @Mock
+    private ReviewContentChecker contentChecker;
+
+    @Mock
+    private ReviewRatingStatsService ratingStats;
+
+    @Mock
+    private ReviewPeople people;
+
     private ReviewServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new ReviewServiceImpl(reviewRepository, bookingFacade, completionLookup, ratingQuery,
-                reviewUpdates, Clock.fixed(NOW, ZoneOffset.UTC));
+                reviewUpdates, contentChecker, ratingStats, people, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     /**
@@ -153,6 +167,27 @@ class ReviewServiceImplTest {
             assertEquals(PROVIDER, response.providerId());
             assertEquals("listing-1", response.listingId());
             assertFalse(response.edited());
+            verify(ratingStats).recompute(PROVIDER, "listing-1");
+        }
+
+        @Test
+        @DisplayName("Flagged by the automated checks: held as AWAITING_MODERATION with the flags and a history entry")
+        void heldWhenFlagged() {
+            doReturn(booking(BookingStatus.COMPLETED)).when(bookingFacade).getBookingParticipants(BOOKING);
+            when(completionLookup.findConfirmedAt(BOOKING)).thenReturn(Optional.of(NOW.minus(Duration.ofDays(1))));
+            when(reviewRepository.existsByBookingId(BOOKING)).thenReturn(false);
+            when(contentChecker.check("Call me on 0771234567")).thenReturn(List.of(ModerationFlag.CONTACT_DETAILS));
+            ArgumentCaptor<Review> saved = ArgumentCaptor.forClass(Review.class);
+            when(reviewRepository.save(saved.capture())).thenAnswer(inv -> inv.getArgument(0));
+
+            ReviewResponse response = service.createReview(CUSTOMER, new CreateReviewRequest(BOOKING, 4, "Call me on 0771234567"));
+
+            assertEquals(ReviewStatus.AWAITING_MODERATION, response.status());
+            assertEquals(List.of(ModerationFlag.CONTACT_DETAILS), saved.getValue().getModerationFlags());
+            ModerationEntry entry = saved.getValue().getModerationHistory().get(0);
+            assertEquals(ModerationAction.AUTO_FLAGGED, entry.getAction());
+            assertEquals(ModerationEntry.SYSTEM, entry.getActorId());
+            verify(ratingStats).recompute(PROVIDER, "listing-1");
         }
 
         @Test
@@ -252,7 +287,8 @@ class ReviewServiceImplTest {
         void editsWithinWindow() {
             Instant createdAt = NOW.minus(Duration.ofHours(47));
             when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(createdAt)));
-            when(reviewUpdates.applyCustomerEdit("rev-1", CUSTOMER, 3, "Okay", NOW.minus(Duration.ofHours(48)), NOW))
+            when(reviewUpdates.applyCustomerEdit("rev-1", CUSTOMER, 3, "Okay", NOW.minus(Duration.ofHours(48)), NOW,
+                    ReviewStatus.PUBLISHED, List.of(), null))
                     .thenReturn(editedReview(createdAt, 3, "Okay"));
 
             ReviewResponse response = service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(3, "  Okay "));
@@ -262,6 +298,27 @@ class ReviewServiceImplTest {
             assertTrue(response.edited());
             assertEquals(NOW, response.editedAt());
             verify(reviewRepository, never()).save(any());
+            verify(ratingStats).recompute(PROVIDER, "listing-1");
+        }
+
+        @Test
+        @DisplayName("Edited text is checked again: flagged -> AWAITING_MODERATION written in the same atomic update")
+        void editIsCheckedAgain() {
+            Instant createdAt = NOW.minus(Duration.ofHours(2));
+            when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(createdAt)));
+            when(contentChecker.check("See www.example.com")).thenReturn(List.of(ModerationFlag.LINK));
+            ArgumentCaptor<ModerationEntry> entry = ArgumentCaptor.forClass(ModerationEntry.class);
+            Review held = editedReview(createdAt, 4, "See www.example.com").orElseThrow();
+            held.setStatus(ReviewStatus.AWAITING_MODERATION);
+            when(reviewUpdates.applyCustomerEdit(eq("rev-1"), eq(CUSTOMER), eq(4), eq("See www.example.com"), any(), eq(NOW),
+                    eq(ReviewStatus.AWAITING_MODERATION), eq(List.of(ModerationFlag.LINK)), entry.capture()))
+                    .thenReturn(Optional.of(held));
+
+            ReviewResponse response = service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(4, "See www.example.com"));
+
+            assertEquals(ReviewStatus.AWAITING_MODERATION, response.status());
+            assertEquals(ModerationAction.AUTO_FLAGGED, entry.getValue().getAction());
+            assertEquals(ReviewStatus.PUBLISHED, entry.getValue().getFromStatus());
         }
 
         @Test
@@ -269,7 +326,7 @@ class ReviewServiceImplTest {
         void allowsOnLastMoment() {
             Instant createdAt = NOW.minus(Duration.ofHours(48));
             when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(createdAt)));
-            when(reviewUpdates.applyCustomerEdit("rev-1", CUSTOMER, 2, null, createdAt, NOW))
+            when(reviewUpdates.applyCustomerEdit("rev-1", CUSTOMER, 2, null, createdAt, NOW, ReviewStatus.PUBLISHED, List.of(), null))
                     .thenReturn(editedReview(createdAt, 2, null));
 
             assertEquals(2, service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(2, null)).rating());
@@ -285,7 +342,7 @@ class ReviewServiceImplTest {
                     () -> service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(3, null)));
 
             assertConflict(ex, "REVIEW_EDIT_WINDOW_CLOSED");
-            verify(reviewUpdates, never()).applyCustomerEdit(any(), any(), anyInt(), any(), any(), any());
+            verify(reviewUpdates, never()).applyCustomerEdit(any(), any(), anyInt(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -297,7 +354,7 @@ class ReviewServiceImplTest {
                     () -> service.updateReview(CUSTOMER, "rev-1", new UpdateReviewRequest(3, null)));
 
             assertConflict(ex, "REVIEW_EDIT_WINDOW_UNAVAILABLE");
-            verify(reviewUpdates, never()).applyCustomerEdit(any(), any(), anyInt(), any(), any(), any());
+            verify(reviewUpdates, never()).applyCustomerEdit(any(), any(), anyInt(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -307,7 +364,7 @@ class ReviewServiceImplTest {
             Review afterReply = review(NOW.minus(Duration.ofHours(1)));
             afterReply.setProviderReply(new ProviderReply());
             when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(beforeReply), Optional.of(afterReply));
-            when(reviewUpdates.applyCustomerEdit(eq("rev-1"), eq(CUSTOMER), eq(3), any(), any(), any()))
+            when(reviewUpdates.applyCustomerEdit(eq("rev-1"), eq(CUSTOMER), eq(3), any(), any(), any(), any(), any(), any()))
                     .thenReturn(Optional.empty());
 
             ApiException ex = assertThrows(ApiException.class,
@@ -321,7 +378,7 @@ class ReviewServiceImplTest {
         @DisplayName("Other change at the same moment gets 409 REVIEW_UPDATE_CONFLICT, nothing overwritten")
         void raceLostToOtherChange() {
             when(reviewRepository.findById("rev-1")).thenReturn(Optional.of(review(NOW.minus(Duration.ofHours(1)))));
-            when(reviewUpdates.applyCustomerEdit(eq("rev-1"), eq(CUSTOMER), eq(3), any(), any(), any()))
+            when(reviewUpdates.applyCustomerEdit(eq("rev-1"), eq(CUSTOMER), eq(3), any(), any(), any(), any(), any(), any()))
                     .thenReturn(Optional.empty());
 
             ApiException ex = assertThrows(ApiException.class,
@@ -460,6 +517,23 @@ class ReviewServiceImplTest {
         }
 
         @Test
+        @DisplayName("Provider's own list (S11) asks for PUBLISHED reviews only and includes the customer's name")
+        void providerListHasCustomerNames() {
+            Review first = review(NOW);
+            Review second = review(NOW);
+            second.setId("rev-2");
+            second.setCustomerId("cust-unknown");
+            when(reviewRepository.findByProviderIdAndStatus(eq(PROVIDER), eq(ReviewStatus.PUBLISHED), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(first, second)));
+            when(people.namesOf(List.of(CUSTOMER, "cust-unknown"))).thenReturn(Map.of(CUSTOMER, "Amaya Perera"));
+
+            ReviewPageResponse response = service.getProviderOwnReviews(PROVIDER, 0, 10);
+
+            assertEquals("Amaya Perera", response.content().get(0).customerName());
+            assertNull(response.content().get(1).customerName());
+        }
+
+        @Test
         @DisplayName("Rating summary: average rounded to 1 decimal, counts for every star value")
         void summaryFromCounts() {
             when(ratingQuery.countPublishedByRating(PROVIDER)).thenReturn(Map.of(5, 3L, 4, 1L, 2, 1L));
@@ -482,6 +556,20 @@ class ReviewServiceImplTest {
             assertEquals(0, summary.reviewCount());
             assertEquals(0.0, summary.averageRating());
             assertNull(summary.ratingCounts().get(6));
+        }
+
+        @Test
+        @DisplayName("Batch rating summaries delegate once to ReviewRatingQuery")
+        void batchSummaries() {
+            Map<String, RatingSummaryResponse> expected = Map.of(
+                    PROVIDER, new RatingSummaryResponse(PROVIDER, 4.5, 2, Map.of(5, 2L)),
+                    "prov-2", new RatingSummaryResponse("prov-2", 0.0, 0, Map.of()));
+            when(ratingQuery.getRatingSummaries(List.of(PROVIDER, "prov-2"))).thenReturn(expected);
+
+            Map<String, RatingSummaryResponse> actual = service.getRatingSummaries(List.of(PROVIDER, "prov-2"));
+
+            assertEquals(expected, actual);
+            verify(ratingQuery).getRatingSummaries(List.of(PROVIDER, "prov-2"));
         }
     }
 }
