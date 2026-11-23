@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -220,8 +221,10 @@ public class BookingFacadeImpl implements BookingFacade {
         assertPaymentProcessing(paymentReference);
         Booking booking = findBooking(bookingId);
 
-        BookingStatusChange applied = lastChangeFrom(booking, BookingStatus.AWAITING_PAYMENT, BookingStatus.CONFIRMED);
-        if (applied != null && booking.getStatus() == BookingStatus.CONFIRMED) {
+        // Checked on the whole timeline, not the current status: a gateway retry can arrive after the
+        // booking has moved on (IN_PROGRESS, COMPLETED, DISPUTED ...). Same reference → unchanged.
+        BookingStatusChange applied = latestChange(booking, BookingStatus.AWAITING_PAYMENT, BookingStatus.CONFIRMED);
+        if (applied != null) {
             if (paymentReference.equals(applied.getReference())) {
                 return toParticipants(booking);
             }
@@ -242,7 +245,7 @@ public class BookingFacadeImpl implements BookingFacade {
         Booking booking = findBooking(bookingId);
 
         if (booking.getStatus() == BookingStatus.EXPIRED
-                && lastChangeFrom(booking, BookingStatus.AWAITING_PAYMENT, BookingStatus.EXPIRED) != null) {
+                && latestChange(booking, BookingStatus.AWAITING_PAYMENT, BookingStatus.EXPIRED) != null) {
             return toParticipants(booking);
         }
         assertStartsFrom(booking, FROM_AWAITING_PAYMENT, BookingStatus.EXPIRED);
@@ -271,13 +274,16 @@ public class BookingFacadeImpl implements BookingFacade {
         }
     }
 
-    /** The latest timeline entry, if it is {@code from} → {@code to}; otherwise null. */
-    private static BookingStatusChange lastChangeFrom(Booking booking, BookingStatus from, BookingStatus to) {
-        if (booking.getTimeline().isEmpty()) {
-            return null;
+    /** Most recent timeline change from {@code from} to {@code to}, anywhere in the history (or null). */
+    private static BookingStatusChange latestChange(Booking booking, BookingStatus from, BookingStatus to) {
+        List<BookingStatusChange> timeline = booking.getTimeline();
+        for (int i = timeline.size() - 1; i >= 0; i--) {
+            BookingStatusChange change = timeline.get(i);
+            if (change.getFromStatus() == from && change.getToStatus() == to) {
+                return change;
+            }
         }
-        BookingStatusChange last = booking.getTimeline().get(booking.getTimeline().size() - 1);
-        return last.getFromStatus() == from && last.getToStatus() == to ? last : null;
+        return null;
     }
 
     /**

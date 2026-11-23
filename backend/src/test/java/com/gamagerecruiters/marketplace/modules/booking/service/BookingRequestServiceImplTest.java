@@ -21,6 +21,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -378,6 +380,55 @@ class BookingRequestServiceImplTest {
         assertThatThrownBy(() -> enabledService.createBookingRequest(request(PROVIDER)))
                 .isInstanceOf(ResourceConflictException.class)
                 .satisfies(e -> assertThat(((ApiException) e).getErrorCode()).isEqualTo("PROVIDER_NOT_BOOKABLE"));
+        verifyNoInteractions(providerBookingGuard, slotService, bookingRepository);
+    }
+
+    @Test
+    @DisplayName("WP03 70-minute service (60 + 10 add-on): slot checked and blocked for 75 minutes, snapshot keeps 70")
+    void nonAlignedDurationRoundedUp() {
+        loginAs(CUSTOMER, Role.CUSTOMER);
+        when(listingService.getListingPriceSnapshot("listing-1", List.of()))
+                .thenReturn(listing(PROVIDER, List.of(), new BigDecimal("5500.00"), 70));
+        when(providerVerification.isApprovedProvider(PROVIDER)).thenReturn(true);
+        when(slotService.isSlotAvailable(PROVIDER, SLOT_START, 75)).thenReturn(true);
+        when(referenceGenerator.next(NOW)).thenReturn("BK-20261120-ABCDEF");
+        givenInsertAssignsId("booking-1");
+
+        BookingResponse response = enabledService.createBookingRequest(request(PROVIDER));
+
+        assertThat(response.durationMinutes()).isEqualTo(75);
+        assertThat(response.slotEnd()).isEqualTo(SLOT_START.plusSeconds(75 * 60));
+        verify(slotService).isSlotAvailable(PROVIDER, SLOT_START, 75);
+        verify(bookingRepository).insert(argThat((Booking b) -> b.getPriceSnapshot().durationMinutes() == 70));
+    }
+
+    @Test
+    @DisplayName("Exactly 480 minutes is bookable")
+    void maxDurationBookable() {
+        loginAs(CUSTOMER, Role.CUSTOMER);
+        when(listingService.getListingPriceSnapshot("listing-1", List.of()))
+                .thenReturn(listing(PROVIDER, List.of(), new BigDecimal("5000.00"), 480));
+        when(providerVerification.isApprovedProvider(PROVIDER)).thenReturn(true);
+        when(slotService.isSlotAvailable(PROVIDER, SLOT_START, 480)).thenReturn(true);
+        when(referenceGenerator.next(NOW)).thenReturn("BK-20261120-ABCDEF");
+        givenInsertAssignsId("booking-1");
+
+        assertThat(enabledService.createBookingRequest(request(PROVIDER)).durationMinutes()).isEqualTo(480);
+    }
+
+    @ParameterizedTest(name = "{0} minutes → 409 DURATION_NOT_SCHEDULABLE")
+    @ValueSource(ints = {481, 600, 1440})
+    @DisplayName("WP03 allows longer services than one booking: rejected before any slot check or write")
+    void overLimitDurationRejected(int totalMinutes) {
+        loginAs(CUSTOMER, Role.CUSTOMER);
+        when(listingService.getListingPriceSnapshot("listing-1", List.of()))
+                .thenReturn(listing(PROVIDER, List.of(), new BigDecimal("5000.00"), totalMinutes));
+        when(providerVerification.isApprovedProvider(PROVIDER)).thenReturn(true);
+
+        assertThatThrownBy(() -> enabledService.createBookingRequest(request(PROVIDER)))
+                .isInstanceOf(ResourceConflictException.class)
+                .satisfies(e -> assertThat(((ResourceConflictException) e).getErrorCode())
+                        .isEqualTo("DURATION_NOT_SCHEDULABLE"));
         verifyNoInteractions(providerBookingGuard, slotService, bookingRepository);
     }
 }

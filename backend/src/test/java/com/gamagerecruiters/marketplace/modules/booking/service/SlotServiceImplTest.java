@@ -275,8 +275,9 @@ class SlotServiceImplTest {
             "p-1, 2027-11-21, 60, INVALID_DATE",
             "p-1, 2026-11-23, '', INVALID_DURATION",
             "p-1, 2026-11-23, abc, INVALID_DURATION",
-            "p-1, 2026-11-23, 10, INVALID_DURATION",
-            "p-1, 2026-11-23, 20, INVALID_DURATION",
+            "p-1, 2026-11-23, 0, INVALID_DURATION",
+            "p-1, 2026-11-23, -15, INVALID_DURATION",
+            "p-1, 2026-11-23, 481, INVALID_DURATION",
             "p-1, 2026-11-23, 495, INVALID_DURATION"
     })
     void invalidInput(String providerId, String date, String duration, String code) {
@@ -285,5 +286,29 @@ class SlotServiceImplTest {
                 .satisfies(e -> assertThat(((ApiException) e).getErrorCode()).isEqualTo(code));
         verify(availabilityFacade, never()).getSchedule(anyString());
         verifyNoInteractions(bookingRepository);
+    }
+
+    @Test
+    @DisplayName("WP03 duration not on the 15-minute grid (60 + 10 = 70) → slots for 75 minutes, not 400")
+    void nonAlignedDurationRoundedUp() {
+        givenWeekdaySchedule();
+        givenNotBlocked(MONDAY);
+        givenExistingBookings(List.of());
+
+        AvailableSlotsResponse response = service.getAvailableSlots(PROVIDER, MONDAY, "70");
+
+        assertThat(response.durationMinutes()).isEqualTo(75);
+        assertThat(response.slots().get(0).localEnd()).isEqualTo("10:15");
+        assertThat(starts(response)).startsWith("09:00").endsWith("15:30");
+    }
+
+    @Test
+    @DisplayName("480 minutes (one working day) is still allowed")
+    void maxDurationAllowed() {
+        givenWeekdaySchedule();
+        givenNotBlocked(MONDAY);
+        givenExistingBookings(List.of());
+
+        assertThat(service.getAvailableSlots(PROVIDER, MONDAY, "480").durationMinutes()).isEqualTo(480);
     }
 }

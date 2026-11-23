@@ -234,6 +234,37 @@ class BookingFacadePaymentTest {
         verify(bookingRepository, never()).save(any(Booking.class));
     }
 
+    @ParameterizedTest(name = "Same payment retried after {0} → unchanged, nothing saved")
+    @EnumSource(value = BookingStatus.class, names = {"IN_PROGRESS", "COMPLETION_PENDING", "COMPLETED", "DISPUTED"})
+    @DisplayName("Gateway retry with the same reference after the booking moved past CONFIRMED is idempotent")
+    void confirmRetryAfterBookingProgressed(BookingStatus laterStatus) {
+        Booking booking = withLastChange(awaitingPayment(), BookingStatus.AWAITING_PAYMENT,
+                BookingStatus.CONFIRMED, PAY_REF);
+        withLastChange(booking, BookingStatus.CONFIRMED, laterStatus, null);
+        int timelineSize = booking.getTimeline().size();
+
+        BookingParticipants result = asPaymentModule(() -> facade.markPaymentConfirmed("b-1", PAY_REF));
+
+        assertThat(result.status()).isEqualTo(laterStatus);
+        assertThat(booking.getTimeline()).hasSize(timelineSize);
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    @Test
+    @DisplayName("Different payment reference after the booking moved past CONFIRMED → 409 PAYMENT_ALREADY_APPLIED")
+    void confirmDifferentReferenceAfterBookingProgressed() {
+        Booking booking = withLastChange(awaitingPayment(), BookingStatus.AWAITING_PAYMENT,
+                BookingStatus.CONFIRMED, PAY_REF);
+        withLastChange(booking, BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS, null);
+        withLastChange(booking, BookingStatus.IN_PROGRESS, BookingStatus.COMPLETION_PENDING, null);
+        withLastChange(booking, BookingStatus.COMPLETION_PENDING, BookingStatus.COMPLETED, null);
+
+        assertThatThrownBy(() -> asPaymentModule(() -> facade.markPaymentConfirmed("b-1", OTHER_REF)))
+                .isInstanceOf(ResourceConflictException.class)
+                .satisfies(e -> assertErrorCode(e, "PAYMENT_ALREADY_APPLIED"));
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
     @Test
     @DisplayName("Booking already EXPIRED → 409 INVALID_STATUS_TRANSITION (payment module refunds)")
     void confirmAfterExpiry() {

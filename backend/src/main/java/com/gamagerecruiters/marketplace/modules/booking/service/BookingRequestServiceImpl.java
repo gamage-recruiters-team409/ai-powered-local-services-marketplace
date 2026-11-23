@@ -149,6 +149,13 @@ public class BookingRequestServiceImpl implements BookingRequestService {
             throw new ResourceConflictException("LISTING_NOT_BOOKABLE",
                     "This service cannot be booked right now");
         }
+        // Same duration rule as GET /available-slots: rounded up to 15 minutes, max one working day.
+        if (!BookingDurationPolicy.isSchedulable(listing.totalDurationMin())) {
+            throw new ResourceConflictException("DURATION_NOT_SCHEDULABLE",
+                    "This service with the selected add-ons takes longer than "
+                            + BookingDurationPolicy.MAX_SCHEDULED_MINUTES / 60
+                            + " hours and cannot be booked as one visit");
+        }
 
         Booking saved = createInTransactionWithRetry(customerId, request, listing);
 
@@ -169,7 +176,7 @@ public class BookingRequestServiceImpl implements BookingRequestService {
                 return transactions.execute(status -> {
                     providerBookingGuard.claim(request.providerId(), now);
                     if (!slotService.isSlotAvailable(request.providerId(), request.slotStart(),
-                            listing.totalDurationMin())) {
+                            BookingDurationPolicy.toScheduledMinutes(listing.totalDurationMin()))) {
                         throw slotUnavailable();
                     }
                     return bookingRepository.insert(booking);
@@ -220,7 +227,8 @@ public class BookingRequestServiceImpl implements BookingRequestService {
 
     private Booking newBooking(String customerId, CreateBookingRequest request, PriceSnapshotResponse listing,
                                Instant now) {
-        int duration = listing.totalDurationMin();
+        // Calendar time on the 15-minute grid; the real service minutes stay in the price snapshot.
+        int duration = BookingDurationPolicy.toScheduledMinutes(listing.totalDurationMin());
         Instant start = request.slotStart();
         Instant end = start.plus(Duration.ofMinutes(duration));
 
