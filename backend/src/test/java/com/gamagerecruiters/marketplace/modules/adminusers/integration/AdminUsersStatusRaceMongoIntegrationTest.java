@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -62,6 +63,10 @@ import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ListingStatus;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ServiceListing;
+import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
+import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
+import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification;
+import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerificationStatus;
 
 /**
  * Status changes through the REAL adapters and the REAL WP01 atomic changeStatus against a throw-away MongoDB
@@ -134,6 +139,15 @@ class AdminUsersStatusRaceMongoIntegrationTest {
     private MockMvc mockMvc;
     @MockitoSpyBean
     private AdminAuditLogService auditLogService;
+    @MockitoSpyBean
+    private ListingRepository listingRepository;
+
+    /**
+     * Armed only by the stale-sync test: the first WP03 save that RESTORES listings (writes ACTIVE, clears the
+     * suspension flag) signals {@code restoreLoaded} and waits for {@code releaseRestore}.
+     */
+    private volatile CountDownLatch restoreLoaded;
+    private volatile CountDownLatch releaseRestore;
 
     /** Set only while a race runs: every PENDING insert waits here until both requests reached it. */
     private volatile CyclicBarrier bothPending;
@@ -151,6 +165,8 @@ class AdminUsersStatusRaceMongoIntegrationTest {
         mongoTemplate.remove(new Query(), AuthToken.class);
         mongoTemplate.remove(new Query(), User.class);
         mongoTemplate.remove(new Query(), "auth_locks");
+        mongoTemplate.remove(new Query(), ProviderProfile.class);
+        mongoTemplate.remove(new Query(), ProviderVerification.class);
         user(ADMIN_A, Role.ADMIN, UserStatus.ACTIVE);
         user(ADMIN_B, Role.ADMIN, UserStatus.ACTIVE);
         user(SUPER_A, Role.SUPER_ADMIN, UserStatus.ACTIVE);
@@ -162,11 +178,42 @@ class AdminUsersStatusRaceMongoIntegrationTest {
             }
             return invocation.callRealMethod();
         }).when(auditLogService).recordPending(any());
+        doAnswer(invocation -> {
+            CountDownLatch loaded = restoreLoaded;
+            if (loaded != null && restores(invocation.getArgument(0))) {
+                restoreLoaded = null; // only the first restore is held
+                loaded.countDown();
+                assertThat(releaseRestore.await(30, TimeUnit.SECONDS)).as("restore released").isTrue();
+            }
+            // Same write as the repository's saveAll (a repository proxy cannot callRealMethod through a spy).
+            List<ServiceListing> saved = new ArrayList<>();
+            for (Object item : (Iterable<?>) invocation.getArgument(0)) {
+                saved.add(mongoTemplate.save((ServiceListing) item));
+            }
+            return saved;
+        }).when(listingRepository).saveAll(any());
+    }
+
+    private static boolean restores(Object listings) {
+        if (!(listings instanceof Iterable<?> items)) {
+            return false;
+        }
+        for (Object item : items) {
+            if (item instanceof ServiceListing l && l.getStatus() == ListingStatus.ACTIVE
+                    && !l.isHiddenByProviderSuspension()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @AfterEach
     void clearSecurity() {
         bothPending = null;
+        restoreLoaded = null;
+        if (releaseRestore != null) {
+            releaseRestore.countDown();
+        }
         SecurityContextHolder.clearContext();
     }
 
@@ -358,5 +405,70 @@ class AdminUsersStatusRaceMongoIntegrationTest {
         assertThat(accountService.syncListingVisibility(ADMIN_A, PROVIDER).listingVisibilitySynced()).isTrue();
         assertThat(mongoTemplate.findById(listing.getId(), ServiceListing.class).getStatus())
                 .isEqualTo(ListingStatus.PAUSED);
+    }
+
+    // ---------- stale listing sync (review finding: older reactivate sync finishing after a newer suspend) ----------
+
+    @Test
+    @DisplayName("overlapping reactivate / suspend: Admin A's listing restore is held after WP03 loaded the hidden "
+            + "listings and passed eligibility; Admin B suspends meanwhile (its sync finds nothing to hide); A's "
+            + "restore is then saved -> the provider stays SUSPENDED and has NO publicly discoverable listing")
+    void staleRestoreCannotExposeSuspendedProvider() throws Exception {
+        user(PROVIDER, Role.PROVIDER, UserStatus.SUSPENDED);
+        ProviderProfile profile = new ProviderProfile();
+        profile.setId("65f1c0aa11bb22cc33a2p001");
+        profile.setUserId(PROVIDER);
+        mongoTemplate.insert(profile);
+        ProviderVerification verification = new ProviderVerification();
+        verification.setProviderId(profile.getId());
+        verification.setStatus(ProviderVerificationStatus.APPROVED);
+        mongoTemplate.insert(verification);
+        ServiceListing listing = new ServiceListing();
+        listing.setId("65f1c0aa11bb22cc33a2bbbb");
+        listing.setProviderId(PROVIDER);
+        listing.setTitle("Garden maintenance");
+        listing.setStatus(ListingStatus.PAUSED);
+        listing.setHiddenByProviderSuspension(true);
+        mongoTemplate.insert(listing);
+
+        restoreLoaded = new CountDownLatch(1);
+        releaseRestore = new CountDownLatch(1);
+        CountDownLatch loaded = restoreLoaded;
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            // Admin A reactivates; WP03 loads the hidden listing, passes eligibility (account ACTIVE) and is held
+            // just before saving it as ACTIVE.
+            Future<Object> reactivate = pool.submit(as(ADMIN_A, Role.ADMIN, () -> accountService.reactivate(ADMIN_A,
+                    Role.ADMIN, PROVIDER, "Appeal accepted after review of the bookings")));
+            assertThat(loaded.await(30, TimeUnit.SECONDS)).as("A's restore reached the save").isTrue();
+
+            // Admin B suspends the (now ACTIVE) provider: WP01 commits SUSPENDED, the hide finds no ACTIVE listing.
+            loginAs(ADMIN_B, Role.ADMIN);
+            AccountActionResponse suspended = accountService.suspend(ADMIN_B, Role.ADMIN, PROVIDER,
+                    "POLICY_VIOLATION", null);
+            SecurityContextHolder.clearContext();
+            assertThat(suspended.status()).isEqualTo(UserStatus.SUSPENDED);
+            assertThat(mongoTemplate.findById(listing.getId(), ServiceListing.class).getStatus())
+                    .as("A's restore has not been saved yet").isEqualTo(ListingStatus.PAUSED);
+
+            // A's stale restore is saved now, after the newer suspension.
+            releaseRestore.countDown();
+            Object result = reactivate.get(60, TimeUnit.SECONDS);
+            assertThat(result).isInstanceOf(AccountActionResponse.class);
+            assertThat(((AccountActionResponse) result).listingVisibilitySynced())
+                    .as("A re-read the account and re-applied the visibility for SUSPENDED").isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(statusOf(PROVIDER)).isEqualTo(UserStatus.SUSPENDED);
+        List<ServiceListing> listings = mongoTemplate.find(
+                Query.query(Criteria.where("providerId").is(PROVIDER)), ServiceListing.class);
+        assertThat(listings).isNotEmpty().allSatisfy(l -> {
+            assertThat(l.getStatus()).as("not publicly discoverable (ACTIVE)").isNotEqualTo(ListingStatus.ACTIVE);
+            assertThat(l.isHiddenByProviderSuspension()).isTrue();
+        });
+        assertThat(mongoTemplate.count(Query.query(Criteria.where("providerId").is(PROVIDER)
+                .and("status").in(ListingStatus.PUBLIC_DISCOVERY_STATUSES)), ServiceListing.class)).isZero();
     }
 }

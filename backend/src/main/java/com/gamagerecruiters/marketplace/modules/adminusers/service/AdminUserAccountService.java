@@ -57,6 +57,9 @@ public class AdminUserAccountService {
     /** Status-change records read to find the latest suspension (the audit read's maximum). */
     static final int AUDIT_LOOKBACK = 100;
 
+    /** Re-check rounds when the account's status keeps changing while its listings are being synced. */
+    static final int MAX_VISIBILITY_ROUNDS = 5;
+
     private static final Logger log = LoggerFactory.getLogger(AdminUserAccountService.class);
 
     private final UserDirectoryPort directory;
@@ -146,7 +149,7 @@ public class AdminUserAccountService {
                 target.id(), actorId, target.status(), updated.status(), ticket.auditLogId());
         Boolean listingsSynced = null;
         if (target.role() == Role.PROVIDER && updated.status() == newStatus) {
-            listingsSynced = applyListingVisibility(updated.id(), newStatus == UserStatus.SUSPENDED);
+            listingsSynced = syncListingsToCurrentStatus(updated.id(), newStatus == UserStatus.SUSPENDED);
             if (!listingsSynced) {
                 ticket.listingVisibilityFailed();
             }
@@ -171,7 +174,7 @@ public class AdminUserAccountService {
             throw new ApiException(HttpStatus.FORBIDDEN, ACTION_NOT_ALLOWED,
                     "Listing visibility applies to provider accounts only");
         }
-        if (!applyListingVisibility(target.id(), target.status() == UserStatus.SUSPENDED)) {
+        if (!syncListingsToCurrentStatus(target.id(), target.status() == UserStatus.SUSPENDED)) {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, LISTING_VISIBILITY_SYNC_FAILED,
                     "Listing visibility could not be updated. Try again later");
         }
@@ -180,6 +183,48 @@ public class AdminUserAccountService {
                 target.id(), actorId, target.status());
         return new AccountActionResponse(target.id(), target.role(), target.status(), target.status(), false, null,
                 true);
+    }
+
+    /**
+     * Makes the provider's listings match the account's CURRENT status, not the status of the operation that started
+     * the sync. The listing update is not atomic with the status change (WP03 reads the listings, checks eligibility,
+     * then saves), so an older sync can finish after a newer status change: e.g. a reactivate restores listings after
+     * another admin already suspended the account, and that suspension's sync found nothing to hide yet.
+     *
+     * <p>So after every write the account's status is read again. If it no longer matches what was just applied, the
+     * visibility for the current status is applied and checked again, up to {@value #MAX_VISIBILITY_ROUNDS} rounds.
+     * Every sync verifies after its own write, so whichever write lands last is followed by a check against the
+     * newest status, and the final state follows the account whatever order the operations finish in. Not settled
+     * (or a failure): false, the caller marks listingVisibilitySync = FAILED and the retry endpoint re-runs this.</p>
+     */
+    private boolean syncListingsToCurrentStatus(String providerUserId, boolean suspended) {
+        boolean applying = suspended;
+        for (int round = 1; round <= MAX_VISIBILITY_ROUNDS; round++) {
+            if (!applyListingVisibility(providerUserId, applying)) {
+                return false;
+            }
+            UserStatus current;
+            try {
+                current = directory.findById(providerUserId).map(UserAccount::status).orElse(null);
+            } catch (RuntimeException e) {
+                log.error("event=ADMIN_USER_LISTING_VISIBILITY_CHECK_FAILED userId={} cause={}",
+                        providerUserId, e.getClass().getSimpleName());
+                return false;
+            }
+            if (current == null) {
+                return false;
+            }
+            boolean nowSuspended = current == UserStatus.SUSPENDED;
+            if (nowSuspended == applying) {
+                return true;
+            }
+            log.warn("event=ADMIN_USER_LISTING_VISIBILITY_RECONCILED userId={} applied={} currentStatus={} round={}",
+                    providerUserId, applying ? "HIDE" : "RESTORE", current, round);
+            applying = nowSuspended;
+        }
+        log.error("event=ADMIN_USER_LISTING_VISIBILITY_NOT_SETTLED userId={} rounds={}",
+                providerUserId, MAX_VISIBILITY_ROUNDS);
+        return false;
     }
 
     /** True when applied. A failure is logged with the id and the exception type only, never rethrown. */

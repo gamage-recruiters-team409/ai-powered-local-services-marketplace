@@ -97,14 +97,24 @@ class AdminUserAccountServiceTest {
         logger.detachAppender(logs);
     }
 
+    /** What the directory currently stores for TARGET; a successful change updates it, like the real source. */
+    private final AtomicReference<UserAccount> stored = new AtomicReference<>();
+
+    private static UserAccount account(Role role, UserStatus status) {
+        return new UserAccount(TARGET, "Kamal Silva", EMAIL, "+94771112223", role, status, true,
+                Instant.parse("2026-01-01T00:00:00Z"));
+    }
+
     private void target(Role role, UserStatus status) {
-        when(directory.findById(TARGET)).thenReturn(Optional.of(new UserAccount(TARGET, "Kamal Silva", EMAIL,
-                "+94771112223", role, status, true, Instant.parse("2026-01-01T00:00:00Z"))));
+        stored.set(account(role, status));
+        when(directory.findById(TARGET)).thenAnswer(inv -> Optional.ofNullable(stored.get()));
     }
 
     private void changeReturns(Role role, UserStatus status) {
-        when(directory.changeStatus(eq(ACTOR), eq(TARGET), any(), eq(status))).thenReturn(new UserAccount(TARGET, "Kamal Silva", EMAIL,
-                "+94771112223", role, status, true, Instant.parse("2026-01-01T00:00:00Z")));
+        when(directory.changeStatus(eq(ACTOR), eq(TARGET), any(), eq(status))).thenAnswer(inv -> {
+            stored.set(account(role, status));
+            return stored.get();
+        });
     }
 
     private AccountActionResponse suspend(String code, String note) {
@@ -192,6 +202,7 @@ class AdminUserAccountServiceTest {
         target(Role.PROVIDER, UserStatus.ACTIVE);
         changeReturns(Role.PROVIDER, UserStatus.SUSPENDED);
         assertThat(suspend("OTHER", "1234567890").changed()).isTrue();
+        target(Role.PROVIDER, UserStatus.ACTIVE);
         assertThat(suspend("OTHER", "n".repeat(500)).changed()).isTrue();
     }
 
@@ -226,6 +237,7 @@ class AdminUserAccountServiceTest {
         target(Role.PROVIDER, UserStatus.SUSPENDED);
         changeReturns(Role.PROVIDER, UserStatus.ACTIVE);
         assertThat(service.reactivate(ACTOR, Role.ADMIN, TARGET, "1234567890").changed()).isTrue();
+        target(Role.PROVIDER, UserStatus.SUSPENDED);
         assertThat(service.reactivate(ACTOR, Role.ADMIN, TARGET, "r".repeat(500)).changed()).isTrue();
         assertApiError(catchThrowable(() -> service.reactivate(ACTOR, Role.ADMIN, TARGET, "r".repeat(501))),
                 HttpStatus.BAD_REQUEST, "VALIDATION_FAILED");
@@ -515,6 +527,67 @@ class AdminUserAccountServiceTest {
         when(directory.findById("missing")).thenReturn(Optional.empty());
         assertApiError(catchThrowable(() -> service.syncListingVisibility(ACTOR, "missing")),
                 HttpStatus.NOT_FOUND, "USER_NOT_FOUND");
+    }
+
+    @Test
+    @DisplayName("stale sync: another admin suspends while this reactivate's listing restore runs -> the account is "
+            + "re-read after the write and the listings are hidden again for the CURRENT status")
+    void reactivateSyncOvertakenBySuspend() {
+        target(Role.PROVIDER, UserStatus.SUSPENDED);
+        changeReturns(Role.PROVIDER, UserStatus.ACTIVE);
+        org.mockito.Mockito.doAnswer(inv -> {
+            stored.set(account(Role.PROVIDER, UserStatus.SUSPENDED)); // the newer suspension commits meanwhile
+            return null;
+        }).when(listings).updateSuspensionVisibility(TARGET, false);
+
+        AccountActionResponse result = service.reactivate(ACTOR, Role.ADMIN, TARGET, NOTE);
+
+        InOrder order = inOrder(listings);
+        order.verify(listings).updateSuspensionVisibility(TARGET, false);
+        order.verify(listings).updateSuspensionVisibility(TARGET, true);
+        assertThat(result.listingVisibilitySynced()).as("listings now match the current status").isTrue();
+        verify(ticket, never()).listingVisibilityFailed();
+        assertThat(logs.list).anySatisfy(e -> assertThat(e.getFormattedMessage())
+                .contains("ADMIN_USER_LISTING_VISIBILITY_RECONCILED").contains("currentStatus=SUSPENDED"));
+    }
+
+    @Test
+    @DisplayName("status keeps changing during the sync: stops after the round limit -> listingVisibilitySynced=false "
+            + "and the audit marker FAILED (retry endpoint re-runs it)")
+    void syncNotSettled() {
+        target(Role.PROVIDER, UserStatus.ACTIVE);
+        changeReturns(Role.PROVIDER, UserStatus.SUSPENDED);
+        org.mockito.Mockito.doAnswer(inv -> {
+            boolean hide = inv.getArgument(1);
+            stored.set(account(Role.PROVIDER, hide ? UserStatus.ACTIVE : UserStatus.SUSPENDED)); // always flips
+            return null;
+        }).when(listings).updateSuspensionVisibility(anyString(), org.mockito.ArgumentMatchers.anyBoolean());
+
+        AccountActionResponse result = suspend(CODE, NOTE);
+
+        assertThat(result.listingVisibilitySynced()).isFalse();
+        verify(ticket).listingVisibilityFailed();
+        verify(listings, org.mockito.Mockito.times(AdminUserAccountService.MAX_VISIBILITY_ROUNDS))
+                .updateSuspensionVisibility(anyString(), org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
+    @Test
+    @DisplayName("the status re-check itself fails -> not confirmed: listingVisibilitySynced=false, marker FAILED, "
+            + "status change kept")
+    void syncCheckFails() {
+        target(Role.PROVIDER, UserStatus.ACTIVE);
+        changeReturns(Role.PROVIDER, UserStatus.SUSPENDED);
+        org.mockito.Mockito.doAnswer(inv -> {
+            when(directory.findById(TARGET)).thenThrow(new IllegalStateException("auth db down"));
+            return null;
+        }).when(listings).updateSuspensionVisibility(TARGET, true);
+
+        AccountActionResponse result = suspend(CODE, NOTE);
+
+        assertThat(result.status()).isEqualTo(UserStatus.SUSPENDED);
+        assertThat(result.listingVisibilitySynced()).isFalse();
+        verify(ticket).succeeded();
+        verify(ticket).listingVisibilityFailed();
     }
 
     // ---------- concurrent status changes (WP01 atomic status-change contract) ----------
