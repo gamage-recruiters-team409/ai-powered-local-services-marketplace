@@ -31,6 +31,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -64,6 +65,7 @@ import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ListingStatus;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ServiceListing;
 import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
+import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification;
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerificationStatus;
@@ -137,6 +139,8 @@ class AdminUsersStatusRaceMongoIntegrationTest {
     private TokenService tokenService;
     @Autowired
     private MockMvc mockMvc;
+    @Autowired
+    private ListingService listingService;
     @MockitoSpyBean
     private AdminAuditLogService auditLogService;
     @MockitoSpyBean
@@ -462,6 +466,10 @@ class AdminUsersStatusRaceMongoIntegrationTest {
         }
 
         assertThat(statusOf(PROVIDER)).isEqualTo(UserStatus.SUSPENDED);
+        assertThat(listingService.searchPublicListings(null, null, null, null, List.of(PROVIDER),
+                PageRequest.of(0, 50)).getContent())
+                .as("WP03 public discovery (used by WP04 search) returns none of the suspended provider's listings")
+                .isEmpty();
         List<ServiceListing> listings = mongoTemplate.find(
                 Query.query(Criteria.where("providerId").is(PROVIDER)), ServiceListing.class);
         assertThat(listings).isNotEmpty().allSatisfy(l -> {
