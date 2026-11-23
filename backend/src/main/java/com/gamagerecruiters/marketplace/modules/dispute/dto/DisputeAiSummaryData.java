@@ -14,7 +14,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.ResolutionAction;
  *
  * @param raiserDescription  what the raising party wrote
  * @param otherPartyResponse the other party's response text, or null if they did not respond
- * @param evidence           evidence files (name and type only); empty until evidence uploads exist
+ * @param evidence           uploaded evidence files: sanitised file name and type (JPG, PNG, WEBP, PDF) only
  * @param decision           the admin's original decision, or null before any decision
  * @param appeal             the appeal state and, once final, the binding result
  */

@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -353,7 +354,16 @@ public class DisputeServiceImpl implements DisputeService {
 
     @Override
     public DisputePageResponse<DisputeSummaryResponse> getMyDisputes(String userId, int page, int size) {
-        Page<Dispute> disputes = disputeRepository.findVisibleByParty(userId, pageRequest(page, size));
+        return getMyDisputes(userId, Set.of(), page, size);
+    }
+
+    @Override
+    public DisputePageResponse<DisputeSummaryResponse> getMyDisputes(String userId, Set<DisputeStatus> statuses,
+                                                                     int page, int size) {
+        Pageable pageable = pageRequest(page, size);
+        Page<Dispute> disputes = statuses == null || statuses.isEmpty()
+                ? disputeRepository.findVisibleByParty(userId, pageable)
+                : disputeRepository.findVisibleByPartyAndStatusIn(userId, statuses, pageable);
         return DisputePageResponse.from(disputes.map(DisputeMapper::toSummary));
     }
 

@@ -135,6 +135,16 @@ class DisputeAiSummaryDataTest {
         DisputeSettlement settlement = DisputeSettlement.pending();
         settlement.setLeaseOwner("settlement-lease-internal");
         d.setSettlement(settlement);
+        com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceFile evidence =
+                new com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceFile();
+        evidence.setId("ev-internal-id");
+        evidence.setPublicId("disputes/" + DISPUTE_ID + "/storage-ref-internal");
+        evidence.setFormat("jpg");
+        evidence.setFileName("front-door.jpg");
+        evidence.setType(com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceType.JPG);
+        evidence.setSizeBytes(1234);
+        evidence.setUploadedByRole(Role.CUSTOMER);
+        d.setEvidenceFiles(java.util.List.of(evidence));
         return d;
     }
 
@@ -153,7 +163,8 @@ class DisputeAiSummaryDataTest {
         assertThat(data.raisedBy()).isEqualTo(DisputeAiSummaryData.Side.CUSTOMER);
         assertThat(data.raiserDescription()).isEqualTo(DESCRIPTION);
         assertThat(data.otherPartyResponse()).isEqualTo(RESPONSE);
-        assertThat(data.evidence()).as("no uploaded evidence files yet").isEmpty();
+        assertThat(data.evidence()).as("file name and type only")
+                .containsExactly(new DisputeAiSummaryData.EvidenceItem("front-door.jpg", "JPG"));
         assertThat(data.statusHistory()).containsExactly(
                 new HistoryItem(DisputeStatus.AWAITING_RESPONSE, dispute.getStatusHistory().get(0).getTimestamp(),
                         ActorKind.CUSTOMER),
@@ -211,16 +222,18 @@ class DisputeAiSummaryDataTest {
                 .writeValueAsString(service.getDisputeForAiSummary(DISPUTE_ID));
 
         assertThat(json).doesNotContain(CUSTOMER_ID).doesNotContain(PROVIDER_ID)
+                .doesNotContain("storage-ref-internal").doesNotContain("ev-internal-id")
                 .doesNotContain(DECIDING_ADMIN).doesNotContain(REVIEWING_ADMIN)
                 .doesNotContain(ADMIN_NOTE).doesNotContain(REVIEW_NOTE).doesNotContain(GROUNDS)
                 .doesNotContain("evidence/").doesNotContain("lease")
                 .doesNotContainIgnoringCase("settlement").doesNotContainIgnoringCase("bookingSync")
                 .doesNotContain(BOOKING_ID).doesNotContain("@")
                 .doesNotContainIgnoringCase("email").doesNotContainIgnoringCase("phone")
-                .doesNotContainIgnoringCase("name\"").doesNotContain("decidedBy").doesNotContain("reviewedBy")
+                .doesNotContain("fullName").doesNotContain("customerName").doesNotContain("providerName")
+                .doesNotContain("decidedBy").doesNotContain("reviewedBy")
                 .doesNotContain("customerId").doesNotContain("providerId").doesNotContain("actorId")
                 .doesNotContain("\"note\"").doesNotContain("penaltyPercent");
-        assertThat(json).contains(DESCRIPTION).contains(RESPONSE).contains("\"raisedBy\":\"CUSTOMER\"");
+        assertThat(json).contains("\"fileName\":\"front-door.jpg\"").contains(DESCRIPTION).contains(RESPONSE).contains("\"raisedBy\":\"CUSTOMER\"");
     }
 
     @Test

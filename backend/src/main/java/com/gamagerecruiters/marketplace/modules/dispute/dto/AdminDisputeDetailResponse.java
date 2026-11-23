@@ -41,8 +41,19 @@ public record AdminDisputeDetailResponse(
         DecisionView finalDecision,
         Instant finalizedAt,
         SettlementView settlement,
-        List<StatusHistoryView> statusHistory
+        List<StatusHistoryView> statusHistory,
+        List<EvidenceView> evidenceFiles,
+        Actions actions
 ) {
+
+    /**
+     * What the signed-in admin may do on this case right now, so the screen never offers an action the backend would
+     * reject. {@code reasonIfNot} explains a false value: VIEW_ONLY (SUPER_ADMIN), NOT_READY (e.g. the response
+     * window is still open), ALREADY_DECIDED, NO_APPEAL, SAME_ADMIN_AS_DECISION (a different admin must review the
+     * appeal); null when an action is available. The backend still checks every action.
+     */
+    public record Actions(boolean canResolve, boolean canDecideAppeal, String reasonIfNot) {
+    }
 
     public record DecisionView(
             ResolutionAction action,

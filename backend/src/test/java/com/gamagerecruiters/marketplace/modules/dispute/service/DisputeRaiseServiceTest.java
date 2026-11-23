@@ -244,6 +244,24 @@ class DisputeRaiseServiceTest {
         assertThat(reason.getValue()).isEqualTo(TIMELINE_REASON).doesNotContain("private");
     }
 
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = DisputeCategory.class,
+            names = {"PROPERTY_DAMAGE", "CUSTOMER_BEHAVIOUR", "NON_PAYMENT", "OTHER"})
+    @DisplayName("raise: the provider \"Raise dispute\" categories are accepted through the same flow and eligibility")
+    void providerRaiseCategories(DisputeCategory category) {
+        loggedInAs(PROVIDER_ID, Role.PROVIDER);
+
+        DisputeDetailResponse created = service.raiseDispute(PROVIDER_ID, Role.PROVIDER,
+                new RaiseDisputeRequest(BOOKING_ID, category, "The customer did not pay the agreed amount", List.of()));
+
+        assertThat(created.id()).isEqualTo(DISPUTE_ID);
+        assertThat(insertedDispute().getCategory()).isEqualTo(category);
+        assertThat(insertedDispute().getRaisedByRole()).isEqualTo(Role.PROVIDER);
+        verify(eligibilityPort).assertEligible(BOOKING_ID);
+        verify(bookingFacade).markDisputed(BOOKING_ID, PROVIDER_ID, "Dispute raised: " + category);
+        assertThat(DisputeCategory.PROVIDER_RAISE).contains(category).doesNotContain(DisputeCategory.NO_SHOW);
+    }
+
     static Stream<Arguments> facadeErrors() {
         return Stream.of(
                 Arguments.of(new AccessDeniedException("Access denied: actor does not match the authenticated user")),

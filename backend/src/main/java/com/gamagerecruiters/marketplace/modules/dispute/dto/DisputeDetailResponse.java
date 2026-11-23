@@ -35,7 +35,9 @@ public record DisputeDetailResponse(
         boolean appealEligible,
         Instant appealDeadline,
         AppealStatus appealStatus,
-        AppealView appeal
+        AppealView appeal,
+        /* Uploaded evidence files (metadata only); each is opened through a short-lived signed URL. */
+        List<EvidenceView> evidenceFiles
 ) {
 
     /** A dispute without any decision yet (raise and response results). */
@@ -45,7 +47,7 @@ public record DisputeDetailResponse(
                                  Instant createdAt, Instant updatedAt, List<StatusHistoryView> statusHistory) {
         this(id, bookingId, customerId, providerId, raisedBy, raisedByRole, category, description, evidence, status,
                 response, responseDueAt, createdAt, updatedAt, statusHistory, null, false, null,
-                AppealStatus.NOT_AVAILABLE, null);
+                AppealStatus.NOT_AVAILABLE, null, List.of());
     }
 
     public record PartyResponseView(String responderId, String text, List<String> evidence, Instant respondedAt) {

@@ -115,7 +115,8 @@ class DisputeMapperTest {
     @Test
     @DisplayName("admin view: includes the deciding admin, the note and names")
     void adminViewIsComplete() {
-        AdminDisputeDetailResponse view = DisputeMapper.toAdminDetail(resolved(NOW.plusSeconds(60)), "Cust", "Prov", NOW);
+        AdminDisputeDetailResponse view = DisputeMapper.toAdminDetail(resolved(NOW.plusSeconds(60)), "Cust", "Prov", NOW,
+                new AdminDisputeDetailResponse.Actions(false, false, "VIEW_ONLY"));
 
         assertThat(view.decision().decidedBy()).isEqualTo(ADMIN);
         assertThat(view.decision().note()).isEqualTo(NOTE);

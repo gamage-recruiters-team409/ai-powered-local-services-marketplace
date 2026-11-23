@@ -1,6 +1,9 @@
 package com.gamagerecruiters.marketplace.modules.dispute.service;
 
+import java.util.Set;
+
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAiSummaryData;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
@@ -20,6 +23,10 @@ public interface DisputeService {
 
     /** Disputes where the user is the customer or the provider, newest first. */
     DisputePageResponse<DisputeSummaryResponse> getMyDisputes(String userId, int page, int size);
+
+    /** As above, only in one of {@code statuses} (empty or null = every status). */
+    DisputePageResponse<DisputeSummaryResponse> getMyDisputes(String userId, Set<DisputeStatus> statuses, int page,
+                                                              int size);
 
     /** A dispute for one of its parties; 403 for anyone else. */
     DisputeDetailResponse getDisputeForParty(String userId, String disputeId);

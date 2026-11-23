@@ -23,6 +23,8 @@ import org.springframework.stereotype.Service;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.BookingSyncState;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
@@ -127,12 +129,44 @@ public class DisputeAdminQueryService {
         return toAdminDetail(dispute);
     }
 
-    /** Admin view with the parties' display names (null when they cannot be read). */
+    /**
+     * Admin view with the parties' display names (null when they cannot be read) and the signed-in admin's
+     * {@link AdminDisputeDetailResponse.Actions}.
+     */
     public AdminDisputeDetailResponse toAdminDetail(Dispute dispute) {
+        Instant now = clock.instant();
         return DisputeMapper.toAdminDetail(dispute,
                 userDirectory.findDisplayName(dispute.getCustomerId()).orElse(null),
                 userDirectory.findDisplayName(dispute.getProviderId()).orElse(null),
-                clock.instant());
+                now,
+                actionsFor(dispute, CurrentUser.getUserId(), CurrentUser.getRole(), now));
+    }
+
+    /**
+     * Same rules as DisputeResolutionService: only ADMIN edits (SUPER_ADMIN is read-only); a decision is possible
+     * while UNDER_REVIEW, or AWAITING_RESPONSE once the response window has passed; an appeal decision while
+     * APPEALED, by an admin other than the one who made the decision.
+     */
+    static AdminDisputeDetailResponse.Actions actionsFor(Dispute dispute, String actorId, Role actorRole, Instant now) {
+        if (actorRole != Role.ADMIN || actorId == null) {
+            return new AdminDisputeDetailResponse.Actions(false, false, "VIEW_ONLY");
+        }
+        DisputeStatus status = dispute.getStatus();
+        boolean windowPassed = dispute.getResponseDueAt() != null && !now.isBefore(dispute.getResponseDueAt());
+        if (status == DisputeStatus.UNDER_REVIEW || (status == DisputeStatus.AWAITING_RESPONSE && windowPassed)) {
+            return new AdminDisputeDetailResponse.Actions(true, false, null);
+        }
+        if (status == DisputeStatus.APPEALED) {
+            boolean sameAdmin = dispute.getDecision() != null && actorId.equals(dispute.getDecision().getDecidedBy());
+            return sameAdmin
+                    ? new AdminDisputeDetailResponse.Actions(false, false, "SAME_ADMIN_AS_DECISION")
+                    : new AdminDisputeDetailResponse.Actions(false, true, null);
+        }
+        if (status == DisputeStatus.RESOLVED || status == DisputeStatus.RESOLVED_FINAL
+                || status == DisputeStatus.CLOSED) {
+            return new AdminDisputeDetailResponse.Actions(false, false, "ALREADY_DECIDED");
+        }
+        return new AdminDisputeDetailResponse.Actions(false, false, "NOT_READY");
     }
 
     private long countStatus(DisputeStatus status) {

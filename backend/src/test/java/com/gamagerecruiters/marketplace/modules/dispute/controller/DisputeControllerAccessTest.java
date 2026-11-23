@@ -47,6 +47,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService;
+import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeEvidenceService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeResolutionService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
 
@@ -90,6 +91,9 @@ class DisputeControllerAccessTest {
     @MockitoBean
     private DisputeAdminQueryService adminQueryService;
 
+    @MockitoBean
+    private DisputeEvidenceService evidenceService;
+
     /** Registers a valid token for a user with the given role and returns the Authorization header value. */
     private String bearer(Role role) {
         String token = "token-" + role.name();
@@ -119,7 +123,8 @@ class DisputeControllerAccessTest {
         return new AdminDisputeDetailResponse(DISPUTE_ID, "booking-1", "cust-1", "Customer", "prov-1", "Provider",
                 "cust-1", Role.CUSTOMER, DisputeCategory.NO_SHOW, "Provider did not come", List.of(),
                 DisputeStatus.UNDER_REVIEW, null, now.plusSeconds(3600), now, now, null, null,
-                AppealStatus.NOT_AVAILABLE, null, null, null, null, List.of());
+                AppealStatus.NOT_AVAILABLE, null, null, null, null, List.of(), List.of(),
+                new AdminDisputeDetailResponse.Actions(true, false, null));
     }
 
     private static <T> DisputePageResponse<T> emptyPage() {
@@ -204,7 +209,7 @@ class DisputeControllerAccessTest {
     @EnumSource(value = Role.class, names = {"CUSTOMER", "PROVIDER"})
     @DisplayName("GET /disputes/my: customers and providers (200) get their own disputes")
     void myDisputesAllowed(Role role) throws Exception {
-        when(disputeService.getMyDisputes("user-" + role.name(), 0, 20)).thenReturn(emptyPage());
+        when(disputeService.getMyDisputes("user-" + role.name(), java.util.Set.of(), 0, 20)).thenReturn(emptyPage());
 
         mockMvc.perform(get(DISPUTES + "/my").header("Authorization", bearer(role)))
                 .andExpect(status().isOk())

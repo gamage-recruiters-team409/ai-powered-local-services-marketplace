@@ -11,6 +11,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeAppeal;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeDecision;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeSettlement;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceFile;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.PartyResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.StatusHistoryEntry;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse;
@@ -27,6 +28,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailRespons
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse.PartyResponseView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse.StatusHistoryView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.EvidenceView;
 
 public final class DisputeMapper {
 
@@ -70,12 +72,13 @@ public final class DisputeMapper {
                 appealEligible,
                 dispute.getAppealDeadline(),
                 appealStatus(dispute, now),
-                toPartyView(dispute.getAppeal()));
+                toPartyView(dispute.getAppeal()),
+                evidenceViews(dispute));
     }
 
-    /** Admin view; names may be null when they cannot be read. */
+    /** Admin view; names may be null when they cannot be read. {@code actions} are the signed-in admin's actions. */
     public static AdminDisputeDetailResponse toAdminDetail(Dispute dispute, String customerName, String providerName,
-                                                           Instant now) {
+                                                           Instant now, AdminDisputeDetailResponse.Actions actions) {
         List<StatusHistoryView> history = dispute.getStatusHistory().stream()
                 .map(DisputeMapper::toView)
                 .toList();
@@ -103,7 +106,19 @@ public final class DisputeMapper {
                 toView(dispute.getFinalDecision()),
                 dispute.getFinalizedAt(),
                 toView(dispute.getSettlement()),
-                history);
+                history,
+                evidenceViews(dispute),
+                actions);
+    }
+
+    public static EvidenceView toView(EvidenceFile file) {
+        return new EvidenceView(file.getId(), file.getFileName(), file.getType(),
+                file.getType() == null ? null : file.getType().mediaType(), file.getSizeBytes(),
+                file.getUploadedByRole(), file.getUploadedAt());
+    }
+
+    private static List<EvidenceView> evidenceViews(Dispute dispute) {
+        return dispute.getEvidenceFiles().stream().map(DisputeMapper::toView).toList();
     }
 
     /**
@@ -119,7 +134,10 @@ public final class DisputeMapper {
                 raiserSide(dispute),
                 dispute.getDescription(),
                 dispute.getResponse() == null ? null : dispute.getResponse().getText(),
-                List.of(),
+                dispute.getEvidenceFiles().stream()
+                        .map(f -> new DisputeAiSummaryData.EvidenceItem(f.getFileName(),
+                                f.getType() == null ? null : f.getType().name()))
+                        .toList(),
                 dispute.getStatusHistory().stream()
                         .map(e -> new DisputeAiSummaryData.HistoryItem(e.getToStatus(), e.getTimestamp(),
                                 actorKind(e.getActorRole())))

@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.dispute.repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -33,6 +34,11 @@ public interface DisputeRepository extends MongoRepository<Dispute, String> {
     /** Visible disputes where the user is the customer or the provider. */
     @Query("{ '$or': [ { 'customerId': ?0 }, { 'providerId': ?0 } ], 'bookingSyncState': { '$ne': 'PENDING' } }")
     Page<Dispute> findVisibleByParty(String userId, Pageable pageable);
+
+    /** Visible disputes of the user (customer or provider) in one of {@code statuses}. */
+    @Query("{ '$or': [ { 'customerId': ?0 }, { 'providerId': ?0 } ], 'status': { '$in': ?1 }, "
+            + "'bookingSyncState': { '$ne': 'PENDING' } }")
+    Page<Dispute> findVisibleByPartyAndStatusIn(String userId, Collection<DisputeStatus> statuses, Pageable pageable);
 
     @Query("{ 'status': ?0, 'bookingSyncState': { '$ne': 'PENDING' } }")
     Page<Dispute> findVisibleByStatus(DisputeStatus status, Pageable pageable);

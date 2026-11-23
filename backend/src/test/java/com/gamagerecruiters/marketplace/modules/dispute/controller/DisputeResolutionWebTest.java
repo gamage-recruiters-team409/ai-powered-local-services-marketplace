@@ -52,6 +52,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAdminSummaryR
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService;
+import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeEvidenceService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeResolutionService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
 
@@ -91,6 +92,9 @@ class DisputeResolutionWebTest {
     @MockitoBean
     private DisputeAdminQueryService adminQueryService;
 
+    @MockitoBean
+    private DisputeEvidenceService evidenceService;
+
     private String bearer(Role role) {
         String token = "token-" + role.name();
         String userId = "user-" + role.name();
@@ -110,7 +114,8 @@ class DisputeResolutionWebTest {
         Instant now = Instant.parse("2026-11-10T10:00:00Z");
         return new AdminDisputeDetailResponse(ID, "booking-1", "cust-1", null, "prov-1", null, "cust-1", Role.CUSTOMER,
                 DisputeCategory.NO_SHOW, "x", List.of(), DisputeStatus.RESOLVED, null, now, now, now, null,
-                now.plusSeconds(3600), AppealStatus.OPEN, null, null, null, null, List.of());
+                now.plusSeconds(3600), AppealStatus.OPEN, null, null, null, null, List.of(), List.of(),
+                new AdminDisputeDetailResponse.Actions(false, false, "ALREADY_DECIDED"));
     }
 
     private static DisputeDetailResponse partyDetail() {
