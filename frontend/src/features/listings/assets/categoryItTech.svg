@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="techTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F5EEFD" />
+      <stop offset="100%" stop-color="#DECDF6" />
+    </linearGradient>
+    <linearGradient id="techLidGrad" x1="68" y1="70" x2="188" y2="154" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#B095DF" />
+      <stop offset="100%" stop-color="#7656B4" />
+    </linearGradient>
+    <linearGradient id="techScreenGrad" x1="76" y1="78" x2="180" y2="146" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F4EEFC" />
+      <stop offset="100%" stop-color="#DCCCF5" />
+    </linearGradient>
+    <linearGradient id="techDeckGrad" x1="56" y1="154" x2="200" y2="192" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C8B2EC" />
+      <stop offset="100%" stop-color="#8B6CC6" />
+    </linearGradient>
+    <filter id="techDrop" x="-15%" y="-15%" width="135%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="4.5" flood-color="#53388A" flood-opacity="0.28" />
+    </filter>
+    <filter id="techTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#7B5CB5" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#techTileBg)" stroke="#C2AAEA" stroke-width="2.5" filter="url(#techTileShadow)" />
+
+  <g filter="url(#techDrop)">
+    <!-- Laptop Lid -->
+    <rect x="66" y="70" width="124" height="84" rx="7" fill="url(#techLidGrad)" stroke="#5B3F94" stroke-width="2.4" />
+    <!-- Inner Screen Display -->
+    <rect x="74" y="78" width="108" height="68" rx="3" fill="url(#techScreenGrad)" stroke="#7B5CB8" stroke-width="1.6" />
+    <path d="M84 86 L124 86 L96 138 L84 138 Z" fill="#FFFFFF" opacity="0.35" />
+
+    <!-- Keyboard Base -->
+    <path d="M66 154 L190 154 L204 182 C206 186 203 190 198 190 L58 190 C53 190 50 186 52 182 Z" fill="url(#techDeckGrad)" stroke="#5B3F94" stroke-width="2.4" stroke-linejoin="round" />
+    <!-- Keyboard Strip -->
+    <path d="M72 160 L184 160 L189 170 L67 170 Z" fill="#7D5EC0" stroke="#5B3F94" stroke-width="1.2" stroke-linejoin="round" />
+    <!-- Trackpad -->
+    <path d="M111 174 L145 174 L147 183 L109 183 Z" fill="#6F50B0" stroke="#5B3F94" stroke-width="1.2" stroke-linejoin="round" />
+    <!-- Front Lip Highlight -->
+    <line x1="56" y1="186" x2="200" y2="186" stroke="#EAE0FA" stroke-width="2" stroke-linecap="round" opacity="0.65" />
+  </g>
+</svg>

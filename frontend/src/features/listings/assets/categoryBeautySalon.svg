@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="salonTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FCEFF1" />
+      <stop offset="100%" stop-color="#F2D2D7" />
+    </linearGradient>
+    <linearGradient id="salonDryerGrad" x1="70" y1="82" x2="176" y2="144" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F1A7AD" />
+      <stop offset="55%" stop-color="#D97B84" />
+      <stop offset="100%" stop-color="#B75862" />
+    </linearGradient>
+    <linearGradient id="salonHandleGrad" x1="130" y1="132" x2="164" y2="196" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E7949C" />
+      <stop offset="100%" stop-color="#BA5B65" />
+    </linearGradient>
+    <linearGradient id="salonCapGrad" x1="164" y1="84" x2="194" y2="142" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C96A73" />
+      <stop offset="100%" stop-color="#9A414A" />
+    </linearGradient>
+    <filter id="salonDrop" x="-15%" y="-15%" width="135%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="4.5" flood-color="#87333C" flood-opacity="0.28" />
+    </filter>
+    <filter id="salonTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#B06870" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#salonTileBg)" stroke="#E4B8BF" stroke-width="2.5" filter="url(#salonTileShadow)" />
+
+  <g filter="url(#salonDrop)">
+    <path d="M135 135 L154 132 L166 184 C168 192 162 199 154 199 C148 199 144 194 142 187 L138 172 L132 169 L130 160 L135 157 Z" fill="url(#salonHandleGrad)" stroke="#924049" stroke-width="2.5" stroke-linejoin="round" />
+    <path d="M62 88 L88 92 C113 91 139 81 162 81 C179 81 190 95 190 113 C190 131 178 144 160 144 C138 144 112 135 88 134 L62 138 C58 138 56 134 56 128 L56 98 C56 92 58 88 62 88 Z" fill="url(#salonDryerGrad)" stroke="#924049" stroke-width="2.5" stroke-linejoin="round" />
+    <path d="M174 85 C185 89 191 100 191 113 C191 126 184 137 173 141 C179 132 182 123 182 113 C182 103 179 94 174 85 Z" fill="url(#salonCapGrad)" />
+    <path d="M72 98 C98 97 132 88 160 88" stroke="#FCE0E3" stroke-width="4" stroke-linecap="round" opacity="0.7" />
+    <line x1="88" y1="92" x2="88" y2="134" stroke="#A14B54" stroke-width="2" opacity="0.55" />
+    <rect x="131" y="158" width="8" height="11" rx="3" fill="#B55761" stroke="#8A3A43" stroke-width="1.5" />
+  </g>
+</svg>
