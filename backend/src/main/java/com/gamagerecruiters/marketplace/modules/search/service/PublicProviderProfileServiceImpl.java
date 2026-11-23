@@ -67,8 +67,9 @@ public class PublicProviderProfileServiceImpl implements PublicProviderProfileSe
         List<ListingResponse> listings = listingService.getPublicListingsByProviderId(canonicalProviderId);
         Map<String, RatingSummaryResponse> ratings =
                 reviewService.getRatingSummaries(List.of(canonicalProviderId));
-        List<ProviderVerification> verifications =
-                verificationRepository.findAllByProviderIdIn(List.of(canonicalProviderId));
+        List<ProviderVerification> verifications = hasText(profile.getId())
+                ? verificationRepository.findAllByProviderIdIn(List.of(profile.getId()))
+                : List.of();
 
         RatingSummaryResponse summary = ratings == null ? null : ratings.get(canonicalProviderId);
         boolean verified = verifications != null && verifications.stream()

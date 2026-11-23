@@ -134,8 +134,8 @@ class SearchServiceImplTest {
         when(providerProfileRepository.findAllByUserIdIn(any()))
                 .thenReturn(List.of(profileOne, profileTwo));
         when(verificationRepository.findAllByProviderIdIn(any()))
-                .thenReturn(List.of(verification("user-1", ProviderVerificationStatus.APPROVED),
-                        verification("user-2", ProviderVerificationStatus.UNDER_REVIEW)));
+                .thenReturn(List.of(verification("profile-1", ProviderVerificationStatus.APPROVED),
+                        verification("profile-2", ProviderVerificationStatus.UNDER_REVIEW)));
         when(reviewService.getRatingSummaries(any()))
                 .thenReturn(Map.of(
                         "user-1", summary("user-1", 4.5, 2),
@@ -199,32 +199,44 @@ class SearchServiceImplTest {
                 .isEqualTo(Sort.Direction.ASC);
 
         verify(providerProfileRepository).findAllByUserIdIn(any());
-        verify(verificationRepository).findAllByProviderIdIn(any());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<java.util.Collection<String>> verificationIdsCaptor =
+                ArgumentCaptor.forClass(java.util.Collection.class);
+        verify(verificationRepository).findAllByProviderIdIn(verificationIdsCaptor.capture());
+        assertThat(verificationIdsCaptor.getValue()).containsExactly("profile-1", "profile-2");
         verify(reviewService).getRatingSummaries(any());
         verify(providerProfileRepository, never()).findByUserId(any());
     }
 
     @Test
-    @DisplayName("verified=true restricts the server-side query to approved provider ids")
-    void verifiedFilterUsesApprovedProviderIds() {
+    @DisplayName("verified=true resolves approved profile ids to user ids and maps verification status back")
+    void verifiedFilterResolvesProfileIdsToUserIds() {
         ListingResponse listing = listing("listing-1", "user-1", new BigDecimal("100"),
                 "Cleaning", "Home Cleaning", null, 10);
+        ProviderProfile profile = profile("profile-1", "user-1", "Ada Cleaning", null);
         when(verificationRepository.findProviderIdsByStatus(ProviderVerificationStatus.APPROVED))
-                .thenReturn(List.of(() -> "user-1"));
+                .thenReturn(List.of(() -> "profile-1"));
+        when(providerProfileRepository.findAllById(any()))
+                .thenReturn(List.of(profile));
         when(listingService.searchPublicListings(any(), any(), any(), any(), any(), any()))
                 .thenReturn(new PageImpl<>(List.of(listing), PageRequest.of(0, 12), 1L));
-        when(verificationRepository.findAllByProviderIdIn(any()))
-                .thenReturn(List.of(verification("user-1", ProviderVerificationStatus.APPROVED)));
+        when(providerProfileRepository.findAllByUserIdIn(Set.of("user-1")))
+                .thenReturn(List.of(profile));
+        when(verificationRepository.findAllByProviderIdIn(List.of("profile-1")))
+                .thenReturn(List.of(verification("profile-1", ProviderVerificationStatus.APPROVED)));
         when(reviewService.getRatingSummaries(any())).thenReturn(Map.of());
 
         SearchResponse response = service.search(request("recommended", 0, 12).withVerified(true).toSearchRequest());
 
         assertThat(response.results()).hasSize(1);
+        assertThat(response.results().get(0).providerId()).isEqualTo("user-1");
+        assertThat(response.results().get(0).profileId()).isEqualTo("profile-1");
         assertThat(response.results().get(0).verified()).isTrue();
         @SuppressWarnings("unchecked")
         ArgumentCaptor<java.util.Collection<String>> idsCaptor = ArgumentCaptor.forClass(java.util.Collection.class);
         verify(listingService).searchPublicListings(any(), any(), any(), any(), idsCaptor.capture(), any());
         assertThat(idsCaptor.getValue()).containsExactly("user-1");
+        verify(verificationRepository).findAllByProviderIdIn(List.of("profile-1"));
     }
 
     @Test

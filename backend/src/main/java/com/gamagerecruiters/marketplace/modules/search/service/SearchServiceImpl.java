@@ -95,7 +95,7 @@ public class SearchServiceImpl implements SearchService {
         List<ListingResponse> listings = listingPage.getContent();
         Set<String> providerIds = distinctProviderIds(listings);
         Map<String, ProviderProfile> profiles = findProfiles(providerIds);
-        Map<String, ProviderVerification> verifications = findVerifications(providerIds);
+        Map<String, ProviderVerification> verifications = findVerifications(profiles);
         Map<String, RatingSummaryResponse> ratings = reviewService.getRatingSummaries(providerIds);
 
         List<ProviderSearchResult> results = new ArrayList<>(listings.size());
@@ -198,19 +198,32 @@ public class SearchServiceImpl implements SearchService {
     }
 
     private Collection<String> findApprovedProviderIds() {
-        Set<String> approvedIds = new LinkedHashSet<>();
+        Set<String> approvedProfileIds = new LinkedHashSet<>();
         List<ProviderVerificationRepository.ProviderIdOnly> approved =
                 verificationRepository.findProviderIdsByStatus(ProviderVerificationStatus.APPROVED);
         if (approved == null) {
-            return approvedIds;
+            return approvedProfileIds;
         }
         for (ProviderVerificationRepository.ProviderIdOnly verification : approved) {
-            if (verification != null && verification.getProviderId() != null
-                    && !verification.getProviderId().isBlank()) {
-                approvedIds.add(verification.getProviderId());
+            if (verification != null && hasText(verification.getProviderId())) {
+                approvedProfileIds.add(verification.getProviderId());
             }
         }
-        return approvedIds;
+        if (approvedProfileIds.isEmpty()) {
+            return approvedProfileIds;
+        }
+
+        Set<String> approvedUserIds = new LinkedHashSet<>();
+        List<ProviderProfile> profiles = providerProfileRepository.findAllById(approvedProfileIds);
+        if (profiles == null) {
+            return approvedUserIds;
+        }
+        for (ProviderProfile profile : profiles) {
+            if (profile != null && hasText(profile.getUserId())) {
+                approvedUserIds.add(profile.getUserId());
+            }
+        }
+        return approvedUserIds;
     }
 
     private Set<String> distinctProviderIds(List<ListingResponse> listings) {
@@ -240,18 +253,38 @@ public class SearchServiceImpl implements SearchService {
         return profiles;
     }
 
-    private Map<String, ProviderVerification> findVerifications(Set<String> providerIds) {
+    private Map<String, ProviderVerification> findVerifications(
+            Map<String, ProviderProfile> profilesByUserId
+    ) {
         Map<String, ProviderVerification> verifications = new LinkedHashMap<>();
-        if (providerIds.isEmpty()) {
+        if (profilesByUserId.isEmpty()) {
             return verifications;
         }
-        List<ProviderVerification> found = verificationRepository.findAllByProviderIdIn(providerIds);
+
+        List<String> profileIds = new ArrayList<>();
+        Map<String, String> userIdByProfileId = new LinkedHashMap<>();
+        for (Map.Entry<String, ProviderProfile> entry : profilesByUserId.entrySet()) {
+            ProviderProfile profile = entry.getValue();
+            if (profile != null && hasText(profile.getId())) {
+                profileIds.add(profile.getId());
+                userIdByProfileId.put(profile.getId(), entry.getKey());
+            }
+        }
+        if (profileIds.isEmpty()) {
+            return verifications;
+        }
+
+        List<ProviderVerification> found = verificationRepository.findAllByProviderIdIn(profileIds);
         if (found == null) {
             return verifications;
         }
         for (ProviderVerification verification : found) {
-            if (verification != null && verification.getProviderId() != null) {
-                verifications.put(verification.getProviderId(), verification);
+            if (verification == null) {
+                continue;
+            }
+            String userId = userIdByProfileId.get(verification.getProviderId());
+            if (hasText(userId)) {
+                verifications.put(userId, verification);
             }
         }
         return verifications;

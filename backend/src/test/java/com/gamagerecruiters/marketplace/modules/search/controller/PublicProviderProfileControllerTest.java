@@ -54,7 +54,7 @@ class PublicProviderProfileControllerTest {
         when(listingService.getPublicListingsByProviderId("user-1")).thenReturn(List.of());
         when(reviewService.getRatingSummaries(List.of("user-1")))
                 .thenReturn(Map.of("user-1", new RatingSummaryResponse("user-1", 0.0, 0, Map.of())));
-        when(verificationRepository.findAllByProviderIdIn(List.of("user-1"))).thenReturn(List.of());
+        when(verificationRepository.findAllByProviderIdIn(List.of("profile-1"))).thenReturn(List.of());
 
         @SuppressWarnings("unchecked")
         ObjectProvider<CategoryLookupPort> categoryLookupPortProvider = mock(ObjectProvider.class);

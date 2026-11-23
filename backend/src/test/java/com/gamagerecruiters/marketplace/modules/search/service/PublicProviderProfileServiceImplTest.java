@@ -73,8 +73,8 @@ class PublicProviderProfileServiceImplTest {
                 .thenReturn(List.of(wiring, painting));
         when(reviewService.getRatingSummaries(List.of("user-1")))
                 .thenReturn(Map.of("user-1", summary("user-1", 4.8, 4)));
-        when(verificationRepository.findAllByProviderIdIn(List.of("user-1")))
-                .thenReturn(List.of(verification("user-1", ProviderVerificationStatus.APPROVED)));
+        when(verificationRepository.findAllByProviderIdIn(List.of("profile-1")))
+                .thenReturn(List.of(verification("profile-1", ProviderVerificationStatus.APPROVED)));
 
         PublicProviderProfileResponse response = service.getPublicProfile("profile-1");
 
@@ -109,7 +109,27 @@ class PublicProviderProfileServiceImplTest {
         verify(profileRepository, never()).findByUserId(any());
         verify(listingService).getPublicListingsByProviderId("user-1");
         verify(reviewService).getRatingSummaries(List.of("user-1"));
-        verify(verificationRepository).findAllByProviderIdIn(List.of("user-1"));
+        verify(verificationRepository).findAllByProviderIdIn(List.of("profile-1"));
+    }
+
+    @Test
+    @DisplayName("Uses the provider profile document id for verification when profile and user ids differ")
+    void usesProfileIdForVerificationLookup() {
+        ProviderProfile profile = profile("profile-verified-1", "user-verified-1", "Verified Provider", null,
+                List.of("cat-a"));
+        when(profileRepository.findByUserId("user-verified-1")).thenReturn(Optional.of(profile));
+        when(listingService.getPublicListingsByProviderId("user-verified-1")).thenReturn(List.of());
+        when(reviewService.getRatingSummaries(List.of("user-verified-1"))).thenReturn(Map.of());
+        when(verificationRepository.findAllByProviderIdIn(List.of("profile-verified-1")))
+                .thenReturn(List.of(verification("profile-verified-1", ProviderVerificationStatus.APPROVED)));
+
+        PublicProviderProfileResponse response = service.getPublicProfile("user-verified-1");
+
+        assertThat(response.providerId()).isEqualTo("user-verified-1");
+        assertThat(response.profileId()).isEqualTo("profile-verified-1");
+        assertThat(response.verified()).isTrue();
+        verify(verificationRepository).findAllByProviderIdIn(List.of("profile-verified-1"));
+        verify(verificationRepository, never()).findAllByProviderIdIn(List.of("user-verified-1"));
     }
 
     @Test
@@ -122,8 +142,8 @@ class PublicProviderProfileServiceImplTest {
         when(listingService.getPublicListingsByProviderId("user-2")).thenReturn(List.of());
         when(reviewService.getRatingSummaries(List.of("user-2")))
                 .thenReturn(Map.of("user-2", summary("user-2", 0.0, 0)));
-        when(verificationRepository.findAllByProviderIdIn(List.of("user-2")))
-                .thenReturn(List.of(verification("user-2", ProviderVerificationStatus.SUBMITTED)));
+        when(verificationRepository.findAllByProviderIdIn(List.of("profile-2")))
+                .thenReturn(List.of(verification("profile-2", ProviderVerificationStatus.SUBMITTED)));
         when(categoryLookupPortProvider.getIfAvailable()).thenReturn(categoryLookupPort);
         when(categoryLookupPort.findActiveCategories()).thenReturn(List.of(
                 new CategorySnapshot("cat-a", "Electrical", null, true, new BigDecimal("0.10")),
