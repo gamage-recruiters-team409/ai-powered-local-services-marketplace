@@ -124,7 +124,7 @@ class PaymentResponseTest {
     void excludesInternalPaymentFieldsFromResponseRecord() {
         var recordComponents = PaymentResponse.class.getRecordComponents();
 
-        assertEquals(7, recordComponents.length);
+        assertEquals(11, recordComponents.length);
 
         for (var component : recordComponents) {
             String fieldName = component.getName();
@@ -136,5 +136,27 @@ class PaymentResponseTest {
                             || fieldName.equals("updatedAt"),
                     "Internal field must not be exposed: " + fieldName);
         }
+    }
+
+    @Test
+    void mapsPersistedPaymentMetadata() {
+        Payment payment = new Payment();
+
+        payment.setReceiptReference("receipt-123");
+        payment.setRefundReference("refund-456");
+        payment.setRefundStatus("PROCESSING");
+        payment.setPaidAt(java.time.Instant.parse("2026-11-19T06:30:00Z"));
+
+        PaymentResponse response = PaymentResponse.from(payment);
+
+        org.junit.jupiter.api.Assertions.assertEquals(
+                "receipt-123", response.receiptReference());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                "refund-456", response.refundReference());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                "PROCESSING", response.refundStatus());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                java.time.Instant.parse("2026-11-19T06:30:00Z"),
+                response.paidAt());
     }
 }

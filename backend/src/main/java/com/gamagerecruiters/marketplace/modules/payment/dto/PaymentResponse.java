@@ -32,7 +32,11 @@ public record PaymentResponse(
         String currency,
         PaymentStatus status,
         BigDecimal refundedAmount,
-        Instant createdAt) {
+        Instant createdAt,
+        String receiptReference,
+        String refundReference,
+        String refundStatus,
+        Instant paidAt) {
 
     /**
      * Converts a payment entity into a customer-facing response.
@@ -58,6 +62,10 @@ public record PaymentResponse(
                 payment.getCurrency(),
                 payment.getStatus(),
                 payment.getRefundedAmount(),
-                payment.getCreatedAt());
+                payment.getCreatedAt(),
+                payment.getReceiptReference(),
+                payment.getRefundReference(),
+                payment.getRefundStatus(),
+                payment.getPaidAt());
     }
 }
