@@ -15,6 +15,7 @@ public class ProviderProfileResponse {
     private String bio;
     private String district;
     private String city;
+    private List<String> serviceAreaDistricts = List.of();
     private Integer experienceYears;
     private String profileImageUrl;
     private Instant createdAt;
@@ -77,6 +78,16 @@ public class ProviderProfileResponse {
 
     public String getCity() {
         return city;
+    }
+
+    public List<String> getServiceAreaDistricts() {
+        return serviceAreaDistricts;
+    }
+
+    public void setServiceAreaDistricts(List<String> serviceAreaDistricts) {
+        this.serviceAreaDistricts = serviceAreaDistricts == null
+                ? List.of()
+                : List.copyOf(serviceAreaDistricts);
     }
 
     public Integer getExperienceYears() {
