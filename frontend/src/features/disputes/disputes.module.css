@@ -832,6 +832,12 @@ a.evidenceName {
   color: var(--dsp-heading);
 }
 
+/* Case and booking references never break inside ("D-" / "000002"). */
+.table td[data-label='Case'],
+.table td[data-label='Booking'] {
+  white-space: nowrap;
+}
+
 .rowLink,
 .primaryLink {
   font-weight: 600;
