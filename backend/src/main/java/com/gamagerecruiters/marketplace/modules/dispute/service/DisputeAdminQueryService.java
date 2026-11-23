@@ -28,10 +28,11 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeRules;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.SettlementState;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAdminSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
-import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.mapper.DisputeMapper;
 import com.gamagerecruiters.marketplace.modules.dispute.port.UserDirectoryPort;
 
@@ -75,7 +76,7 @@ public class DisputeAdminQueryService {
      * Admin list. {@code q} matches the case id exactly, or the start of the booking, customer or provider id.
      * {@code from}/{@code to} are inclusive UTC dates on createdAt. {@code sort} is "field" or "field,asc|desc".
      */
-    public DisputePageResponse<DisputeSummaryResponse> search(String status, String category, String q,
+    public DisputePageResponse<AdminDisputeSummaryResponse> search(String status, String category, String q,
                                                               LocalDate from, LocalDate to, String sort,
                                                               int page, int size) {
         Pageable pageable = PageRequest.of(validPage(page, size), size, parseSort(sort));
@@ -100,10 +101,10 @@ public class DisputeAdminQueryService {
         Query query = Query.query(new Criteria().andOperator(filters.toArray(Criteria[]::new)));
         long total = mongoTemplate.count(query, Dispute.class);
         List<Dispute> content = mongoTemplate.find(Query.of(query).with(pageable), Dispute.class);
-        return DisputePageResponse.from(new PageImpl<>(content, pageable, total).map(DisputeMapper::toSummary));
+        return DisputePageResponse.from(new PageImpl<>(content, pageable, total).map(DisputeMapper::toAdminSummary));
     }
 
-    /** Current counts per open status, and decisions made in the last 30 days. */
+    /** Current counts per open status, decisions made in the last 30 days, and settlements needing an admin. */
     public DisputeAdminSummaryResponse summary() {
         Instant since = clock.instant().minus(DisputeRules.SUMMARY_RESOLVED_WINDOW);
         return new DisputeAdminSummaryResponse(
@@ -112,7 +113,10 @@ public class DisputeAdminQueryService {
                 countStatus(DisputeStatus.APPEALED),
                 mongoTemplate.count(Query.query(new Criteria().andOperator(visible(),
                         Criteria.where("decision.decidedAt").gte(since))), Dispute.class),
-                since);
+                since,
+                mongoTemplate.count(Query.query(new Criteria().andOperator(visible(),
+                        Criteria.where("settlement.state").in(SettlementState.MANUAL_REVIEW, SettlementState.REJECTED))),
+                        Dispute.class));
     }
 
     public AdminDisputeDetailResponse getDetail(String disputeId) {

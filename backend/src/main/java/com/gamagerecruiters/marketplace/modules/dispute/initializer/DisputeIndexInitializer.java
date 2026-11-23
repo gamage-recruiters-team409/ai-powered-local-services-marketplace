@@ -1,5 +1,8 @@
 package com.gamagerecruiters.marketplace.modules.dispute.initializer;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,14 +31,23 @@ import com.mongodb.client.model.Indexes;
  *   <li>{@code status_1_appealDeadline_1} (partial, only documents with an appealDeadline): lets the finalizer find
  *       RESOLVED disputes whose appeal window has passed.</li>
  *   <li>{@code settlement.state_1_settlement.lastAttemptAt_1} (partial, only final disputes): lets the finalizer find
- *       settlements that are PENDING or due for a retry.</li>
+ *       due settlements. Every branch of its claim query starts with {@code settlement.state} (PENDING; FAILED with
+ *       nextAttemptAt; NOT_APPLIED with lastAttemptAt), so this index covers it; the terminal states (APPLIED,
+ *       REJECTED, MANUAL_REVIEW) are skipped by the state key. The admin summary's manual-review count uses it too.</li>
+ *   <li>{@code bookingId_1}: one dispute per booking in any status (the raise check also covers final disputes).</li>
  * </ul>
+ * After creating them, startup checks that every index above exists and fails otherwise.
  */
 @Component
 @Profile("!test")
 public class DisputeIndexInitializer {
 
     static final String DISPUTES = "disputes";
+
+    /** Every index this initializer creates; all must exist after startup. */
+    static final List<String> EXPECTED_INDEXES = List.of("activeBookingKey_1", "customerId_1_createdAt_-1",
+            "providerId_1_createdAt_-1", "status_1_createdAt_-1", "bookingSyncState_1_createdAt_1",
+            "status_1_appealDeadline_1", "settlement.state_1_settlement.lastAttemptAt_1", "bookingId_1");
 
     private static final Logger log = LoggerFactory.getLogger(DisputeIndexInitializer.class);
 
@@ -70,8 +82,15 @@ public class DisputeIndexInitializer {
                             Indexes.ascending("settlement.lastAttemptAt")),
                     new IndexOptions().name("settlement.state_1_settlement.lastAttemptAt_1")
                             .partialFilterExpression(new Document("settlement.state", new Document("$exists", true))));
+            disputes.createIndex(Indexes.ascending("bookingId"), new IndexOptions().name("bookingId_1"));
 
-            log.info("Dispute indexes verified on collection {}", DISPUTES);
+            List<String> present = new ArrayList<>();
+            disputes.listIndexes().forEach(index -> present.add(index.getString("name")));
+            List<String> missing = EXPECTED_INDEXES.stream().filter(name -> !present.contains(name)).toList();
+            if (!missing.isEmpty()) {
+                throw new IllegalStateException("Missing dispute indexes: " + missing);
+            }
+            log.info("Dispute indexes verified on collection {}: {}", DISPUTES, EXPECTED_INDEXES);
         } catch (RuntimeException e) {
             throw new IllegalStateException("Startup failed: unable to create or verify the indexes of the "
                     + DISPUTES + " collection. Check for duplicate active disputes or a conflicting index.", e);

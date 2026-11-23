@@ -480,6 +480,34 @@ class DisputeRaiseServiceTest {
     }
 
     @Test
+    @DisplayName("raise: a FINAL dispute exists for the booking (active key already released) -> 409 "
+            + "DISPUTE_ALREADY_EXISTS before the Booking module is asked; nothing changed")
+    void finalizedDisputeBlocksSecondRaise() {
+        Dispute finalized = dispute(CUSTOMER_ID, BookingSyncState.SYNCED);
+        finalized.changeStatus(DisputeStatus.RESOLVED_FINAL, "admin-1", Role.ADMIN, null, NOW);
+        assertThat(finalized.getActiveBookingKey()).isNull();
+        when(disputeRepository.findVisiblePartiesByBookingId(BOOKING_ID)).thenReturn(List.of(finalized));
+
+        assertApiError(catchThrowable(() -> raiseAs(PROVIDER_ID, Role.PROVIDER)), HttpStatus.CONFLICT,
+                "DISPUTE_ALREADY_EXISTS");
+        verifyNoInteractions(eligibilityPort);
+        assertNoBookingChangeAndNothingSaved();
+    }
+
+    @Test
+    @DisplayName("raise: a non-party asks about a booking that has a dispute -> no 409 (nothing leaks); the Booking "
+            + "module's own 403 is returned")
+    void nonPartyDoesNotLearnAboutDispute() {
+        when(disputeRepository.findVisiblePartiesByBookingId(BOOKING_ID))
+                .thenReturn(List.of(dispute(CUSTOMER_ID, BookingSyncState.SYNCED)));
+        AccessDeniedException denied = new AccessDeniedException("Access denied: actor is not a participant");
+        when(eligibilityPort.assertEligible(BOOKING_ID)).thenThrow(denied);
+
+        assertThat(catchThrowable(() -> raiseAs("stranger-1", Role.CUSTOMER))).isSameAs(denied);
+        assertNoBookingChangeAndNothingSaved();
+    }
+
+    @Test
     @DisplayName("raise: another user's PENDING intent holds the booking -> 409 DISPUTE_ALREADY_EXISTS")
     void otherUsersPendingIntentRejected() {
         when(disputeRepository.findByActiveBookingKey(BOOKING_ID))

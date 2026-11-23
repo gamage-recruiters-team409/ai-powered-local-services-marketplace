@@ -17,7 +17,10 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailRe
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse.AppealReviewView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse.DecisionView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse.SettlementView;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.SettlementState;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealStatus;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAiSummaryData;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse.AppealView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse.OutcomeView;
@@ -103,6 +106,56 @@ public final class DisputeMapper {
                 history);
     }
 
+    /**
+     * Content for an AI summary (WP01 AI-005): only the fields of {@link DisputeAiSummaryData}. Parties become
+     * CUSTOMER / PROVIDER, history actors lose their ids and reasons, decisions are reduced to their result.
+     */
+    public static DisputeAiSummaryData toAiSummaryData(Dispute dispute, Instant now) {
+        boolean isFinal = dispute.getStatus() == DisputeStatus.RESOLVED_FINAL;
+        return new DisputeAiSummaryData(
+                dispute.getId(),
+                dispute.getStatus(),
+                dispute.getCategory(),
+                raiserSide(dispute),
+                dispute.getDescription(),
+                dispute.getResponse() == null ? null : dispute.getResponse().getText(),
+                List.of(),
+                dispute.getStatusHistory().stream()
+                        .map(e -> new DisputeAiSummaryData.HistoryItem(e.getToStatus(), e.getTimestamp(),
+                                actorKind(e.getActorRole())))
+                        .toList(),
+                toOutcomeOnly(dispute.getDecision()),
+                new DisputeAiSummaryData.AppealResult(appealStatus(dispute, now),
+                        isFinal ? toOutcomeOnly(dispute.getFinalDecision()) : null,
+                        isFinal ? DisputeStatus.RESOLVED_FINAL : null));
+    }
+
+    private static DisputeAiSummaryData.Side raiserSide(Dispute dispute) {
+        if (dispute.getRaisedByRole() == Role.PROVIDER) {
+            return DisputeAiSummaryData.Side.PROVIDER;
+        }
+        if (dispute.getRaisedByRole() == Role.CUSTOMER) {
+            return DisputeAiSummaryData.Side.CUSTOMER;
+        }
+        return dispute.getRaisedBy() != null && dispute.getRaisedBy().equals(dispute.getProviderId())
+                ? DisputeAiSummaryData.Side.PROVIDER : DisputeAiSummaryData.Side.CUSTOMER;
+    }
+
+    private static DisputeAiSummaryData.ActorKind actorKind(Role role) {
+        if (role == Role.CUSTOMER) {
+            return DisputeAiSummaryData.ActorKind.CUSTOMER;
+        }
+        if (role == Role.PROVIDER) {
+            return DisputeAiSummaryData.ActorKind.PROVIDER;
+        }
+        return isAdminRole(role) ? DisputeAiSummaryData.ActorKind.ADMIN : DisputeAiSummaryData.ActorKind.SYSTEM;
+    }
+
+    private static DisputeAiSummaryData.Outcome toOutcomeOnly(DisputeDecision decision) {
+        return decision == null ? null : new DisputeAiSummaryData.Outcome(decision.getAction(),
+                decision.getCustomerRefundPercent(), decision.isProviderPenaltyApplied());
+    }
+
     public static DisputeSummaryResponse toSummary(Dispute dispute) {
         return new DisputeSummaryResponse(
                 dispute.getId(),
@@ -141,12 +194,16 @@ public final class DisputeMapper {
             return null;
         }
         boolean viewerIsProvider = viewerId != null && viewerId.equals(dispute.getProviderId());
+        boolean isFinal = dispute.getStatus() == DisputeStatus.RESOLVED_FINAL;
+        boolean carriedOut = dispute.getSettlement() != null
+                && dispute.getSettlement().getState() == SettlementState.APPLIED;
         return new OutcomeView(
                 binding.getAction(),
                 binding.getCustomerRefundPercent(),
                 viewerIsProvider ? binding.isProviderPenaltyApplied() : null,
                 binding.getDecidedAt(),
-                dispute.getStatus() == DisputeStatus.RESOLVED_FINAL);
+                isFinal,
+                isFinal && !carriedOut ? OutcomeView.PAYMENT_IN_PROGRESS : null);
     }
 
     private static PartyResponseView toView(PartyResponse response) {
@@ -179,9 +236,14 @@ public final class DisputeMapper {
                 entry.getFromStatus(),
                 entry.getToStatus(),
                 null,
-                Roles.ADMIN_ROLES.contains(entry.getActorRole()) ? entry.getActorRole() : null,
+                isAdminRole(entry.getActorRole()) ? entry.getActorRole() : null,
                 null,
                 entry.getTimestamp());
+    }
+
+    /** Null-safe: SYSTEM entries (e.g. the finalizer's) have no role, and Set.of(...).contains(null) throws. */
+    private static boolean isAdminRole(Role role) {
+        return role != null && Roles.ADMIN_ROLES.contains(role);
     }
 
     private static boolean isPartyRole(Role role) {
@@ -240,9 +302,32 @@ public final class DisputeMapper {
         }
         return new SettlementView(
                 settlement.getState(),
+                settlement.financeStateOrPending(),
                 settlement.getBookingState(),
-                settlement.getPayoutState(),
                 settlement.getAttempts(),
-                settlement.getLastAttemptAt());
+                settlement.getLastAttemptAt(),
+                settlement.getNextAttemptAt(),
+                settlement.getLastErrorCode(),
+                settlement.getNotAppliedReason(),
+                settlement.getManualReviewReason());
+    }
+
+    /** Admin list row: the summary plus the read-only settlement state and manual review reason. */
+    public static AdminDisputeSummaryResponse toAdminSummary(Dispute dispute) {
+        DisputeSettlement settlement = dispute.getSettlement();
+        return new AdminDisputeSummaryResponse(
+                dispute.getId(),
+                dispute.getBookingId(),
+                dispute.getCustomerId(),
+                dispute.getProviderId(),
+                dispute.getRaisedByRole(),
+                dispute.getCategory(),
+                dispute.getStatus(),
+                dispute.getResponseDueAt(),
+                dispute.getAppealDeadline(),
+                dispute.getCreatedAt(),
+                dispute.getUpdatedAt(),
+                settlement == null ? null : settlement.getState(),
+                settlement == null ? null : settlement.getManualReviewReason());
     }
 }

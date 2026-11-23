@@ -30,6 +30,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeRules;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.PartyResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAiSummaryData;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
@@ -109,6 +110,8 @@ public class DisputeServiceImpl implements DisputeService {
     /**
      * Raise flow (the Booking module decides eligibility; the dispute module never stays out of step with it):
      * <ol>
+     *   <li>A party of an existing visible dispute for the booking (any status, also RESOLVED_FINAL): 409
+     *       DISPUTE_ALREADY_EXISTS, nothing else is called.</li>
      *   <li>BookingFacade.assertDisputeEligible (via {@link DisputeEligibilityPort}): read-only; its errors (401, 403,
      *       404, 409 INVALID_STATUS_TRANSITION / DISPUTE_WINDOW_CLOSED) are returned unchanged. The caller must also
      *       be a party (checked here too, so the reporter and counterparty are always right).</li>
@@ -137,6 +140,15 @@ public class DisputeServiceImpl implements DisputeService {
      */
     @Override
     public DisputeDetailResponse raiseDispute(String actorId, Role actorRole, RaiseDisputeRequest request) {
+        // One dispute per booking, in any status: also after finalization, when the booking may have left DISPUTED and
+        // the active-booking key was released. Only a party learns that a dispute exists; anyone else gets the Booking
+        // module's own answer (403/404) below.
+        if (disputeRepository.findVisiblePartiesByBookingId(request.bookingId()).stream()
+                .anyMatch(prior -> prior.isParty(actorId))) {
+            throw duplicateDispute();
+        }
+
+        // The Booking module decides eligibility, including every time rule (BR-008). No completion-based window here.
         BookingSnapshot booking = disputeEligibilityPort.assertEligible(request.bookingId());
 
         // Same rule as the Booking module. Kept so the reporter/counterparty are always the booking's own parties.
@@ -406,6 +418,11 @@ public class DisputeServiceImpl implements DisputeService {
         return DisputeMapper.toDetail(findDispute(disputeId));
     }
 
+    @Override
+    public DisputeAiSummaryData getDisputeForAiSummary(String disputeId) {
+        return DisputeMapper.toAiSummaryData(findDispute(disputeId), clock.instant());
+    }
+
     /** Short, system-generated text for the booking timeline. The user's description is never copied there. */
     static String bookingTimelineReason(DisputeCategory category) {
         return "Dispute raised: " + category;
@@ -427,7 +444,7 @@ public class DisputeServiceImpl implements DisputeService {
 
     private static ResourceConflictException duplicateDispute() {
         return new ResourceConflictException("DISPUTE_ALREADY_EXISTS",
-                "An active dispute already exists for this booking");
+                "A dispute already exists for this booking");
     }
 
     private static ApiException syncPending() {

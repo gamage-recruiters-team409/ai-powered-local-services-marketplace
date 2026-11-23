@@ -1,6 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.dispute.service;
 
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAiSummaryData;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
@@ -32,4 +33,12 @@ public interface DisputeService {
 
     /** Admin detail. Caller must be authorized for the area. */
     DisputeDetailResponse getDisputeForAdmin(String disputeId);
+
+    /**
+     * Dispute content for an AI summary (WP01 AI-005). In-process only: there is no HTTP endpoint for it, and the
+     * caller must be authorized to view the dispute. Contains no personal data, ids of the parties or admins, admin
+     * notes or settlement internals (see {@link DisputeAiSummaryData}). A PENDING (unsynced) or unknown dispute:
+     * 404 DISPUTE_NOT_FOUND, as in the party view.
+     */
+    DisputeAiSummaryData getDisputeForAiSummary(String disputeId);
 }

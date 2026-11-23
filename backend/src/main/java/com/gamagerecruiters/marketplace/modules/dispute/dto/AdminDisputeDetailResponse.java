@@ -70,13 +70,21 @@ public record AdminDisputeDetailResponse(
     ) {
     }
 
-    /** NOT_APPLIED means nothing was carried out yet (no real integration). */
+    /**
+     * Read-only settlement progress. NOT_APPLIED means nothing was carried out yet (integration not connected,
+     * {@code notAppliedReason}); MANUAL_REVIEW and REJECTED need an admin ({@code manualReviewReason}). Finance runs
+     * first; the booking step only after finance is APPLIED. {@code attempts} counts failed attempts only.
+     */
     public record SettlementView(
             SettlementState state,
+            SettlementState financeState,
             SettlementState bookingState,
-            SettlementState payoutState,
             int attempts,
-            Instant lastAttemptAt
+            Instant lastAttemptAt,
+            Instant nextAttemptAt,
+            String lastErrorCode,
+            String notAppliedReason,
+            String manualReviewReason
     ) {
     }
 }

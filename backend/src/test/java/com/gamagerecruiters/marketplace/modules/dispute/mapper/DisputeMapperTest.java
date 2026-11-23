@@ -55,6 +55,26 @@ class DisputeMapperTest {
     }
 
     @Test
+    @DisplayName("party view of a dispute finalized by the finalizer (SYSTEM entry without a role) does not fail; the "
+            + "entry has no actor, role or reason; neutral payment note while not carried out")
+    void systemEntryWithoutRole() {
+        Dispute dispute = resolved(NOW.minusSeconds(30));
+        dispute.setFinalDecision(dispute.getDecision());
+        dispute.changeStatus(DisputeStatus.RESOLVED_FINAL, "SYSTEM", null, "Appeal window closed without an appeal",
+                NOW);
+        dispute.setSettlement(com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeSettlement.pending());
+
+        DisputeDetailResponse view = DisputeMapper.toPartyDetail(dispute, "cust-1", NOW);
+
+        DisputeDetailResponse.StatusHistoryView system = view.statusHistory().get(3);
+        assertThat(system.actorId()).isNull();
+        assertThat(system.actorRole()).isNull();
+        assertThat(system.reason()).isNull();
+        assertThat(view.outcome().finalDecision()).isTrue();
+        assertThat(view.outcome().paymentNote()).isEqualTo("Payment handling for this dispute is being processed.");
+    }
+
+    @Test
     @DisplayName("party view: the penalty flag is shown to the provider only")
     void penaltyOnlyForProvider() {
         Dispute dispute = resolved(NOW.plusSeconds(60));

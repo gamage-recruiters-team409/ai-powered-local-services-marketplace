@@ -203,7 +203,7 @@ class DisputeResolutionWebTest {
     @EnumSource(value = Role.class, names = {"ADMIN", "SUPER_ADMIN"})
     @DisplayName("GET /admin/disputes/summary and the filtered list: ADMIN and SUPER_ADMIN (read-only) -> 200")
     void summaryAndListAllowed(Role role) throws Exception {
-        when(adminQueryService.summary()).thenReturn(new DisputeAdminSummaryResponse(1, 2, 3, 4, Instant.EPOCH));
+        when(adminQueryService.summary()).thenReturn(new DisputeAdminSummaryResponse(1, 2, 3, 4, Instant.EPOCH, 5));
         when(adminQueryService.search(any(), any(), any(), any(), any(), any(), anyInt(), anyInt()))
                 .thenReturn(new DisputePageResponse<>(List.of(), 0, 20, 0, 0));
         String auth = bearer(role);
@@ -211,7 +211,8 @@ class DisputeResolutionWebTest {
         mockMvc.perform(get(ADMIN_DISPUTES + "/summary").header("Authorization", auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.appealed").value(3))
-                .andExpect(jsonPath("$.resolvedLast30Days").value(4));
+                .andExpect(jsonPath("$.resolvedLast30Days").value(4))
+                .andExpect(jsonPath("$.manualReview").value(5));
         mockMvc.perform(get(ADMIN_DISPUTES).header("Authorization", auth)
                         .param("status", "UNDER_REVIEW").param("category", "NO_SHOW").param("q", "booking-1")
                         .param("from", "2026-11-01").param("to", "2026-11-17").param("sort", "createdAt,asc"))
@@ -310,7 +311,7 @@ class DisputeResolutionWebTest {
     @Test
     @DisplayName("GET /admin/disputes/summary is not taken as a dispute id")
     void summaryIsNotAnId() throws Exception {
-        when(adminQueryService.summary()).thenReturn(new DisputeAdminSummaryResponse(0, 0, 0, 0, Instant.EPOCH));
+        when(adminQueryService.summary()).thenReturn(new DisputeAdminSummaryResponse(0, 0, 0, 0, Instant.EPOCH, 0));
 
         mockMvc.perform(get(ADMIN_DISPUTES + "/summary").header("Authorization", bearer(Role.ADMIN)))
                 .andExpect(status().isOk());

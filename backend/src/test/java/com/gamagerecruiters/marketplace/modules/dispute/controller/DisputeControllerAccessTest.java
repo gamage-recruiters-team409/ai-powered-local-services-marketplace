@@ -46,7 +46,6 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailRe
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
-import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeResolutionService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
@@ -123,7 +122,7 @@ class DisputeControllerAccessTest {
                 AppealStatus.NOT_AVAILABLE, null, null, null, null, List.of());
     }
 
-    private static DisputePageResponse<DisputeSummaryResponse> emptyPage() {
+    private static <T> DisputePageResponse<T> emptyPage() {
         return new DisputePageResponse<>(List.of(), 0, 20, 0, 0);
     }
 
