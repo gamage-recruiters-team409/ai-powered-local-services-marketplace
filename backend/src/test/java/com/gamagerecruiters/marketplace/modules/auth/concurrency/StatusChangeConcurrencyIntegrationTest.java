@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeout;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -12,10 +13,12 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -23,6 +26,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.bson.Document;
@@ -774,5 +778,260 @@ class StatusChangeConcurrencyIntegrationTest {
             serviceImpl.setSuperAdminLockLeaseMs(10000L);
             serviceImpl.setSuperAdminLockSafetyMarginMs(3000L);
         }
+    }
+
+    @Test
+    @DisplayName("F2-A Real MongoDB: Stale operation cannot commit after losing guard before user status update")
+    void testStaleOperationCannotCommitAfterLosingGuardBeforeUserUpdate() {
+        assertTimeout(Duration.ofSeconds(10), () -> {
+            User superAdminX = createUserRecord("super-x-stale", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            User superAdminY = createUserRecord("super-y-stale", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            userRepository.saveAll(List.of(superAdminX, superAdminY));
+
+            AuthToken tokenX = new AuthToken(superAdminX.getId(), TokenType.REFRESH, "token-x-stale", Instant.now().plusSeconds(3600), Instant.now());
+            AuthToken tokenY = new AuthToken(superAdminY.getId(), TokenType.REFRESH, "token-y-stale", Instant.now().plusSeconds(3600), Instant.now());
+            authTokenRepository.saveAll(List.of(tokenX, tokenY));
+
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+            CountDownLatch aPausedBeforeUserUpdate = new CountDownLatch(1);
+            CountDownLatch proceedA = new CountDownLatch(1);
+            AtomicBoolean firstUserUpdate = new AtomicBoolean(true);
+
+            try {
+                doAnswer(invocation -> {
+                    if (firstUserUpdate.compareAndSet(true, false)) {
+                        aPausedBeforeUserUpdate.countDown();
+                        proceedA.await(10, TimeUnit.SECONDS);
+                    }
+                    return invocation.callRealMethod();
+                }).when(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+
+                // Operation A: Y suspends X
+                Future<?> futureA = executor.submit(() -> {
+                    authenticateAs(superAdminY.getId(), superAdminY.getEmail(), Role.SUPER_ADMIN);
+                    return userInternalService.changeStatus(superAdminY.getId(), superAdminX.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED);
+                });
+
+                assertTrue(aPausedBeforeUserUpdate.await(5, TimeUnit.SECONDS), "Operation A must reach User.class update");
+
+                // Operation B: X suspends Y while A is paused
+                Future<?> futureB = executor.submit(() -> {
+                    authenticateAs(superAdminX.getId(), superAdminX.getEmail(), Role.SUPER_ADMIN);
+                    return userInternalService.changeStatus(superAdminX.getId(), superAdminY.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED);
+                });
+
+                // Let B attempt its acquisition / update
+                Thread.sleep(300);
+                proceedA.countDown();
+
+                int successCount = 0;
+                try {
+                    futureA.get(5, TimeUnit.SECONDS);
+                    successCount++;
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    assertTrue(cause instanceof ApiException, "Expected ApiException but got: " + cause);
+                    ApiException ae = (ApiException) cause;
+                    assertTrue(ae.getStatus() == HttpStatus.CONFLICT || ae.getStatus() == HttpStatus.SERVICE_UNAVAILABLE,
+                            "Expected 409 or 503 but got: " + ae.getStatus());
+                }
+
+                try {
+                    futureB.get(5, TimeUnit.SECONDS);
+                    successCount++;
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    assertTrue(cause instanceof ApiException, "Expected ApiException but got: " + cause);
+                    ApiException ae = (ApiException) cause;
+                    assertTrue(ae.getStatus() == HttpStatus.CONFLICT || ae.getStatus() == HttpStatus.SERVICE_UNAVAILABLE,
+                            "Expected 409 or 503 but got: " + ae.getStatus());
+                }
+
+                assertTrue(successCount <= 1, "At most one operation can succeed, but got: " + successCount);
+                long activeSuperAdmins = userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE);
+                assertTrue(activeSuperAdmins >= 1, "At least one active SUPER_ADMIN must remain, but found: " + activeSuperAdmins);
+            } finally {
+                proceedA.countDown();
+                executor.shutdownNow();
+                reset(mongoTemplate);
+            }
+        });
+    }
+
+    @Test
+    @DisplayName("F2-A Real MongoDB: Guard fence changed before transaction aborts with 503 and leaves user unchanged")
+    void testGuardFenceChangedBeforeTransactionAbortsAndLeavesUserUnchanged() {
+        User superAdminX = createUserRecord("super-fence-x", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User superAdminY = createUserRecord("super-fence-y", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        userRepository.saveAll(List.of(superAdminX, superAdminY));
+
+        AuthToken tokenX = new AuthToken(superAdminX.getId(), TokenType.REFRESH, "token-fence-x", Instant.now().plusSeconds(3600), Instant.now());
+        authTokenRepository.save(tokenX);
+
+        authenticateAs(superAdminY.getId(), superAdminY.getEmail(), Role.SUPER_ADMIN);
+
+        try {
+            // Hook into Step 1 token revocation (which runs immediately before Step 2 transaction) to alter fence in Mongo
+            doAnswer(invocation -> {
+                Object result = invocation.callRealMethod();
+                Query query = new Query(Criteria.where("_id").is("super-admin-status"));
+                Update update = new Update().set("fence", 9999L).set("owner", "interfering-owner");
+                mongoTemplate.updateFirst(query, update, "auth_locks");
+                return result;
+            }).when(authTokenRepository).revokeAllActiveTokensByUserIdAndType(eq(superAdminX.getId()), eq(TokenType.REFRESH));
+
+            ApiException ex = assertThrows(ApiException.class, () ->
+                    userInternalService.changeStatus(superAdminY.getId(), superAdminX.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+            assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
+
+            User target = userRepository.findById(superAdminX.getId()).orElse(null);
+            assertNotNull(target);
+            assertEquals(UserStatus.ACTIVE, target.getStatus(), "Target user must remain ACTIVE when transaction aborts");
+
+            long activeCount = userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE);
+            assertEquals(2L, activeCount, "Both SUPER_ADMINs must remain ACTIVE");
+        } finally {
+            reset(authTokenRepository);
+        }
+    }
+
+    @Test
+    @DisplayName("F2-A Real MongoDB: Rolled-back transaction does not renew guard or change user")
+    void testRolledBackTransactionDoesNotRenewGuardOrChangeUser() {
+        User superAdminX = createUserRecord("super-rollback-x", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User superAdminY = createUserRecord("super-rollback-y", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        userRepository.saveAll(List.of(superAdminX, superAdminY));
+
+        AuthToken tokenX = new AuthToken(superAdminX.getId(), TokenType.REFRESH, "token-rollback-x", Instant.now().plusSeconds(3600), Instant.now());
+        authTokenRepository.save(tokenX);
+
+        authenticateAs(superAdminY.getId(), superAdminY.getEmail(), Role.SUPER_ADMIN);
+
+        try {
+            // Force user update inside transaction to throw
+            doThrow(new RuntimeException("Simulated failure during user update"))
+                    .when(mongoTemplate)
+                    .updateFirst(any(Query.class), any(Update.class), eq(User.class));
+
+            ApiException ex = assertThrows(ApiException.class, () ->
+                    userInternalService.changeStatus(superAdminY.getId(), superAdminX.getId(), UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+            assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+            assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
+
+            // Target user was NOT updated in DB
+            User target = userRepository.findById(superAdminX.getId()).orElse(null);
+            assertNotNull(target);
+            assertEquals(UserStatus.ACTIVE, target.getStatus(), "Target user status must remain ACTIVE after rollback");
+
+            // Guard document in auth_locks was released in finally (owner unset, expiresAt = EPOCH)
+            Document guardDoc = mongoTemplate.findById("super-admin-status", Document.class, "auth_locks");
+            assertNotNull(guardDoc);
+            assertFalse(guardDoc.containsKey("owner"), "Lock owner must be unset after release in finally");
+        } finally {
+            reset(mongoTemplate);
+        }
+    }
+
+    @Test
+    @DisplayName("F2-B Real MongoDB: Legacy expired lockedUntil is migrated to expiresAt, lockedUntil unset, and held lock cannot be taken over")
+    void testLegacyExpiredLockedUntilIsMigratedAndCannotBeUsedForTakeover() {
+        mongoTemplate.remove(new Query(), "auth_locks");
+
+        // 1. Pre-insert legacy document with expired lockedUntil and no expiresAt/fence
+        Document legacyDoc = new Document("_id", "super-admin-status")
+                .append("owner", "legacy-expired-owner")
+                .append("lockedUntil", Date.from(Instant.now().minusSeconds(60)));
+        mongoTemplate.save(legacyDoc, "auth_locks");
+
+        // 2. Op A acquires: should succeed, set expiresAt, inc fence, and unset lockedUntil
+        UserInternalServiceImpl serviceImpl = org.springframework.test.util.AopTestUtils.getTargetObject(userInternalService);
+        UserInternalServiceImpl.SuperAdminGuard guardA = serviceImpl.acquireSuperAdminGuard();
+        assertNotNull(guardA);
+        assertNotNull(guardA.owner());
+        assertEquals(1L, guardA.fence());
+
+        Document migratedDoc = mongoTemplate.findById("super-admin-status", Document.class, "auth_locks");
+        assertNotNull(migratedDoc);
+        assertEquals(guardA.owner(), migratedDoc.getString("owner"));
+        assertTrue(migratedDoc.containsKey("expiresAt"), "Document must now have expiresAt");
+        assertFalse(migratedDoc.containsKey("lockedUntil"), "lockedUntil must be removed ($unset)");
+        assertEquals(1L, ((Number) migratedDoc.get("fence")).longValue());
+
+        // 3. Op B tries to acquire while A holds the unexpired guard: fails with 409
+        ResourceConflictException ex = assertThrows(ResourceConflictException.class, () ->
+                serviceImpl.acquireSuperAdminGuard());
+        assertEquals("CONCURRENT_MODIFICATION", ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("F2-B Real MongoDB: Legacy lockedUntil in future without expiresAt cannot be acquired")
+    void testLegacyLockedUntilInFutureWithoutExpiresAtCannotBeAcquired() {
+        mongoTemplate.remove(new Query(), "auth_locks");
+
+        Document legacyDoc = new Document("_id", "super-admin-status")
+                .append("owner", "legacy-future-owner")
+                .append("lockedUntil", Date.from(Instant.now().plusSeconds(60)));
+        mongoTemplate.save(legacyDoc, "auth_locks");
+
+        UserInternalServiceImpl serviceImpl = org.springframework.test.util.AopTestUtils.getTargetObject(userInternalService);
+        ResourceConflictException ex = assertThrows(ResourceConflictException.class, () ->
+                serviceImpl.acquireSuperAdminGuard());
+        assertEquals("CONCURRENT_MODIFICATION", ex.getErrorCode());
+
+        Document unchangedDoc = mongoTemplate.findById("super-admin-status", Document.class, "auth_locks");
+        assertNotNull(unchangedDoc);
+        assertEquals("legacy-future-owner", unchangedDoc.getString("owner"));
+        assertFalse(unchangedDoc.containsKey("expiresAt"));
+    }
+
+    @Test
+    @DisplayName("F2-B Real MongoDB: Document with expiresAt in future and lockedUntil in past cannot be acquired")
+    void testBothFieldsWithExpiresAtFutureAndLockedUntilPastCannotBeAcquired() {
+        mongoTemplate.remove(new Query(), "auth_locks");
+
+        Document doc = new Document("_id", "super-admin-status")
+                .append("owner", "active-owner")
+                .append("expiresAt", Date.from(Instant.now().plusSeconds(60)))
+                .append("lockedUntil", Date.from(Instant.now().minusSeconds(60)))
+                .append("fence", 5L);
+        mongoTemplate.save(doc, "auth_locks");
+
+        UserInternalServiceImpl serviceImpl = org.springframework.test.util.AopTestUtils.getTargetObject(userInternalService);
+        ResourceConflictException ex = assertThrows(ResourceConflictException.class, () ->
+                serviceImpl.acquireSuperAdminGuard());
+        assertEquals("CONCURRENT_MODIFICATION", ex.getErrorCode());
+
+        Document unchangedDoc = mongoTemplate.findById("super-admin-status", Document.class, "auth_locks");
+        assertNotNull(unchangedDoc);
+        assertEquals("active-owner", unchangedDoc.getString("owner"));
+        assertEquals(5L, ((Number) unchangedDoc.get("fence")).longValue());
+    }
+
+    @Test
+    @DisplayName("F2-B Real MongoDB: Modern expiresAt in past takes precedence over legacy lockedUntil in future and unsets lockedUntil")
+    void testModernExpiresAtPastTakesPrecedenceOverLegacyLockedUntilFutureAndUnsetsLockedUntil() {
+        mongoTemplate.remove(new Query(), "auth_locks");
+
+        Document doc = new Document("_id", "super-admin-status")
+                .append("owner", "old-owner")
+                .append("expiresAt", Date.from(Instant.now().minusSeconds(30)))
+                .append("lockedUntil", Date.from(Instant.now().plusSeconds(300)))
+                .append("fence", 10L);
+        mongoTemplate.save(doc, "auth_locks");
+
+        UserInternalServiceImpl serviceImpl = org.springframework.test.util.AopTestUtils.getTargetObject(userInternalService);
+        UserInternalServiceImpl.SuperAdminGuard guard = serviceImpl.acquireSuperAdminGuard();
+        assertNotNull(guard);
+        assertEquals(11L, guard.fence());
+
+        Document updatedDoc = mongoTemplate.findById("super-admin-status", Document.class, "auth_locks");
+        assertNotNull(updatedDoc);
+        assertEquals(guard.owner(), updatedDoc.getString("owner"));
+        assertTrue(updatedDoc.containsKey("expiresAt"));
+        assertFalse(updatedDoc.containsKey("lockedUntil"), "lockedUntil must be removed ($unset)");
+        assertEquals(11L, ((Number) updatedDoc.get("fence")).longValue());
     }
 }

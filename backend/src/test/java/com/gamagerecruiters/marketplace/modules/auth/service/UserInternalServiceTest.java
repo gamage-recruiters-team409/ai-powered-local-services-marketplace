@@ -13,6 +13,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -53,7 +55,10 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 
+import com.mongodb.MongoException;
 import com.mongodb.client.result.UpdateResult;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
@@ -83,11 +88,15 @@ class UserInternalServiceTest {
     @Mock
     private MongoTemplate mongoTemplate;
 
+    @Mock
+    private PlatformTransactionManager transactionManager;
+
     private UserInternalServiceImpl userInternalService;
 
     @BeforeEach
     void setUp() {
-        userInternalService = new UserInternalServiceImpl(userRepository, authTokenRepository, passwordEncoder, mongoTemplate);
+        lenient().when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+        userInternalService = new UserInternalServiceImpl(userRepository, authTokenRepository, passwordEncoder, mongoTemplate, transactionManager);
     }
 
     @AfterEach
@@ -1582,6 +1591,8 @@ class UserInternalServiceTest {
 
         assertNotNull(result);
         assertEquals(UserStatus.SUSPENDED, result.getStatus());
+        // Verify transaction was committed
+        verify(transactionManager).commit(any());
         // Verify guard renewal and release executed on auth_locks
         verify(mongoTemplate, atLeastOnce()).updateFirst(any(Query.class), any(Update.class), eq("auth_locks"));
     }
@@ -1630,6 +1641,8 @@ class UserInternalServiceTest {
 
         assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+        // Verify transaction rolled back
+        verify(transactionManager).rollback(any());
         // Verify guard renewal and release executed on auth_locks
         verify(mongoTemplate, atLeastOnce()).updateFirst(any(Query.class), any(Update.class), eq("auth_locks"));
     }
@@ -1661,7 +1674,7 @@ class UserInternalServiceTest {
     }
 
     @Test
-    @DisplayName("changeStatus Guard: Proof failure before Step 2 throws 503 without user update")
+    @DisplayName("changeStatus Guard: Proof failure inside transaction rolls back and throws 503 without user update")
     void changeStatusGuardProofFailsBeforeStep2Throws503() {
         authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
         User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
@@ -1672,7 +1685,7 @@ class UserInternalServiceTest {
         when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
         when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
                 .thenReturn(new Document("owner", "lock-uuid-p2").append("fence", 1L));
-        // Proof (b) succeeds, but proof (c) fails
+        // Proof (b) succeeds, but proof inside transaction matches 0
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
                 .thenReturn(UpdateResult.acknowledged(1L, 1L, null))
                 .thenReturn(UpdateResult.acknowledged(0L, 0L, null));
@@ -1683,13 +1696,15 @@ class UserInternalServiceTest {
         assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
         assertEquals("The status change could not be completed safely. No status was changed. Please reload and retry.", ex.getMessage());
-        // Step 1 token revoke executed once before proof (c) failed
+        // Step 1 token revoke executed once before transaction proof failed
         verify(authTokenRepository, times(1)).revokeAllActiveTokensByUserIdAndType("super-2", TokenType.REFRESH);
         verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        verify(transactionManager).rollback(any());
+        verify(transactionManager, never()).commit(any());
     }
 
     @Test
-    @DisplayName("changeStatus Guard: Policy recheck before Step 2 finds one active SUPER_ADMIN throws 409")
+    @DisplayName("changeStatus Guard: Policy recheck inside transaction finds one active SUPER_ADMIN rolls back and throws 409")
     void changeStatusPolicyRecheckBeforeStep2FindsOneActiveSuperAdminThrows409() {
         authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
         User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
@@ -1697,7 +1712,7 @@ class UserInternalServiceTest {
 
         when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
         when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
-        // Initial policy check passes (2 active), recheck before Step 2 finds 1 active
+        // Initial policy check passes (2 active), recheck inside transaction finds 1 active
         when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE))
                 .thenReturn(2L)
                 .thenReturn(1L);
@@ -1715,6 +1730,8 @@ class UserInternalServiceTest {
         verify(authTokenRepository, times(1)).revokeAllActiveTokensByUserIdAndType("super-2", TokenType.REFRESH);
         // Step 2 DB update was never executed
         verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        verify(transactionManager).rollback(any());
+        verify(transactionManager, never()).commit(any());
     }
 
     @Test
@@ -1750,37 +1767,117 @@ class UserInternalServiceTest {
     }
 
     @Test
-    @DisplayName("changeStatus Guard: Post-update count zero restores status and throws 409")
-    void changeStatusPostUpdateCountZeroRestoresStatusAndThrows409() {
+    @DisplayName("changeStatus Guard: User update failure inside transaction rolls back and throws neutral 503")
+    void changeStatusUserUpdateThrowsInsideTransactionRollsBackAndThrowsNeutral503() {
         authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
         User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
         User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
 
         when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
         when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
-        // Policy check 1 -> 2L, Policy recheck before step 2 -> 2L, Post-update check -> 0L
-        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE))
-                .thenReturn(2L)
-                .thenReturn(2L)
-                .thenReturn(0L);
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
         when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
-                .thenReturn(new Document("owner", "lock-uuid-restore").append("fence", 1L));
+                .thenReturn(new Document("owner", "lock-uuid-ex").append("fence", 1L));
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
                 .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenThrow(new RuntimeException("Mongo connection dropped"));
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+        assertEquals("The status change could not be confirmed. Please reload the user and retry.", ex.getMessage());
+        verify(transactionManager).rollback(any());
+        verify(transactionManager, never()).commit(any());
+    }
+
+    @Test
+    @DisplayName("changeStatus Guard: Transient transaction or write conflict rolls back and throws 409")
+    void changeStatusTransientTransactionErrorRollsBackAndThrows409() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
+        when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
+                .thenReturn(new Document("owner", "lock-uuid-conflict").append("fence", 1L));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
                 .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+
+        MongoException conflictEx = new MongoException(112, "WriteConflict");
+        conflictEx.addLabel("TransientTransactionError");
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenThrow(conflictEx);
 
         ResourceConflictException ex = assertThrows(ResourceConflictException.class,
                 () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
 
         assertEquals("CONCURRENT_MODIFICATION", ex.getErrorCode());
         assertEquals(HttpStatus.CONFLICT, ex.getStatus());
-        assertTrue(ex.getMessage().contains("status has been restored"));
+        verify(transactionManager).rollback(any());
+        verify(transactionManager, never()).commit(any());
+    }
 
-        // Verify that 2 updates were performed on User.class: the update and the compensating restore
-        verify(mongoTemplate, times(2)).updateFirst(any(Query.class), any(Update.class), eq(User.class));
-        // Verify Step 3 token revocation was NOT performed
-        verify(authTokenRepository, times(1)).revokeAllActiveTokensByUserIdAndType("super-2", TokenType.REFRESH);
+    @Test
+    @DisplayName("changeStatus Guard: Standalone Mongo transactions not supported fails closed with 503 without fallback")
+    void changeStatusTransactionsNotSupportedFailsClosedThrows503WithoutFallback() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2")).thenReturn(Optional.of(target));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
+        when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
+                .thenReturn(new Document("owner", "lock-uuid-not-supported").append("fence", 1L));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+
+        MongoException notSupportedEx = new MongoException(20,
+                "Transaction numbers are only allowed on a replica set member or mongos");
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenThrow(notSupportedEx);
+
+        ApiException ex = assertThrows(ApiException.class,
+                () -> userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED));
+
+        assertEquals("STATUS_CHANGE_FAILED", ex.getErrorCode());
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+        assertEquals("The status change could not be completed safely. No status was changed. Please reload and retry.", ex.getMessage());
+        verify(transactionManager).rollback(any());
+        verify(transactionManager, never()).commit(any());
+    }
+
+    @Test
+    @DisplayName("changeStatus Guard: Successful SUPER_ADMIN status update commits transaction and executes secondary revocation")
+    void changeStatusSuperAdminSuccessCommitsTransactionAndRevokesTokensAfterCommit() {
+        authenticateAs("super-1", "super1@marketplace.local", Role.SUPER_ADMIN);
+        User actor = createUser("super-1", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User target = createUser("super-2", Role.SUPER_ADMIN, UserStatus.ACTIVE);
+        User updated = createUser("super-2", Role.SUPER_ADMIN, UserStatus.SUSPENDED);
+
+        when(userRepository.findById("super-1")).thenReturn(Optional.of(actor));
+        when(userRepository.findById("super-2"))
+                .thenReturn(Optional.of(target))
+                .thenReturn(Optional.of(updated));
+        when(userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE)).thenReturn(2L);
+        when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
+                .thenReturn(new Document("owner", "lock-uuid-success").append("fence", 1L));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq("auth_locks")))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(1L, 1L, null));
+
+        User result = userInternalService.changeStatus("super-1", "super-2", UserStatus.ACTIVE, UserStatus.SUSPENDED);
+
+        assertNotNull(result);
+        assertEquals(UserStatus.SUSPENDED, result.getStatus());
+        verify(transactionManager).commit(any());
+        verify(authTokenRepository, times(2)).revokeAllActiveTokensByUserIdAndType("super-2", TokenType.REFRESH);
     }
 
     @Test
@@ -1825,6 +1922,32 @@ class UserInternalServiceTest {
         assertEquals("super-admin-status", queryObject.get("_id"));
         assertEquals(acquiredOwner, queryObject.get("owner"));
         assertEquals(42L, queryObject.get("fence"));
+    }
+
+    @Test
+    @DisplayName("F2-B: acquireSuperAdminGuard builds query ignoring legacy lockedUntil if expiresAt exists and unsets lockedUntil in update")
+    void acquireSuperAdminGuardBuildsCorrectQueryAndUnsetsLockedUntil() {
+        when(mongoTemplate.findAndModify(any(), any(), any(), eq(Document.class), eq("auth_locks")))
+                .thenReturn(new Document("owner", "new-owner").append("fence", 1L));
+
+        userInternalService.acquireSuperAdminGuard();
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
+        verify(mongoTemplate).findAndModify(queryCaptor.capture(), updateCaptor.capture(), any(), eq(Document.class), eq("auth_locks"));
+
+        Query query = queryCaptor.getValue();
+        Document queryObject = query.getQueryObject();
+        assertEquals("super-admin-status", queryObject.get("_id"));
+        assertTrue(queryObject.containsKey("$or"));
+
+        Update update = updateCaptor.getValue();
+        Document updateObject = update.getUpdateObject();
+        assertTrue(updateObject.containsKey("$set"));
+        assertTrue(updateObject.containsKey("$unset"));
+        assertTrue(updateObject.containsKey("$inc"));
+        Document unsetDoc = (Document) updateObject.get("$unset");
+        assertTrue(unsetDoc.containsKey("lockedUntil"));
     }
 
     // --- F3 Status update and token revocation consistency tests (No rollback) ---

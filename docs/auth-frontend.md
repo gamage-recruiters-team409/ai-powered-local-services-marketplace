@@ -109,22 +109,28 @@ The user interface implements the 15 high-fidelity visual designs matching the L
 - **Signature:** `User changeStatus(String actorId, String userId, UserStatus expectedStatus, UserStatus newStatus)`
 - **Legacy Delegation:** The deprecated 2-argument `User changeStatus(String userId, UserStatus status)` safely resolves `actorId = CurrentUser.getUserId()`, reads the target's current status as `expectedStatus`, and delegates directly to the 4-argument atomic method.
 - **Fail-Closed Actor Validation:** Strict validation ensures a valid security context with a `UserPrincipal`, matching `actorId` (preventing actor spoofing), existing database record, and `ACTIVE` actor status.
-- **Concurrency-Safe Guard with Fencing Token, Lease Renewal, & Safety Net for SUPER_ADMIN:**
+- **Concurrency-Safe Guard with Fencing Token, Lease Renewal, & Transactional Coupling for SUPER_ADMIN:**
   - Whenever modifying a `SUPER_ADMIN` to a non-active status (`newStatus != ACTIVE`), an atomic lease-based guard is acquired in collection `auth_locks` with `_id: "super-admin-status"`.
-  - **Fencing Token (`fence`) & Monotonic Ownership:** Every successful acquisition does an atomic upsert/`findAndModify` setting `owner` (random UUID), `expiresAt = now + lease`, and `$inc: { fence: 1 }` returning the new document (`owner`, `fence`). If another operation holds an unexpired lease, it retries with short backoffs (5 x 50ms) before returning HTTP 409 `CONCURRENT_MODIFICATION`.
+  - **Fencing Token (`fence`) & Monotonic Ownership:** Every successful acquisition does an atomic upsert/`findAndModify` setting `owner` (random UUID), `expiresAt = now + lease`, `$unset: { lockedUntil: "" }` (safely migrating legacy documents while prioritizing modern `expiresAt`), and `$inc: { fence: 1 }` returning the new document (`owner`, `fence`). If another operation holds an unexpired lease, it retries with short backoffs (5 x 50ms) before returning HTTP 409 `CONCURRENT_MODIFICATION`.
   - **Ownership Proof & Periodic Lease Renewal (`verifyAndRenewGuard`):** Before performing critical operations, the service verifies guard ownership and renews the lease via a single atomic conditional update:
     `{ _id: "super-admin-status", owner: guard.owner, fence: guard.fence, expiresAt: { $gt: now } } -> $set expiresAt = now + lease`.
     If 0 documents match (indicating lease expired or was taken over by another operation), it immediately aborts with HTTP 503 `STATUS_CHANGE_FAILED` ("The status change could not be completed safely. No status was changed. Please reload and retry.").
   - **Proof Points in Lifecycle:**
-    1. *Acquisition:* Held immediately upon acquiring guard.
+    1. *Acquisition:* Held immediately upon acquiring guard with `$unset lockedUntil`.
     2. *Proof Point (b):* Immediately before Step 1 token revocation.
-    3. *Proof Point (c):* Immediately before Step 2 status update:
-       - Checks local monotonic elapsed time (`System.nanoTime() - guard.lastProofNanoTime()`). If elapsed time exceeds `lease - safetyMargin` (e.g. 10s - 3s = 7s), aborts with HTTP 503 `STATUS_CHANGE_FAILED` without touching the user document.
-       - Runs atomic ownership proof and lease renewal (`verifyAndRenewGuard`).
-       - Re-evaluates active `SUPER_ADMIN` count and policy (`AdminRolePolicy.validateStatusChange`) under the renewed lease.
+    3. *Step 2 Pre-Transaction Time Bound:* Checks local monotonic elapsed time (`System.nanoTime() - guard.lastProofNanoTime()`). If elapsed time exceeds `lease - safetyMargin` (e.g. 10s - 3s = 7s), aborts with HTTP 503 `STATUS_CHANGE_FAILED` without touching the user document.
+    4. *Atomic Transaction Coupling:* The final guard proof write, policy recheck (verifying at least 1 other active SUPER_ADMIN exists), and user status update are coupled into **ONE MongoDB multi-document transaction** (`TransactionTemplate` / `PlatformTransactionManager`):
+       - (a) Guard proof write in transaction: `{ _id: "super-admin-status", owner: guard.owner, fence: guard.fence, expiresAt: { $gt: now } } -> $set expiresAt = now + lease` on `auth_locks`. If 0 documents match, transaction rolls back and aborts with 503.
+       - (b) Policy recheck inside transaction: `AdminRolePolicy.validateStatusChange(actor, target, newStatus, userRepository)`.
+       - (c) User status update in transaction: `{ _id: userId, status: expectedStatus } -> $set status = newStatus` on `User.class`.
+       - If transient transaction error / write conflict occurs (Mongo error code 112 or error label `TransientTransactionError`), maps to HTTP 409 `CONCURRENT_MODIFICATION`.
   - **Release in Finally:** The guard is released in a `finally` block matching `_id`, `owner`, and `fence` (`{ _id: "super-admin-status", owner: guard.owner, fence: guard.fence }`), preventing an expired operation from accidentally wiping a successor's active lock.
-  - **Post-Update Invariant Safety Net:** If a `SUPER_ADMIN` status update succeeds, the service recounts active `SUPER_ADMIN`s. If the count dropped to 0, it executes a targeted atomic restoration `{ _id: userId, status: newStatus } -> $set status = expectedStatus` (without resetting other authentication fields), logs `SUPER_ADMIN_INVARIANT_RESTORED: <userId>`, and throws HTTP 409 `CONCURRENT_MODIFICATION`. If restoration throws an exception, it logs safely and throws HTTP 503 `STATUS_CHANGE_FAILED`.
-  - **Remaining Narrow Race Window:** While fencing tokens, dual ownership proofs, local elapsed time bounds, policy re-checks under renewed lease, and post-update invariant recovery protect against concurrent deactivations across distributed requests, distributed consensus without a dedicated distributed transaction coordinator leaves an infinitesimally narrow window: if an extreme JVM pause (e.g. Stop-The-World GC lasting > 7 seconds) occurs precisely between the Step 2 proof/policy recount and the MongoDB status write, the lease could expire and be overtaken before the write commits. The post-update recount and conditional restoration provide a compensating safety net for this boundary condition.
+  - **MongoDB Replica Set Requirement:** SUPER_ADMIN status changes **REQUIRE** MongoDB replica set transactions. On standalone deployments where transactions are unsupported (Mongo error code 20 / `IllegalOperation`), the operation strictly **fails closed** with HTTP 503 `STATUS_CHANGE_FAILED` ("The status change could not be completed safely. No status was changed. Please reload and retry.") and never falls back to an unsafe non-transactional mutation.
+    To start a single-node replica set for local development or testing:
+    ```bash
+    docker run -d --name mongo-rs -p 27017:27017 mongo:7.0 mongod --replSet rs0 --bind_ip_all
+    docker exec mongo-rs mongosh --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]})"
+    ```
 - **Ordered Execution & No Compensating Rollback:**
   - **Early Stale-View Check:** Prior to Step 1, if the target user's status loaded from the database differs from `expectedStatus`, it rejects immediately with HTTP 409 `CONCURRENT_MODIFICATION` without revoking tokens or modifying database state.
   - **Step 1 (Pre-Update Revocation):** When `newStatus` is `SUSPENDED` or `DEACTIVATED`, refresh tokens are revoked first via `authTokenRepository.revokeAllActiveTokensByUserIdAndType(userId, TokenType.REFRESH)`. If revocation fails, no database state has changed, and it returns HTTP 503 `STATUS_CHANGE_FAILED` with 'The status was not changed because sessions could not be revoked. Please retry.'

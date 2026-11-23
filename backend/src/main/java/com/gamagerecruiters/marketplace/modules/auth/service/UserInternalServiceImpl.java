@@ -20,6 +20,7 @@ import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -41,10 +42,13 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.mongodb.MongoException;
 import com.mongodb.client.result.UpdateResult;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.TokenType;
@@ -69,11 +73,10 @@ public class UserInternalServiceImpl implements UserInternalService {
     /**
      * Distributed lease-based guard with fencing tokens in collection {@code auth_locks}.
      * Serializes status modifications on SUPER_ADMIN accounts. Uses an atomic findAndModify
-     * with $inc fence on acquire, ownership proofs (verifyAndRenewGuard) before step 1 and step 2,
-     * local time bound enforcement, re-validation of AdminRolePolicy inside the renewed lease,
-     * release-in-finally matching owner and fence, and a post-update safety net if active count reaches 0.
-     * The narrow window that remains (milliseconds between the pre-step-2 recount and the atomic update)
-     * is closed further by the post-update invariant check and restoration.
+     * with $inc fence on acquire (unsetting legacy lockedUntil), an ownership proof before step 1,
+     * local time bound enforcement, and couples the final guard proof, policy recheck, and user
+     * status update inside a single MongoDB transaction (TransactionTemplate).
+     * Release-in-finally matches _id, owner, and fence.
      */
     private static final String AUTH_LOCKS_COLLECTION = "auth_locks";
     private static final String SUPER_ADMIN_LOCK_ID = "super-admin-status";
@@ -86,7 +89,7 @@ public class UserInternalServiceImpl implements UserInternalService {
     @Value("${app.auth.super-admin-lock-safety-margin-ms:3000}")
     private long superAdminLockSafetyMarginMs = 3000L;
 
-    private record SuperAdminGuard(String owner, long fence, long lastProofNanoTime) {}
+    public record SuperAdminGuard(String owner, long fence, long lastProofNanoTime) {}
 
     private static final Pattern PASSWORD_POLICY = Pattern.compile("^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}$");
 
@@ -94,17 +97,22 @@ public class UserInternalServiceImpl implements UserInternalService {
     private final AuthTokenRepository authTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final MongoTemplate mongoTemplate;
+    private final PlatformTransactionManager transactionManager;
+    private final TransactionTemplate transactionTemplate;
 
     public UserInternalServiceImpl(
             UserRepository userRepository,
             AuthTokenRepository authTokenRepository,
             PasswordEncoder passwordEncoder,
-            MongoTemplate mongoTemplate
+            MongoTemplate mongoTemplate,
+            PlatformTransactionManager transactionManager
     ) {
         this.userRepository = userRepository;
         this.authTokenRepository = authTokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.mongoTemplate = mongoTemplate;
+        this.transactionManager = transactionManager;
+        this.transactionTemplate = transactionManager != null ? new TransactionTemplate(transactionManager) : null;
     }
 
     public void setSuperAdminLockLeaseMs(long superAdminLockLeaseMs) {
@@ -483,7 +491,7 @@ public class UserInternalServiceImpl implements UserInternalService {
                 }
             }
 
-            // Proof point (c): immediately BEFORE step 2 (conditional status update)
+            // Time bound check before Step 2
             if (isSuperAdminGuardRequired) {
                 long elapsedNanos = System.nanoTime() - guard.lastProofNanoTime();
                 long maxAllowedNanos = (superAdminLockLeaseMs - superAdminLockSafetyMarginMs) * 1_000_000L;
@@ -491,55 +499,100 @@ public class UserInternalServiceImpl implements UserInternalService {
                     throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
                             "The status change could not be completed safely. No status was changed. Please reload and retry.");
                 }
-                guard = verifyAndRenewGuard(guard);
-                // Re-run the SUPER_ADMIN policy check / active count inside the held, renewed lease
-                AdminRolePolicy.validateStatusChange(actor, target, newStatus, userRepository);
             }
 
-            // Step 2: Atomic conditional status update (_id AND status == expectedStatus)
-            Query query = new Query(Criteria.where("_id").is(userId).and("status").is(expectedStatus));
-            Update update = new Update().set("status", newStatus);
-
-            if (newStatus == UserStatus.ACTIVE) {
-                update.set("failedLoginCount", 0);
-                update.unset("lockStartedAt");
-            }
-
-            UpdateResult result;
-            try {
-                result = mongoTemplate.updateFirst(query, update, User.class);
-            } catch (Exception ex) {
-                throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
-                        "The status change could not be confirmed. Please reload the user and retry.");
-            }
-
-            if (result.getMatchedCount() == 0) {
-                boolean exists = userRepository.existsById(userId);
-                if (exists) {
-                    throw new ResourceConflictException("CONCURRENT_MODIFICATION",
-                            "User status was modified concurrently. Expected '" + expectedStatus
-                                    + "' but it has changed. Please retry.");
-                } else {
-                    throw new ResourceNotFoundException("USER_NOT_FOUND", "User not found with id: " + userId);
-                }
-            }
-
-            // Post-update safety net: after step 2 succeeds for a SUPER_ADMIN -> non-ACTIVE change
+            // Step 2: Conditional status update (inside a transaction for SUPER_ADMIN protected changes)
             if (isSuperAdminGuardRequired) {
-                long activeSuperAdmins = userRepository.countByRoleAndStatus(Role.SUPER_ADMIN, UserStatus.ACTIVE);
-                if (activeSuperAdmins == 0) {
-                    Query restoreQuery = new Query(Criteria.where("_id").is(userId).and("status").is(newStatus));
-                    Update restoreUpdate = new Update().set("status", expectedStatus);
-                    try {
-                        mongoTemplate.updateFirst(restoreQuery, restoreUpdate, User.class);
-                    } catch (Exception ex) {
-                        log.warn("Failed to restore super-admin status for user {}: {}", userId, ex.getClass().getSimpleName());
-                        throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
-                                "The status change could not be confirmed. Please reload the user and retry.");
+                if (transactionTemplate == null) {
+                    log.warn("Transactions not supported for super-admin status change on user {}: IllegalStateException", userId);
+                    throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
+                            "The status change could not be completed safely. No status was changed. Please reload and retry.");
+                }
+                final SuperAdminGuard activeGuard = guard;
+                try {
+                    transactionTemplate.execute(status -> {
+                        // a) Guard proof as a WRITE to the guard document inside the transaction
+                        Instant now = Instant.now();
+                        Query proofQuery = new Query(Criteria.where("_id").is(SUPER_ADMIN_LOCK_ID)
+                                .and("owner").is(activeGuard.owner())
+                                .and("fence").is(activeGuard.fence())
+                                .and("expiresAt").gt(now));
+                        Update proofUpdate = new Update().set("expiresAt", now.plusMillis(superAdminLockLeaseMs));
+                        UpdateResult proofResult = mongoTemplate.updateFirst(proofQuery, proofUpdate, AUTH_LOCKS_COLLECTION);
+                        if (proofResult == null || proofResult.getMatchedCount() == 0) {
+                            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
+                                    "The status change could not be completed safely. No status was changed. Please reload and retry.");
+                        }
+
+                        // b) Re-run the SUPER_ADMIN policy check inside the transaction
+                        AdminRolePolicy.validateStatusChange(actor, target, newStatus, userRepository);
+
+                        // c) Conditional user update inside the transaction
+                        Query query = new Query(Criteria.where("_id").is(userId).and("status").is(expectedStatus));
+                        Update update = new Update().set("status", newStatus);
+                        if (newStatus == UserStatus.ACTIVE) {
+                            update.set("failedLoginCount", 0);
+                            update.unset("lockStartedAt");
+                        }
+
+                        UpdateResult result = mongoTemplate.updateFirst(query, update, User.class);
+                        if (result.getMatchedCount() == 0) {
+                            boolean exists = userRepository.existsById(userId);
+                            if (exists) {
+                                throw new ResourceConflictException("CONCURRENT_MODIFICATION",
+                                        "User status was modified concurrently. Expected '" + expectedStatus
+                                                + "' but it has changed. Please retry.");
+                            } else {
+                                throw new ResourceNotFoundException("USER_NOT_FOUND", "User not found with id: " + userId);
+                            }
+                        }
+                        return null;
+                    });
+                } catch (ApiException apiEx) {
+                    throw apiEx;
+                } catch (Exception ex) {
+                    if (isTransientTransactionOrWriteConflict(ex)) {
+                        throw new ResourceConflictException("CONCURRENT_MODIFICATION",
+                                "User status was modified concurrently. Please retry.");
                     }
-                    log.warn("SUPER_ADMIN_INVARIANT_RESTORED: {}", userId);
-                    throw new ResourceConflictException("CONCURRENT_MODIFICATION",
-                            "Concurrent modification compromised the last active super-admin invariant; status has been restored. Please retry.");
+                    if (isTransactionsNotSupported(ex)) {
+                        log.warn("Transactions not supported for super-admin status change on user {}: {}",
+                                userId, ex.getClass().getSimpleName());
+                        throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
+                                "The status change could not be completed safely. No status was changed. Please reload and retry.");
+                    }
+                    log.warn("Transaction failure for super-admin status change on user {}: {}",
+                            userId, ex.getClass().getSimpleName());
+                    throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
+                            "The status change could not be confirmed. Please reload the user and retry.");
+                }
+            } else {
+                // Non-SUPER_ADMIN status change (no transaction needed)
+                Query query = new Query(Criteria.where("_id").is(userId).and("status").is(expectedStatus));
+                Update update = new Update().set("status", newStatus);
+
+                if (newStatus == UserStatus.ACTIVE) {
+                    update.set("failedLoginCount", 0);
+                    update.unset("lockStartedAt");
+                }
+
+                UpdateResult result;
+                try {
+                    result = mongoTemplate.updateFirst(query, update, User.class);
+                } catch (Exception ex) {
+                    throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATUS_CHANGE_FAILED",
+                            "The status change could not be confirmed. Please reload the user and retry.");
+                }
+
+                if (result.getMatchedCount() == 0) {
+                    boolean exists = userRepository.existsById(userId);
+                    if (exists) {
+                        throw new ResourceConflictException("CONCURRENT_MODIFICATION",
+                                "User status was modified concurrently. Expected '" + expectedStatus
+                                        + "' but it has changed. Please retry.");
+                    } else {
+                        throw new ResourceNotFoundException("USER_NOT_FOUND", "User not found with id: " + userId);
+                    }
                 }
             }
 
@@ -561,21 +614,28 @@ public class UserInternalServiceImpl implements UserInternalService {
         }
     }
 
-    private SuperAdminGuard acquireSuperAdminGuard() {
+    public SuperAdminGuard acquireSuperAdminGuard() {
         String owner = UUID.randomUUID().toString();
         for (int attempt = 0; attempt < LOCK_ACQUISITION_RETRIES; attempt++) {
             try {
                 Instant now = Instant.now();
                 Instant expiresAt = now.plusMillis(superAdminLockLeaseMs);
-                Query query = new Query(Criteria.where("_id").is(SUPER_ADMIN_LOCK_ID)
-                        .orOperator(
-                                Criteria.where("expiresAt").exists(false),
-                                Criteria.where("expiresAt").lt(now),
+
+                Criteria modernExpiry = Criteria.where("expiresAt").exists(true).lt(now);
+                Criteria legacyExpiry = new Criteria().andOperator(
+                        Criteria.where("expiresAt").exists(false),
+                        new Criteria().orOperator(
+                                Criteria.where("lockedUntil").exists(false),
                                 Criteria.where("lockedUntil").lt(now)
-                        ));
+                        )
+                );
+
+                Query query = new Query(Criteria.where("_id").is(SUPER_ADMIN_LOCK_ID)
+                        .orOperator(modernExpiry, legacyExpiry));
                 Update update = new Update()
                         .set("owner", owner)
                         .set("expiresAt", expiresAt)
+                        .unset("lockedUntil")
                         .inc("fence", 1);
                 FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
                 Document doc = mongoTemplate.findAndModify(query, update, options, Document.class, AUTH_LOCKS_COLLECTION);
@@ -731,5 +791,47 @@ public class UserInternalServiceImpl implements UserInternalService {
                     "Actor role '" + actor.getRole() + "' is not permitted to view users");
         }
         return actor;
+    }
+
+    private boolean isTransientTransactionOrWriteConflict(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ConcurrencyFailureException) {
+                return true;
+            }
+            if (cause instanceof MongoException mongo) {
+                if (mongo.hasErrorLabel("TransientTransactionError")
+                        || mongo.hasErrorLabel("WriteConflict")
+                        || mongo.getCode() == 112) {
+                    return true;
+                }
+            }
+            String msg = cause.getMessage();
+            if (msg != null && (msg.contains("WriteConflict") || msg.contains("TransientTransactionError"))) {
+                return true;
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return false;
+    }
+
+    private boolean isTransactionsNotSupported(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof MongoException mongo) {
+                if (mongo.getCode() == 20) { // IllegalOperation
+                    return true;
+                }
+            }
+            String msg = cause.getMessage();
+            if (msg != null && (msg.contains("Transaction numbers are only allowed on a replica set member or mongos")
+                    || msg.contains("replica set member or mongos"))) {
+                return true;
+            }
+            if (cause.getCause() == cause) {
+                break;
+            }
+        }
+        return false;
     }
 }
