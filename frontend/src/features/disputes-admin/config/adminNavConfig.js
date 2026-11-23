@@ -39,8 +39,6 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
   { id: 'admin.disputes', area: ADMIN, section: 'Operations', label: 'Disputes', path: 'disputes', icon: 'alertCircle', description: 'Dispute console and appeals' },
   { id: 'admin.users', area: ADMIN, section: 'Operations', label: 'Users', path: 'users', icon: 'users', description: 'Customer and provider accounts' },
   { id: 'admin.provider-verification', area: ADMIN, section: 'Operations', label: 'Provider verification', path: 'provider-verification', icon: 'shield', description: 'Review provider verification requests' },
-  { id: 'admin.moderation.reported-content', area: ADMIN, section: 'Operations', group: MODERATION_GROUP, label: 'Reported content', path: 'moderation/reported-content', description: 'Reported messages and content' },
-  { id: 'admin.moderation.reviews', area: ADMIN, section: 'Operations', group: MODERATION_GROUP, label: 'Review moderation', path: 'moderation/reviews', description: 'Reported reviews' },
   { id: 'admin.overdue-bookings', area: ADMIN, section: 'Operations', label: 'Overdue bookings', path: 'overdue-bookings', icon: 'clock', description: 'Bookings still open 72 hours after the slot ended' },
   { id: 'admin.late-cases', area: ADMIN, section: 'Operations', label: 'Late cases', path: 'late-cases', icon: 'calendar', description: 'Problems reported after the 72-hour window' },
   { id: 'admin.repeat-cancellations', area: ADMIN, section: 'Operations', label: 'Repeat cancellations', path: 'repeat-cancellations', icon: 'xCircle', description: 'Warnings and suspensions for repeat cancellations' },
@@ -57,6 +55,8 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
   { id: 'support.repeat-cancellations', area: SUPPORT_ADMIN, section: 'Operations', label: 'Repeat cancellations', path: 'repeat-cancellations', icon: 'xCircle', description: 'Repeat cancellation cases' },
 
   // ---------- Moderator ----------
+  // Moderation writes (WP06 reported content, WP08 review moderation) belong to the MODERATOR area only; the ADMIN area
+  // has no Moderation group. SUPER_ADMIN opens this area read-only (decided by /api/v1/admin/access).
   { id: 'moderator.dashboard', area: MODERATOR, section: null, label: 'Dashboard', path: '', icon: 'dashboard', description: 'Overview of the moderation queue' },
   { id: 'moderator.moderation.reported-content', area: MODERATOR, section: 'Operations', group: MODERATION_GROUP, label: 'Reported content', path: 'moderation/reported-content', description: 'Reported messages and content' },
   { id: 'moderator.moderation.reviews', area: MODERATOR, section: 'Operations', group: MODERATION_GROUP, label: 'Review moderation', path: 'moderation/reviews', description: 'Reported reviews' },

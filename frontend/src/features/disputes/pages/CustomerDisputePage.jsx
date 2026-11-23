@@ -28,8 +28,8 @@ import styles from '../disputes.module.css'
 const MY_BOOKINGS_PATH = '/customer/bookings'
 
 /**
- * Customer "View dispute" (read-only). The route wraps it in CustomerDisputeShell until the customer layout
- * (WP03) is in the repository.
+ * Customer "View dispute" (read-only). Rendered inside the Customer Common Layout with the account sidebar
+ * (CUSTOMER_ACCOUNT_ROUTES); the customer guards handle sign-in and the CUSTOMER role.
  */
 export function CustomerDisputePage() {
   const { disputeId } = useParams()

@@ -31,20 +31,6 @@
   font-family: var(--prv-font, inherit);
 }
 
-/* Standalone customer page (no customer layout yet): full-width light background, centred content. */
-.standalone {
-  min-height: 100vh;
-  padding: 24px 16px 40px;
-  background: #f8fafc;
-  color-scheme: light;
-  box-sizing: border-box;
-}
-
-.container {
-  max-width: 1120px;
-  margin: 0 auto;
-}
-
 .page :focus-visible {
   outline: 2px solid var(--dsp-focus);
   outline-offset: 2px;
@@ -627,12 +613,6 @@ a.evidenceName {
 @media print {
   .noPrint {
     display: none !important;
-  }
-
-  .standalone {
-    padding: 0;
-    background: #ffffff;
-    min-height: 0;
   }
 
   .grid {
