@@ -14,18 +14,21 @@ import {
   StatusBadge,
   WhatHappensNext,
 } from '../components/DisputeParts'
+import { AppealSection } from '../components/AppealSection'
 import { DisputeIcon } from '../components/DisputeIcon'
 import { DisputeResponseForm } from '../components/DisputeResponseForm'
+import { EvidenceSection } from '../components/EvidenceSection'
 import { DisputeAccessDenied, DisputeErrorState, DisputeNotFound, DisputeSkeleton } from '../components/DisputeStates'
 import { responderRoleOf } from '../config/disputeStatus'
 import { useDispute } from '../hooks/useDispute'
 import { useNow } from '../hooks/useNow'
 import { isResponseOverdue } from '../utils/countdown'
+import { EVIDENCE_OPEN_STATUSES } from '../utils/evidence'
 import { disputeTitle } from '../utils/format'
 import { responseClosedReason } from '../utils/responseState'
 import styles from '../disputes.module.css'
 
-const MY_BOOKINGS_PATH = '/customer/bookings'
+const MY_DISPUTES_PATH = '/customer/disputes'
 
 /**
  * Customer "View dispute" (read-only). Rendered inside the Customer Common Layout with the account sidebar
@@ -47,7 +50,7 @@ export function CustomerDisputePage() {
     if (error.kind === 'forbidden') {
       content = <DisputeAccessDenied />
     } else if (error.kind === 'not-found') {
-      content = <DisputeNotFound backTo={MY_BOOKINGS_PATH} />
+      content = <DisputeNotFound backTo={MY_DISPUTES_PATH} />
     } else {
       content = <DisputeErrorState message={error.message} onRetry={reload} />
     }
@@ -65,7 +68,7 @@ export function CustomerDisputePage() {
  * and gets the shared response form (same rules, validation and error handling as the provider screen).
  */
 function CustomerDisputeView({ dispute, now, onUpdated, onReload }) {
-  const [justSubmitted, setJustSubmitted] = useState(false)
+  const [justSubmitted, setJustSubmitted] = useState(null)
   const responderRole = responderRoleOf(dispute)
   const customerResponds = responderRole === 'CUSTOMER'
   const title = disputeTitle(dispute)
@@ -76,7 +79,7 @@ function CustomerDisputeView({ dispute, now, onUpdated, onReload }) {
     <div className={styles.page}>
       <Breadcrumb items={[
         { label: 'Home', to: '/' },
-        { label: 'My Bookings', to: MY_BOOKINGS_PATH },
+        { label: 'My Disputes', to: MY_DISPUTES_PATH },
         { label: title },
       ]}
       />
@@ -110,8 +113,10 @@ function CustomerDisputeView({ dispute, now, onUpdated, onReload }) {
 
       <div aria-live="polite">
         {justSubmitted && (
-          <InlineMessage variant="success">
+          <InlineMessage variant={justSubmitted.failedUploads > 0 ? 'warning' : 'success'}>
             Your response was submitted. An admin will now review both sides.
+            {justSubmitted.failedUploads > 0
+              && ` ${justSubmitted.failedUploads} file(s) could not be uploaded; you can add them below.`}
           </InlineMessage>
         )}
       </div>
@@ -124,6 +129,12 @@ function CustomerDisputeView({ dispute, now, onUpdated, onReload }) {
             response={dispute.response}
             title={customerResponds ? 'Your response' : "Provider's response"}
           />
+          <EvidenceSection
+            dispute={dispute}
+            viewerRole="CUSTOMER"
+            canUpload={EVIDENCE_OPEN_STATUSES.has(dispute.status)}
+            onUploaded={(uploaded) => onUpdated({ ...dispute, evidenceFiles: [...(dispute.evidenceFiles ?? []), ...uploaded] })}
+          />
           <DisputeTimeline
             dispute={dispute}
             waitingTitle={customerResponds ? 'Waiting for your response' : "Waiting for the provider's response"}
@@ -131,13 +142,14 @@ function CustomerDisputeView({ dispute, now, onUpdated, onReload }) {
           />
         </div>
         <div className={styles.column}>
+          <AppealSection dispute={dispute} now={now} viewerRole="CUSTOMER" onUpdated={onUpdated} onReload={onReload} />
           {customerResponds && !dispute.response && (
             <DisputeResponseForm
               disputeId={dispute.id}
               canRespond={reason === null}
               closedMessage={reason}
-              onSubmitted={(updated) => {
-                setJustSubmitted(true)
+              onSubmitted={(updated, result) => {
+                setJustSubmitted({ failedUploads: result?.failedUploads ?? 0 })
                 onUpdated(updated)
               }}
               onWindowClosed={onReload}

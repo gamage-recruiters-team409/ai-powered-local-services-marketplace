@@ -57,6 +57,55 @@ export async function submitDisputeResponse(disputeId, text) {
   return data
 }
 
+/**
+ * GET /disputes/my -> { content, page, size, totalElements, totalPages }
+ * @param {{statuses?: string[], page?: number, size?: number}} query  page is 0-based
+ */
+export async function fetchMyDisputes({ statuses = [], page = 0, size = 10 } = {}, signal) {
+  const params = new URLSearchParams()
+  statuses.forEach((status) => params.append('status', status))
+  params.set('page', String(page))
+  params.set('size', String(size))
+  const { data } = await disputeHttp.get('/disputes/my', { params, signal })
+  return data
+}
+
+/** POST /disputes with { bookingId, category, description } -> DisputeDetailResponse (201). */
+export async function raiseDispute({ bookingId, category, description }) {
+  const { data } = await disputeHttp.post('/disputes', { bookingId, category, description })
+  return data
+}
+
+/** POST /disputes/{id}/appeal with { grounds } -> DisputeDetailResponse (APPEALED). */
+export async function submitAppeal(disputeId, grounds) {
+  const { data } = await disputeHttp.post(`${disputePath(disputeId)}/appeal`, { grounds })
+  return data
+}
+
+/**
+ * POST /disputes/{id}/evidence (multipart "file") -> EvidenceView. `onProgress(percent)` reports the upload.
+ * Uploads get a longer timeout than other requests.
+ */
+export async function uploadEvidence(disputeId, file, onProgress) {
+  const form = new FormData()
+  form.append('file', file)
+  const { data } = await disputeHttp.post(`${disputePath(disputeId)}/evidence`, form, {
+    timeout: 60000,
+    onUploadProgress: (event) => {
+      if (onProgress && event.total) {
+        onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)))
+      }
+    },
+  })
+  return data
+}
+
+/** GET /disputes/{id}/evidence/{evidenceId}/url -> { url, expiresAt } (signed link, valid a few minutes). */
+export async function fetchEvidenceUrl(disputeId, evidenceId) {
+  const { data } = await disputeHttp.get(`${disputePath(disputeId)}/evidence/${encodeURIComponent(evidenceId)}/url`)
+  return data
+}
+
 /** GET /users/me -> { id, name, role, ... }; used for the role check on the dispute routes. */
 export async function fetchCurrentUser(signal) {
   const { data } = await disputeHttp.get('/users/me', { signal })

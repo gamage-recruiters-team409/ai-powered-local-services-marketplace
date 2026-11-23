@@ -8,6 +8,7 @@ import ProfilePage from '../../features/customer-account/pages/ProfilePage'
 import SavedAddressesPage from '../../features/customer-account/pages/SavedAddressesPage'
 import SettingsPage from '../../features/customer-account/pages/SettingsPage'
 import { CustomerDisputePage } from '../../features/disputes/pages/CustomerDisputePage'
+import { MyDisputesPage } from '../../features/disputes/pages/MyDisputesPage'
 import { CustomerGuards } from './CustomerGuards'
 import { CustomerLayoutRoute } from './CustomerLayoutRoute'
 
@@ -35,7 +36,8 @@ export const CUSTOMER_ACCOUNT_ROUTES = [
   { path: '/customer/account/deactivate', element: <DeactivatePage /> },
   { path: '/customer/account/payments', element: <PaymentsPage /> },
   { path: '/customer/account/favorites', element: <FavoritesPage /> },
-  // WP09 – a dispute opened from My Bookings / My Disputes (no sidebar item yet: the list page comes later)
+  // WP09 – My Disputes (sidebar item "My Disputes", active on the list and on each dispute)
+  { path: '/customer/disputes', element: <MyDisputesPage role="CUSTOMER" /> },
   { path: '/customer/disputes/:disputeId', element: <CustomerDisputePage /> },
 ]
 

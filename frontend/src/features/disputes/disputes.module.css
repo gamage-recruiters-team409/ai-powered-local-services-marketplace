@@ -608,6 +608,375 @@ a.evidenceName {
   }
 }
 
+/* ---------- evidence upload (picker) ---------- */
+
+.evidencePicker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dropzoneDisabled {
+  opacity: 0.65;
+}
+
+.fileInput {
+  max-width: 100%;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--dsp-text);
+}
+
+.fileInput:focus-visible {
+  outline: 2px solid var(--dsp-focus);
+  outline-offset: 2px;
+}
+
+.pickedList,
+.fileList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pickedItem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--dsp-border);
+  border-radius: var(--dsp-radius-sm);
+  background: var(--dsp-surface);
+}
+
+.pickedItemError {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.pickedName {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: 0.875rem;
+  color: var(--dsp-text);
+  overflow-wrap: anywhere;
+}
+
+.pickedDone {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #047857;
+}
+
+.pickedError {
+  font-size: 0.8125rem;
+  color: var(--dsp-error);
+}
+
+.progress {
+  position: relative;
+  flex: 0 1 140px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--dsp-border);
+  overflow: hidden;
+}
+
+.progressBar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--dsp-primary);
+  transition: width 0.2s ease;
+}
+
+.linkButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--dsp-primary-dark);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.linkButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsp-border);
+  border-radius: var(--dsp-radius-sm);
+  min-width: 0;
+}
+
+.fileInfo {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.8125rem;
+}
+
+.fileName {
+  font-weight: 600;
+  color: var(--dsp-heading);
+  overflow-wrap: anywhere;
+}
+
+.uploadBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dsp-border);
+}
+
+/* ---------- decision and appeal ---------- */
+
+.decisionText {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--dsp-heading);
+}
+
+.appealCard {
+  border-color: var(--dsp-warning-border);
+  box-shadow: inset 4px 0 0 var(--dsp-warning-border);
+}
+
+/* ---------- My Disputes list ---------- */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--dsp-border);
+  scrollbar-width: thin;
+}
+
+.tab {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--dsp-muted);
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--dsp-heading);
+}
+
+.tabActive {
+  border-bottom-color: var(--dsp-primary);
+  color: var(--dsp-primary-dark);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.table th {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--dsp-border);
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--dsp-muted);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--dsp-border);
+  color: var(--dsp-text);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table tbody tr:hover td {
+  background: var(--dsp-section);
+}
+
+.strong {
+  font-weight: 600;
+  color: var(--dsp-heading);
+}
+
+.rowLink,
+.primaryLink {
+  font-weight: 600;
+  color: var(--dsp-primary-dark);
+  text-decoration: none;
+}
+
+.rowLink:hover {
+  text-decoration: underline;
+}
+
+.primaryLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: var(--dsp-radius-sm);
+  background: var(--dsp-primary);
+  color: #ffffff;
+  white-space: nowrap;
+}
+
+.primaryLink:hover {
+  background: var(--dsp-primary-dark);
+}
+
+.rowLink:focus-visible,
+.primaryLink:focus-visible,
+.tab:focus-visible,
+.linkButton:focus-visible {
+  outline: 2px solid var(--dsp-focus);
+  outline-offset: 2px;
+}
+
+.paginationRow {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 12px;
+}
+
+/* ---------- provider raise form ---------- */
+
+.bookingRef {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-weight: 600;
+  color: var(--dsp-heading);
+  overflow-wrap: anywhere;
+}
+
+.radioGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.radioOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsp-border);
+  border-radius: var(--dsp-radius-sm);
+  cursor: pointer;
+}
+
+.radioOption > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.875rem;
+}
+
+.radioOption input {
+  margin-top: 3px;
+  accent-color: var(--dsp-primary);
+}
+
+.radioOptionActive {
+  border-color: var(--dsp-primary);
+  background: var(--dsp-primary-soft);
+}
+
+.plainSteps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.875rem;
+  color: var(--dsp-text);
+}
+
+/* Phone: the table becomes one card per dispute. */
+@media (max-width: 760px) {
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .table,
+  .table tbody,
+  .table tr,
+  .table td {
+    display: block;
+    width: 100%;
+  }
+
+  .table tr {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--dsp-border);
+  }
+
+  .table td {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+    border: 0;
+    text-align: right;
+  }
+
+  .table td[data-label]::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: var(--dsp-muted);
+    text-align: left;
+  }
+
+  .paginationRow {
+    justify-content: center;
+  }
+}
+
 /* ---------- print (customer "Print Case Summary") ---------- */
 
 @media print {

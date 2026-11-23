@@ -26,6 +26,11 @@ vi.mock('../../customer-account/services/customerAccountApi', () => ({
 
 vi.mock('../services/disputesApi', () => ({
   fetchDispute: vi.fn(),
+  fetchMyDisputes: vi.fn(),
+  raiseDispute: vi.fn(),
+  submitAppeal: vi.fn(),
+  uploadEvidence: vi.fn(),
+  fetchEvidenceUrl: vi.fn(),
   submitDisputeResponse: vi.fn(),
   fetchCurrentUser: vi.fn(),
   isDisputeFixtureMode: () => false,
@@ -42,7 +47,7 @@ vi.mock('../../disputes-admin/services/authBridge', () => ({
 import { CUSTOMER_NAV_SECTIONS } from '../../../shared/layouts/customer/customerNavConfig'
 import { ToastProvider } from '../../../shared/components/feedback'
 import { customerRoutes } from '../../../routes/customer/customerRoutes'
-import { fetchCurrentUser, fetchDispute } from '../services/disputesApi'
+import { fetchCurrentUser, fetchDispute, fetchMyDisputes } from '../services/disputesApi'
 import { disputeRoutes } from './disputeRoutes'
 
 const HOUR = 60 * 60 * 1000
@@ -109,7 +114,14 @@ beforeEach(() => {
   auth.current = signedInCustomer()
   fetchDispute.mockReset()
   fetchCurrentUser.mockReset()
+  fetchMyDisputes.mockReset()
+  fetchMyDisputes.mockResolvedValue({ content: [], page: 0, size: 10, totalElements: 0, totalPages: 0 })
 })
+
+/** The sidebar / nav link that is marked as the current page. */
+function activeLink(container, name) {
+  return within(container).getByRole('link', { name }).getAttribute('aria-current')
+}
 
 afterEach(() => {
   cleanup()
@@ -174,21 +186,43 @@ describe('customer dispute screen inside the Customer Common Layout', () => {
     expect(router.state.location.pathname).toBe('/customer/account/favorites')
   })
 
-  it('the breadcrumb links back to My Bookings', async () => {
+  it('the breadcrumb links back to My Disputes', async () => {
     fetchDispute.mockResolvedValue(dispute())
     renderApp([customerDisputePath])
     await screen.findByRole('heading', { level: 1 })
 
     const breadcrumb = screen.getAllByRole('navigation', { name: 'Breadcrumb' })
-      .find((nav) => within(nav).queryByRole('link', { name: 'My Bookings' }))
-    expect(within(breadcrumb).getByRole('link', { name: 'My Bookings' }).getAttribute('href')).toBe('/customer/bookings')
+      .find((nav) => within(nav).queryByRole('link', { name: 'My Disputes' }))
+    expect(within(breadcrumb).getByRole('link', { name: 'My Disputes' }).getAttribute('href')).toBe('/customer/disputes')
   })
 
-  it('"My Disputes" is NOT in the customer sidebar yet (the list page comes in a later PR)', () => {
+  it('"My Disputes" is in the customer sidebar and is the active item on the dispute detail', async () => {
     const labels = CUSTOMER_NAV_SECTIONS.flatMap((section) => section.items.map((item) => item.label))
-    expect(labels).not.toContain('My Disputes')
-    expect(labels.some((label) => /dispute/i.test(label))).toBe(false)
+    expect(labels).toContain('My Disputes')
+    fetchDispute.mockResolvedValue(dispute())
+    renderApp([customerDisputePath])
+    await screen.findByRole('heading', { level: 1 })
+
+    const sidebar = screen.getByRole('complementary', { name: 'Account sidebar' })
+    expect(activeLink(sidebar, 'My Disputes')).toBe('page')
+    expect(activeLink(sidebar, 'Profile')).toBeNull()
   })
+
+  it('/customer/disputes (My Disputes list) renders in the layout with "My Disputes" active; View opens the detail',
+    async () => {
+      fetchMyDisputes.mockResolvedValue({ content: [{ id: DISPUTE_ID, bookingId: 'b-1', raisedByRole: 'CUSTOMER',
+        category: 'NO_SHOW', status: 'UNDER_REVIEW', createdAt: '2026-11-18T10:00:00Z' }], page: 0, size: 10,
+      totalElements: 1, totalPages: 1 })
+      fetchDispute.mockResolvedValue(dispute())
+      const router = renderApp(['/customer/disputes'])
+
+      expect(await screen.findByRole('heading', { level: 1, name: 'My Disputes' })).toBeTruthy()
+      const sidebar = screen.getByRole('complementary', { name: 'Account sidebar' })
+      expect(activeLink(sidebar, 'My Disputes')).toBe('page')
+
+      fireEvent.click(await screen.findByRole('link', { name: /view dispute/i }))
+      expect(router.state.location.pathname).toBe(customerDisputePath)
+    })
 })
 
 describe('provider dispute screen inside the shared ProviderLayout', () => {
@@ -199,12 +233,34 @@ describe('provider dispute screen inside the shared ProviderLayout', () => {
     fetchDispute.mockResolvedValue(dispute({ raisedBy: 'u-1', raisedByRole: 'CUSTOMER' }))
   })
 
-  it('renders inside the provider layout', async () => {
+  it('renders inside the provider layout with "My Disputes" active (the WP08 "View dispute" link lands here)', async () => {
     renderApp([providerDisputePath])
 
     expect(await screen.findByRole('heading', { level: 1 })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'Provider mobile navigation' })).toBeTruthy()
     expect(screen.queryByRole('complementary', { name: 'Account sidebar' })).toBeNull()
+    const disputesLinks = screen.getAllByRole('link', { name: 'My Disputes' })
+    expect(disputesLinks.some((link) => link.getAttribute('aria-current') === 'page')).toBe(true)
+  })
+
+  it('/provider/disputes (My Disputes) and /provider/disputes/new render inside the provider layout', async () => {
+    const router = renderApp(['/provider/disputes'])
+    expect(await screen.findByRole('heading', { level: 1, name: 'My Disputes' })).toBeTruthy()
+    expect(screen.getByRole('navigation', { name: 'Provider mobile navigation' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('link', { name: 'Raise a dispute' }))
+    expect(router.state.location.pathname).toBe('/provider/disputes/new')
+    expect(await screen.findByRole('heading', { level: 1, name: 'Raise a dispute' })).toBeTruthy()
+    expect(screen.getByRole('navigation', { name: 'Provider mobile navigation' })).toBeTruthy()
+  })
+
+  it('Back from the provider dispute returns to the provider page the user came from', async () => {
+    const router = renderApp(['/provider/disputes', providerDisputePath])
+    await screen.findByRole('heading', { level: 1 })
+
+    await router.navigate(-1)
+
+    expect(router.state.location.pathname).toBe('/provider/disputes')
   })
 
   it.each([
