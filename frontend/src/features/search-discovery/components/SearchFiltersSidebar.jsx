@@ -2,7 +2,12 @@
  * Filter Sidebar matching the approved design.
  * Fully controlled component connected to parent search state.
  */
-export function SearchFiltersSidebar({ filters = {}, onFilterChange, onReset }) {
+export function SearchFiltersSidebar({
+  filters = {},
+  onFilterChange,
+  onReset,
+  isBudgetFilterDisabled = false,
+}) {
   return (
     <aside className="filters-sidebar" aria-label="Search Filters">
       <div className="filters-card">
@@ -78,10 +83,13 @@ export function SearchFiltersSidebar({ filters = {}, onFilterChange, onReset }) 
               onChange={(e) => onFilterChange?.('budgetMax', Number(e.target.value))}
               className="budget-range-slider"
               aria-label="Hourly budget upper limit"
+              disabled={isBudgetFilterDisabled}
             />
           </div>
           <div className="budget-selected-text">
-            Selected: $30–${filters.budgetMax || 60} per hour
+            {isBudgetFilterDisabled
+              ? 'Unavailable in live search until pricing support is agreed'
+              : `Selected: $30–${filters.budgetMax || 60} per hour`}
           </div>
         </div>
 
