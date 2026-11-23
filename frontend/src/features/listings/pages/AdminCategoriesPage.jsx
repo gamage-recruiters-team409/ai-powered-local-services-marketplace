@@ -204,9 +204,8 @@ function toCommissionPercentString(rate) {
 export default function AdminCategoriesPage({ entry } = {}) {
   const areaAccess = useAreaAccess()
   const toast = useToast()
-  // AreaAccessContext defaults to { area: null, canEdit: false } outside <RequireAreaAccess>.
-  // Enforce RBAC strictly when mounted under an admin area; allow editing on standalone dev preview routes.
-  const canEdit = areaAccess?.area ? areaAccess.canEdit : true
+  // Fail-closed least-privilege guard matching merged Admin pages (useAreaAccess defaults canEdit=false).
+  const canEdit = Boolean(areaAccess?.canEdit)
 
   const [categories, setCategories] = useState([])
   const [activeTab, setActiveTab] = useState('ALL')
@@ -217,6 +216,7 @@ export default function AdminCategoriesPage({ entry } = {}) {
   const [syncError, setSyncError] = useState(null)
   const [togglingId, setTogglingId] = useState(null)
   const [confirmDeactivateItem, setConfirmDeactivateItem] = useState(null)
+  const [pendingEditDeactivate, setPendingEditDeactivate] = useState(null)
   const [isInitialReveal, setIsInitialReveal] = useState(true)
 
   useEffect(() => {
@@ -238,6 +238,15 @@ export default function AdminCategoriesPage({ entry } = {}) {
   const [formError, setFormError] = useState(null)
 
   const isEditing = Boolean(selectedId)
+  const selectedCategory = useMemo(() => {
+    if (!selectedId) return null
+    for (const root of categories) {
+      if (root.id === selectedId) return root
+      const subMatch = (root.subcategories || []).find((sub) => sub.id === selectedId)
+      if (subMatch) return subMatch
+    }
+    return null
+  }, [categories, selectedId])
   const activeIconObj = findIconOption(selectedIconObj) || selectedIconObj
   const selectedParentRoot =
     formNodeType === 'SUBCATEGORY' ? categories.find((c) => c.id === formParentId) || null : null
@@ -355,6 +364,7 @@ export default function AdminCategoriesPage({ entry } = {}) {
     )
     setFormVisiblePublic(cat.active !== false)
     setFormError(null)
+    setPendingEditDeactivate(null)
   }
 
   // Reset Form for "+ Add New Category" or dashed card
@@ -370,6 +380,7 @@ export default function AdminCategoriesPage({ entry } = {}) {
     setSelectedIconObj(PREDEFINED_ICONS[1])
     setFormVisiblePublic(true)
     setFormError(null)
+    setPendingEditDeactivate(null)
   }
 
   // Switch Form to "Add Subcategory Under <Root>"
@@ -391,6 +402,7 @@ export default function AdminCategoriesPage({ entry } = {}) {
     setSelectedIconObj(findIconOption(parentRoot) || PREDEFINED_ICONS[1])
     setFormVisiblePublic(true)
     setFormError(null)
+    setPendingEditDeactivate(null)
     setExpandedNodes((prev) => ({ ...prev, [parentRoot.id]: true }))
   }
 
@@ -457,6 +469,24 @@ export default function AdminCategoriesPage({ entry } = {}) {
     }
   }
 
+  // Execute category update against backend API (reused by normal edits and confirmed Edit-form deactivation)
+  const executeUpdateCategory = async (categoryId, updatePayload, fallbackName) => {
+    setFormLoading(true)
+    setFormError(null)
+    try {
+      const updated = await updateCategory(categoryId, updatePayload)
+      await syncCategoriesFromBackend()
+      toast.success(`Category "${updated?.name || fallbackName}" updated successfully.`)
+    } catch (err) {
+      const parsed = extractCatalogApiError(err, 'Operation failed')
+      setFormError(parsed.message)
+      toast.error(parsed.message)
+    } finally {
+      setFormLoading(false)
+      setPendingEditDeactivate(null)
+    }
+  }
+
   // Form Submission (Create or Update against Real Backend API)
   const handleSubmitForm = async (e) => {
     e.preventDefault()
@@ -508,62 +538,51 @@ export default function AdminCategoriesPage({ entry } = {}) {
       return
     }
 
+    if (isEditing) {
+      const updatePayload = {
+        name: trimmedName,
+        slug: cleanSlug,
+        description: trimmedDescription || null,
+        icon: effectiveIconObj.id,
+        commissionRate: rateDecimal,
+        active: formVisiblePublic,
+      }
+      // Require the same explicit confirmation when Edit form transitions Active -> Inactive
+      if (selectedCategory?.active && !formVisiblePublic) {
+        setPendingEditDeactivate({
+          id: selectedId,
+          name: selectedCategory.name || trimmedName,
+          parentId: selectedCategory.parentId || null,
+          payload: updatePayload,
+        })
+        return
+      }
+      await executeUpdateCategory(selectedId, updatePayload, trimmedName)
+      return
+    }
+
     setFormLoading(true)
     setFormError(null)
 
     try {
-      if (isEditing) {
-        const updatePayload = {
-          name: trimmedName,
-          slug: cleanSlug,
-          description: trimmedDescription || null,
-          icon: effectiveIconObj.id,
-          commissionRate: rateDecimal,
-          active: formVisiblePublic,
-        }
-        const updated = await updateCategory(selectedId, updatePayload)
-        await syncCategoriesFromBackend()
-        toast.success(`Category "${updated?.name || trimmedName}" updated successfully.`)
-      } else {
-        const createPayload = {
-          name: trimmedName,
-          slug: cleanSlug,
-          description: trimmedDescription || null,
-          icon: effectiveIconObj.id,
-          parentId: formNodeType === 'SUBCATEGORY' ? formParentId : null,
-          commissionRate: rateDecimal,
-        }
-        const created = await createCategory(createPayload)
-
-        if (!formVisiblePublic && created?.id) {
-          try {
-            await deactivateCategory(created.id)
-          } catch (deactivateErr) {
-            const parsedDeactivate = extractCatalogApiError(
-              deactivateErr,
-              'Failed to set category as inactive'
-            )
-            await syncCategoriesFromBackend()
-            if (createPayload.parentId) {
-              setExpandedNodes((prev) => ({ ...prev, [createPayload.parentId]: true }))
-            }
-            handleSelectCategory(created, Boolean(createPayload.parentId), selectedParentRoot)
-            const partialMsg = `Category "${created.name || trimmedName}" was created as Active, but could not be deactivated automatically: ${parsedDeactivate.message}`
-            setFormError(partialMsg)
-            toast.error(partialMsg)
-            return
-          }
-        }
-
-        await syncCategoriesFromBackend()
-        if (createPayload.parentId) {
-          setExpandedNodes((prev) => ({ ...prev, [createPayload.parentId]: true }))
-        }
-        toast.success(
-          `Category "${created?.name || trimmedName}" created${!formVisiblePublic ? ' as Inactive' : ''}.`
-        )
-        handleResetNewCategory()
+      const createPayload = {
+        name: trimmedName,
+        slug: cleanSlug,
+        description: trimmedDescription || null,
+        icon: effectiveIconObj.id,
+        parentId: formNodeType === 'SUBCATEGORY' ? formParentId : null,
+        commissionRate: rateDecimal,
+        active: formVisiblePublic,
       }
+      const created = await createCategory(createPayload)
+      await syncCategoriesFromBackend()
+      if (createPayload.parentId) {
+        setExpandedNodes((prev) => ({ ...prev, [createPayload.parentId]: true }))
+      }
+      toast.success(
+        `Category "${created?.name || trimmedName}" created${!formVisiblePublic ? ' as Inactive' : ''}.`
+      )
+      handleResetNewCategory()
     } catch (err) {
       const parsed = extractCatalogApiError(err, 'Operation failed')
       setFormError(parsed.message)
@@ -660,10 +679,12 @@ export default function AdminCategoriesPage({ entry } = {}) {
   const isInitialLoading = syncStatus === 'loading' && categories.length === 0
   const hasAnyActiveParent = categories.some((root) => root.active)
 
-  const confirmDeactivateMessage = confirmDeactivateItem
-    ? confirmDeactivateItem.parentId
-      ? `"${confirmDeactivateItem.name}" will be hidden from the public marketplace catalog. Existing listings using it will not be bookable until reactivated.`
-      : `"${confirmDeactivateItem.name}" will be hidden from the public marketplace catalog. Note: root categories with active subcategories must have all subcategories deactivated first.`
+  const activeConfirmDeactivate = confirmDeactivateItem || pendingEditDeactivate
+  const isEditDeactivateConfirm = Boolean(pendingEditDeactivate)
+  const confirmDeactivateMessage = activeConfirmDeactivate
+    ? activeConfirmDeactivate.parentId
+      ? `"${activeConfirmDeactivate.name}" will be hidden from the public marketplace catalog. Existing listings using it will not be bookable until reactivated.`
+      : `"${activeConfirmDeactivate.name}" will be hidden from the public marketplace catalog. Note: root categories with active subcategories must have all subcategories deactivated first.`
     : ''
 
   return (
@@ -959,7 +980,7 @@ export default function AdminCategoriesPage({ entry } = {}) {
                       >
                         {/* Root Node Header */}
                         {!root.hideRoot && (
-                          <div className={styles.rootHeader} onClick={() => handleSelectCategory(root, false)}>
+                          <div className={styles.rootHeader}>
                             <div className={styles.rootLeft}>
                               {canExpandRoot ? (
                                 <button
@@ -990,28 +1011,35 @@ export default function AdminCategoriesPage({ entry } = {}) {
                                 <span style={{ width: '14px', display: 'inline-block' }} />
                               )}
 
-                              <div className={styles.iconSquare}>
-                                {rootIconImg ? (
-                                  <img src={rootIconImg} alt="" width="34" height="34" />
-                                ) : (
-                                  <span>📁</span>
-                                )}
-                              </div>
-
-                              <div className={styles.rootInfo}>
-                                <div className={styles.rootNameRow}>
-                                  <span className={styles.rootName}>{root.name}</span>
-                                  {isSelected ? (
-                                    <span className={styles.badgeEditing}>Editing</span>
+                              <button
+                                type="button"
+                                className={styles.nodeSelectBtn}
+                                onClick={() => handleSelectCategory(root, false)}
+                                aria-pressed={isSelected}
+                              >
+                                <div className={styles.iconSquare}>
+                                  {rootIconImg ? (
+                                    <img src={rootIconImg} alt="" width="34" height="34" />
                                   ) : (
-                                    <span className={styles.badgeRoot}>Root Category</span>
+                                    <span>📁</span>
                                   )}
                                 </div>
-                                <span className={styles.rootSubCount}>
-                                  {root.totalSubCount}{' '}
-                                  {root.totalSubCount === 1 ? 'Subcategory' : 'Subcategories'}
-                                </span>
-                              </div>
+
+                                <div className={styles.rootInfo}>
+                                  <div className={styles.rootNameRow}>
+                                    <span className={styles.rootName}>{root.name}</span>
+                                    {isSelected ? (
+                                      <span className={styles.badgeEditing}>Editing</span>
+                                    ) : (
+                                      <span className={styles.badgeRoot}>Root Category</span>
+                                    )}
+                                  </div>
+                                  <span className={styles.rootSubCount}>
+                                    {root.totalSubCount}{' '}
+                                    {root.totalSubCount === 1 ? 'Subcategory' : 'Subcategories'}
+                                  </span>
+                                </div>
+                              </button>
                             </div>
 
                             <div className={styles.rootRight}>
@@ -1053,34 +1081,38 @@ export default function AdminCategoriesPage({ entry } = {}) {
                               const rateMatchLabel =
                                 subRate === rootRate ? 'Matches parent rate' : 'Custom rate'
 
-                              return (
-                                <div
-                                  key={sub.id}
-                                  className={`${styles.subCard} ${isSubSelected ? styles.subCardSelected : ''}`}
-                                  onClick={() => handleSelectCategory(sub, true, root)}
-                                >
-                                  <div className={styles.subLeft}>
-                                    <div className={styles.subIconSquare}>
-                                      {subIconImg ? (
-                                        <img src={subIconImg} alt="" width="28" height="28" />
-                                      ) : (
-                                        <span>↳</span>
-                                      )}
-                                    </div>
-                                    <div className={styles.subInfo}>
-                                      <div className={styles.subNameRow}>
-                                        <span className={styles.subName}>{sub.name}</span>
-                                        {isSubSelected && <span className={styles.badgeEditing}>Editing</span>}
+                                return (
+                                  <div
+                                    key={sub.id}
+                                    className={`${styles.subCard} ${isSubSelected ? styles.subCardSelected : ''}`}
+                                  >
+                                    <button
+                                      type="button"
+                                      className={`${styles.subLeft} ${styles.nodeSelectBtn}`}
+                                      onClick={() => handleSelectCategory(sub, true, root)}
+                                      aria-pressed={isSubSelected}
+                                    >
+                                      <div className={styles.subIconSquare}>
+                                        {subIconImg ? (
+                                          <img src={subIconImg} alt="" width="28" height="28" />
+                                        ) : (
+                                          <span>↳</span>
+                                        )}
                                       </div>
-                                      <div className={styles.subMetaLine}>
-                                        <span className={styles.subDetails}>
-                                          {activeTab === 'SUB' ? root.name : 'Subcategory'}
-                                        </span>
-                                        <span className={styles.subDetails} aria-hidden="true">•</span>
-                                        <span className={styles.subDetails}>{rateMatchLabel}</span>
+                                      <div className={styles.subInfo}>
+                                        <div className={styles.subNameRow}>
+                                          <span className={styles.subName}>{sub.name}</span>
+                                          {isSubSelected && <span className={styles.badgeEditing}>Editing</span>}
+                                        </div>
+                                        <div className={styles.subMetaLine}>
+                                          <span className={styles.subDetails}>
+                                            {activeTab === 'SUB' ? root.name : 'Subcategory'}
+                                          </span>
+                                          <span className={styles.subDetails} aria-hidden="true">•</span>
+                                          <span className={styles.subDetails}>{rateMatchLabel}</span>
+                                        </div>
                                       </div>
-                                    </div>
-                                  </div>
+                                    </button>
 
                                   <div className={styles.rootRight}>
                                     <span className={styles.ratePill}>{subRate}%</span>
@@ -1546,21 +1578,41 @@ export default function AdminCategoriesPage({ entry } = {}) {
         </div>
       </div>
 
-      {/* Shared Accessible Confirmation Dialog for Category Deactivation */}
+      {/* Shared Accessible Confirmation Dialog for Category Deactivation (Status Pill & Edit Form) */}
       <ConfirmDialog
-        open={Boolean(confirmDeactivateItem)}
-        title={confirmDeactivateItem ? `Deactivate "${confirmDeactivateItem.name}"?` : 'Deactivate category?'}
+        open={Boolean(activeConfirmDeactivate)}
+        title={
+          activeConfirmDeactivate
+            ? `Deactivate "${activeConfirmDeactivate.name}"?`
+            : 'Deactivate category?'
+        }
         message={confirmDeactivateMessage}
         confirmLabel="Deactivate"
         cancelLabel="Cancel"
         variant="destructive"
-        loading={Boolean(confirmDeactivateItem && togglingId === confirmDeactivateItem.id)}
+        loading={
+          isEditDeactivateConfirm
+            ? formLoading
+            : Boolean(confirmDeactivateItem && togglingId === confirmDeactivateItem.id)
+        }
         onConfirm={() => {
-          if (confirmDeactivateItem) {
+          if (pendingEditDeactivate) {
+            executeUpdateCategory(
+              pendingEditDeactivate.id,
+              pendingEditDeactivate.payload,
+              pendingEditDeactivate.name
+            )
+          } else if (confirmDeactivateItem) {
             executeToggleCategoryActive(confirmDeactivateItem, false)
           }
         }}
-        onCancel={() => setConfirmDeactivateItem(null)}
+        onCancel={() => {
+          if (pendingEditDeactivate) {
+            setPendingEditDeactivate(null)
+            setFormVisiblePublic(true)
+          }
+          setConfirmDeactivateItem(null)
+        }}
       />
     </AdminPage>
   )

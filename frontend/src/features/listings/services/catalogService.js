@@ -2,14 +2,15 @@ import axios from 'axios'
 import apiClient from '../../../shared/services/apiClient'
 import tokenStore from '../../../shared/services/tokenStore'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1'
-
 /**
  * Shared authenticated HTTP client for WP03 catalog endpoints.
  * Delegates to WP01 shared `apiClient` so real `/login` in-memory access tokens
  * and 15-minute single-flight `/auth/refresh` retries work automatically.
  */
 export const catalogHttp = apiClient
+
+const API_BASE_URL =
+  catalogHttp.defaults?.baseURL || import.meta.env.VITE_API_BASE_URL || '/api/v1'
 
 function buildAdminRequestConfig(signal) {
   const config = {}
@@ -114,6 +115,7 @@ export async function getAdminCategories(signal) {
  * @param {string|null} [payload.icon]
  * @param {string|null} [payload.parentId] - null for root category, string id for subcategory
  * @param {number|string} payload.commissionRate - e.g. 0.10 for 10%
+ * @param {boolean} [payload.active=true] - initial visibility state persisted atomically on creation
  */
 export async function createCategory(payload) {
   const response = await catalogHttp.post('/admin/categories', payload, buildAdminRequestConfig())

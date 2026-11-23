@@ -81,6 +81,26 @@ describe('catalogService', () => {
     expect(result.description).toBe('Certified electrical repair services')
   })
 
+  it('forwards explicit active=false atomically in createCategory payload', async () => {
+    const payload = {
+      name: 'Seasonal Services',
+      slug: 'seasonal-services',
+      description: 'Hidden until launch',
+      icon: 'shield',
+      parentId: null,
+      commissionRate: 0.12,
+      active: false,
+    }
+
+    const postSpy = vi
+      .spyOn(catalogHttp, 'post')
+      .mockResolvedValueOnce({ data: { id: 'cat-inactive', ...payload } })
+
+    const result = await createCategory(payload)
+    expect(postSpy).toHaveBeenCalledWith('/admin/categories', payload, {})
+    expect(result.active).toBe(false)
+  })
+
   it('updates an existing category by encoded id', async () => {
     const updatePayload = {
       name: 'Electrical Repairs (Updated)',
