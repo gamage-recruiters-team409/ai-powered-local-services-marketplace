@@ -39,6 +39,18 @@ public class Payment {
 
     private String gatewayRef;
 
+    /**
+     * Unique token identifying an active Stripe Checkout reservation.
+     * Null when no reservation is active.
+     */
+    private String checkoutReservationToken;
+
+    /**
+     * Timestamp when the Checkout reservation was acquired.
+     * Used for safe recovery and reconciliation.
+     */
+    private Instant checkoutReservedAt;
+
     // Store the payment amount as MongoDB Decimal128.
     @Field(targetType = FieldType.DECIMAL128)
     private BigDecimal amount;
@@ -135,6 +147,22 @@ public class Payment {
 
     public void setGatewayRef(String gatewayRef) {
         this.gatewayRef = gatewayRef;
+    }
+
+    public String getCheckoutReservationToken() {
+        return checkoutReservationToken;
+    }
+
+    public void setCheckoutReservationToken(String checkoutReservationToken) {
+        this.checkoutReservationToken = checkoutReservationToken;
+    }
+
+    public Instant getCheckoutReservedAt() {
+        return checkoutReservedAt;
+    }
+
+    public void setCheckoutReservedAt(Instant checkoutReservedAt) {
+        this.checkoutReservedAt = checkoutReservedAt;
     }
 
     public BigDecimal getAmount() {

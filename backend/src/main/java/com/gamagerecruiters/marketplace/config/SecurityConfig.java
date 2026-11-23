@@ -41,6 +41,8 @@ public class SecurityConfig {
             ApiPaths.API_V1 + "/auth/resend-verification",
             ApiPaths.API_V1 + "/auth/forgot-password",
             ApiPaths.API_V1 + "/auth/reset-password",
+            // Stripe authenticates webhook requests using its signed payload.
+            ApiPaths.API_V1 + "/payments/stripe/webhook",
             ApiPaths.API_V1 + "/categories/**"
     };
 
