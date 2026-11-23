@@ -198,6 +198,24 @@ class CategoryMongoIntegrationTest {
                 .hasMessageContaining("Cannot activate subcategory while its parent category is inactive");
     }
 
+    @Test
+    @DisplayName("Creating an inactive category atomically persists active=false and hides it from public catalog reads")
+    void createInactiveCategoryAtomicallyIsHiddenFromPublicAndVisibleToAdmin() {
+        CategoryResponse created = categoryService.createCategory(new CreateCategoryRequest(
+                "Private Beta Category", "private-beta-category", "Unpublished", "shield", null, new BigDecimal("0.15"), false));
+
+        assertThat(created.active()).isFalse();
+        assertThat(categoryService.getActiveCategoryTree())
+                .noneMatch(node -> "private-beta-category".equals(node.slug()));
+        assertThatThrownBy(() -> categoryService.getCategoryBySlug("private-beta-category"))
+                .isInstanceOf(com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException.class);
+        assertThat(categoryService.getAllCategoriesForAdmin())
+                .anySatisfy(node -> {
+                    assertThat(node.slug()).isEqualTo("private-beta-category");
+                    assertThat(node.active()).isFalse();
+                });
+    }
+
     private void assertStoredCategoryIndexes() {
         List<Document> storedIndexes = mongoTemplate.getCollection("categories").listIndexes().into(new ArrayList<>());
         for (Document indexDoc : storedIndexes) {

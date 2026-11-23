@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="safetyTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F6E8FE" />
+      <stop offset="100%" stop-color="#E1C2FA" />
+    </linearGradient>
+    <linearGradient id="safetyOuterGrad" x1="72" y1="54" x2="184" y2="204" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#D49EF8" />
+      <stop offset="100%" stop-color="#7E42B8" />
+    </linearGradient>
+    <linearGradient id="safetyLeftFacet" x1="84" y1="74" x2="128" y2="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C683F2" />
+      <stop offset="100%" stop-color="#8B4EC7" />
+    </linearGradient>
+    <linearGradient id="safetyRightFacet" x1="128" y1="74" x2="174" y2="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#A662DC" />
+      <stop offset="100%" stop-color="#6F33A8" />
+    </linearGradient>
+    <filter id="safetyDrop" x="-18%" y="-15%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#4E1F7D" flood-opacity="0.34" />
+    </filter>
+    <filter id="safetyTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#9A66C2" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#safetyTileBg)" stroke="#CEA2F0" stroke-width="2.5" filter="url(#safetyTileShadow)" />
+
+  <g filter="url(#safetyDrop)">
+    <path d="M128 52 C144 68 164 75 182 77 C187 78 190 82 190 87 L190 124 C190 164 162 193 132 204 C129 205 127 205 124 204 C94 193 66 164 66 124 L66 87 C66 82 69 78 74 77 C92 75 112 68 128 52 Z" fill="url(#safetyOuterGrad)" />
+    <path d="M128 71 C116 83 101 88 84 90 L84 123 C84 152 103 175 128 186 Z" fill="url(#safetyLeftFacet)" />
+    <path d="M128 71 C140 83 155 88 172 90 L172 123 C172 152 153 175 128 186 Z" fill="url(#safetyRightFacet)" />
+    <path d="M84 90 C101 88 116 83 128 71" stroke="#F8EBFF" stroke-width="4" stroke-linecap="round" opacity="0.8" />
+  </g>
+</svg>

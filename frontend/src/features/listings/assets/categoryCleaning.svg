@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="cleanTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFF0ED" />
+      <stop offset="100%" stop-color="#FFD8D1" />
+    </linearGradient>
+    <linearGradient id="cleanBottleGrad" x1="90" y1="74" x2="154" y2="206" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FF9A8E" />
+      <stop offset="55%" stop-color="#EF6559" />
+      <stop offset="100%" stop-color="#C93F35" />
+    </linearGradient>
+    <linearGradient id="cleanNozzleGrad" x1="86" y1="52" x2="160" y2="96" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFA89D" />
+      <stop offset="100%" stop-color="#D94C40" />
+    </linearGradient>
+    <linearGradient id="cleanSparkGrad" x1="160" y1="86" x2="192" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFE074" />
+      <stop offset="100%" stop-color="#D98A12" />
+    </linearGradient>
+    <filter id="cleanDrop" x="-18%" y="-15%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#9E2A22" flood-opacity="0.34" />
+    </filter>
+    <filter id="cleanTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#C46A60" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#cleanTileBg)" stroke="#F6C1B8" stroke-width="2.5" filter="url(#cleanTileShadow)" />
+
+  <g filter="url(#cleanDrop)">
+    <path d="M136 86 C152 86 161 95 162 110 C162 113 159 116 156 116 C152 116 150 113 150 109 C149 101 144 97 136 97 Z" fill="#D94D41" />
+    <rect x="106" y="88" width="32" height="15" rx="6" fill="#D94D41" />
+    <path d="M84 64 C84 56 91 52 100 52 L134 52 C145 52 153 60 153 70 L153 79 C153 84 148 88 142 88 L104 88 C99 88 94 84 94 79 L94 75 L86 75 C83 75 82 70 84 64 Z" fill="url(#cleanNozzleGrad)" />
+    <path d="M107 103 L137 103 C142 103 145 109 144 114 C143 121 151 129 156 138 C163 149 165 164 164 184 C163 197 153 205 140 205 L102 205 C90 205 82 196 82 184 L82 162 C82 145 89 131 101 120 C105 116 105 108 107 103 Z" fill="url(#cleanBottleGrad)" />
+    <path d="M97 148 C92 158 91 171 93 185" stroke="#FFE6E3" stroke-width="7" stroke-linecap="round" opacity="0.85" />
+    <path d="M102 62 L134 62" stroke="#FFE8E5" stroke-width="4.5" stroke-linecap="round" opacity="0.75" />
+  </g>
+
+  <path d="M175 84 Q175 102 193 102 Q175 102 175 120 Q175 102 157 102 Q175 102 175 84 Z" fill="url(#cleanSparkGrad)" filter="url(#cleanDrop)" />
+</svg>
