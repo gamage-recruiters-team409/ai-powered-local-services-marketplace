@@ -76,6 +76,12 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
+                        .requestMatchers(HttpMethod.GET, ApiPaths.API_V1 + "/providers/me").authenticated()
+                        .requestMatchers(
+                                HttpMethod.GET,
+                                ApiPaths.API_V1 + "/search",
+                                ApiPaths.API_V1 + "/providers/*"
+                        ).permitAll()
                         // Protect provider-scoped listing routes before the public GET /listings/* rule.
                         .requestMatchers(
                                 HttpMethod.GET,
