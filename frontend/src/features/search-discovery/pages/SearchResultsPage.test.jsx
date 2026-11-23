@@ -219,6 +219,17 @@ describe('SearchResultsPage live defaults', () => {
     );
   });
 
+  it('disables the unsupported budget filter in live mode', async () => {
+    vi.stubEnv('VITE_SEARCH_FIXTURE_MODE', 'false');
+    fetchSearchResults.mockResolvedValue(pagedResponse());
+
+    renderSearchPage();
+
+    await screen.findByText('Provider 1');
+    expect(screen.getByLabelText(/hourly budget upper limit/i).disabled).toBe(true);
+    expect(screen.getByText(/unavailable in live search/i)).toBeTruthy();
+  });
+
   it('resets live query and location to empty values', async () => {
     vi.stubEnv('VITE_SEARCH_FIXTURE_MODE', 'false');
     fetchSearchResults.mockResolvedValue(pagedResponse());
@@ -659,6 +670,39 @@ describe('SearchResultsPage pagination', () => {
     expect(screen.getByRole('button', { name: 'Previous page' }).disabled).toBe(false);
   });
 
+  it('bounds pagination controls for large result sets', async () => {
+    fetchSearchResults.mockImplementation(async ({ page }) =>
+      pagedResponse({ page, totalCount: 1200 }),
+    );
+
+    const user = userEvent.setup();
+    renderSearchPage();
+
+    await screen.findByText('Provider 1');
+    const numberedButtons = () =>
+      within(screen.getByRole('navigation', { name: 'Search pagination' }))
+        .getAllByRole('button')
+        .filter((button) => /^\d+$/.test(button.textContent.trim()));
+
+    expect(numberedButtons().length).toBeLessThanOrEqual(7);
+    expect(numberedButtons().map((button) => button.textContent.trim())).toEqual([
+      '1',
+      '2',
+      '100',
+    ]);
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+
+    await screen.findByText('Provider 13');
+    expect(numberedButtons().map((button) => button.textContent.trim())).toEqual([
+      '1',
+      '2',
+      '3',
+      '100',
+    ]);
+    expect(screen.getByRole('button', { name: '2' }).getAttribute('aria-current')).toBe('page');
+  });
+
   it('disables Next on the last page and shows the final partial range', async () => {
     fetchSearchResults.mockImplementation(async ({ page }) =>
       pagedResponse({ page, totalCount: 13 }),
@@ -833,7 +877,7 @@ describe('SearchResultsPage pagination', () => {
     renderSearchPage();
 
     const note = await screen.findByText(/does not enforce availability/i);
-    expect(note.textContent).toMatch(/service type, or rating filters/i);
+    expect(note.textContent).toMatch(/service type, rating, or budget filters/i);
     expect(note.textContent).toMatch(/may not reflect these preferences/i);
     expect(screen.queryByText(/demo mode/i)).toBeNull();
   });

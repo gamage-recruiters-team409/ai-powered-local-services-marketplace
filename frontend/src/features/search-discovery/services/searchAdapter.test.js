@@ -145,18 +145,29 @@ describe('fetchSearchResults', () => {
     });
   });
 
-  it('adds pagination metadata without changing fixture filtering', async () => {
-    const data = await fetchSearchResults({
+  it('paginates fixture results and preserves the full filtered count', async () => {
+    const firstPage = await fetchSearchResults({
+      query: 'Home cleaning',
+      page: 0,
+      size: 2,
+    });
+    const secondPage = await fetchSearchResults({
       query: 'Home cleaning',
       page: 1,
       size: 2,
     });
 
-    expect(data.results).toHaveLength(4);
-    expect(data.page).toBe(1);
-    expect(data.size).toBe(2);
-    expect(data.pageCount).toBe(2);
-    expect(data.unsupportedFilters).toEqual([]);
+    expect(firstPage.results.map((item) => item.id)).toEqual(['prv-001', 'prv-002']);
+    expect(secondPage.results.map((item) => item.id)).toEqual(['prv-003', 'prv-004']);
+    expect(firstPage.totalCount).toBe(4);
+    expect(secondPage.totalCount).toBe(4);
+    expect(firstPage.page).toBe(0);
+    expect(secondPage.page).toBe(1);
+    expect(firstPage.size).toBe(2);
+    expect(secondPage.size).toBe(2);
+    expect(firstPage.pageCount).toBe(2);
+    expect(secondPage.pageCount).toBe(2);
+    expect(firstPage.unsupportedFilters).toEqual([]);
   });
 });
 
@@ -246,19 +257,45 @@ describe('fetchSearchResults live mode', () => {
       q: 'Home cleaning',
       location: 'Austin',
       verified: true,
-      maxPrice: 60,
       sort: 'recommended',
       page: 0,
       size: 12,
     });
+    expect(config.params.maxPrice).toBeUndefined();
     expect(UNSUPPORTED_LIVE_FILTERS).toEqual([
       'serviceTypes',
       'availability',
       'maxDistanceMiles',
       'backgroundChecked',
       'minRating',
+      'budgetMax',
     ]);
     expect(data.unsupportedFilters).toEqual(UNSUPPORTED_LIVE_FILTERS);
+  });
+
+  it('does not apply the budget threshold across FIXED or HOURLY live listings', async () => {
+    for (const model of ['FIXED', 'HOURLY']) {
+      axios.get.mockResolvedValueOnce({
+        data: {
+          results: [{ ...liveResult, pricing: { amount: 55, model } }],
+          totalCount: 1,
+          page: 0,
+          size: 12,
+          pageCount: 1,
+          unsupportedFilters: [],
+        },
+      });
+
+      const data = await fetchSearchResults({
+        filters: { budgetMax: 55 },
+      });
+
+      const [, config] = axios.get.mock.calls.at(-1);
+      expect(config.params.maxPrice).toBeUndefined();
+      expect(config.params).not.toHaveProperty('maxHourlyRate');
+      expect(data.results[0].pricing.model).toBe(model);
+      expect(data.unsupportedFilters).toContain('budgetMax');
+    }
   });
 
   it('maps live results into UI items with null-safe pricing', async () => {

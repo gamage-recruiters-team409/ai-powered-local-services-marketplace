@@ -12,6 +12,7 @@ export const UNSUPPORTED_LIVE_FILTERS = [
   'maxDistanceMiles',
   'backgroundChecked',
   'minRating',
+  'budgetMax',
 ];
 
 const SUPPORTED_LIVE_SORTS = ['recommended', 'price_asc', 'price_desc'];
@@ -83,6 +84,13 @@ export function getRequestedUnsupportedLiveFilters(filters = {}) {
 
   if (filters.highRating) {
     requested.push('minRating');
+  }
+
+  if (
+    typeof filters.budgetMax === 'number' &&
+    Number.isFinite(filters.budgetMax)
+  ) {
+    requested.push('budgetMax');
   }
 
   return requested;
@@ -169,13 +177,6 @@ function buildLiveParams({
 
   if (filters.verifiedOnly === true) {
     params.verified = true;
-  }
-
-  if (
-    typeof filters.budgetMax === 'number' &&
-    Number.isFinite(filters.budgetMax)
-  ) {
-    params.maxPrice = filters.budgetMax;
   }
 
   params.sort = SUPPORTED_LIVE_SORTS.includes(sortBy) ? sortBy : 'recommended';
@@ -310,15 +311,17 @@ export async function fetchSearchResults({
   if (isFixtureModeEnabled()) {
     // Brief latency simulation for realistic UI transition
     await new Promise((resolve) => setTimeout(resolve, 200));
-    const results = filterFixtureResults({ query, location, filters, sortBy });
+    const filteredResults = filterFixtureResults({ query, location, filters, sortBy });
+    const start = normalizedPage * normalizedSize;
+    const results = filteredResults.slice(start, start + normalizedSize);
     return {
       isLive: false,
       isFixture: true,
       results,
-      totalCount: results.length,
+      totalCount: filteredResults.length,
       page: normalizedPage,
       size: normalizedSize,
-      pageCount: Math.ceil(results.length / normalizedSize),
+      pageCount: Math.ceil(filteredResults.length / normalizedSize),
       unsupportedFilters: [],
     };
   }

@@ -59,6 +59,32 @@ function getDefaultSearchValues() {
   return { query: LIVE_DEFAULT_QUERY, location: LIVE_DEFAULT_LOCATION };
 }
 
+function getPaginationItems(currentPage, totalPages, siblingCount = 1) {
+  if (totalPages <= 0) {
+    return [];
+  }
+
+  const visiblePages = new Set([0, totalPages - 1]);
+  const firstNearbyPage = Math.max(0, currentPage - siblingCount);
+  const lastNearbyPage = Math.min(totalPages - 1, currentPage + siblingCount);
+
+  for (let pageIndex = firstNearbyPage; pageIndex <= lastNearbyPage; pageIndex += 1) {
+    visiblePages.add(pageIndex);
+  }
+
+  const sortedPages = [...visiblePages].sort((a, b) => a - b);
+  const items = [];
+
+  sortedPages.forEach((pageIndex, index) => {
+    if (index > 0 && pageIndex - sortedPages[index - 1] > 1) {
+      items.push(`gap-${pageIndex}`);
+    }
+    items.push(pageIndex);
+  });
+
+  return items;
+}
+
 /**
  * Main Search Results Page matching the approved LocalServe design.
  * Features full-width responsive header/footer, sidebar filters,
@@ -226,6 +252,7 @@ export function SearchResultsPage() {
   };
 
   const totalPages = Math.ceil(totalCount / pageSize);
+  const paginationItems = getPaginationItems(page, totalPages);
 
   const handlePageChange = (nextPage) => {
     if (
@@ -295,6 +322,7 @@ export function SearchResultsPage() {
   const hasActiveUnsupportedFilters =
     filters.highRating ||
     filters.backgroundChecked ||
+    typeof filters.budgetMax === 'number' ||
     (filters.distance != null && String(filters.distance).trim() !== '') ||
     Boolean(filters.availability && filters.availability !== 'any') ||
     Boolean(
@@ -337,6 +365,7 @@ export function SearchResultsPage() {
               filters={filters}
               onFilterChange={handleFilterChange}
               onReset={handleResetAll}
+              isBudgetFilterDisabled={isLive}
             />
 
             {/* Right Column: Cards, States, Comparison & Pagination */}
@@ -355,7 +384,8 @@ export function SearchResultsPage() {
               {showUnsupportedNotice && (
                 <p className="search-unsupported-notice" role="status">
                   Live search does not enforce availability, distance, background check,
-                  service type, or rating filters. Results may not reflect these preferences.
+                  service type, rating, or budget filters. Results may not reflect these
+                  preferences.
                   {sortBy === 'rating' && ' Highest-rated sorting is also not supported.'}
                 </p>
               )}
@@ -413,19 +443,25 @@ export function SearchResultsPage() {
                       >
                         ‹
                       </button>
-                      {Array.from({ length: totalPages }, (_, index) => (
-                        <button
-                          key={index}
-                          type="button"
-                          className={`pagination-btn${
-                            index === page ? ' pagination-btn-active' : ''
-                          }`}
-                          aria-current={index === page ? 'page' : undefined}
-                          onClick={() => handlePageChange(index)}
-                        >
-                          {index + 1}
-                        </button>
-                      ))}
+                      {paginationItems.map((item) =>
+                        typeof item === 'number' ? (
+                          <button
+                            key={item}
+                            type="button"
+                            className={`pagination-btn${
+                              item === page ? ' pagination-btn-active' : ''
+                            }`}
+                            aria-current={item === page ? 'page' : undefined}
+                            onClick={() => handlePageChange(item)}
+                          >
+                            {item + 1}
+                          </button>
+                        ) : (
+                          <span key={item} className="pagination-ellipsis" aria-hidden="true">
+                            …
+                          </span>
+                        ),
+                      )}
                       <button
                         type="button"
                         className="pagination-btn"
