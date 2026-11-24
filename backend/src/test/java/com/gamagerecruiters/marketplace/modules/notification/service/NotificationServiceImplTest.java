@@ -5,11 +5,16 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionSynchronizationUtils;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import com.mongodb.client.result.UpdateResult;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 import com.gamagerecruiters.marketplace.modules.notification.domain.Notification;
@@ -19,7 +24,10 @@ import com.gamagerecruiters.marketplace.modules.notification.repository.Notifica
 class NotificationServiceImplTest {
     private final UserInternalService users = mock(UserInternalService.class);
     private final NotificationRepository repository = mock(NotificationRepository.class);
-    private NotificationServiceImpl service(java.util.concurrent.Executor executor) { return new NotificationServiceImpl(users, repository, new NotificationDataSanitizer(), executor); }
+    private final EmailSender emailSender = mock(EmailSender.class);
+    private final MongoTemplate mongoTemplate = mock(MongoTemplate.class);
+    private NotificationServiceImpl service(java.util.concurrent.Executor executor) { return service(executor, executor); }
+    private NotificationServiceImpl service(java.util.concurrent.Executor executor, java.util.concurrent.Executor emailExecutor) { return new NotificationServiceImpl(users, repository, new NotificationDataSanitizer(), executor, emailExecutor, emailSender, new NotificationTextBuilder(), mongoTemplate); }
     private void active(String id) { when(users.getContactById(id)).thenReturn(new UserInternalService.UserContact(id, "Name", "email", UserStatus.ACTIVE)); }
     @AfterEach void clearSynchronization() { if (TransactionSynchronizationManager.isSynchronizationActive()) TransactionSynchronizationManager.clearSynchronization(); }
     @Test void validEventSavesUnreadNotification() { active("user"); service(Runnable::run).notify(new NotificationEvent(NotificationType.BOOKING_CONFIRMED,"user","booking",Map.of())); ArgumentCaptor<Notification> saved=ArgumentCaptor.forClass(Notification.class); verify(repository).save(saved.capture()); org.junit.jupiter.api.Assertions.assertNull(saved.getValue().getReadAt()); }
@@ -29,4 +37,9 @@ class NotificationServiceImplTest {
     @Test void activeSynchronizationSavesOnlyAfterCommitAndNeverOnRollback() { active("user"); NotificationServiceImpl s=service(Runnable::run); TransactionSynchronizationManager.initSynchronization(); s.notify(new NotificationEvent(NotificationType.NEW_MESSAGE,"user",null,null)); verifyNoInteractions(repository); TransactionSynchronizationUtils.triggerAfterCommit(); verify(repository).save(any()); TransactionSynchronizationManager.clearSynchronization(); reset(repository); TransactionSynchronizationManager.initSynchronization(); s.notify(new NotificationEvent(NotificationType.NEW_MESSAGE,"user",null,null)); TransactionSynchronizationManager.clearSynchronization(); verifyNoInteractions(repository); }
     @Test void rejectingExecutorAndUnsafeDataNeverEscape() { active("user"); assertDoesNotThrow(() -> service(task -> { throw new RejectedExecutionException(); }).notify(new NotificationEvent(NotificationType.NEW_MESSAGE,"user",null,Map.of("token","x")))); }
     @Test void sanitizesDataBeforeSaving() { active("user"); service(Runnable::run).notify(new NotificationEvent(NotificationType.NEW_MESSAGE,"user",null,Map.of("district"," Kandy ","token","x"))); ArgumentCaptor<Notification> saved=ArgumentCaptor.forClass(Notification.class); verify(repository).save(saved.capture()); org.junit.jupiter.api.Assertions.assertEquals(Map.of("district","Kandy"),saved.getValue().getData()); }
+    @Test void allowedTypeSendsNotificationEmailAndRecordsSent() { active("user"); when(repository.save(any())).thenAnswer(invocation -> { Notification value = invocation.getArgument(0); value.setId("notification-1"); return value; }); when(emailSender.sendEmail(eq(EmailType.NOTIFICATION), any(), any())).thenReturn(EmailResult.success("accepted")); service(Runnable::run).notify(new NotificationEvent(NotificationType.BOOKING_CONFIRMED,"user",null,Map.of())); verify(emailSender).sendEmail(eq(EmailType.NOTIFICATION), eq("email"), any()); verify(mongoTemplate).updateFirst(any(), any(), eq(Notification.class)); }
+    @Test void emailFailureAndExceptionAreSwallowedAndMarkedFailed() { active("user"); when(repository.save(any())).thenAnswer(invocation -> { Notification value = invocation.getArgument(0); value.setId("notification-1"); return value; }); when(emailSender.sendEmail(any(), any(), any())).thenReturn(EmailResult.failure("failed")); assertDoesNotThrow(() -> service(Runnable::run).notify(new NotificationEvent(NotificationType.BOOKING_CONFIRMED,"user",null,Map.of()))); doThrow(new RuntimeException()).when(emailSender).sendEmail(any(), any(), any()); assertDoesNotThrow(() -> service(Runnable::run).notify(new NotificationEvent(NotificationType.BOOKING_CONFIRMED,"user",null,Map.of()))); }
+    @Test void inAppOnlyTypeRecordsSkippedWithoutSendingEmail() { active("user"); when(repository.save(any())).thenAnswer(invocation -> { Notification value = invocation.getArgument(0); value.setId("notification-1"); return value; }); service(Runnable::run).notify(new NotificationEvent(NotificationType.NEW_MESSAGE,"user",null,Map.of("conversationId","conversation-1"))); verifyNoInteractions(emailSender); verify(mongoTemplate).updateFirst(any(), any(), eq(Notification.class)); }
+    @Test void duplicateUnreadNewMessageForConversationIsSkippedAndReadNotificationAllowsAnother() { active("user"); when(mongoTemplate.exists(any(), eq(Notification.class))).thenReturn(false, true, false, false); NotificationServiceImpl value = service(Runnable::run); value.notify(new NotificationEvent(NotificationType.NEW_MESSAGE,"user",null,Map.of("conversationId","conversation-1"))); value.notify(new NotificationEvent(NotificationType.NEW_MESSAGE,"user",null,Map.of("conversationId","conversation-1"))); value.notify(new NotificationEvent(NotificationType.NEW_MESSAGE,"user",null,Map.of("conversationId","conversation-2"))); value.notify(new NotificationEvent(NotificationType.NEW_MESSAGE,"user",null,Map.of("conversationId","conversation-1"))); verify(repository, times(3)).save(any()); }
+    @Test void directPathEmailRunsOnEmailExecutorThread() throws Exception { active("user"); when(repository.save(any())).thenAnswer(invocation -> { Notification value = invocation.getArgument(0); value.setId("notification-1"); return value; }); when(emailSender.sendEmail(any(), any(), any())).thenReturn(EmailResult.success("accepted")); CountDownLatch sent = new CountDownLatch(1); AtomicReference<String> executorThread = new AtomicReference<>(); java.util.concurrent.Executor emailAsync = task -> new Thread(() -> { executorThread.set(Thread.currentThread().getName()); task.run(); sent.countDown(); }, "notification-email-test-executor").start(); service(Runnable::run, emailAsync).notify(new NotificationEvent(NotificationType.BOOKING_CONFIRMED,"user",null,Map.of())); org.junit.jupiter.api.Assertions.assertTrue(sent.await(2, TimeUnit.SECONDS)); org.junit.jupiter.api.Assertions.assertNotEquals(Thread.currentThread().getName(), executorThread.get()); }
 }

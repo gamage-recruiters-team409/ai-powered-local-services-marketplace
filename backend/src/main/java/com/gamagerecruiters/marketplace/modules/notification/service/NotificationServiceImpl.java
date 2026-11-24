@@ -1,6 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.notification.service;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executor;
 
@@ -8,6 +9,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -23,13 +28,23 @@ public class NotificationServiceImpl implements NotificationService {
     private final NotificationRepository notificationRepository;
     private final NotificationDataSanitizer sanitizer;
     private final Executor executor;
+    private final Executor emailExecutor;
+    private final EmailSender emailSender;
+    private final NotificationTextBuilder textBuilder;
+    private final MongoTemplate mongoTemplate;
 
     public NotificationServiceImpl(UserInternalService userInternalService, NotificationRepository notificationRepository,
-            NotificationDataSanitizer sanitizer, @Qualifier("notificationExecutor") Executor executor) {
+            NotificationDataSanitizer sanitizer, @Qualifier("notificationExecutor") Executor executor,
+            @Qualifier("notificationEmailExecutor") Executor emailExecutor, EmailSender emailSender,
+            NotificationTextBuilder textBuilder, MongoTemplate mongoTemplate) {
         this.userInternalService = userInternalService;
         this.notificationRepository = notificationRepository;
         this.sanitizer = sanitizer;
         this.executor = executor;
+        this.emailExecutor = emailExecutor;
+        this.emailSender = emailSender;
+        this.textBuilder = textBuilder;
+        this.mongoTemplate = mongoTemplate;
     }
 
     @Override
@@ -56,7 +71,7 @@ public class NotificationServiceImpl implements NotificationService {
                     @Override public void afterCommit() { submitSave(notification); }
                 });
             } else {
-                save(notification);
+                submitSave(notification);
             }
         } catch (Exception ex) {
             String type = event == null || event.type() == null ? "UNKNOWN" : event.type().name();
@@ -73,8 +88,59 @@ public class NotificationServiceImpl implements NotificationService {
         }
     }
 
+    /**
+     * The single-thread notification executor makes this check-then-save sequence race-free.
+     */
     private void save(Notification notification) {
-        try { notificationRepository.save(notification); }
+        try {
+            if (notification.getType() == com.gamagerecruiters.marketplace.modules.notification.domain.NotificationType.NEW_MESSAGE
+                    && mongoTemplate.exists(newMessageQuery(notification), Notification.class)) {
+                log.warn("Notification duplicate skipped for type {}", notification.getType().name());
+                return;
+            }
+            Notification saved = notificationRepository.save(notification);
+            submitEmail(saved == null ? notification : saved);
+        }
         catch (Exception ex) { log.warn("Notification save failed for type {}", notification.getType().name()); }
+    }
+
+    private void submitEmail(Notification notification) {
+        try {
+            emailExecutor.execute(() -> sendEmail(notification));
+        } catch (Exception ex) {
+            updateEmailStatus(notification.getId(), "FAILED");
+            log.warn("Notification email task rejected");
+        }
+    }
+
+    private Query newMessageQuery(Notification notification) {
+        return Query.query(Criteria.where("type").is(notification.getType()).and("userId").is(notification.getUserId())
+                .and("readAt").is(null).and("data.conversationId").is(notification.getData() == null ? null : notification.getData().get("conversationId")));
+    }
+
+    private void sendEmail(Notification notification) {
+        try {
+            if (!NotificationEmailPolicy.allows(notification.getType())) {
+                updateEmailStatus(notification.getId(), "SKIPPED");
+                return;
+            }
+            UserInternalService.UserContact contact = userInternalService.getContactById(notification.getUserId());
+            if (contact == null || contact.email() == null || contact.email().isBlank()) {
+                updateEmailStatus(notification.getId(), "SKIPPED");
+                return;
+            }
+            NotificationText text = textBuilder.build(notification.getType(), notification.getData());
+            Map<String, Object> data = new HashMap<>();
+            data.put("name", contact.fullName()); data.put("title", text.title()); data.put("message", text.message());
+            EmailResult result = emailSender.sendEmail(EmailType.NOTIFICATION, contact.email(), data);
+            updateEmailStatus(notification.getId(), result.success() ? "SENT" : "FAILED");
+        } catch (Exception ex) {
+            updateEmailStatus(notification.getId(), "FAILED");
+            log.warn("Notification email failed for type {}", notification.getType().name());
+        }
+    }
+
+    private void updateEmailStatus(String id, String status) {
+        if (id != null) mongoTemplate.updateFirst(Query.query(Criteria.where("_id").is(id)), new Update().set("emailStatus", status), Notification.class);
     }
 }
