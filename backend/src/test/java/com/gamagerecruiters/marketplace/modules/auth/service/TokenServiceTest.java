@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.auth.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -74,5 +75,33 @@ class TokenServiceTest {
         assertNotNull(hash1);
         assertEquals(64, hash1.length()); // SHA-256 hex length
         assertEquals(hash1, hash2); // Deterministic
+    }
+
+    @Test
+    @DisplayName("Should return null token type for standard access token")
+    void shouldReturnNullTokenTypeForStandardAccessToken() {
+        String token = tokenService.generateAccessToken("user-123", "user@marketplace.local", Role.CUSTOMER);
+        assertNull(tokenService.getTokenType(token));
+    }
+
+    @Test
+    @DisplayName("Should return token type when type claim is present in JWT")
+    void shouldReturnTokenTypeWhenPresent() {
+        byte[] keyBytes = TEST_SECRET.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        javax.crypto.SecretKey key = io.jsonwebtoken.security.Keys.hmacShaKeyFor(keyBytes);
+        String refreshTokenJwt = io.jsonwebtoken.Jwts.builder()
+                .subject("user-123")
+                .claim("type", "REFRESH")
+                .signWith(key, io.jsonwebtoken.Jwts.SIG.HS256)
+                .compact();
+
+        assertEquals("REFRESH", tokenService.getTokenType(refreshTokenJwt));
+    }
+
+    @Test
+    @DisplayName("Should return null token type for malformed token")
+    void shouldReturnNullTokenTypeForMalformedToken() {
+        assertNull(tokenService.getTokenType("not-a-token"));
+        assertNull(tokenService.getTokenType(null));
     }
 }
