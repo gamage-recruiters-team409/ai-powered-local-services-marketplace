@@ -1,11 +1,16 @@
 package com.gamagerecruiters.marketplace.modules.customer.service;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -20,11 +25,19 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
+
+import com.mongodb.client.result.UpdateResult;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
@@ -59,6 +72,12 @@ class CustomerServiceTest {
     @Mock
     private OpenBookingsChecker openBookingsChecker;
 
+    @Mock
+    private CustomerProfileImageStorage profileImageStorage;
+
+    @Mock
+    private MongoTemplate mongoTemplate;
+
     private CustomerServiceImpl customerService;
 
     @BeforeEach
@@ -68,6 +87,8 @@ class CustomerServiceTest {
                 customerAddressRepository,
                 districtCatalog,
                 openBookingsCheckerProvider,
+                profileImageStorage,
+                mongoTemplate,
                 10
         );
     }
@@ -375,6 +396,8 @@ class CustomerServiceTest {
                 customerAddressRepository,
                 districtCatalog,
                 openBookingsCheckerProvider,
+                profileImageStorage,
+                mongoTemplate,
                 5 // Lower limit
         );
 
@@ -428,5 +451,186 @@ class CustomerServiceTest {
         verify(customerAddressRepository).delete(addressToDelete);
         assertTrue(oldestRemaining.isDefault(), "Oldest remaining address must be promoted to default");
         verify(customerAddressRepository).save(oldestRemaining);
+    }
+
+    @Test
+    @DisplayName("uploadProfilePhoto: successfully uploads photo, updates DB with targeted set, and deletes old photo")
+    void uploadProfilePhoto_success() {
+        User userBefore = new User();
+        userBefore.setId("c-1");
+        userBefore.setName("Kamal");
+        userBefore.setEmail("kamal@test.com");
+        userBefore.setRole(Role.CUSTOMER);
+        userBefore.setStatus(UserStatus.ACTIVE);
+        userBefore.setProfileImagePublicId("old-public-id");
+        userBefore.setProfileImageUrl("https://old.url/old.jpg");
+
+        User userAfter = new User();
+        userAfter.setId("c-1");
+        userAfter.setName("Kamal");
+        userAfter.setEmail("kamal@test.com");
+        userAfter.setRole(Role.CUSTOMER);
+        userAfter.setStatus(UserStatus.ACTIVE);
+        userAfter.setProfileImagePublicId("new-public-id");
+        userAfter.setProfileImageUrl("https://new.url/new.jpg");
+
+        when(userInternalService.getById("c-1")).thenReturn(userBefore, userAfter);
+        MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
+        when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("new-public-id", "https://new.url/new.jpg"));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+
+        CustomerProfileResponse res = customerService.uploadProfilePhoto("c-1", file);
+
+        assertEquals("https://new.url/new.jpg", res.profileImageUrl());
+
+        InOrder order = inOrder(profileImageStorage, mongoTemplate);
+        order.verify(profileImageStorage).upload("c-1", file);
+        order.verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        order.verify(profileImageStorage).delete("old-public-id");
+    }
+
+    @Test
+    @DisplayName("uploadProfilePhoto: rejects upload if customer account is not ACTIVE")
+    void uploadProfilePhoto_inactiveAccount_throws403() {
+        User suspendedUser = new User();
+        suspendedUser.setId("c-1");
+        suspendedUser.setStatus(UserStatus.SUSPENDED);
+        when(userInternalService.getById("c-1")).thenReturn(suspendedUser);
+
+        MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
+
+        ApiException ex = assertThrows(ApiException.class, () -> customerService.uploadProfilePhoto("c-1", file));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        assertEquals("ACCOUNT_INACTIVE", ex.getErrorCode());
+
+        verify(profileImageStorage, never()).upload(any(), any());
+        verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+    }
+
+    @Test
+    @DisplayName("uploadProfilePhoto: old image deletion failure does not fail request")
+    void uploadProfilePhoto_oldDeleteFails_doesNotFailRequest() {
+        User userBefore = new User();
+        userBefore.setId("c-1");
+        userBefore.setStatus(UserStatus.ACTIVE);
+        userBefore.setProfileImagePublicId("old-public-id");
+
+        User userAfter = new User();
+        userAfter.setId("c-1");
+        userAfter.setStatus(UserStatus.ACTIVE);
+        userAfter.setProfileImageUrl("https://new.url/new.jpg");
+
+        when(userInternalService.getById("c-1")).thenReturn(userBefore, userAfter);
+        MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
+        when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("new-public-id", "https://new.url/new.jpg"));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+        doThrow(new RuntimeException("Cloudinary deletion failed")).when(profileImageStorage).delete("old-public-id");
+
+        CustomerProfileResponse res = assertDoesNotThrow(() -> customerService.uploadProfilePhoto("c-1", file));
+        assertEquals("https://new.url/new.jpg", res.profileImageUrl());
+    }
+
+    @Test
+    @DisplayName("uploadProfilePhoto: DB update failure triggers cleanup of newly uploaded image and throws 503")
+    void uploadProfilePhoto_dbFailure_cleansUpNewImageAndThrows503() {
+        User user = new User();
+        user.setId("c-1");
+        user.setStatus(UserStatus.ACTIVE);
+        when(userInternalService.getById("c-1")).thenReturn(user);
+
+        MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
+        when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("new-public-id", "https://new.url/new.jpg"));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenThrow(new RuntimeException("Mongo connection drop"));
+
+        ApiException ex = assertThrows(ApiException.class, () -> customerService.uploadProfilePhoto("c-1", file));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
+        assertEquals("PROFILE_PHOTO_UPDATE_FAILED", ex.getErrorCode());
+
+        verify(profileImageStorage).delete("new-public-id");
+    }
+
+    @Test
+    @DisplayName("uploadProfilePhoto: DB update matches 0 documents triggers cleanup and throws 404")
+    void uploadProfilePhoto_userNotFound_cleansUpAndThrows404() {
+        User user = new User();
+        user.setId("c-1");
+        user.setStatus(UserStatus.ACTIVE);
+        when(userInternalService.getById("c-1")).thenReturn(user);
+
+        MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
+        when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("new-public-id", "https://new.url/new.jpg"));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(0, 0L, null));
+
+        ResourceNotFoundException ex = assertThrows(ResourceNotFoundException.class, () -> customerService.uploadProfilePhoto("c-1", file));
+        assertEquals("USER_NOT_FOUND", ex.getErrorCode());
+
+        verify(profileImageStorage).delete("new-public-id");
+    }
+
+    @Test
+    @DisplayName("deleteProfilePhoto: unsets fields in DB and deletes image from storage")
+    void deleteProfilePhoto_withExistingPhoto_unsetsAndDeletes() {
+        User user = new User();
+        user.setId("c-1");
+        user.setStatus(UserStatus.ACTIVE);
+        user.setProfileImagePublicId("existing-public-id");
+        when(userInternalService.getById("c-1")).thenReturn(user);
+
+        customerService.deleteProfilePhoto("c-1");
+
+        verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        verify(profileImageStorage).delete("existing-public-id");
+    }
+
+    @Test
+    @DisplayName("deleteProfilePhoto: no existing photo is a no-op")
+    void deleteProfilePhoto_noExistingPhoto_noop() {
+        User user = new User();
+        user.setId("c-1");
+        user.setStatus(UserStatus.ACTIVE);
+        user.setProfileImagePublicId(null);
+        when(userInternalService.getById("c-1")).thenReturn(user);
+
+        customerService.deleteProfilePhoto("c-1");
+
+        verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        verify(profileImageStorage, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("deleteProfilePhoto: rejects deletion if customer account is not ACTIVE")
+    void deleteProfilePhoto_inactiveAccount_throws403() {
+        User deactivated = new User();
+        deactivated.setId("c-1");
+        deactivated.setStatus(UserStatus.DEACTIVATED);
+        when(userInternalService.getById("c-1")).thenReturn(deactivated);
+
+        ApiException ex = assertThrows(ApiException.class, () -> customerService.deleteProfilePhoto("c-1"));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        assertEquals("ACCOUNT_INACTIVE", ex.getErrorCode());
+
+        verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
+        verify(profileImageStorage, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("getProfile: includes profileImageUrl when set on User")
+    void getProfile_includesProfileImageUrl() {
+        User user = new User();
+        user.setId("c-1");
+        user.setName("Kamal");
+        user.setEmail("kamal@test.com");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setProfileImageUrl("https://img.url/photo.jpg");
+
+        when(userInternalService.getById("c-1")).thenReturn(user);
+
+        CustomerProfileResponse res = customerService.getProfile("c-1");
+        assertEquals("https://img.url/photo.jpg", res.profileImageUrl());
     }
 }

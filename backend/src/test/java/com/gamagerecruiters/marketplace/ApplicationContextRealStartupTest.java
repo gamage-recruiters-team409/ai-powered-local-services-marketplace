@@ -32,6 +32,8 @@ import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCom
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerFavouriteRepository;
 import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
+import com.gamagerecruiters.marketplace.modules.customer.service.CustomerProfileImageStorage;
+import com.gamagerecruiters.marketplace.modules.customer.service.FavouriteListingLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
 import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
@@ -172,6 +174,14 @@ class ApplicationContextRealStartupTest {
                 assertNotNull(
                                 applicationContext.getBean(ProviderVerificationLookupAdapter.class),
                                 "ProviderVerificationLookupAdapter bean must exist");
+
+                assertNotNull(
+                                applicationContext.getBean(FavouriteListingLookupAdapter.class),
+                                "FavouriteListingLookupAdapter bean must exist");
+
+                assertNotNull(
+                                applicationContext.getBean(CustomerProfileImageStorage.class),
+                                "CustomerProfileImageStorage bean must exist");
 
                 assertInstanceOf(
                                 DisputePayoutHoldAdapter.class,

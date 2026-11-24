@@ -12,13 +12,20 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
+import com.mongodb.client.result.UpdateResult;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
+import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 import com.gamagerecruiters.marketplace.modules.customer.domain.CustomerAddress;
 import com.gamagerecruiters.marketplace.modules.customer.dto.ChangePasswordRequest;
@@ -41,6 +48,8 @@ public class CustomerServiceImpl implements CustomerService {
     private final CustomerAddressRepository customerAddressRepository;
     private final DistrictCatalog districtCatalog;
     private final ObjectProvider<OpenBookingsChecker> openBookingsCheckerProvider;
+    private final CustomerProfileImageStorage profileImageStorage;
+    private final MongoTemplate mongoTemplate;
     private final int maxAddresses;
 
     public CustomerServiceImpl(
@@ -48,12 +57,16 @@ public class CustomerServiceImpl implements CustomerService {
             CustomerAddressRepository customerAddressRepository,
             DistrictCatalog districtCatalog,
             ObjectProvider<OpenBookingsChecker> openBookingsCheckerProvider,
+            CustomerProfileImageStorage profileImageStorage,
+            MongoTemplate mongoTemplate,
             @Value("${app.customer.max-addresses:10}") int maxAddresses
     ) {
         this.userInternalService = userInternalService;
         this.customerAddressRepository = customerAddressRepository;
         this.districtCatalog = districtCatalog;
         this.openBookingsCheckerProvider = openBookingsCheckerProvider;
+        this.profileImageStorage = profileImageStorage;
+        this.mongoTemplate = mongoTemplate;
         this.maxAddresses = maxAddresses;
     }
 
@@ -410,6 +423,94 @@ public class CustomerServiceImpl implements CustomerService {
                 .orElseThrow(() -> new ResourceNotFoundException("ADDRESS_NOT_FOUND", "Address not found"));
     }
 
+    @Override
+    public CustomerProfileResponse uploadProfilePhoto(String customerId, MultipartFile file) {
+        User user = userInternalService.getById(customerId);
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_INACTIVE", "Customer account must be active");
+        }
+
+        String oldPublicId = user.getProfileImagePublicId();
+
+        // 1. Upload new image
+        StoredProfileImage stored = profileImageStorage.upload(customerId, file);
+
+        // 2. Targeted $set of profileImageUrl + profileImagePublicId on the user
+        try {
+            Query query = Query.query(Criteria.where("_id").is(customerId));
+            Update update = new Update()
+                    .set("profileImageUrl", stored.secureUrl())
+                    .set("profileImagePublicId", stored.publicId());
+            UpdateResult result = mongoTemplate.updateFirst(query, update, User.class);
+            if (result.getMatchedCount() == 0) {
+                throw new ResourceNotFoundException("USER_NOT_FOUND", "Customer not found: " + customerId);
+            }
+        } catch (Exception ex) {
+            // DB update failed after successful upload: best-effort delete just-uploaded image
+            try {
+                profileImageStorage.delete(stored.publicId());
+            } catch (Exception deleteEx) {
+                log.warn("Failed to delete orphaned profile image after DB failure: userId={}, error={}",
+                        customerId, deleteEx.getClass().getSimpleName());
+            }
+            if (ex instanceof ApiException) {
+                throw (ApiException) ex;
+            }
+            log.warn("DB update failed for customer profile photo: userId={}, error={}",
+                    customerId, ex.getClass().getSimpleName());
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PROFILE_PHOTO_UPDATE_FAILED",
+                    "Failed to save profile photo. Please try again.");
+        }
+
+        // 3. Best-effort delete of the OLD publicId
+        if (oldPublicId != null && !oldPublicId.isBlank()) {
+            try {
+                profileImageStorage.delete(oldPublicId);
+            } catch (Exception deleteEx) {
+                log.warn("Failed to delete previous profile image from storage: userId={}, error={}",
+                        customerId, deleteEx.getClass().getSimpleName());
+            }
+        }
+
+        User updated = userInternalService.getById(customerId);
+        return toProfileResponse(updated);
+    }
+
+    @Override
+    public void deleteProfilePhoto(String customerId) {
+        User user = userInternalService.getById(customerId);
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_INACTIVE", "Customer account must be active");
+        }
+
+        String oldPublicId = user.getProfileImagePublicId();
+        if (oldPublicId == null || oldPublicId.isBlank()) {
+            return;
+        }
+
+        // Targeted $unset of both fields
+        try {
+            Query query = Query.query(Criteria.where("_id").is(customerId));
+            Update update = new Update()
+                    .unset("profileImageUrl")
+                    .unset("profileImagePublicId");
+            mongoTemplate.updateFirst(query, update, User.class);
+        } catch (Exception ex) {
+            log.warn("DB unset failed for customer profile photo: userId={}, error={}",
+                    customerId, ex.getClass().getSimpleName());
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PROFILE_PHOTO_DELETE_FAILED",
+                    "Failed to delete profile photo. Please try again.");
+        }
+
+        // Best-effort delete old image from Cloudinary
+        try {
+            profileImageStorage.delete(oldPublicId);
+        } catch (Exception deleteEx) {
+            log.warn("Failed to delete profile image from storage: userId={}, error={}",
+                    customerId, deleteEx.getClass().getSimpleName());
+        }
+    }
+
     private CustomerProfileResponse toProfileResponse(User user) {
         return new CustomerProfileResponse(
                 user.getId(),
@@ -418,7 +519,8 @@ public class CustomerServiceImpl implements CustomerService {
                 user.getPhone(),
                 user.getRole(),
                 user.getStatus(),
-                user.isEmailVerified()
+                user.isEmailVerified(),
+                user.getProfileImageUrl()
         );
     }
 }
