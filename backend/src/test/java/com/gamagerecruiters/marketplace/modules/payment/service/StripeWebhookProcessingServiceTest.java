@@ -71,6 +71,7 @@ class StripeWebhookProcessingServiceTest {
 
         when(session.getPaymentStatus()).thenReturn("paid");
         when(session.getId()).thenReturn("cs_test_123");
+        when(session.getPaymentIntent()).thenReturn("pi_test123");
         when(session.getClientReferenceId()).thenReturn("pay_123");
         when(session.getCurrency()).thenReturn("usd");
         when(session.getAmountTotal()).thenReturn(10000L);
@@ -84,7 +85,7 @@ class StripeWebhookProcessingServiceTest {
 
         when(transactionService.captureVerifiedPayment(
                 anyString(), anyString(), anyString(),
-                any(BigDecimal.class), anyString()))
+                anyString(), any(BigDecimal.class), anyString()))
                 .thenReturn(true);
 
         boolean result = service.process("raw-payload", "signature");
@@ -97,6 +98,7 @@ class StripeWebhookProcessingServiceTest {
                 eq("evt_test_123"),
                 eq("pay_123"),
                 eq("cs_test_123"),
+                eq("pi_test123"),
                 eq(new BigDecimal("100.00")),
                 eq("USD"));
     }
@@ -169,15 +171,120 @@ class StripeWebhookProcessingServiceTest {
 
         when(transactionService.captureVerifiedPayment(
                 anyString(), anyString(), anyString(),
-                any(BigDecimal.class), anyString()))
+                anyString(), any(BigDecimal.class), anyString()))
                 .thenReturn(true);
 
         assertTrue(service.process("raw-payload", "signature"));
 
         verify(registrationService).register(any(Event.class));
         verify(transactionService).captureVerifiedPayment(
-                anyString(), anyString(), anyString(),
-                any(BigDecimal.class), anyString());
+                eq("evt_test_123"),
+                eq("pay_123"),
+                eq("cs_test_123"),
+                eq("pi_test123"),
+                eq(new BigDecimal("100.00")),
+                eq("USD"));
+    }
+
+    /**
+     * A paid session without a PaymentIntent must not initiate
+     * financial processing.
+     */
+    @Test
+    void missingPaymentIntentIsRejected() throws Exception {
+        Session session = paidSession();
+        when(session.getPaymentIntent()).thenReturn(null);
+
+        mockEvent("checkout.session.completed", session);
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.process("raw-payload", "signature"));
+
+        assertEquals(
+                "Stripe PaymentIntent ID is missing",
+                exception.getMessage());
+
+        verifyNoInteractions(registrationService, transactionService);
+    }
+
+    @Test
+    void blankPaymentIntentIsRejected() throws Exception {
+        Session session = paidSession();
+        when(session.getPaymentIntent()).thenReturn("   ");
+
+        mockEvent("checkout.session.completed", session);
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.process("raw-payload", "signature"));
+
+        assertEquals(
+                "Stripe PaymentIntent ID is missing",
+                exception.getMessage());
+
+        verifyNoInteractions(registrationService, transactionService);
+    }
+
+    @Test
+    void invalidPaymentIntentFormatIsRejected() throws Exception {
+
+        // Reject other Stripe object types and malformed references.
+        String[] invalidReferences = {
+                "cs_test123",
+                "ch_test123",
+                "pi_",
+                "pi_invalid-value",
+                "pi_invalid value",
+                "PI_test123"
+        };
+
+        for (String reference : invalidReferences) {
+            Session session = paidSession();
+            when(session.getPaymentIntent()).thenReturn(reference);
+
+            mockEvent("checkout.session.completed", session);
+
+            IllegalStateException exception = assertThrows(
+                    IllegalStateException.class,
+                    () -> service.process("raw-payload", "signature"));
+
+            assertEquals(
+                    "Invalid Stripe PaymentIntent ID",
+                    exception.getMessage());
+
+            verifyNoInteractions(
+                    registrationService,
+                    transactionService);
+        }
+    }
+
+    @Test
+    void duplicateCaptureResultIsReturnedWithoutNewCapture()
+            throws Exception {
+
+        mockEvent("checkout.session.completed", paidSession());
+
+        when(transactionService.captureVerifiedPayment(
+                eq("evt_test_123"),
+                eq("pay_123"),
+                eq("cs_test_123"),
+                eq("pi_test123"),
+                eq(new BigDecimal("100.00")),
+                eq("USD")))
+                .thenReturn(false);
+
+        assertFalse(service.process("raw-payload", "signature"));
+
+        verify(registrationService).register(any(Event.class));
+
+        verify(transactionService).captureVerifiedPayment(
+                eq("evt_test_123"),
+                eq("pay_123"),
+                eq("cs_test_123"),
+                eq("pi_test123"),
+                eq(new BigDecimal("100.00")),
+                eq("USD"));
     }
 
     @Test

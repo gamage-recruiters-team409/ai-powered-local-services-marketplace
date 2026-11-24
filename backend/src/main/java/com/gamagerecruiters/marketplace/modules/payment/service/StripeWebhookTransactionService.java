@@ -50,7 +50,9 @@ public class StripeWebhookTransactionService {
      * Captures a verified, paid Stripe Checkout Session.
      *
      * @param eventId authenticated Stripe event identifier
+     * @param paymentId verified internal payment identifier
      * @param sessionId verified Stripe Checkout Session identifier
+     * @param paymentIntentId verified Stripe PaymentIntent identifier
      * @param amount verified Stripe payment amount in major units
      * @param currency verified ISO currency code
      * @return true if a new capture was committed, false if already processed
@@ -59,12 +61,20 @@ public class StripeWebhookTransactionService {
             String eventId,
             String paymentId,
             String sessionId,
+            String paymentIntentId,
             BigDecimal amount,
             String currency) {
 
         String validatedEventId = requireText(eventId, "Event ID");
         String validatedPaymentId = requireText(paymentId, "Payment ID");
         String validatedSessionId = requireText(sessionId, "Session ID");
+        String validatedPaymentIntentId = requireText(
+                paymentIntentId, "PaymentIntent ID");
+
+        if (!validatedPaymentIntentId.matches("pi_[A-Za-z0-9]+")) {
+            throw new IllegalArgumentException(
+                    "Invalid Stripe PaymentIntent ID");
+        }
         String validatedCurrency = requireText(currency, "Currency")
                 .toUpperCase(java.util.Locale.ROOT);
 
@@ -109,6 +119,13 @@ public class StripeWebhookTransactionService {
                             "Processed Stripe event payment details mismatch");
                 }
 
+                // A processed event must never overwrite an existing
+                // PaymentIntent or silently backfill a legacy record.
+                validateStoredPaymentIntent(
+                        processedPayment,
+                        validatedPaymentIntentId,
+                        false);
+
                 return false;
             }
 
@@ -150,6 +167,13 @@ public class StripeWebhookTransactionService {
                         "Payment is not eligible for capture");
             }
 
+            // Only an initiated payment may receive its first
+            // PaymentIntent during a new verified capture.
+            validateStoredPaymentIntent(
+                    payment,
+                    validatedPaymentIntentId,
+                    !alreadyCaptured);
+
             if (!alreadyCaptured) {
                 transitionService.validateTransition(
                     PaymentStatus.INITIATED,
@@ -170,10 +194,16 @@ public class StripeWebhookTransactionService {
             Query paymentQuery = Query.query(
                     Criteria.where("_id").is(validatedPaymentId)
                             .and("status").is(PaymentStatus.INITIATED)
-                            .and("gatewayRef").is(validatedSessionId));
+                            .and("gatewayRef").is(validatedSessionId)
+                            .orOperator(
+                                    Criteria.where("gatewayPaymentIntentId")
+                                            .is(null),
+                                    Criteria.where("gatewayPaymentIntentId")
+                                            .is(validatedPaymentIntentId)));
 
             Update paymentUpdate = new Update()
                     .set("status", PaymentStatus.CAPTURED)
+                    .set("gatewayPaymentIntentId", validatedPaymentIntentId)
                     .set("paidAt", now)
                     .set("updatedAt", now);
 
@@ -227,6 +257,37 @@ public class StripeWebhookTransactionService {
                 query,
                 update,
                 StripeWebhookEvent.class).getModifiedCount() == 1;
+    }
+
+    /**
+     * Prevents conflicting PaymentIntent references and unsafe
+     * backfilling of previously captured legacy payments.
+     *
+     * Legacy captured payments without a verified reference must
+     * be handled through a dedicated reconciliation workflow.
+     */
+    private static void validateStoredPaymentIntent(
+            Payment payment,
+            String verifiedPaymentIntentId,
+            boolean allowMissingReference) {
+
+        String storedPaymentIntentId =
+                payment.getGatewayPaymentIntentId();
+
+        if (storedPaymentIntentId == null) {
+            if (allowMissingReference) {
+                return;
+            }
+
+            throw new IllegalStateException(
+                    "Stored PaymentIntent reference is missing; "
+                            + "verified reconciliation is required");
+        }
+
+        if (!verifiedPaymentIntentId.equals(storedPaymentIntentId)) {
+            throw new IllegalStateException(
+                    "Stripe PaymentIntent reference mismatch");
+        }
     }
 
     private static String requireText(String value, String fieldName) {

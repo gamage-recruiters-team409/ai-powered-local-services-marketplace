@@ -75,6 +75,16 @@ public class StripeWebhookProcessingService {
 
         String eventId = requireText(event.getId(), "Stripe event ID");
         String sessionId = requireText(session.getId(), "Checkout Session ID");
+
+        // Extract the PaymentIntent only from the authenticated,
+        // paid Checkout Session. Never accept it from client input.
+        String paymentIntentId = requireText(
+                session.getPaymentIntent(), "Stripe PaymentIntent ID");
+
+        if (!paymentIntentId.matches("pi_[A-Za-z0-9]+")) {
+            throw new IllegalStateException(
+                    "Invalid Stripe PaymentIntent ID");
+        }
         String paymentId = requireText(
                 session.getClientReferenceId(), "Payment reference");
         String currency = requireText(
@@ -102,7 +112,12 @@ public class StripeWebhookProcessingService {
         // The transaction service must additionally validate the
         // persisted Payment ID against the verified payment reference.
         return transactionService.captureVerifiedPayment(
-                eventId, paymentId, sessionId, amount, currency);
+                eventId,
+                paymentId,
+                sessionId,
+                paymentIntentId,
+                amount,
+                currency);
     }
 
     private static String requireText(String value, String name) {

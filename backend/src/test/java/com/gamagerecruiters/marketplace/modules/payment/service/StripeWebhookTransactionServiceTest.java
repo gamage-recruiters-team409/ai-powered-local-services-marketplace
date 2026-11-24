@@ -99,6 +99,7 @@ class StripeWebhookTransactionServiceTest {
         boolean captured = service.captureVerifiedPayment(
                 "evt_test_123", "pay_123",
                 "cs_test_123",
+                "pi_test123",
                 new BigDecimal("100.00"),
                 "USD");
 
@@ -126,11 +127,16 @@ class StripeWebhookTransactionServiceTest {
         when(event.getPaymentId()).thenReturn("pay_123");
         when(event.getCheckoutSessionId()).thenReturn("cs_test_123");
 
-        mockEventAndPayment(event, initiatedPayment());
+        Payment payment = initiatedPayment();
+        payment.setStatus(PaymentStatus.CAPTURED);
+        payment.setGatewayPaymentIntentId("pi_test123");
+
+        mockEventAndPayment(event, payment);
 
         assertFalse(service.captureVerifiedPayment(
                 "evt_test_123", "pay_123",
                 "cs_test_123",
+                "pi_test123",
                 new BigDecimal("100.00"),
                 "USD"));
 
@@ -143,6 +149,7 @@ class StripeWebhookTransactionServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> service.captureVerifiedPayment(
                         "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"), "USD"));
 
         verify(transactionManager).rollback(any());
@@ -155,6 +162,7 @@ class StripeWebhookTransactionServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> service.captureVerifiedPayment(
                         "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("99.00"), "USD"));
 
         verify(mongoTemplate, never()).updateFirst(
@@ -168,6 +176,7 @@ class StripeWebhookTransactionServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> service.captureVerifiedPayment(
                         "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"), "EUR"));
     }
 
@@ -181,6 +190,7 @@ class StripeWebhookTransactionServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> service.captureVerifiedPayment(
                         "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"), "USD"));
     }
 
@@ -209,6 +219,7 @@ class StripeWebhookTransactionServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> service.captureVerifiedPayment(
                         "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"), "USD"));
 
         verify(transactionManager).rollback(any());
@@ -219,11 +230,13 @@ class StripeWebhookTransactionServiceTest {
         assertThrows(IllegalArgumentException.class,
                 () -> service.captureVerifiedPayment(
                         " ", "pay_123", "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"), "USD"));
 
         assertThrows(IllegalArgumentException.class,
                 () -> service.captureVerifiedPayment(
                         "evt_test_123", "pay_123", null,
+                        "pi_test123",
                         new BigDecimal("100.00"), "USD"));
 
         verifyNoInteractions(mongoTemplate);
@@ -242,6 +255,7 @@ class StripeWebhookTransactionServiceTest {
                         "evt_test_123",
                         "pay_different",
                         "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"),
                         "USD"));
 
@@ -261,12 +275,14 @@ class StripeWebhookTransactionServiceTest {
     void differentEventForCapturedPaymentIsAcknowledgedWithoutRecapture() {
         Payment payment = initiatedPayment();
         payment.setStatus(PaymentStatus.CAPTURED);
+        payment.setGatewayPaymentIntentId("pi_test123");
 
         mockEventAndPayment(receivedEvent(), payment);
         mockSuccessfulUpdates();
 
         boolean newlyCaptured = service.captureVerifiedPayment(
                 "evt_test_123", "pay_123", "cs_test_123",
+                "pi_test123",
                 new BigDecimal("100.00"), "USD");
 
         assertFalse(newlyCaptured);
@@ -298,6 +314,7 @@ class StripeWebhookTransactionServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> service.captureVerifiedPayment(
                         "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"), "USD"));
 
         verify(mongoTemplate, never()).updateFirst(
@@ -321,6 +338,7 @@ class StripeWebhookTransactionServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> service.captureVerifiedPayment(
                         "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"), "USD"));
 
         verify(transactionManager).rollback(any());
@@ -342,6 +360,7 @@ class StripeWebhookTransactionServiceTest {
                         "evt_test_123",
                         "pay_123",
                         "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("200.00"),
                         "USD"));
 
@@ -367,6 +386,7 @@ class StripeWebhookTransactionServiceTest {
                         "evt_test_123",
                         "pay_123",
                         "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"),
                         "EUR"));
 
@@ -398,6 +418,7 @@ class StripeWebhookTransactionServiceTest {
                         "evt_test_123",
                         "pay_123",
                         "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"),
                         "USD"));
 
@@ -447,6 +468,7 @@ class StripeWebhookTransactionServiceTest {
                         "evt_test_123",
                         "pay_123",
                         "cs_test_123",
+                        "pi_test123",
                         new BigDecimal("100.00"),
                         "USD"));
 
@@ -458,6 +480,282 @@ class StripeWebhookTransactionServiceTest {
         verify(mongoTemplate, times(2)).updateFirst(
                 any(Query.class),
                 any(Update.class),
+                eq(StripeWebhookEvent.class));
+
+        verify(transactionManager).rollback(any());
+        verify(transactionManager, never()).commit(any());
+    }
+
+    /**
+     * Verifies that the capture status and verified PaymentIntent
+     * are included in the same conditional MongoDB update.
+     */
+    @Test
+    void capturePersistsPaymentIntentAtomically() {
+        mockEventAndPayment(receivedEvent(), initiatedPayment());
+        mockSuccessfulUpdates();
+
+        assertTrue(service.captureVerifiedPayment(
+                "evt_test_123", "pay_123", "cs_test_123",
+                "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        org.mockito.ArgumentCaptor<Query> queryCaptor =
+                org.mockito.ArgumentCaptor.forClass(Query.class);
+
+        org.mockito.ArgumentCaptor<Update> updateCaptor =
+                org.mockito.ArgumentCaptor.forClass(Update.class);
+
+        verify(mongoTemplate).updateFirst(
+                queryCaptor.capture(),
+                updateCaptor.capture(),
+                eq(Payment.class));
+
+        org.bson.Document filter =
+                queryCaptor.getValue().getQueryObject();
+
+        assertEquals("pay_123", filter.get("_id"));
+        assertEquals(PaymentStatus.INITIATED, filter.get("status"));
+        assertEquals("cs_test_123", filter.get("gatewayRef"));
+
+        // The CAS filter must reject conflicting stored references.
+        java.util.List<?> alternatives =
+                (java.util.List<?>) filter.get("$or");
+
+        assertNotNull(alternatives);
+        assertEquals(2, alternatives.size());
+
+        assertTrue(alternatives.contains(
+                new org.bson.Document(
+                        "gatewayPaymentIntentId", null)));
+
+        assertTrue(alternatives.contains(
+                new org.bson.Document(
+                        "gatewayPaymentIntentId", "pi_test123")));
+
+        org.bson.Document fields =
+                (org.bson.Document) updateCaptor.getValue()
+                        .getUpdateObject().get("$set");
+
+        assertNotNull(fields);
+        assertEquals(PaymentStatus.CAPTURED, fields.get("status"));
+        assertEquals("pi_test123",
+                fields.get("gatewayPaymentIntentId"));
+
+        assertNotNull(fields.get("paidAt"));
+        assertNotNull(fields.get("updatedAt"));
+
+        verify(transactionManager).commit(any());
+        verify(transactionManager, never()).rollback(any());
+    }
+
+    @Test
+    void missingPaymentIntentIsRejectedBeforeTransaction() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.captureVerifiedPayment(
+                        "evt_test_123", "pay_123", "cs_test_123",
+                        null, new BigDecimal("100.00"), "USD"));
+
+        verifyNoInteractions(mongoTemplate, transactionManager);
+    }
+
+    @Test
+    void blankPaymentIntentIsRejectedBeforeTransaction() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.captureVerifiedPayment(
+                        "evt_test_123", "pay_123", "cs_test_123",
+                        "   ", new BigDecimal("100.00"), "USD"));
+
+        verifyNoInteractions(mongoTemplate, transactionManager);
+    }
+
+    @Test
+    void invalidPaymentIntentIsRejectedBeforeTransaction() {
+        String[] invalidReferences = {
+                "cs_test123",
+                "ch_test123",
+                "pi_",
+                "pi_invalid-value",
+                "pi_invalid value",
+                "PI_test123"
+        };
+
+        for (String reference : invalidReferences) {
+            IllegalArgumentException exception = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> service.captureVerifiedPayment(
+                            "evt_test_123", "pay_123", "cs_test_123",
+                            reference,
+                            new BigDecimal("100.00"), "USD"));
+
+            assertEquals("Invalid Stripe PaymentIntent ID",
+                    exception.getMessage());
+        }
+
+        verifyNoInteractions(mongoTemplate, transactionManager);
+    }
+
+    @Test
+    void initiatedPaymentWithMatchingPaymentIntentCanBeCaptured() {
+        Payment payment = initiatedPayment();
+        payment.setGatewayPaymentIntentId("pi_test123");
+
+        mockEventAndPayment(receivedEvent(), payment);
+        mockSuccessfulUpdates();
+
+        assertTrue(service.captureVerifiedPayment(
+                "evt_test_123", "pay_123", "cs_test_123",
+                "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        verify(mongoTemplate).updateFirst(
+                any(Query.class), any(Update.class),
+                eq(Payment.class));
+
+        verify(transactionManager).commit(any());
+    }
+
+    @Test
+    void initiatedPaymentWithConflictingPaymentIntentIsRejected() {
+        Payment payment = initiatedPayment();
+        payment.setGatewayPaymentIntentId("pi_other123");
+
+        mockEventAndPayment(receivedEvent(), payment);
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.captureVerifiedPayment(
+                        "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        assertEquals("Stripe PaymentIntent reference mismatch",
+                exception.getMessage());
+
+        verify(mongoTemplate, never()).updateFirst(
+                any(Query.class), any(Update.class), any(Class.class));
+
+        verify(transactionManager).rollback(any());
+        verify(transactionManager, never()).commit(any());
+    }
+
+    @Test
+    void capturedPaymentWithConflictingPaymentIntentIsRejected() {
+        Payment payment = initiatedPayment();
+        payment.setStatus(PaymentStatus.CAPTURED);
+        payment.setGatewayPaymentIntentId("pi_other123");
+
+        mockEventAndPayment(receivedEvent(), payment);
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.captureVerifiedPayment(
+                        "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        assertEquals("Stripe PaymentIntent reference mismatch",
+                exception.getMessage());
+
+        verify(mongoTemplate, never()).updateFirst(
+                any(Query.class), any(Update.class), any(Class.class));
+
+        verify(transactionManager).rollback(any());
+        verify(transactionManager, never()).commit(any());
+    }
+
+    @Test
+    void legacyCapturedPaymentRequiresReconciliation() {
+        Payment payment = initiatedPayment();
+        payment.setStatus(PaymentStatus.CAPTURED);
+
+        mockEventAndPayment(receivedEvent(), payment);
+
+        IllegalStateException exception = assertThrows(
+                IllegalStateException.class,
+                () -> service.captureVerifiedPayment(
+                        "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        assertEquals(
+                "Stored PaymentIntent reference is missing; "
+                        + "verified reconciliation is required",
+                exception.getMessage());
+
+        verify(mongoTemplate, never()).updateFirst(
+                any(Query.class), any(Update.class), any(Class.class));
+
+        verify(transactionManager).rollback(any());
+        verify(transactionManager, never()).commit(any());
+    }
+
+    /**
+     * Processed events must not overwrite a conflicting reference
+     * or silently backfill a missing legacy PaymentIntent.
+     */
+    @Test
+    void processedEventRejectsMissingOrConflictingPaymentIntent() {
+        StripeWebhookEvent event = mock(StripeWebhookEvent.class);
+
+        when(event.getStatus()).thenReturn(
+                StripeWebhookEvent.ProcessingStatus.PROCESSED);
+
+        when(event.getPaymentId()).thenReturn("pay_123");
+        when(event.getCheckoutSessionId()).thenReturn("cs_test_123");
+
+        Payment payment = initiatedPayment();
+        payment.setStatus(PaymentStatus.CAPTURED);
+
+        mockEventAndPayment(event, payment);
+
+        IllegalStateException missing = assertThrows(
+                IllegalStateException.class,
+                () -> service.captureVerifiedPayment(
+                        "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        assertEquals(
+                "Stored PaymentIntent reference is missing; "
+                        + "verified reconciliation is required",
+                missing.getMessage());
+
+        payment.setGatewayPaymentIntentId("pi_other123");
+
+        IllegalStateException conflicting = assertThrows(
+                IllegalStateException.class,
+                () -> service.captureVerifiedPayment(
+                        "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        assertEquals("Stripe PaymentIntent reference mismatch",
+                conflicting.getMessage());
+
+        verify(mongoTemplate, never()).updateFirst(
+                any(Query.class), any(Update.class), any(Class.class));
+
+        verify(transactionManager, times(2)).rollback(any());
+        verify(transactionManager, never()).commit(any());
+    }
+
+    /**
+     * Simulates a unique index violation during payment capture.
+     * Verifies rollback orchestration, not real database rollback.
+     */
+    @Test
+    void duplicatePaymentIntentKeyTriggersTransactionRollback() {
+        mockEventAndPayment(receivedEvent(), initiatedPayment());
+        mockSuccessfulUpdates();
+
+        when(mongoTemplate.updateFirst(
+                any(Query.class), any(Update.class),
+                eq(Payment.class)))
+                .thenThrow(new org.springframework.dao.DuplicateKeyException(
+                        "Duplicate gatewayPaymentIntentId"));
+
+        assertThrows(
+                org.springframework.dao.DuplicateKeyException.class,
+                () -> service.captureVerifiedPayment(
+                        "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        verify(mongoTemplate, times(1)).updateFirst(
+                any(Query.class), any(Update.class),
                 eq(StripeWebhookEvent.class));
 
         verify(transactionManager).rollback(any());

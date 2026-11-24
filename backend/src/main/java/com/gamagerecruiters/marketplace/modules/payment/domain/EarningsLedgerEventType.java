@@ -53,5 +53,26 @@ public enum EarningsLedgerEventType {
     REFUND_FROM_AVAILABLE,
 
     // Refund deducted from held earnings.
-    REFUND_FROM_HELD
+    REFUND_FROM_HELD,
+
+    // Reserve pending earnings for an active refund.
+    REFUND_RESERVE_FROM_PENDING,
+
+    // Reserve available earnings for an active refund.
+    REFUND_RESERVE_FROM_AVAILABLE,
+
+    // Reserve dispute-held earnings for an authorized refund.
+    REFUND_RESERVE_FROM_HELD,
+
+    // Restore reserved earnings to their original pending balance.
+    REFUND_RELEASE_TO_PENDING,
+
+    // Restore reserved earnings to their original available balance.
+    REFUND_RELEASE_TO_AVAILABLE,
+
+    // Restore reserved earnings to their original held balance.
+    REFUND_RELEASE_TO_HELD,
+
+    // Finalize reserved earnings after verified refund success.
+    REFUND_SETTLE
 }

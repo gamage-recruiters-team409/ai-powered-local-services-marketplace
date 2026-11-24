@@ -46,6 +46,7 @@ public class EarningsLifecycleService {
     private final BookingFacade bookingFacade;
     private final CompletionLookup completionLookup;
     private final EarningsLedgerService earningsLedgerService;
+    private final EarningsRecognitionTransactionService recognitionTransactionService;
 
     /**
      * Creates the lifecycle service with its trusted dependencies.
@@ -54,12 +55,14 @@ public class EarningsLifecycleService {
      * @param bookingFacade             trusted booking information interface
      * @param completionLookup          verified service completion lookup
      * @param earningsLedgerService     append-only earnings ledger service
+     * @param recognitionTransactionService atomic earnings recognition service
      */
     public EarningsLifecycleService(
             PaymentPersistenceService paymentPersistenceService,
             BookingFacade bookingFacade,
             CompletionLookup completionLookup,
-            EarningsLedgerService earningsLedgerService) {
+            EarningsLedgerService earningsLedgerService,
+            EarningsRecognitionTransactionService recognitionTransactionService) {
 
         this.paymentPersistenceService = Objects.requireNonNull(
                 paymentPersistenceService,
@@ -76,6 +79,10 @@ public class EarningsLifecycleService {
         this.earningsLedgerService = Objects.requireNonNull(
                 earningsLedgerService,
                 "Earnings ledger service is required");
+
+        this.recognitionTransactionService = Objects.requireNonNull(
+                recognitionTransactionService,
+                "Earnings recognition transaction service is required");
     }
 
     /**
@@ -195,7 +202,9 @@ public class EarningsLifecycleService {
                             "Disputed booking has no previously committed pending earnings event"));
         }
 
-        return earningsLedgerService.appendEvent(entry);
+        // Serialize earnings recognition with concurrent refund reservations.
+        return recognitionTransactionService.recognizeAtomically(
+                payment, entry);
     }
 
     /**

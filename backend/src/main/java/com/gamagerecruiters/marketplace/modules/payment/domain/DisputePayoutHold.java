@@ -51,7 +51,9 @@ public class DisputePayoutHold {
         PENDING,
         APPLIED,
         RELEASED,
-        FAILED
+        FAILED,
+        SETTLING,
+        SETTLED
     }
 
     protected DisputePayoutHold() {
@@ -112,6 +114,38 @@ public class DisputePayoutHold {
     public void markFailed() {
         requireStatus(HoldStatus.PENDING);
         this.status = HoldStatus.FAILED;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Claims an applied hold for an authorized financial settlement.
+     * The caller must persist this transition atomically with the
+     * corresponding refund reservation.
+     */
+    public void markSettling() {
+        requireStatus(HoldStatus.APPLIED);
+        this.status = HoldStatus.SETTLING;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Completes a hold after all required financial settlement
+     * operations have been confirmed and persisted.
+     */
+    public void markSettled() {
+        requireStatus(HoldStatus.SETTLING);
+        this.status = HoldStatus.SETTLED;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Restores an applied hold after a definitive settlement failure.
+     * The original financial reservation must be restored within
+     * the same transaction before this transition is committed.
+     */
+    public void restoreAppliedAfterSettlementFailure() {
+        requireStatus(HoldStatus.SETTLING);
+        this.status = HoldStatus.APPLIED;
         this.updatedAt = Instant.now();
     }
 

@@ -40,6 +40,15 @@ public class Payment {
     private String gatewayRef;
 
     /**
+     * Stripe PaymentIntent identifier obtained from a verified
+     * paid Checkout Session.
+     *
+     * Used for trusted refund execution and reconciliation.
+     * Null for payments without a verified PaymentIntent reference.
+     */
+    private String gatewayPaymentIntentId;
+
+    /**
      * Unique token identifying an active Stripe Checkout reservation.
      * Null when no reservation is active.
      */
@@ -50,6 +59,20 @@ public class Payment {
      * Used for safe recovery and reconciliation.
      */
     private Instant checkoutReservedAt;
+
+    /**
+     * Identifies the active refund operation reserved against this payment.
+     * Null when no refund reservation is active.
+     *
+     * Must be acquired and released through conditional persistence updates.
+     */
+    private String refundReservationToken;
+
+    /**
+     * Timestamp when the refund reservation was acquired.
+     * Used for recovery and reconciliation of incomplete refunds.
+     */
+    private Instant refundReservedAt;
 
     // Store the payment amount as MongoDB Decimal128.
     @Field(targetType = FieldType.DECIMAL128)
@@ -149,6 +172,24 @@ public class Payment {
         this.gatewayRef = gatewayRef;
     }
 
+    /**
+     * Returns the verified gateway PaymentIntent reference.
+     *
+     * @return PaymentIntent identifier, or null when unavailable
+     */
+    public String getGatewayPaymentIntentId() {
+        return gatewayPaymentIntentId;
+    }
+
+    /**
+     * Sets the PaymentIntent reference from a trusted gateway workflow.
+     *
+     * @param gatewayPaymentIntentId verified PaymentIntent identifier
+     */
+    public void setGatewayPaymentIntentId(String gatewayPaymentIntentId) {
+        this.gatewayPaymentIntentId = gatewayPaymentIntentId;
+    }
+
     public String getCheckoutReservationToken() {
         return checkoutReservationToken;
     }
@@ -163,6 +204,34 @@ public class Payment {
 
     public void setCheckoutReservedAt(Instant checkoutReservedAt) {
         this.checkoutReservedAt = checkoutReservedAt;
+    }
+
+    /**
+     * Returns the active refund reservation token.
+     */
+    public String getRefundReservationToken() {
+        return refundReservationToken;
+    }
+
+    /**
+     * Sets the token used by the trusted refund persistence workflow.
+     */
+    public void setRefundReservationToken(String refundReservationToken) {
+        this.refundReservationToken = refundReservationToken;
+    }
+
+    /**
+     * Returns the refund reservation acquisition timestamp.
+     */
+    public Instant getRefundReservedAt() {
+        return refundReservedAt;
+    }
+
+    /**
+     * Sets the refund reservation acquisition timestamp.
+     */
+    public void setRefundReservedAt(Instant refundReservedAt) {
+        this.refundReservedAt = refundReservedAt;
     }
 
     public BigDecimal getAmount() {
