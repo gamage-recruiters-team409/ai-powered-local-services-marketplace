@@ -26,7 +26,18 @@ public record CreateCategoryRequest(
 
         @DecimalMin(value = "0.00", message = "Commission rate cannot be negative")
         @DecimalMax(value = "0.50", message = "Commission rate cannot exceed 50%")
-        BigDecimal commissionRate
+        BigDecimal commissionRate,
+
+        Boolean active
 ) {
+    public CreateCategoryRequest(
+            String name,
+            String slug,
+            String description,
+            String icon,
+            String parentId,
+            BigDecimal commissionRate) {
+        this(name, slug, description, icon, parentId, commissionRate, null);
+    }
 }
 

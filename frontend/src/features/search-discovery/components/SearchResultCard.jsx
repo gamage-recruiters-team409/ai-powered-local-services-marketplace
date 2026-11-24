@@ -31,7 +31,27 @@ export function SearchResultCard({ item, isSelected = false, onToggleComparison 
     responseTimeText,
     nextAvailable,
     pricing = {},
+    providerId,
   } = item;
+
+  const profileId = providerId || id;
+  const pricingCurrency =
+    typeof pricing.currency === 'string' ? pricing.currency.trim() : '';
+  const pricingUnit =
+    typeof pricing.unit === 'string' ? pricing.unit.trim() : '';
+  const hasPrice =
+    typeof pricing.hourlyRate === 'number' &&
+    Number.isFinite(pricing.hourlyRate) &&
+    Boolean(pricingCurrency) &&
+    Boolean(pricingUnit);
+  const hasAmount =
+    typeof pricing.amount === 'number' && Number.isFinite(pricing.amount);
+  const pricingModelLabel =
+    pricing.model === 'HOURLY'
+      ? 'hourly'
+      : pricing.model === 'FIXED'
+        ? 'fixed price'
+        : null;
 
   return (
     <article className="provider-result-card" data-testid={`provider-card-${id}`}>
@@ -142,7 +162,18 @@ export function SearchResultCard({ item, isSelected = false, onToggleComparison 
         <div className="provider-card-footer-row">
           <div className="provider-pricing-block">
             <div className="pricing-primary">
-              From <strong className="pricing-rate">{pricing.currency || '$'}{pricing.hourlyRate || 45}</strong>/{pricing.unit || 'hr'}
+              {hasPrice ? (
+                <>
+                  From <strong className="pricing-rate">{pricingCurrency}{pricing.hourlyRate}</strong>/{pricingUnit}
+                </>
+              ) : hasAmount ? (
+                <>
+                  From <strong className="pricing-rate">{pricing.amount}</strong>
+                  {pricingModelLabel ? ` (${pricingModelLabel})` : ''}
+                </>
+              ) : (
+                'Price not provided'
+              )}
             </div>
             {pricing.minimumHours && (
               <div className="pricing-secondary">{pricing.minimumHours}-hour minimum</div>
@@ -150,7 +181,7 @@ export function SearchResultCard({ item, isSelected = false, onToggleComparison 
           </div>
 
           <Link
-            to={`/providers/${encodeURIComponent(id)}`}
+            to={`/providers/${encodeURIComponent(profileId)}`}
             className="view-profile-btn"
             aria-label={`View profile for ${name}`}
           >

@@ -89,6 +89,7 @@ public class CategoryServiceImpl implements CategoryService {
         }
 
         BigDecimal commission = request.commissionRate() != null ? request.commissionRate() : DEFAULT_COMMISSION_RATE;
+        boolean initialActive = !Boolean.FALSE.equals(request.active());
 
         Category category = new Category();
         category.setName(request.name().trim());
@@ -97,7 +98,7 @@ public class CategoryServiceImpl implements CategoryService {
         category.setIcon(request.icon() != null ? request.icon().trim() : null);
         category.setParentId(parentId);
         category.setCommissionRate(commission);
-        category.setActive(true);
+        category.setActive(initialActive);
         category.setCreatedAt(Instant.now());
         category.setUpdatedAt(Instant.now());
 

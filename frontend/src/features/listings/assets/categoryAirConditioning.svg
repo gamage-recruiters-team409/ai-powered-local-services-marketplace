@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="hvacTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F4ECFF" />
+      <stop offset="100%" stop-color="#DFCFFE" />
+    </linearGradient>
+    <linearGradient id="hvacTubeGrad" x1="78" y1="54" x2="128" y2="202" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#C8A9FA" />
+      <stop offset="55%" stop-color="#9A6EE5" />
+      <stop offset="100%" stop-color="#7042C4" />
+    </linearGradient>
+    <linearGradient id="hvacMercuryGrad" x1="94" y1="106" x2="112" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7B4ED0" />
+      <stop offset="100%" stop-color="#4D249E" />
+    </linearGradient>
+    <filter id="hvacDrop" x="-18%" y="-15%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#3E1D80" flood-opacity="0.34" />
+    </filter>
+    <filter id="hvacTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#835AC4" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#hvacTileBg)" stroke="#C6ADF7" stroke-width="2.5" filter="url(#hvacTileShadow)" />
+
+  <g filter="url(#hvacDrop)">
+    <path d="M88 72 C88 61 97 52 108 52 C119 52 128 61 128 72 L128 142 C136 148 141 158 141 169 C141 187 126 202 108 202 C90 202 75 187 75 169 C75 158 80 148 88 142 Z" fill="url(#hvacTubeGrad)" />
+    <path d="M101 104 C101 100 104 97 108 97 C112 97 115 100 115 104 L115 150 C121 153 126 160 126 169 C126 179 118 187 108 187 C98 187 90 179 90 169 C90 160 95 153 101 150 Z" fill="url(#hvacMercuryGrad)" />
+    <path d="M95 74 L95 138" stroke="#F4ECFF" stroke-width="4" stroke-linecap="round" opacity="0.7" />
+
+    <rect x="152" y="72" width="26" height="11" rx="5.5" fill="#7D4ED1" />
+    <rect x="152" y="96" width="19" height="11" rx="5.5" fill="#7D4ED1" />
+    <rect x="152" y="120" width="26" height="11" rx="5.5" fill="#7D4ED1" />
+    <rect x="152" y="144" width="17" height="11" rx="5.5" fill="#7D4ED1" />
+  </g>
+</svg>
