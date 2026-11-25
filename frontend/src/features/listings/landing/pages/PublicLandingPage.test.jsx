@@ -86,7 +86,7 @@ describe('PublicLandingPage (100% SRS-Accurate, Live-API Public UI)', () => {
     ).toBeTruthy()
 
     // SRS-grounded Trust Metrics (100%, 48 hrs, 72 hrs, 25)
-    expect(screen.getByText('Admin-Verified Providers (BR-002)')).toBeTruthy()
+    expect(screen.getAllByText('Admin-Verified Providers').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Completion Review Window')).toBeTruthy()
     expect(screen.getByText('Escrow Dispute Protection')).toBeTruthy()
     expect(screen.getByText('Sri Lankan Districts Supported')).toBeTruthy()
@@ -203,7 +203,7 @@ describe('PublicLandingPage (100% SRS-Accurate, Live-API Public UI)', () => {
     const simulator = screen.getByRole('region', {
       name: /interactive escrow protection simulator/i,
     })
-    expect(within(simulator).getByText('Payment Held in Escrow (CONFIRMED)')).toBeTruthy()
+    expect(within(simulator).getByText('Payment Held in Escrow')).toBeTruthy()
     expect(within(simulator).getByText('100% Held in Escrow')).toBeTruthy()
 
     await user.click(within(simulator).getByRole('tab', { name: /3\. 72h Cleared & Payout/i }))

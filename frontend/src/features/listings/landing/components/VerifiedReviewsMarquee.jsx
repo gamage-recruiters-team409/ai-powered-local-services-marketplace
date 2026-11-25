@@ -121,8 +121,8 @@ export function VerifiedReviewsMarquee({
             <h3 className={styles.reviewsEmptyTitle}>No Customer Reviews Published Yet</h3>
             <p className={styles.reviewsEmptyCopy}>
               {requiresAuth
-                ? 'Customer reviews for verified providers are written strictly after completed bookings (BR-003). Sign in to view published provider reviews or explore active listings.'
-                : 'Verified customers can leave one 1–5 star review after each completed booking (BR-003). Real customer feedback for providers will appear here automatically as jobs complete.'}
+                ? 'Customer reviews for verified providers are written strictly after completed bookings. Sign in to view published provider reviews or explore active listings.'
+                : 'Verified customers can leave one 1–5 star review after each completed booking. Real customer feedback for providers will appear here automatically as jobs complete.'}
             </p>
             <div className={styles.emptyActionRow}>
               <Link to="/search" className={styles.directoryPrimaryLink}>

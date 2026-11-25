@@ -88,8 +88,8 @@ export function HowMarketWorksSection() {
               <div>
                 <h3 className={styles.escrowSimTitle}>Escrow &amp; Dispute Lifecycle Walkthrough</h3>
                 <p className={styles.escrowSimSub}>
-                  How LocalServe protects every booking under <strong>SRS BR-004 – BR-009</strong>{' '}
-                  (Escrow hold, 48h review &amp; 72h dispute window)
+                  How LocalServe protects every booking with{' '}
+                  <strong>escrow hold, 48-hour review, and 72-hour dispute protection</strong>
                 </p>
               </div>
             </div>

@@ -36,7 +36,7 @@ export const ROTATING_PLACEHOLDERS = Object.freeze([
 export const TRUST_METRICS = Object.freeze([
   {
     id: 'admin-verified-providers',
-    label: 'Admin-Verified Providers (BR-002)',
+    label: 'Admin-Verified Providers',
     prefix: '',
     target: 100,
     suffix: '%',
@@ -122,12 +122,12 @@ export const ESCROW_SIMULATOR_STAGES = Object.freeze([
     id: 'held',
     step: 1,
     label: '1. Confirmed & Held',
-    statusLabel: 'Payment Held in Escrow (CONFIRMED)',
+    statusLabel: 'Payment Held in Escrow',
     statusTone: 'locked',
     amountHeld: '100% Held in Escrow',
     providerReceives: 'Locked (Not Released Yet)',
     summary:
-      'Once the provider accepts your booking request and online payment is authorized (BR-005), funds are captured and held securely in platform escrow — never sent upfront.',
+      'Once the provider accepts your booking request and online payment is authorized, funds are captured and held securely in platform escrow — never sent upfront.',
   },
   {
     id: 'completion-pending',
@@ -138,7 +138,7 @@ export const ESCROW_SIMULATOR_STAGES = Object.freeze([
     amountHeld: 'Held Through Review',
     providerReceives: 'Pending Customer Sign-Off',
     summary:
-      'After the technician completes the job and marks completion, you receive 48 hours to inspect the work and confirm — or raise an issue before auto-confirmation (BR-007).',
+      'After the technician completes the job and marks completion, you receive 48 hours to inspect the work and confirm — or raise an issue before automatic confirmation.',
   },
   {
     id: 'released',
@@ -149,7 +149,7 @@ export const ESCROW_SIMULATOR_STAGES = Object.freeze([
     amountHeld: 'Window Cleared (72h)',
     providerReceives: 'Net Payout (After Commission)',
     summary:
-      'Once the 72-hour dispute window closes with zero open disputes (BR-008, BR-009), net earnings — after the transparent category platform commission (10% default per BR-004) — become available for bank payout.',
+      'Once the 72-hour dispute window closes with zero open disputes, net earnings — after the transparent category platform commission (10% default) — become available for bank payout.',
   },
 ])
 
@@ -237,19 +237,19 @@ export const LANDING_FAQ_ITEMS = Object.freeze([
     id: 'faq-escrow',
     question: 'How do escrow payments and the 72-hour dispute window work?',
     answer:
-      'When a provider accepts your booking and payment is authorized (BR-005), funds stay held securely in platform escrow. After work is completed, you have 48 hours to inspect and confirm (BR-007), followed by a 72-hour dispute protection window (BR-008) before provider earnings become available for payout.',
+      'When a provider accepts your booking and payment is authorized, funds stay held securely in platform escrow. After work is completed, you have 48 hours to inspect and confirm, followed by a 72-hour dispute protection window before provider earnings become available for payout.',
   },
   {
     id: 'faq-verification',
     question: 'How are service providers verified before appearing on LocalServe?',
     answer:
-      'Providers register as an individual or business and submit their NIC/Passport, business registration, and trade certificates to secure private storage. Admins manually review each submission — only APPROVED providers receive the Verified badge and can publish active listings (BR-002).',
+      'Providers register as an individual or business and submit their NIC/Passport, business registration, and trade certificates to secure private storage. Admins manually review each submission — only approved providers receive the Verified badge and can publish active listings.',
   },
   {
     id: 'faq-pricing-commission',
     question: 'How do pricing, platform commissions, and cancellations work?',
     answer:
-      'Providers publish transparent Fixed, Hourly, or Quote LKR prices plus optional add-ons that are snapshot-locked when you book (FR-LIST-005). A transparent platform commission (default 10%, configurable per category per BR-004) is deducted from provider earnings. Customer cancellations receive 100% refund over 24 hours ahead, 50% between 6–24 hours, and 100% if a provider cancels (BR-006).',
+      'Providers publish transparent Fixed, Hourly, or Quote LKR prices plus optional add-ons that are price-locked when you book. A transparent platform commission (default 10%, configurable per category) is deducted from provider earnings. Customer cancellations receive a 100% refund over 24 hours ahead, 50% between 6–24 hours, and 100% if a provider cancels.',
   },
   {
     id: 'faq-provider-join',
