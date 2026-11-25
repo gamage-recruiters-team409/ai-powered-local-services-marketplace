@@ -5,6 +5,7 @@ import {
   formatCancellationPolicy,
   formatDistanceArea,
   formatInclusions,
+  formatListingPrice,
   formatNextAvailable,
   formatPrice,
   formatProviderLocation,
@@ -39,6 +40,17 @@ describe('provider comparison formatting', () => {
   it('returns Not provided for missing price data', () => {
     expect(formatPrice()).toBe(NOT_PROVIDED);
     expect(formatPrice({})).toBe(NOT_PROVIDED);
+  });
+
+  it('formats live listing amounts without inventing currency or unit', () => {
+    expect(formatListingPrice({ amount: 3000, model: 'FIXED' })).toBe(
+      'From 3000 (fixed price)',
+    );
+    expect(formatListingPrice({ amount: 55, model: 'HOURLY' })).toBe(
+      'From 55 (hourly)',
+    );
+    expect(formatListingPrice({ amount: 55 })).toBe('From 55');
+    expect(formatListingPrice()).toBe(NOT_PROVIDED);
   });
 
   it('formats ratings and review counts', () => {

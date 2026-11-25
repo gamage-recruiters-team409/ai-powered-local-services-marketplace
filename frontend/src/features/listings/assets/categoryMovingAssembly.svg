@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="moveTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FDF1E0" />
+      <stop offset="100%" stop-color="#F7D5AE" />
+    </linearGradient>
+    <linearGradient id="moveBoxTop" x1="58" y1="76" x2="148" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FACFA0" />
+      <stop offset="100%" stop-color="#E7A866" />
+    </linearGradient>
+    <linearGradient id="moveBoxFront" x1="58" y1="102" x2="148" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F0B16D" />
+      <stop offset="100%" stop-color="#CA7E38" />
+    </linearGradient>
+    <linearGradient id="moveTapeGrad" x1="92" y1="76" x2="114" y2="132" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#CD7F35" />
+      <stop offset="100%" stop-color="#A65A1A" />
+    </linearGradient>
+    <linearGradient id="moveHandleGrad" x1="170" y1="128" x2="188" y2="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E5984D" />
+      <stop offset="100%" stop-color="#B96A22" />
+    </linearGradient>
+    <filter id="moveDrop" x="-15%" y="-15%" width="135%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="4.5" flood-color="#8A4B14" flood-opacity="0.28" />
+    </filter>
+    <filter id="moveTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#BA7E43" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#moveTileBg)" stroke="#E3B583" stroke-width="2.5" filter="url(#moveTileShadow)" />
+
+  <g filter="url(#moveDrop)">
+    <!-- Delivery Box -->
+    <path d="M76 76 L132 76 L152 100 L56 100 Z" fill="url(#moveBoxTop)" stroke="#9C591C" stroke-width="2.3" stroke-linejoin="round" />
+    <path d="M56 100 L152 100 L152 182 C152 186 149 189 145 189 L63 189 C59 189 56 186 56 182 Z" fill="url(#moveBoxFront)" stroke="#9C591C" stroke-width="2.3" stroke-linejoin="round" />
+    <!-- Packing Tape -->
+    <path d="M97 76 L111 76 L114 100 L114 129 L94 129 L94 100 Z" fill="url(#moveTapeGrad)" stroke="#8A4C15" stroke-width="1.8" stroke-linejoin="round" />
+    <line x1="94" y1="100" x2="114" y2="100" stroke="#7A400E" stroke-width="1.6" />
+
+    <!-- Screwdriver -->
+    <path d="M174 78 L184 78 L183 88 L181 91 L181 124 L177 124 L177 91 L175 88 Z" fill="#D49A62" stroke="#8F511A" stroke-width="1.8" stroke-linejoin="round" />
+    <rect x="172" y="123" width="14" height="7" rx="3" fill="#B86B25" stroke="#8F511A" stroke-width="1.6" />
+    <path d="M172 130 C172 130 186 130 186 130 L188 182 C188 186 184 189 179 189 C174 189 170 186 170 182 Z" fill="url(#moveHandleGrad)" stroke="#8F511A" stroke-width="2" stroke-linejoin="round" />
+    <line x1="179" y1="140" x2="179" y2="178" stroke="#FCE2C2" stroke-width="2.4" stroke-linecap="round" opacity="0.65" />
+  </g>
+</svg>

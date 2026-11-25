@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="paintTileBg" x1="20" y1="12" x2="236" y2="236" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E4FBF5" />
+      <stop offset="100%" stop-color="#BFF1E4" />
+    </linearGradient>
+    <linearGradient id="paintRollerGrad" x1="72" y1="54" x2="72" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#5FD9C7" />
+      <stop offset="55%" stop-color="#2EAD9A" />
+      <stop offset="100%" stop-color="#198374" />
+    </linearGradient>
+    <linearGradient id="paintHandleGrad" x1="108" y1="142" x2="136" y2="206" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#5BD5C3" />
+      <stop offset="100%" stop-color="#198475" />
+    </linearGradient>
+    <filter id="paintDrop" x="-18%" y="-15%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#12665A" flood-opacity="0.34" />
+    </filter>
+    <filter id="paintTileShadow" x="-10%" y="-10%" width="125%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#3F9E8F" flood-opacity="0.18" />
+    </filter>
+  </defs>
+
+  <rect x="14" y="10" width="228" height="228" rx="54" fill="url(#paintTileBg)" stroke="#9EDFD0" stroke-width="2.5" filter="url(#paintTileShadow)" />
+
+  <g filter="url(#paintDrop)">
+    <path d="M168 78 L182 78 C189 78 194 84 194 91 L194 102 C194 109 189 114 182 114 L132 124 C126 126 122 131 122 137 L122 148" stroke="#6E9992" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" />
+    <path d="M168 78 L182 78 C189 78 194 84 194 91 L194 102 C194 109 189 114 182 114 L132 124 C126 126 122 131 122 137 L122 148" stroke="#CFE9E4" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+
+    <rect x="64" y="54" width="110" height="48" rx="18" fill="url(#paintRollerGrad)" />
+    <path d="M78 65 L160 65" stroke="#D8FFF8" stroke-width="6" stroke-linecap="round" opacity="0.85" />
+    <rect x="64" y="54" width="14" height="48" rx="7" fill="#187E6F" opacity="0.45" />
+
+    <rect x="114" y="140" width="16" height="14" rx="5" fill="#2CA896" />
+    <path d="M111 152 C111 148 115 145 122 145 C129 145 133 148 133 152 L136 192 C137 200 130 206 122 206 C114 206 107 200 108 192 Z" fill="url(#paintHandleGrad)" />
+    <path d="M117 156 L116 194" stroke="#B4F5EB" stroke-width="4" stroke-linecap="round" opacity="0.75" />
+  </g>
+</svg>

@@ -2,6 +2,8 @@ import { lazy } from 'react'
 
 import { ADMIN_ROLES } from './adminAreas'
 
+const AdminCategoriesPage = lazy(() => import('../../listings/pages/AdminCategoriesPage'))
+
 /**
  * THE single source for admin sidebar links AND admin routes.
  *
@@ -37,14 +39,14 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
   // ---------- Admin ----------
   { id: 'admin.dashboard', area: ADMIN, section: null, label: 'Dashboard', path: '', icon: 'dashboard', description: 'Overview of admin operations' },
   { id: 'admin.disputes', area: ADMIN, section: 'Operations', label: 'Disputes', path: 'disputes', icon: 'alertCircle', description: 'Dispute console and appeals' },
-  { id: 'admin.users', area: ADMIN, section: 'Operations', label: 'Users', path: 'users', icon: 'users', description: 'Customer and provider accounts' },
+  { id: 'admin.users', area: ADMIN, section: 'Operations', label: 'Users', path: 'users', icon: 'users', description: 'Customer and provider accounts', nested: true, page: lazy(() => import('../../admin-users/pages/UsersSection')) },
   { id: 'admin.provider-verification', area: ADMIN, section: 'Operations', label: 'Provider verification', path: 'provider-verification', icon: 'shield', description: 'Review provider verification requests' },
   { id: 'admin.moderation.reported-content', area: ADMIN, section: 'Operations', group: MODERATION_GROUP, label: 'Reported content', path: 'moderation/reported-content', description: 'Reported messages and content' },
   { id: 'admin.moderation.reviews', area: ADMIN, section: 'Operations', group: MODERATION_GROUP, label: 'Review moderation', path: 'moderation/reviews', description: 'Reported reviews' },
   { id: 'admin.overdue-bookings', area: ADMIN, section: 'Operations', label: 'Overdue bookings', path: 'overdue-bookings', icon: 'clock', description: 'Bookings still open 72 hours after the slot ended' },
   { id: 'admin.late-cases', area: ADMIN, section: 'Operations', label: 'Late cases', path: 'late-cases', icon: 'calendar', description: 'Problems reported after the 72-hour window' },
   { id: 'admin.repeat-cancellations', area: ADMIN, section: 'Operations', label: 'Repeat cancellations', path: 'repeat-cancellations', icon: 'xCircle', description: 'Warnings and suspensions for repeat cancellations' },
-  { id: 'admin.categories', area: ADMIN, section: 'Management', label: 'Categories', path: 'categories', icon: 'grid', description: 'Service categories and commission' },
+  { id: 'admin.categories', area: ADMIN, section: 'Management', label: 'Categories', path: 'categories', icon: 'grid', description: 'Service categories and commission', page: AdminCategoriesPage },
   { id: 'admin.announcements', area: ADMIN, section: 'Management', label: 'Announcements', path: 'announcements', icon: 'message', description: 'Platform announcements', nested: true, page: lazy(() => import('../../admin-announcements/pages/AnnouncementsSection')) },
   { id: 'admin.audit-log', area: ADMIN, section: 'Management', label: 'Audit log', path: 'audit-log', icon: 'fileText', description: 'Record of administrative actions' },
   { id: 'admin.provider-analytics', area: ADMIN, section: 'Insights', label: 'Provider analytics', path: 'provider-analytics', icon: 'barChart', description: 'Provider performance' },
