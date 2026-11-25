@@ -182,6 +182,18 @@ class DevLoggingEmailSenderTest {
     }
 
     @Test
+    void notificationRequiresNameTitleAndMessageWithoutExpiry() {
+        EmailResult success = sender.sendEmail(EmailType.NOTIFICATION, EMAIL,
+                Map.of("name", "Person", "title", "Booking confirmed", "message", "Your booking is confirmed."));
+
+        assertThat(success.success()).isTrue();
+        assertFailure(EmailType.NOTIFICATION, EMAIL, Map.of("name", "Person", "title", "Title"),
+                "Missing required data: message");
+        assertFailure(EmailType.NOTIFICATION, EMAIL, Map.of("name", "Person", "title", " ", "message", "Message"),
+                "Required data is blank: title");
+    }
+
+    @Test
     void invalidRecipientFailureDoesNotContainLinkTokenOrRecipient() {
         EmailResult result = sender.sendEmail(
                 EmailType.ACCOUNT_VERIFICATION,

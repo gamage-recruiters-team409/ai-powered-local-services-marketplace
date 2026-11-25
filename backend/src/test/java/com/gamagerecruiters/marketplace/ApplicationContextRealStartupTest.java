@@ -39,6 +39,7 @@ import com.gamagerecruiters.marketplace.modules.listing.service.CatalogCategoryL
 import com.gamagerecruiters.marketplace.modules.listing.service.ProviderVerificationLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
+import com.gamagerecruiters.marketplace.modules.notification.repository.NotificationRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.DisputePayoutHoldRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
@@ -115,6 +116,9 @@ class ApplicationContextRealStartupTest {
 
         @MockitoBean
         private MessageRepository messageRepository;
+
+        @MockitoBean
+        private NotificationRepository notificationRepository;
 
         @MockitoBean
         private EarningsLedgerRepository earningsLedgerRepository;

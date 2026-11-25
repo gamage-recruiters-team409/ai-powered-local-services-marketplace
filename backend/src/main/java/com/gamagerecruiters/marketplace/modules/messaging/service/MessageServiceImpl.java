@@ -1,7 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.messaging.service;
 
 import java.time.Instant;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +48,9 @@ import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePollingResp
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessageResponse;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
+import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationType;
+import com.gamagerecruiters.marketplace.modules.notification.service.NotificationEvent;
+import com.gamagerecruiters.marketplace.modules.notification.service.NotificationService;
 
 @Service
 public class MessageServiceImpl implements MessageService {
@@ -57,9 +59,6 @@ public class MessageServiceImpl implements MessageService {
     private static final int MAX_PAGE_SIZE = 50;
     private static final int POLLING_PAGE_SIZE = 100;
     private static final int MAX_BODY_LENGTH = 2000;
-    private static final Set<BookingStatus> CONTACT_VISIBLE_STATUSES = EnumSet.of(
-            BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS, BookingStatus.COMPLETION_PENDING,
-            BookingStatus.COMPLETED, BookingStatus.DISPUTED);
     private static final Logger log = LoggerFactory.getLogger(MessageServiceImpl.class);
 
     private final BookingFacade bookingFacade;
@@ -67,16 +66,19 @@ public class MessageServiceImpl implements MessageService {
     private final MessageRepository messageRepository;
     private final AdminAccessPolicyService adminAccessPolicyService;
     private final MongoTemplate mongoTemplate;
+    private final NotificationService notificationService;
 
     public MessageServiceImpl(BookingFacade bookingFacade, ConversationRepository conversationRepository,
                               MessageRepository messageRepository,
                               AdminAccessPolicyService adminAccessPolicyService,
-                              MongoTemplate mongoTemplate) {
+                              MongoTemplate mongoTemplate,
+                              NotificationService notificationService) {
         this.bookingFacade = bookingFacade;
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.adminAccessPolicyService = adminAccessPolicyService;
         this.mongoTemplate = mongoTemplate;
+        this.notificationService = notificationService;
     }
 
     @Override
@@ -96,6 +98,7 @@ public class MessageServiceImpl implements MessageService {
         message.setFlagged(false);
         message.setCreatedAt(now);
         Message saved = messageRepository.save(message);
+        notifyOtherParticipant(saved, participants, bookingId, userId);
 
         conversation.setLastMessageAt(now);
         conversation.setUpdatedAt(now);
@@ -472,12 +475,19 @@ public class MessageServiceImpl implements MessageService {
 
     private MessageResponse toResponse(Message message, BookingStatus currentStatus) {
         String body = message.getStatus() == MessageStatus.HIDDEN ? null : message.getBody();
-        // TODO: switch to BookingStatus.isContactVisible() once WP05 adds it.
-        if (body != null && !CONTACT_VISIBLE_STATUSES.contains(currentStatus)) {
+        if (body != null && (currentStatus == null || !currentStatus.isContactVisible())) {
             body = ContactMasker.mask(body);
         }
         return new MessageResponse(message.getId(), message.getConversationId(), message.getSenderId(),
                 body, message.getStatus(), message.getCreatedAt());
+    }
+
+    private void notifyOtherParticipant(Message message, BookingParticipants participants, String bookingId, String senderId) {
+        if (message == null || message.getStatus() == MessageStatus.HIDDEN) return;
+        String recipient = senderId.equals(participants.customerId()) ? participants.providerId() : participants.customerId();
+        if (recipient == null || recipient.equals(senderId)) return;
+        try { notificationService.notify(new NotificationEvent(NotificationType.NEW_MESSAGE, recipient, bookingId, Map.of("conversationId", message.getConversationId()))); }
+        catch (Exception ignored) { }
     }
 
     private ModerationMessageResponse toModerationResponse(Message message, Conversation conversation) {

@@ -136,7 +136,7 @@ class AdminAccountServiceTest {
 
         private void assertNoAuditAndNoChange() {
             verify(auditLogService, never()).recordPending(any());
-            verify(userInternalService, never()).changeStatus(anyString(), any());
+            verify(userInternalService, never()).changeStatus(anyString(), anyString(), any(), any());
         }
 
         @ParameterizedTest
@@ -145,7 +145,7 @@ class AdminAccountServiceTest {
         void suspendsAdminAccount(Role targetRole) {
             when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, targetRole, UserStatus.ACTIVE));
             auditInsertReturnsId();
-            when(userInternalService.changeStatus(TARGET_ID, UserStatus.SUSPENDED))
+            when(userInternalService.changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED)))
                     .thenReturn(user(TARGET_ID, targetRole, UserStatus.SUSPENDED));
 
             AdminStatusChangeResponse result = suspend(TARGET_ID);
@@ -170,6 +170,26 @@ class AdminAccountServiceTest {
 
             verify(auditLogService).markSuccess(AUDIT_ID);
             verify(auditLogService, never()).markFailed(anyString(), anyString());
+            verify(userInternalService).changeStatus(ACTOR_ID, TARGET_ID, UserStatus.ACTIVE, UserStatus.SUSPENDED);
+            verify(userInternalService, never()).changeStatus(anyString(), any(UserStatus.class));
+        }
+
+        @Test
+        @DisplayName("Another Super Admin changed the status first: auth's 409 CONCURRENT_MODIFICATION -> record FAILED "
+                + "with that code, same 409 code with the reload message")
+        void concurrentModification() {
+            when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.ACTIVE));
+            auditInsertReturnsId();
+            when(userInternalService.changeStatus(ACTOR_ID, TARGET_ID, UserStatus.ACTIVE, UserStatus.SUSPENDED))
+                    .thenThrow(new com.gamagerecruiters.marketplace.common.exception.ResourceConflictException(
+                            "CONCURRENT_MODIFICATION", "Expected 'ACTIVE' but current status is 'SUSPENDED'"));
+
+            Throwable thrown = catchThrowable(() -> suspend(TARGET_ID));
+
+            assertApiError(thrown, HttpStatus.CONFLICT, AdminErrors.CONCURRENT_MODIFICATION);
+            assertThat(thrown.getMessage()).isEqualTo(AdminErrors.CONCURRENT_MODIFICATION_MESSAGE);
+            verify(auditLogService).markFailed(AUDIT_ID, AdminErrors.CONCURRENT_MODIFICATION);
+            verify(auditLogService, never()).markSuccess(anyString());
         }
 
         @Test
@@ -177,7 +197,7 @@ class AdminAccountServiceTest {
         void reactivatesAdmin() {
             when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.MODERATOR, UserStatus.SUSPENDED));
             auditInsertReturnsId();
-            when(userInternalService.changeStatus(TARGET_ID, UserStatus.ACTIVE))
+            when(userInternalService.changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.ACTIVE)))
                     .thenReturn(user(TARGET_ID, Role.MODERATOR, UserStatus.ACTIVE));
 
             AdminStatusChangeResponse result = service.changeStatus(
@@ -266,7 +286,7 @@ class AdminAccountServiceTest {
             when(userInternalService.getById(ACTOR_ID)).thenReturn(user(ACTOR_ID, Role.SUPER_ADMIN, UserStatus.ACTIVE));
             auditInsertReturnsId();
             ApiException selfChange = new ApiException(HttpStatus.FORBIDDEN, "CANNOT_MODIFY_SELF", "Self status modification is not allowed");
-            when(userInternalService.changeStatus(ACTOR_ID, UserStatus.SUSPENDED)).thenThrow(selfChange);
+            when(userInternalService.changeStatus(anyString(), eq(ACTOR_ID), any(), eq(UserStatus.SUSPENDED))).thenThrow(selfChange);
 
             assertThat(catchThrowable(() -> suspend(ACTOR_ID))).isSameAs(selfChange);
             verify(auditLogService).markFailed(AUDIT_ID, "CANNOT_MODIFY_SELF");
@@ -280,7 +300,7 @@ class AdminAccountServiceTest {
             when(userInternalService.getById(ACTOR_ID)).thenReturn(user(ACTOR_ID, Role.SUPER_ADMIN, current));
             auditInsertReturnsId();
             ApiException selfChange = new ApiException(HttpStatus.FORBIDDEN, "CANNOT_MODIFY_SELF", "Self status modification is not allowed");
-            when(userInternalService.changeStatus(ACTOR_ID, requested)).thenThrow(selfChange);
+            when(userInternalService.changeStatus(anyString(), eq(ACTOR_ID), any(), eq(requested))).thenThrow(selfChange);
 
             Throwable thrown = catchThrowable(
                     () -> service.changeStatus(ACTOR_ID, Role.SUPER_ADMIN, ACTOR_ID, requested, REASON));
@@ -318,7 +338,7 @@ class AdminAccountServiceTest {
         void correlationIdPerRequest() {
             when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.ACTIVE));
             auditInsertReturnsId();
-            when(userInternalService.changeStatus(TARGET_ID, UserStatus.SUSPENDED))
+            when(userInternalService.changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED)))
                     .thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.SUSPENDED));
 
             suspend(TARGET_ID);
@@ -348,7 +368,7 @@ class AdminAccountServiceTest {
             when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.SUPER_ADMIN, UserStatus.ACTIVE));
             auditInsertReturnsId();
             ApiException rejection = new ApiException(status, code, "rejected by auth");
-            when(userInternalService.changeStatus(TARGET_ID, UserStatus.SUSPENDED)).thenThrow(rejection);
+            when(userInternalService.changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED))).thenThrow(rejection);
 
             Throwable thrown = catchThrowable(() -> suspend(TARGET_ID));
 
@@ -364,7 +384,7 @@ class AdminAccountServiceTest {
             when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.ACTIVE));
             auditInsertReturnsId();
             AccessDeniedException denied = new AccessDeniedException("denied");
-            when(userInternalService.changeStatus(TARGET_ID, UserStatus.SUSPENDED)).thenThrow(denied);
+            when(userInternalService.changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED))).thenThrow(denied);
 
             assertThat(catchThrowable(() -> suspend(TARGET_ID))).isSameAs(denied);
             verify(auditLogService).markFailed(AUDIT_ID, "ACCESS_DENIED");
@@ -376,7 +396,7 @@ class AdminAccountServiceTest {
             when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.ACTIVE));
             auditInsertReturnsId();
             StackOverflowError error = new StackOverflowError();
-            when(userInternalService.changeStatus(TARGET_ID, UserStatus.SUSPENDED)).thenThrow(error);
+            when(userInternalService.changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED))).thenThrow(error);
 
             assertThat(catchThrowable(() -> suspend(TARGET_ID))).isSameAs(error);
             verify(auditLogService).markFailed(AUDIT_ID, "UNEXPECTED_ERROR");
@@ -389,7 +409,7 @@ class AdminAccountServiceTest {
             when(auditLogService.recordPending(any())).thenThrow(new IllegalStateException("db down"));
 
             assertThat(catchThrowable(() -> suspend(TARGET_ID))).isInstanceOf(IllegalStateException.class);
-            verify(userInternalService, never()).changeStatus(anyString(), any());
+            verify(userInternalService, never()).changeStatus(anyString(), anyString(), any(), any());
         }
 
         @Test
@@ -397,13 +417,13 @@ class AdminAccountServiceTest {
         void successMarkFailureDoesNotHideChange() {
             when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.ACTIVE));
             auditInsertReturnsId();
-            when(userInternalService.changeStatus(TARGET_ID, UserStatus.SUSPENDED))
+            when(userInternalService.changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED)))
                     .thenReturn(user(TARGET_ID, Role.ADMIN, UserStatus.SUSPENDED));
             doThrow(new IllegalStateException("db down")).when(auditLogService).markSuccess(AUDIT_ID);
             reconciliationInsertSucceeds();
 
             assertThat(suspend(TARGET_ID).status()).isEqualTo(UserStatus.SUSPENDED);
-            verify(userInternalService, org.mockito.Mockito.times(1)).changeStatus(TARGET_ID, UserStatus.SUSPENDED);
+            verify(userInternalService, org.mockito.Mockito.times(1)).changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED));
             verify(auditLogService).recordReconciliation(any(), eq(TARGET_ID), eq(AdminAccountService.AUDIT_COMPLETION_FAILED));
         }
 

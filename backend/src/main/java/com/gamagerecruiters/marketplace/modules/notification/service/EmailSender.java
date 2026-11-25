@@ -17,7 +17,8 @@ public interface EmailSender {
      *
      * {@code ACCOUNT_VERIFICATION} requires {@code name}, {@code verificationLink},
      * and {@code expiresInMinutes}. {@code PASSWORD_RESET} requires {@code name},
-     * {@code resetLink}, and {@code expiresInMinutes}.
+     * {@code resetLink}, and {@code expiresInMinutes}. {@code NOTIFICATION} requires
+     * {@code name}, {@code title}, and {@code message}.
      *
      * @param type the type of email to process
      * @param recipientEmail the recipient email address
