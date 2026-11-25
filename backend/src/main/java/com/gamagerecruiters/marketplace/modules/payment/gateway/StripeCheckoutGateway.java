@@ -88,8 +88,10 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
         requireText(successUrl, "Success URL");
         requireText(cancelUrl, "Cancel URL");
 
+        // Monetary validation occurs before any external request is submitted.
+        // Confirmed pre-submission failures permit token-checked reservation release.
         if (amount == null || amount.signum() <= 0) {
-            throw new IllegalArgumentException("Payment amount must be positive.");
+            throw new CheckoutNotSubmittedException("Payment amount must be positive.");
         }
 
         // This initial adapter supports only two-decimal currencies.
@@ -99,7 +101,7 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
 
         if (!java.util.Set.of("USD", "EUR", "GBP", "LKR")
                 .contains(normalizedCurrency)) {
-            throw new IllegalArgumentException(
+            throw new CheckoutNotSubmittedException(
                     "Unsupported Stripe checkout currency.");
         }
 
@@ -107,13 +109,13 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
         try {
             amountInMinorUnits = amount.movePointRight(2).longValueExact();
         } catch (ArithmeticException exception) {
-            throw new IllegalArgumentException(
+            throw new CheckoutNotSubmittedException(
                     "Payment amount cannot be represented in minor units.",
                     exception);
         }
 
         if (amountInMinorUnits <= 0) {
-            throw new IllegalArgumentException("Payment amount is too small.");
+            throw new CheckoutNotSubmittedException("Payment amount is too small.");
         }
 
         SessionCreateParams params = SessionCreateParams.builder()

@@ -25,7 +25,12 @@ class StripeCheckoutGatewayTest {
     void setUp() {
         StripeGatewayProperties properties =
                 new StripeGatewayProperties(true, "sk_test_dummy", "whsec_dummy");
-        gateway = new StripeCheckoutGateway(properties);
+        gateway = new StripeCheckoutGateway(
+                properties,
+                (secretKey, params, options) -> {
+                    throw new AssertionError(
+                            "Invalid checkout input must not reach Stripe.");
+                });
     }
 
     @Test
@@ -51,32 +56,48 @@ class StripeCheckoutGatewayTest {
 
     @Test
     void nullAmountIsRejected() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(CheckoutNotSubmittedException.class,
                 () -> createCheckout("payment-1", null, "USD"));
     }
 
     @Test
     void zeroAmountIsRejected() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(CheckoutNotSubmittedException.class,
                 () -> createCheckout("payment-1", BigDecimal.ZERO, "USD"));
     }
 
     @Test
     void negativeAmountIsRejected() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(CheckoutNotSubmittedException.class,
                 () -> createCheckout("payment-1", new BigDecimal("-1.00"), "USD"));
     }
 
     @Test
     void unsupportedCurrencyIsRejected() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(CheckoutNotSubmittedException.class,
                 () -> createCheckout("payment-1", new BigDecimal("100.00"), "JPY"));
     }
 
     @Test
     void fractionalMinorUnitsAreRejected() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(CheckoutNotSubmittedException.class,
                 () -> createCheckout("payment-1", new BigDecimal("10.001"), "USD"));
+    }
+
+    @Test
+    void unsupportedAudCurrencyIsRejectedBeforeSubmission() {
+        assertThrows(CheckoutNotSubmittedException.class,
+                () -> createCheckout(
+                        "payment-1", new BigDecimal("100.00"), "AUD"));
+    }
+
+    @Test
+    void minorUnitOverflowIsRejectedBeforeSubmission() {
+        assertThrows(CheckoutNotSubmittedException.class,
+                () -> createCheckout(
+                        "payment-1",
+                        new BigDecimal("92233720368547758.08"),
+                        "USD"));
     }
 
     @Test

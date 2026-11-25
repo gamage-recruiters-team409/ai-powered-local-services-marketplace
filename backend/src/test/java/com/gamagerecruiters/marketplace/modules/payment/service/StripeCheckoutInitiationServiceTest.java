@@ -482,6 +482,169 @@ class StripeCheckoutInitiationServiceTest {
         }
     }
 
+    /**
+     * Unsupported currency must not leave an active checkout reservation.
+     */
+    @Test
+    void releasesReservationAfterUnsupportedCurrencyValidation() {
+        verifyMonetaryValidationFailure(
+                new BigDecimal("100.00"), "AUD");
+    }
+
+    /**
+     * An amount that cannot be represented in minor units must be released.
+     */
+    @Test
+    void releasesReservationAfterInvalidMinorUnitValidation() {
+        verifyMonetaryValidationFailure(
+                new BigDecimal("10.001"), "USD");
+    }
+
+    private void verifyMonetaryValidationFailure(
+            BigDecimal amount, String currency) {
+
+        Payment invalidPayment = payment();
+        invalidPayment.setAmount(amount);
+        invalidPayment.setCurrency(currency);
+
+        when(persistenceService.findPaymentById(PAYMENT_ID))
+                .thenReturn(Optional.of(invalidPayment));
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(new BookingPaymentQuote(
+                        amount, currency, new BigDecimal("0.10"),
+                        Instant.now().minusSeconds(60)));
+
+        when(reservationService.tryReserve(PAYMENT_ID))
+                .thenReturn("invalid-reservation");
+
+        when(reservationService.markSubmissionStarted(
+                PAYMENT_ID, "invalid-reservation"))
+                .thenReturn(true);
+
+        // Exercise the actual gateway's deterministic monetary validation.
+        PaymentCheckoutGateway realGateway =
+                new com.gamagerecruiters.marketplace.modules.payment.gateway
+                        .StripeCheckoutGateway(
+                        new com.gamagerecruiters.marketplace.modules.payment.config
+                                .StripeGatewayProperties(
+                                        true, "sk_test_dummy", "whsec_dummy"));
+
+        StripeCheckoutInitiationService validationService =
+                new StripeCheckoutInitiationService(
+                        authorizationService,
+                        persistenceService,
+                        quoteProvider,
+                        realGateway,
+                        sessionPersistenceService,
+                        reservationService,
+                        new StripeCheckoutRedirectPolicy(
+                                SUCCESS_URL, CANCEL_URL));
+
+        when(reservationService.releaseReservation(
+                PAYMENT_ID, "invalid-reservation"))
+                .thenReturn(true);
+
+        assertThrows(
+                com.gamagerecruiters.marketplace.modules.payment.gateway
+                        .CheckoutNotSubmittedException.class,
+                () -> validationService.initiate(
+                        PAYMENT_ID, CUSTOMER_ID, SUCCESS_URL, CANCEL_URL));
+
+        verify(reservationService).releaseReservation(
+                PAYMENT_ID, "invalid-reservation");
+
+        verifyNoInteractions(sessionPersistenceService);
+    }
+
+    /**
+     * Corrected matching payment data can acquire a fresh reservation
+     * after a confirmed pre-submission failure.
+     */
+    @Test
+    void permitsSuccessfulRetryAfterMonetaryValidationCorrection() {
+        Payment invalidPayment = payment();
+        invalidPayment.setCurrency("AUD");
+
+        Payment correctedPayment = payment();
+
+        when(persistenceService.findPaymentById(PAYMENT_ID))
+                .thenReturn(
+                        Optional.of(invalidPayment),
+                        Optional.of(correctedPayment));
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(
+                        new BookingPaymentQuote(
+                                new BigDecimal("100.00"),
+                                "AUD",
+                                new BigDecimal("0.10"),
+                                Instant.now().minusSeconds(60)),
+                        trustedQuote());
+
+        when(reservationService.tryReserve(PAYMENT_ID))
+                .thenReturn("invalid-reservation", "retry-reservation");
+
+        when(reservationService.markSubmissionStarted(
+                PAYMENT_ID, "invalid-reservation"))
+                .thenReturn(true);
+
+        when(reservationService.markSubmissionStarted(
+                PAYMENT_ID, "retry-reservation"))
+                .thenReturn(true);
+
+        when(checkoutGateway.createCheckoutSession(
+                PAYMENT_ID, new BigDecimal("100.00"), "AUD",
+                SUCCESS_URL, CANCEL_URL))
+                .thenThrow(
+                        new com.gamagerecruiters.marketplace.modules.payment.gateway
+                                .CheckoutNotSubmittedException(
+                                        "Unsupported Stripe checkout currency."));
+
+        when(reservationService.releaseReservation(
+                PAYMENT_ID, "invalid-reservation"))
+                .thenReturn(true);
+
+        assertThrows(
+                com.gamagerecruiters.marketplace.modules.payment.gateway
+                        .CheckoutNotSubmittedException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID, SUCCESS_URL, CANCEL_URL));
+
+        verifyNoInteractions(sessionPersistenceService);
+
+        when(checkoutGateway.createCheckoutSession(
+                PAYMENT_ID, new BigDecimal("100.00"), "USD",
+                SUCCESS_URL, CANCEL_URL))
+                .thenReturn(new PaymentCheckoutGateway.CheckoutSession(
+                        "cs_test_retry",
+                        "https://checkout.stripe.com/retry"));
+
+        PaymentCheckoutGateway.CheckoutSession result =
+                service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID, SUCCESS_URL, CANCEL_URL);
+
+        assertEquals("cs_test_retry", result.sessionId());
+
+        org.mockito.InOrder ordered =
+                org.mockito.Mockito.inOrder(
+                        reservationService, sessionPersistenceService);
+
+        ordered.verify(reservationService).tryReserve(PAYMENT_ID);
+        ordered.verify(reservationService).markSubmissionStarted(
+                PAYMENT_ID, "invalid-reservation");
+        ordered.verify(reservationService).releaseReservation(
+                PAYMENT_ID, "invalid-reservation");
+        ordered.verify(reservationService).tryReserve(PAYMENT_ID);
+        ordered.verify(reservationService).markSubmissionStarted(
+                PAYMENT_ID, "retry-reservation");
+        ordered.verify(sessionPersistenceService).attachSession(
+                PAYMENT_ID, "cs_test_retry", "retry-reservation");
+
+        verify(reservationService, never()).releaseReservation(
+                PAYMENT_ID, "retry-reservation");
+    }
+
     private void prepareReservedCheckout() {
         when(persistenceService.findPaymentById(PAYMENT_ID))
                 .thenReturn(Optional.of(payment()));
