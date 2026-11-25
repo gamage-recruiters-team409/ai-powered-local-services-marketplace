@@ -16,7 +16,10 @@ import java.util.concurrent.ExecutionException;
 
 import org.bson.Document;
 import org.bson.types.Decimal128;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.MongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.support.MongoRepositoryFactory;
@@ -63,7 +66,20 @@ import com.mongodb.client.model.Indexes;
  */
 class EarningsLedgerMongoIntegrationTest {
 
-    private static final String LOCAL_URI = "mongodb://127.0.0.1:27018/?replicaSet=wp07rs";
+    private static final MongoDBContainer MONGO =
+            new MongoDBContainer("mongo:7.0");
+
+    @BeforeAll
+    static void startMongoContainer() {
+        MONGO.start();
+    }
+
+    @AfterAll
+    static void stopMongoContainer() {
+        if (MONGO.isRunning()) {
+            MONGO.stop();
+        }
+    }
 
     @Test
     void validEventIsPersistedWithDecimal128Amount() {
@@ -534,7 +550,7 @@ class EarningsLedgerMongoIntegrationTest {
         String databaseName = "wp07_earnings_ledger_test_"
                 + UUID.randomUUID().toString().replace("-", "");
 
-        try (MongoClient client = MongoClients.create(LOCAL_URI)) {
+        try (MongoClient client = MongoClients.create(MONGO.getReplicaSetUrl())) {
 
             MongoDatabase database = client.getDatabase(databaseName);
 

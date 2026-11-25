@@ -71,6 +71,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailRespons
 import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.port.BookingSnapshot;
 import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeEligibilityPort;
+import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeBookingSyncReconciler;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeBookingSyncStore;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
@@ -144,6 +145,11 @@ class DisputeBookingSyncMongoIntegrationTest {
     @MockitoSpyBean
     private DisputeBookingSyncStore syncStore;
 
+    /**
+     * WP07 payout holds are outside the scope of dispute-scoped integration tests.
+     */
+    @MockitoBean
+    private PayoutHoldPort payoutHoldPort;
     @Autowired
     private DisputeService disputeService;
     @Autowired
