@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
@@ -37,6 +38,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeRules;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceFile;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceCleanupTask;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceType;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.EvidenceUrlResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.EvidenceView;
@@ -65,6 +67,7 @@ class DisputeEvidenceServiceTest {
 
     private MongoTemplate mongoTemplate;
     private FakeStorage storage;
+    private EvidenceCleanupStore cleanupStore;
     private DisputeEvidenceService service;
     private Dispute dispute;
     private ListAppender<ILoggingEvent> logs;
@@ -121,7 +124,8 @@ class DisputeEvidenceServiceTest {
     void setUp() {
         mongoTemplate = mock(MongoTemplate.class);
         storage = new FakeStorage();
-        service = new DisputeEvidenceService(mongoTemplate, storage, Clock.fixed(NOW, ZoneOffset.UTC));
+        cleanupStore = mock(EvidenceCleanupStore.class);
+        service = new DisputeEvidenceService(mongoTemplate, storage, cleanupStore, Clock.fixed(NOW, ZoneOffset.UTC));
         dispute = dispute(DisputeStatus.AWAITING_RESPONSE);
         when(mongoTemplate.findById(ID, Dispute.class)).thenAnswer(i -> dispute);
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(Dispute.class)))
@@ -372,10 +376,12 @@ class DisputeEvidenceServiceTest {
         assertApiError(thrown, HttpStatus.SERVICE_UNAVAILABLE, "EVIDENCE_UPLOAD_FAILED");
         assertThat(storage.stored).hasSize(1);
         assertThat(storage.deleted).containsExactlyElementsOf(storage.stored);
+        // Confirmed-not-persisted and deleted cleanly: no durable cleanup task needed.
+        verifyNoInteractions(cleanupStore);
     }
 
     @Test
-    @DisplayName("MongoDB returns no match and Cloudinary deletion fails → 409 still thrown, orphan logged")
+    @DisplayName("MongoDB returns no match and Cloudinary deletion fails → 409 still thrown, durable cleanup task queued")
     void recordRaceWithDeleteFailure() {
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(Dispute.class)))
                 .thenReturn(com.mongodb.client.result.UpdateResult.acknowledged(0, 0L, null));
@@ -385,8 +391,10 @@ class DisputeEvidenceServiceTest {
 
         assertApiError(thrown, HttpStatus.CONFLICT, "EVIDENCE_LIMIT_REACHED");
         assertThat(storage.stored).hasSize(1);
-        // Delete was attempted (but failed): the orphan is logged for later cleanup
+        // Delete was attempted (but failed): the orphan is logged AND a durable cleanup task is queued for retry.
         assertThat(logs.list).anyMatch(e -> e.getFormattedMessage().contains("DISPUTE_EVIDENCE_ORPHAN_DELETE_FAILED"));
+        verify(cleanupStore).enqueue(eq(ID), any(), eq(storage.stored.get(0)),
+                eq(EvidenceCleanupTask.Reason.DELETE_FAILED), eq(NOW));
     }
 
     @Test
@@ -423,5 +431,33 @@ class DisputeEvidenceServiceTest {
         assertThat(view.type()).isEqualTo(EvidenceType.PNG);
         assertThat(storage.stored).hasSize(1);
         assertThat(storage.deleted).as("persisted evidence must NOT be deleted").isEmpty();
+        // Confirmed persisted inline: nothing to reconcile.
+        verifyNoInteractions(cleanupStore);
+    }
+
+    @Test
+    @DisplayName("uncertain write AND the verification re-read also fails → asset preserved (never deleted), durable "
+            + "cleanup task queued, 503 returned")
+    void uncertainWriteWithFailedVerificationPreservesAsset() {
+        // The record update throws (write outcome unknown), and the follow-up re-read also throws — e.g. the database
+        // connection is still down. A failed verification must NOT be treated as "not persisted".
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(Dispute.class)))
+                .thenThrow(new RuntimeException("connection reset"));
+
+        java.util.concurrent.atomic.AtomicBoolean firstCall = new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(mongoTemplate.findById(ID, Dispute.class)).thenAnswer(invocation -> {
+            if (firstCall.compareAndSet(true, false)) {
+                return dispute(DisputeStatus.AWAITING_RESPONSE); // initial findVisible
+            }
+            throw new RuntimeException("database unavailable"); // verification re-read also fails → UNKNOWN
+        });
+
+        Throwable thrown = catchThrowable(() -> service.upload(CUSTOMER, ID, file("a.png", PNG)));
+
+        assertApiError(thrown, HttpStatus.SERVICE_UNAVAILABLE, "EVIDENCE_UPLOAD_FAILED");
+        assertThat(storage.stored).hasSize(1);
+        assertThat(storage.deleted).as("asset must be preserved when persistence cannot be confirmed").isEmpty();
+        verify(cleanupStore).enqueue(eq(ID), any(), eq(storage.stored.get(0)),
+                eq(EvidenceCleanupTask.Reason.UNCERTAIN_WRITE), eq(NOW));
     }
 }

@@ -36,6 +36,11 @@ import com.mongodb.client.model.Indexes;
  *       REJECTED, MANUAL_REVIEW) are skipped by the state key. The admin summary's manual-review count uses it too.</li>
  *   <li>{@code bookingId_1}: one dispute per booking in any status (the raise check also covers final disputes).</li>
  * </ul>
+ * It also indexes the {@code dispute_evidence_cleanup_tasks} collection:
+ * <ul>
+ *   <li>{@code publicId_1} (unique): one cleanup task per stored asset, so enqueue can upsert without duplicating a
+ *       task and the reconciler never races two tasks for the same asset.</li>
+ * </ul>
  * After creating them, startup checks that every index above exists and fails otherwise.
  */
 @Component
@@ -43,11 +48,15 @@ import com.mongodb.client.model.Indexes;
 public class DisputeIndexInitializer {
 
     static final String DISPUTES = "disputes";
+    static final String EVIDENCE_CLEANUP_TASKS = "dispute_evidence_cleanup_tasks";
 
-    /** Every index this initializer creates; all must exist after startup. */
+    /** Every index this initializer creates on {@code disputes}; all must exist after startup. */
     static final List<String> EXPECTED_INDEXES = List.of("activeBookingKey_1", "customerId_1_createdAt_-1",
             "providerId_1_createdAt_-1", "status_1_createdAt_-1", "bookingSyncState_1_createdAt_1",
             "status_1_appealDeadline_1", "settlement.state_1_settlement.lastAttemptAt_1", "bookingId_1");
+
+    /** Every index this initializer creates on {@code dispute_evidence_cleanup_tasks}; all must exist after startup. */
+    static final List<String> EXPECTED_CLEANUP_INDEXES = List.of("publicId_1");
 
     private static final Logger log = LoggerFactory.getLogger(DisputeIndexInitializer.class);
 
@@ -91,6 +100,18 @@ public class DisputeIndexInitializer {
                 throw new IllegalStateException("Missing dispute indexes: " + missing);
             }
             log.info("Dispute indexes verified on collection {}: {}", DISPUTES, EXPECTED_INDEXES);
+
+            MongoCollection<Document> cleanupTasks = mongoTemplate.getCollection(EVIDENCE_CLEANUP_TASKS);
+            cleanupTasks.createIndex(Indexes.ascending("publicId"),
+                    new IndexOptions().name("publicId_1").unique(true));
+            List<String> cleanupPresent = new ArrayList<>();
+            cleanupTasks.listIndexes().forEach(index -> cleanupPresent.add(index.getString("name")));
+            List<String> cleanupMissing = EXPECTED_CLEANUP_INDEXES.stream()
+                    .filter(name -> !cleanupPresent.contains(name)).toList();
+            if (!cleanupMissing.isEmpty()) {
+                throw new IllegalStateException("Missing evidence cleanup indexes: " + cleanupMissing);
+            }
+            log.info("Dispute indexes verified on collection {}: {}", EVIDENCE_CLEANUP_TASKS, EXPECTED_CLEANUP_INDEXES);
         } catch (RuntimeException e) {
             throw new IllegalStateException("Startup failed: unable to create or verify the indexes of the "
                     + DISPUTES + " collection. Check for duplicate active disputes or a conflicting index.", e);
