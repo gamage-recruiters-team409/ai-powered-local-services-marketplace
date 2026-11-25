@@ -19,7 +19,7 @@ function Footer({ loading, cancel, label = 'Save changes', disabled = false }) {
   </div>
 }
 
-function ServicesEditor({ profile, categories, provinces, loading, onSave, onCancel, error }) {
+export function ServicesEditor({ profile, categories, provinces, loading, onSave, onCancel, error }) {
   const [categoryIds, setCategoryIds] = useState(() => [...(profile.categoryIds ?? [])])
   const [districts, setDistricts] = useState(() => [...(profile.serviceAreaDistricts ?? [])])
   const [attemptedSave, setAttemptedSave] = useState(false)
@@ -35,7 +35,7 @@ function ServicesEditor({ profile, categories, provinces, loading, onSave, onCan
   return <form className={styles.form} onSubmit={(event) => {
     event.preventDefault()
     setAttemptedSave(true)
-    if (districts.length > 0 && !invalidDistricts.length) {
+    if (categoryIds.length > 0 && districts.length > 0 && !invalidDistricts.length) {
       onSave({ categoryIds, serviceAreaDistricts: districts })
     }
   }}>
@@ -49,6 +49,7 @@ function ServicesEditor({ profile, categories, provinces, loading, onSave, onCan
           {!categories.length && <p>No categories available. Try again later.</p>}
         </div>
       </details>
+      {categoryIds.length === 0 && <InlineMessage variant="error">Select at least one service category to save your services.</InlineMessage>}
       {!!categoryIds.length && <div className={styles.chips}>{categoryIds.map((id) => {
         const name = categories.find((category) => category.id === id)?.name ?? id
         return <button key={id} type="button" className={styles.chip} disabled={loading} onClick={() => setCategoryIds(categoryIds.filter((item) => item !== id))}>{name} ×</button>
@@ -70,11 +71,11 @@ function ServicesEditor({ profile, categories, provinces, loading, onSave, onCan
       {invalidDistricts.length > 0 && <InlineMessage variant="error">Previously saved service areas need to be updated before saving: {invalidDistricts.join(', ')}.</InlineMessage>}
     </div>
     {error && <InlineMessage variant="error">{error}</InlineMessage>}
-    <Footer cancel={onCancel} loading={loading} disabled={!categories.length || !provinces.length || !!invalidDistricts.length} />
+    <Footer cancel={onCancel} loading={loading} disabled={categoryIds.length === 0 || districts.length === 0 || !categories.length || !provinces.length || !!invalidDistricts.length} />
   </form>
 }
 
-function PayoutEditor({ payout, loading, error, onCancel, onSave }) {
+export function PayoutEditor({ payout, loading, error, onCancel, onSave }) {
   const [form, setForm] = useState(() => ({
     ...EMPTY_PAYOUT,
     bankName: payout?.bankName ?? '',
@@ -85,13 +86,17 @@ function PayoutEditor({ payout, loading, error, onCancel, onSave }) {
   const accountValid = /^\d{6,34}$/.test(accountNumber)
   return <form className={styles.form} onSubmit={(event) => {
     event.preventDefault()
-    if (accountValid) onSave({ ...form, bankName: form.bankName.trim(), accountHolderName: form.accountHolderName.trim() })
+    if (accountValid && form.bankName.trim() && form.accountHolderName.trim()) {
+      // Match the WP02 backend request DTO length and server normalization.
+      // Sending only digits avoids >34-character formatted requests.
+      onSave({ ...form, bankName: form.bankName.trim(), accountHolderName: form.accountHolderName.trim(), accountNumber })
+    }
   }}>
     <h3>Bank account details</h3>
     <p className={styles.helper}>Enter the bank account to receive your payouts.</p>
     {payout?.configured && <div className={styles.info}>Current account: <strong>{payout.maskedAccountNumber}</strong>. For security, enter the full account number when saving any changes.</div>}
     <Input label="Bank name" required maxLength={100} value={form.bankName} onChange={(e) => change('bankName', e.target.value)} disabled={loading} placeholder="e.g. Commercial Bank" />
-    <Input label="Account holder name" required maxLength={100} value={form.accountHolderName} onChange={(e) => change('accountHolderName', e.target.value)} disabled={loading} />
+    <Input label="Account holder name" required maxLength={150} value={form.accountHolderName} onChange={(e) => change('accountHolderName', e.target.value)} disabled={loading} />
     <Input label="Account number" required value={form.accountNumber} onChange={(e) => change('accountNumber', e.target.value)} disabled={loading} inputMode="numeric" autoComplete="off" helperText="6–34 digits; spaces and hyphens are accepted. Account number is never displayed in full after saving." />
     {form.accountNumber && !accountValid && <p className={styles.error} role="alert">Enter a valid bank account number containing 6–34 digits.</p>}
     {error && <InlineMessage variant="error">{error}</InlineMessage>}

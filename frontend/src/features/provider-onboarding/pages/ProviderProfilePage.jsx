@@ -34,6 +34,7 @@ import {
 import styles from '../providerProfile.module.css'
 import ProviderManagementDialogs from '../components/ProviderManagementDialogs'
 import ProviderFeatureIcon from '../components/ProviderFeatureIcon'
+import { formFromProfile, validateProfile, toProfileEditPayload } from '../services/providerProfileForm'
 
 const EMPTY_FORM = {
   providerType: 'INDIVIDUAL',
@@ -62,19 +63,6 @@ const STATUS_NAMES = {
   PAUSED: 'Paused',
 }
 
-function formFromProfile(profile) {
-  return {
-    providerType: profile?.providerType ?? 'INDIVIDUAL',
-    displayName: profile?.displayName ?? '',
-    bio: profile?.bio ?? '',
-    district: profile?.district ?? '',
-    city: profile?.city ?? '',
-    experienceYears: profile?.experienceYears == null ? '' : String(profile.experienceYears),
-    categoryIds: [...(profile?.categoryIds ?? [])],
-    serviceAreaDistricts: [...(profile?.serviceAreaDistricts ?? [])],
-  }
-}
-
 function flattenCategories(tree) {
   const result = []
   const seen = new Set()
@@ -88,35 +76,6 @@ function flattenCategories(tree) {
   return result
 }
 
-function validateProfile(form, districts, onboarding) {
-  const errors = {}
-  if (!['INDIVIDUAL', 'BUSINESS'].includes(form.providerType)) errors.providerType = 'Select a provider type.'
-  if (!form.displayName.trim()) errors.displayName = 'Enter your display name.'
-  else if (form.displayName.trim().length > 100) errors.displayName = 'Use 100 characters or fewer.'
-  if (form.bio.length > 1000) errors.bio = 'Use 1,000 characters or fewer.'
-  if (onboarding && !form.bio.trim()) errors.bio = 'Add a short description of your services.'
-  // Location is required when creating a profile. The Edit Profile dialog
-  // does not expose location fields, so existing location data must not block edits.
-  if (onboarding) {
-    if (!districts.includes(form.district)) errors.district = 'Select a valid district.'
-    if (!form.city.trim()) errors.city = 'Enter your city.'
-    else if (form.city.trim().length > 100) errors.city = 'Use 100 characters or fewer.'
-  }
-  if (form.experienceYears !== '') {
-    const years = Number(form.experienceYears)
-    if (!Number.isInteger(years) || years < 0 || years > 80) {
-      errors.experienceYears = 'Enter a whole number from 0 to 80.'
-    }
-  }
-  if (onboarding && !form.categoryIds.length) errors.categoryIds = 'Select at least one service category.'
-  if (onboarding && !form.serviceAreaDistricts.length) {
-    errors.serviceAreaDistricts = 'Select at least one service-area district.'
-  } else if (onboarding && form.serviceAreaDistricts.some((district) => !districts.includes(district))) {
-    errors.serviceAreaDistricts = 'Select districts from the available list.'
-  }
-  return errors
-}
-
 function toPayload(form) {
   return {
     providerType: form.providerType,
@@ -127,21 +86,6 @@ function toPayload(form) {
     experienceYears: form.experienceYears === '' ? null : Number(form.experienceYears),
     categoryIds: [...form.categoryIds],
     serviceAreaDistricts: [...form.serviceAreaDistricts],
-  }
-}
-
-/**
- * Edit Profile updates only fields shown in the edit dialog. Omitted fields
- * (district, city, categories, and service-area districts) remain unchanged
- * because the existing backend profile update endpoint supports partial updates.
- * Service categories and service-area districts are edited in Manage Services.
- */
-function toProfileEditPayload(form) {
-  return {
-    providerType: form.providerType,
-    displayName: form.displayName.trim(),
-    bio: form.bio.trim(),
-    ...(form.experienceYears === '' ? {} : { experienceYears: Number(form.experienceYears) }),
   }
 }
 
@@ -188,23 +132,30 @@ function ProgressSteps({ current = 1 }) {
   )
 }
 
-function ProfileFields({ form, errors, districts, provinces, categories, busy, setField, toggleItem, onboarding, includeServices = true }) {
+export function ProfileFields({ form, errors, districts, provinces, categories, busy, setField, toggleItem, onboarding, includeServices = true }) {
   const categorySet = new Set(form.categoryIds)
   const areaSet = new Set(form.serviceAreaDistricts)
   return (
     <div className={styles.formFields}>
       <fieldset className={styles.providerType} disabled={busy}>
         <legend>Provider type <span className={styles.required}>*</span></legend>
-        <div className={styles.radioRow}>
-          <Radio label="Individual" name="providerType" value="INDIVIDUAL" checked={form.providerType === 'INDIVIDUAL'} onChange={(e) => setField('providerType', e.target.value)} />
-          <Radio label="Business" name="providerType" value="BUSINESS" checked={form.providerType === 'BUSINESS'} onChange={(e) => setField('providerType', e.target.value)} />
-        </div>
+        {onboarding ? (
+          <div className={styles.radioRow}>
+            <Radio label="Individual" name="providerType" value="INDIVIDUAL" checked={form.providerType === 'INDIVIDUAL'} onChange={(e) => setField('providerType', e.target.value)} />
+            <Radio label="Business" name="providerType" value="BUSINESS" checked={form.providerType === 'BUSINESS'} onChange={(e) => setField('providerType', e.target.value)} />
+          </div>
+        ) : (
+          <div>
+            <strong>{form.providerType === 'BUSINESS' ? 'Business' : 'Individual'}</strong>
+            <p>Provider type cannot be changed after profile creation. Other profile details can still be edited.</p>
+          </div>
+        )}
         {errors.providerType && <InlineMessage variant="error">{errors.providerType}</InlineMessage>}
       </fieldset>
 
       <div className={styles.twoColumn}>
         <Input label={form.providerType === 'BUSINESS' ? 'Business display name' : 'Display name'} placeholder="Enter your provider or business display name" required maxLength={100} value={form.displayName} disabled={busy} onChange={(e) => setField('displayName', e.target.value)} error={errors.displayName} helperText="This name will be visible to customers." />
-        <Input label="Experience (years)" placeholder="For example, 5" type="number" min="0" max="80" step="1" value={form.experienceYears} disabled={busy} onChange={(e) => setField('experienceYears', e.target.value)} error={errors.experienceYears} helperText="Enter a whole number from 0 to 80." />
+        <Input label="Experience (years)" placeholder="For example, 5" type="number" min="0" max="80" step="1" value={form.experienceYears} disabled={busy} onChange={(e) => setField('experienceYears', e.target.value)} error={errors.experienceYears} helperText={onboarding || form.experienceYears === '' ? 'Enter a whole number from 0 to 80.' : 'Enter a whole number from 0 to 80. An existing experience value cannot be cleared.'} />
       </div>
 
       <Textarea label="Bio" placeholder="Tell customers a little about your services and experience" required={onboarding} rows={onboarding ? 4 : 3} maxLength={1000} value={form.bio} disabled={busy} onChange={(e) => setField('bio', e.target.value)} error={errors.bio} helperText={`${form.bio.length}/1000 characters. Describe your services and background.`} />
@@ -385,7 +336,7 @@ export default function ProviderProfilePage() {
   async function saveProfile(event) {
     event.preventDefault()
     const onboarding = !profile
-    const nextErrors = validateProfile(form, districts, onboarding)
+    const nextErrors = validateProfile(form, districts, onboarding, profile)
     setErrors(nextErrors)
     setSaveError('')
     if (Object.keys(nextErrors).length) {
