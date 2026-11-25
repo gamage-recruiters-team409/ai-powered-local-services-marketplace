@@ -4,6 +4,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
+import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 
 /**
  * The ONE place for admin-module error codes and for reading error codes coming from the auth module.
@@ -36,6 +37,15 @@ public final class AdminErrors {
     /** 400: invalid paging or sort parameter, or a parameter of the wrong type. */
     public static final String INVALID_PARAMETER = "INVALID_PARAMETER";
 
+    /**
+     * 409 from the auth module's atomic changeStatus: the account's status was no longer the one the admin saw.
+     * Kept as the same code, with a message that tells the admin what to do.
+     */
+    public static final String CONCURRENT_MODIFICATION = "CONCURRENT_MODIFICATION";
+
+    public static final String CONCURRENT_MODIFICATION_MESSAGE =
+            "The account status was changed by someone else. Reload the account and try again";
+
     /** Audit failure code for an AccessDeniedException thrown by the auth module. */
     static final String ACCESS_DENIED = "ACCESS_DENIED";
 
@@ -54,6 +64,18 @@ public final class AdminErrors {
             return ACCESS_DENIED;
         }
         return UNEXPECTED_ERROR;
+    }
+
+    /**
+     * The auth module's 409 CONCURRENT_MODIFICATION becomes the same 409 code with the admin-facing message (the auth
+     * message names internal statuses). Every other error is returned unchanged, so it passes through as it is.
+     */
+    public static RuntimeException fromStatusChange(RuntimeException error) {
+        if (error instanceof ApiException api && api.getStatus() == HttpStatus.CONFLICT
+                && CONCURRENT_MODIFICATION.equals(api.getErrorCode())) {
+            return new ResourceConflictException(CONCURRENT_MODIFICATION, CONCURRENT_MODIFICATION_MESSAGE);
+        }
+        return error;
     }
 
     static ApiException badRequest(String code, String message) {
