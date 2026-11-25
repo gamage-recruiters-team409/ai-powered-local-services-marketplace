@@ -169,8 +169,14 @@ public class AdminUsersQueryService {
         return directory.search(actorId, filters.roles(), filters.status(), filters.text(), pageable);
     }
 
+    /**
+     * Newest first, then email A-Z as a unique tie-breaker, so accounts with the same createdAt keep one stable order
+     * across pages and export batches (no duplicates, none skipped). Email, not id: WP01's searchUsers only accepts
+     * createdAt, fullName and email as sort fields (anything else drops the whole sort), and users.email has a
+     * unique index with emails stored lowercase.
+     */
     public static Sort newestFirst() {
-        return Sort.by(Sort.Direction.DESC, "createdAt");
+        return Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("email"));
     }
 
     private AdminUserRow toRow(UserAccount u) {

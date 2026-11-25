@@ -3,7 +3,10 @@ package com.gamagerecruiters.marketplace.modules.adminusers.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.junit.jupiter.api.AfterAll;
@@ -36,8 +39,10 @@ import com.gamagerecruiters.marketplace.modules.admin.domain.AuditOutcome;
 import com.gamagerecruiters.marketplace.modules.admin.service.AdminAuditLogService;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AccountActionResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUserDetailResponse;
+import com.gamagerecruiters.marketplace.modules.adminusers.dto.AdminUserRow;
 import com.gamagerecruiters.marketplace.modules.adminusers.port.UserDisputeStatsPort;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUserAccountService;
+import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUsersCsvExporter;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUsersQueryService;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
@@ -109,6 +114,8 @@ class AdminUsersMongoIntegrationTest {
     private AdminUserAccountService accountService;
     @Autowired
     private AdminUsersQueryService queryService;
+    @Autowired
+    private AdminUsersCsvExporter csvExporter;
 
     @BeforeEach
     void refuseSharedDatabaseAndClean() {
@@ -278,5 +285,67 @@ class AdminUsersMongoIntegrationTest {
         assertThat(detail.profile().lastActive().available()).isTrue();
         assertThat(detail.disputes().data().lifetime()).isZero();
         assertThat(detail.bookingStats().available()).as("booking stats are a stub").isFalse();
+    }
+
+    // ---------- deterministic order when createdAt ties (pagination and CSV export) ----------
+
+    @Test
+    @DisplayName("205 accounts with the SAME createdAt: list pages (size 8) and CSV export batches (100) through the "
+            + "real WP01 searchUsers return every account exactly once, in the same order every time "
+            + "(createdAt desc, then email)")
+    void tiedCreatedAtIsPagedDeterministically() {
+        user(ADMIN, Role.ADMIN, UserStatus.ACTIVE);
+        Instant sameMoment = Instant.parse("2026-06-01T00:00:00Z");
+        int count = 205;
+        List<User> accounts = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            User u = new User();
+            u.setId(String.format("65f1c0aa11bb22cc33%06x", 0x100000 + i));
+            u.setName("Tied " + i);
+            // emails inserted in a scrambled order (37 and 205 share no factor), so insertion order != email order
+            u.setEmail(String.format("tied%03d@example.test", (i * 37) % count));
+            u.setPasswordHash("not-a-real-hash");
+            u.setRole(i % 2 == 0 ? Role.CUSTOMER : Role.PROVIDER);
+            u.setStatus(UserStatus.ACTIVE);
+            u.setCreatedAt(sameMoment);
+            accounts.add(u);
+        }
+        mongoTemplate.insertAll(accounts);
+        List<String> allIds = accounts.stream().map(User::getId).toList();
+        loginAs(ADMIN, Role.ADMIN);
+
+        List<AdminUserRow> firstPass = allPages(8);
+        List<AdminUserRow> secondPass = allPages(8);
+
+        assertThat(firstPass).extracting(AdminUserRow::id)
+                .as("every account once, none duplicated or skipped across pages")
+                .hasSize(count).doesNotHaveDuplicates().containsExactlyInAnyOrderElementsOf(allIds);
+        assertThat(secondPass).extracting(AdminUserRow::id).as("same order on every read")
+                .containsExactlyElementsOf(firstPass.stream().map(AdminUserRow::id).toList());
+        assertThat(firstPass).extracting(AdminUserRow::email).as("ties broken by email A-Z").isSorted();
+
+        AdminUsersCsvExporter.Export export = csvExporter.export(ADMIN, null, null, null);
+        List<String> csvIds = Arrays.stream(new String(export.content(), StandardCharsets.UTF_8).split("\r\n"))
+                .skip(1) // header
+                .filter(line -> !line.isBlank())
+                .map(line -> line.substring(0, line.indexOf(',')))
+                .toList();
+        assertThat(export.truncated()).isFalse();
+        assertThat(csvIds).as("export batches: every account once, same order as the list")
+                .hasSize(count).doesNotHaveDuplicates()
+                .containsExactlyElementsOf(firstPass.stream().map(AdminUserRow::id).toList());
+    }
+
+    private List<AdminUserRow> allPages(int size) {
+        List<AdminUserRow> rows = new ArrayList<>();
+        int page = 0;
+        int totalPages;
+        do {
+            var result = queryService.list(ADMIN, null, null, null, page, size);
+            rows.addAll(result.content());
+            totalPages = result.totalPages();
+            page++;
+        } while (page < totalPages);
+        return rows;
     }
 }

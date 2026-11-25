@@ -324,6 +324,21 @@ class AdminUsersQueryServiceTest {
         assertThat(body.has("hiddenListings")).isFalse();
     }
 
+    @Test
+    @DisplayName("list: sorted newest first with email as the unique tie-breaker (a sort WP01 searchUsers accepts)")
+    void listSortHasUniqueTieBreaker() {
+        when(directory.search(anyString(), any(), any(), any(), any())).thenReturn(org.springframework.data.domain.Page.empty());
+
+        service.list(ACTOR, null, null, null, 0, 8);
+
+        org.mockito.ArgumentCaptor<org.springframework.data.domain.Pageable> pageable =
+                org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        verify(directory).search(eq(ACTOR), any(), any(), any(), pageable.capture());
+        assertThat(pageable.getValue().getSort()).containsExactly(
+                org.springframework.data.domain.Sort.Order.desc("createdAt"),
+                org.springframework.data.domain.Sort.Order.asc("email"));
+    }
+
     // ---------- summary ----------
 
     @Test
