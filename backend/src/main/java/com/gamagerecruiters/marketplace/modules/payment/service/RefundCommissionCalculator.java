@@ -133,6 +133,49 @@ public class RefundCommissionCalculator {
     }
 
     /**
+     * Calculates the remaining provider entitlement after successful
+     * refunds using the original persisted commission snapshot.
+     *
+     * This calculation does not authorize earnings recognition.
+     * Callers must independently validate payment status, refund
+     * history, service completion and existing ledger events.
+     */
+    public BigDecimal calculateRemainingProviderEarnings(
+            BigDecimal originalPaymentAmount,
+            BigDecimal originalCommissionAmount,
+            BigDecimal cumulativeRefundedAmount) {
+
+        BigDecimal payment = requireMoney(
+                originalPaymentAmount, "Original payment amount");
+
+        BigDecimal commission = requireMoney(
+                originalCommissionAmount, "Original commission amount");
+
+        BigDecimal refunded = requireMoney(
+                cumulativeRefundedAmount, "Cumulative refunded amount");
+
+        if (payment.signum() <= 0
+                || commission.compareTo(payment) > 0
+                || refunded.compareTo(payment) > 0) {
+
+            throw new IllegalArgumentException(
+                    "Invalid refund-adjusted financial snapshot");
+        }
+
+        if (refunded.signum() == 0) {
+            return payment.subtract(commission);
+        }
+
+        // Reuse the existing cumulative commission rounding policy.
+        return calculate(
+                payment,
+                commission,
+                BigDecimal.ZERO,
+                refunded)
+                .remainingProviderEarningsAmount();
+    }
+
+    /**
      * Calculates the cumulative commission reversal for the total
      * amount refunded against the original payment.
      */

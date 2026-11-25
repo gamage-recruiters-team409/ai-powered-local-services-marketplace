@@ -1,6 +1,8 @@
 package com.gamagerecruiters.marketplace.modules.payment.gateway;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Optional;
 
 /**
  * Gateway-independent contract for creating hosted payment checkout sessions.
@@ -29,6 +31,45 @@ public interface PaymentCheckoutGateway {
             String currency,
             String successUrl,
             String cancelUrl);
+
+    /**
+     * Finds an existing checkout session without submitting a new
+     * payment creation request.
+     *
+     * Implementations must validate payment identity, amount, currency
+     * and session state before returning a matching session.
+     *
+     * An empty result does not prove that no gateway request was
+     * submitted and must not authorize reservation release.
+     *
+     * @param paymentId persisted internal payment identifier
+     * @param amount trusted payment amount
+     * @param currency trusted payment currency
+     * @param reservedAt persisted checkout reservation timestamp
+     * @return verified existing session, if found
+     */
+    default Optional<RecoveredCheckoutSession> findCheckoutSession(
+            String paymentId,
+            BigDecimal amount,
+            String currency,
+            Instant reservedAt) {
+
+        throw new UnsupportedOperationException(
+                "Checkout session recovery is not supported");
+    }
+
+    /**
+     * Verified session discovered through read-only gateway recovery.
+     *
+     * The checkout URL may be absent for a completed session.
+     * Recovering a session reference does not itself confirm payment capture.
+     */
+    record RecoveredCheckoutSession(
+            String sessionId,
+            String checkoutUrl,
+            String status,
+            String paymentStatus) {
+    }
 
     /**
      * Result returned by a hosted checkout gateway.

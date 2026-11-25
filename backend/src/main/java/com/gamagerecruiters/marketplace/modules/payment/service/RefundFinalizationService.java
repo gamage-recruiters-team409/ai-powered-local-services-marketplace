@@ -676,10 +676,12 @@ public class RefundFinalizationService {
 
         // Unallocated earnings require separate lifecycle verification.
         if (reservation.unallocatedProviderReversalAmount()
-                .signum() != 0) {
+                .signum() != 0
+                && !Boolean.TRUE.equals(
+                        reservation.verifiedUnrecognizedEarnings())) {
 
             throw new IllegalStateException(
-                    "Unrecognized earnings refund is not supported");
+                    "Unallocated provider earnings require verified recognition state");
         }
 
         // Ordinary refunds must never consume dispute-held earnings.

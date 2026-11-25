@@ -20,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
 
+import com.gamagerecruiters.marketplace.modules.payment.config.StripeCheckoutRedirectPolicy;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import com.gamagerecruiters.marketplace.modules.payment.gateway.PaymentCheckoutGateway;
@@ -63,7 +64,107 @@ class StripeCheckoutInitiationServiceTest {
                 quoteProvider,
                 checkoutGateway,
                 sessionPersistenceService,
-                reservationService);
+                reservationService,
+                new StripeCheckoutRedirectPolicy(
+                        SUCCESS_URL, CANCEL_URL));
+    }
+
+    @Test
+    void rejectsExternalSuccessUrlBeforePaymentReservation() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        "https://evil.example/success", CANCEL_URL));
+
+        verifyNoCheckoutInteractions();
+    }
+
+    @Test
+    void rejectsExternalCancelUrlBeforePaymentReservation() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        SUCCESS_URL, "https://evil.example/cancel"));
+
+        verifyNoCheckoutInteractions();
+    }
+
+    @Test
+    void rejectsMisleadingRedirectHostname() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        "https://example.com.evil.example/success",
+                        CANCEL_URL));
+
+        verifyNoCheckoutInteractions();
+    }
+
+    @Test
+    void rejectsMalformedRedirectUrl() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        "https://example.com/invalid path",
+                        CANCEL_URL));
+
+        verifyNoCheckoutInteractions();
+    }
+
+    @Test
+    void rejectsUnapprovedPathOnTrustedHost() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        "https://example.com/unapproved",
+                        CANCEL_URL));
+
+        verifyNoCheckoutInteractions();
+    }
+
+    @Test
+    void rejectsRedirectContainingUserInfo() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        "https://example.com@evil.example/success",
+                        CANCEL_URL));
+
+        verifyNoCheckoutInteractions();
+    }
+
+    @Test
+    void rejectsCheckoutWhenTrustedRedirectsAreNotConfigured() {
+        StripeCheckoutInitiationService unconfiguredService =
+                new StripeCheckoutInitiationService(
+                        authorizationService,
+                        persistenceService,
+                        quoteProvider,
+                        checkoutGateway,
+                        sessionPersistenceService,
+                        reservationService,
+                        new StripeCheckoutRedirectPolicy("", ""));
+
+        assertThrows(IllegalStateException.class,
+                () -> unconfiguredService.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        SUCCESS_URL, CANCEL_URL));
+
+        verifyNoCheckoutInteractions();
+    }
+
+    /**
+     * Invalid redirects must not trigger payment processing,
+     * financial reservations or external gateway requests.
+     */
+    private void verifyNoCheckoutInteractions() {
+        verifyNoInteractions(
+                authorizationService,
+                persistenceService,
+                quoteProvider,
+                reservationService,
+                checkoutGateway,
+                sessionPersistenceService);
     }
 
     @Test
@@ -75,6 +176,10 @@ class StripeCheckoutInitiationServiceTest {
                 .thenReturn(trustedQuote());
         when(reservationService.tryReserve(PAYMENT_ID))
                 .thenReturn("reservation-123");
+
+        when(reservationService.markSubmissionStarted(
+                PAYMENT_ID, "reservation-123"))
+                .thenReturn(true);
 
         PaymentCheckoutGateway.CheckoutSession session =
                 new PaymentCheckoutGateway.CheckoutSession(
@@ -219,6 +324,179 @@ class StripeCheckoutInitiationServiceTest {
                 checkoutGateway,
                 sessionPersistenceService);
     }
+    /**
+     * A confirmed pre-request failure must release the newly acquired
+     * reservation so that checkout can be retried safely.
+     */
+    @Test
+    void releasesReservationWhenGatewayRequestWasNotSubmitted() {
+        prepareReservedCheckout();
+
+        when(checkoutGateway.createCheckoutSession(
+                PAYMENT_ID, new BigDecimal("100.00"), "USD",
+                SUCCESS_URL, CANCEL_URL))
+                .thenThrow(new com.gamagerecruiters.marketplace.modules.payment.gateway
+                        .CheckoutNotSubmittedException("Stripe gateway disabled"));
+
+        when(reservationService.releaseReservation(
+                PAYMENT_ID, "reservation-123"))
+                .thenReturn(true);
+
+        assertThrows(
+                com.gamagerecruiters.marketplace.modules.payment.gateway
+                        .CheckoutNotSubmittedException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID, SUCCESS_URL, CANCEL_URL));
+
+        verify(reservationService).releaseReservation(
+                PAYMENT_ID, "reservation-123");
+
+        verifyNoInteractions(sessionPersistenceService);
+    }
+
+    /**
+     * An uncertain gateway outcome must not permit another checkout claim.
+     */
+    @Test
+    void retainsReservationAfterAmbiguousGatewayFailure() {
+        prepareReservedCheckout();
+
+        when(checkoutGateway.createCheckoutSession(
+                PAYMENT_ID, new BigDecimal("100.00"), "USD",
+                SUCCESS_URL, CANCEL_URL))
+                .thenThrow(new IllegalStateException("Gateway timeout"));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID, SUCCESS_URL, CANCEL_URL));
+
+        verify(reservationService, never())
+                .releaseReservation(anyString(), anyString());
+
+        verifyNoInteractions(sessionPersistenceService);
+    }
+
+    /**
+     * An incomplete response does not prove that no session was created.
+     */
+    @Test
+    void retainsReservationAfterIncompleteGatewayResponse() {
+        prepareReservedCheckout();
+
+        when(checkoutGateway.createCheckoutSession(
+                PAYMENT_ID, new BigDecimal("100.00"), "USD",
+                SUCCESS_URL, CANCEL_URL))
+                .thenReturn(null);
+
+        assertThrows(IllegalStateException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID, SUCCESS_URL, CANCEL_URL));
+
+        verify(reservationService, never())
+                .releaseReservation(anyString(), anyString());
+
+        verifyNoInteractions(sessionPersistenceService);
+    }
+
+    /**
+     * A session may already exist when local persistence fails.
+     * The reservation must remain available for controlled recovery.
+     */
+    @Test
+    void retainsReservationWhenSessionPersistenceFails() {
+        prepareReservedCheckout();
+
+        when(checkoutGateway.createCheckoutSession(
+                PAYMENT_ID, new BigDecimal("100.00"), "USD",
+                SUCCESS_URL, CANCEL_URL))
+                .thenReturn(new PaymentCheckoutGateway.CheckoutSession(
+                        "cs_test_123", "https://checkout.stripe.com/test"));
+
+        org.mockito.Mockito.doThrow(
+                new IllegalStateException("Session persistence failed"))
+                .when(sessionPersistenceService)
+                .attachSession(
+                        PAYMENT_ID, "cs_test_123", "reservation-123");
+
+        assertThrows(IllegalStateException.class,
+                () -> service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID, SUCCESS_URL, CANCEL_URL));
+
+        verify(reservationService, never())
+                .releaseReservation(anyString(), anyString());
+
+        verify(sessionPersistenceService).attachSession(
+                PAYMENT_ID, "cs_test_123", "reservation-123");
+    }
+
+    @Test
+    void rejectsCheckoutWhenSubmissionAuthorizationFails() {
+
+        when(persistenceService.findPaymentById(PAYMENT_ID))
+                .thenReturn(Optional.of(payment()));
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(trustedQuote());
+
+        when(reservationService.tryReserve(PAYMENT_ID))
+                .thenReturn("reservation-123");
+
+        when(reservationService.markSubmissionStarted(
+                PAYMENT_ID, "reservation-123"))
+                .thenReturn(false);
+
+        assertThrows(IllegalStateException.class, () ->
+                service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        SUCCESS_URL, CANCEL_URL));
+
+        verifyNoInteractions(
+                checkoutGateway, sessionPersistenceService);
+
+        verify(reservationService, never())
+                .releaseReservation(anyString(), anyString());
+    }
+
+    @Test
+    void rejectsCheckoutInsideActiveTransaction() {
+
+        org.springframework.transaction.support
+                .TransactionSynchronizationManager
+                .setActualTransactionActive(true);
+
+        try {
+            assertThrows(IllegalStateException.class, () ->
+                    service.initiate(
+                            PAYMENT_ID, CUSTOMER_ID,
+                            SUCCESS_URL, CANCEL_URL));
+
+            verifyNoInteractions(
+                    persistenceService,
+                    reservationService,
+                    checkoutGateway,
+                    sessionPersistenceService);
+        } finally {
+            org.springframework.transaction.support
+                    .TransactionSynchronizationManager
+                    .setActualTransactionActive(false);
+        }
+    }
+
+    private void prepareReservedCheckout() {
+        when(persistenceService.findPaymentById(PAYMENT_ID))
+                .thenReturn(Optional.of(payment()));
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(trustedQuote());
+
+        when(reservationService.tryReserve(PAYMENT_ID))
+                .thenReturn("reservation-123");
+
+        when(reservationService.markSubmissionStarted(
+                PAYMENT_ID, "reservation-123"))
+                .thenReturn(true);
+    }
+
     private static Payment payment() {
         Payment payment = new Payment();
         payment.setId(PAYMENT_ID);

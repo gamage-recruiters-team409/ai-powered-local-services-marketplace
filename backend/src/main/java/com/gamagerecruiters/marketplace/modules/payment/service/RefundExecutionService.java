@@ -265,10 +265,12 @@ public class RefundExecutionService {
         }
 
         if (reservation.unallocatedProviderReversalAmount()
-                .signum() != 0) {
+                .signum() != 0
+                && !Boolean.TRUE.equals(
+                        reservation.verifiedUnrecognizedEarnings())) {
 
             throw new IllegalStateException(
-                    "Unrecognized earnings refund is not supported");
+                    "Unallocated provider earnings require verified recognition state");
         }
 
         if (reservation.commissionReversalAmount()

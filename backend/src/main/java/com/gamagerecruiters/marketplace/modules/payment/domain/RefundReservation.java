@@ -37,7 +37,35 @@ public record RefundReservation(
 
         @Field(targetType = FieldType.DECIMAL128) BigDecimal heldAllocation,
 
-        String providerId) {
+        String providerId,
+
+        Boolean verifiedUnrecognizedEarnings) {
+
+    /**
+     * Preserves compatibility with existing recognized-earnings
+     * reservations and their current callers.
+     */
+    public RefundReservation(
+            PaymentStatus originalPaymentStatus,
+            BigDecimal previouslyRefundedAmount,
+            BigDecimal commissionReversalAmount,
+            BigDecimal providerEarningsReversalAmount,
+            BigDecimal pendingAllocation,
+            BigDecimal availableAllocation,
+            BigDecimal heldAllocation,
+            String providerId) {
+
+        this(
+                originalPaymentStatus,
+                previouslyRefundedAmount,
+                commissionReversalAmount,
+                providerEarningsReversalAmount,
+                pendingAllocation,
+                availableAllocation,
+                heldAllocation,
+                providerId,
+                false);
+    }
 
     /**
      * Validates and normalizes the reserved financial allocation.
@@ -82,6 +110,26 @@ public record RefundReservation(
         BigDecimal totalAllocation = pendingAllocation
                 .add(availableAllocation)
                 .add(heldAllocation);
+
+        // Missing legacy markers must never authorize unrecognized earnings.
+        verifiedUnrecognizedEarnings =
+                Boolean.TRUE.equals(verifiedUnrecognizedEarnings);
+
+        // Unrecognized earnings must not reserve existing ledger balances.
+        if (verifiedUnrecognizedEarnings
+                && totalAllocation.signum() != 0) {
+
+            throw new IllegalArgumentException(
+                    "Unrecognized earnings cannot contain ledger allocations");
+        }
+
+        if (verifiedUnrecognizedEarnings
+                && originalPaymentStatus != PaymentStatus.CAPTURED
+                && originalPaymentStatus != PaymentStatus.PARTIALLY_REFUNDED) {
+
+            throw new IllegalArgumentException(
+                    "Invalid payment status for unrecognized earnings refund");
+        }
 
         // Existing ledger allocations must not exceed
         // the calculated provider earnings reversal.

@@ -50,6 +50,10 @@ public class StripeCheckoutSessionPersistenceService {
                 Criteria.where("_id").is(paymentId.trim())
                         .and("status").is(PaymentStatus.INITIATED)
                         .and("gatewayRef").is(null)
+                        .and("gatewayPaymentIntentId").is(null)
+                        .and("checkoutReservedAt").ne(null)
+                        .and("checkoutSubmissionStarted")
+                                .in(java.util.Arrays.asList(Boolean.TRUE, null))
                         .and("checkoutReservationToken").is(
                                 reservationToken.trim()));
 
@@ -57,6 +61,7 @@ public class StripeCheckoutSessionPersistenceService {
                 .set("gatewayRef", sessionId.trim())
                 .unset("checkoutReservationToken")
                 .unset("checkoutReservedAt")
+                .unset("checkoutSubmissionStarted")
                 .set("updatedAt", Instant.now());
 
         long modified = mongoTemplate.updateFirst(

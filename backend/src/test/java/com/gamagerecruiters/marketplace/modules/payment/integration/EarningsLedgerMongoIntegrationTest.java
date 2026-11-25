@@ -16,7 +16,14 @@ import java.util.concurrent.ExecutionException;
 
 import org.bson.Document;
 import org.bson.types.Decimal128;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
+import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
+import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.utility.DockerImageName;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.support.MongoRepositoryFactory;
@@ -51,7 +58,7 @@ import com.mongodb.client.model.Indexes;
  * Real MongoDB integration tests for earnings ledger persistence.
  *
  * <p>
- * Tests use an isolated local MongoDB replica set and a unique
+ * Tests use a managed MongoDB Testcontainers replica set and a unique
  * temporary database per test. Shared application databases are
  * never modified.
  * </p>
@@ -62,9 +69,24 @@ import com.mongodb.client.model.Indexes;
  * and concurrency protection required by PR #28.
  * </p>
  */
+@Tag("integration")
+@DisabledIfSystemProperty(named = "SKIP_DOCKER_TESTS", matches = "true")
+@DisabledIfEnvironmentVariable(named = "SKIP_DOCKER_TESTS", matches = "true")
 class EarningsLedgerMongoIntegrationTest {
 
-    private static final String LOCAL_URI = "mongodb://127.0.0.1:27018/?replicaSet=wp07rs";
+    // Managed replica set for real MongoDB transaction verification.
+    private static final MongoDBContainer MONGO =
+            new MongoDBContainer(DockerImageName.parse("mongo:7.0"));
+
+    @BeforeAll
+    static void startMongo() {
+        MONGO.start();
+    }
+
+    @AfterAll
+    static void stopMongo() {
+        MONGO.stop();
+    }
 
     @Test
     void validEventIsPersistedWithDecimal128Amount() {
@@ -551,7 +573,7 @@ class EarningsLedgerMongoIntegrationTest {
         String databaseName = "wp07_earnings_ledger_test_"
                 + UUID.randomUUID().toString().replace("-", "");
 
-        try (MongoClient client = MongoClients.create(LOCAL_URI)) {
+        try (MongoClient client = MongoClients.create(MONGO.getReplicaSetUrl())) {
 
             MongoDatabase database = client.getDatabase(databaseName);
 

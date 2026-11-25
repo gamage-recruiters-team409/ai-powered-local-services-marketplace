@@ -4,6 +4,9 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import org.springframework.stereotype.Service;
@@ -83,8 +86,8 @@ public class RefundTransactionService {
      * Repeated requests with identical financial data return the
      * existing operation without creating additional reservations.
      *
-     * Ordinary refunds involving unrecognized or dispute-held earnings remain
-     * blocked; disputed bookings require the dispute settlement workflow.
+     * Ordinary refunds may include independently verified unrecognized
+     * earnings. Disputed bookings require the dispute settlement workflow.
      */
     public RefundOperation reserveRefund(
             String paymentId,
@@ -242,12 +245,15 @@ if (amount == null
                         "Disputed booking requires dispute refund settlement");
             }
 
-            // Preserve the existing ordinary refund workflow.
+            // Verify recognition state after acquiring the payment write.
+            boolean verifiedUnrecognizedEarnings =
+                    verifyUnrecognizedEarnings(payment, idempotencyKey, providerId);
+
             reservation = allocationService.calculateAllocation(
                     payment,
                     providerId,
                     refundAmounts,
-                    false);
+                    verifiedUnrecognizedEarnings);
 
         } else {
 
@@ -313,6 +319,87 @@ if (amount == null
                 "HELD");
 
         return persisted;
+    }
+
+    /**
+     * Establishes whether provider earnings remain unrecognized.
+     *
+     * Must execute after the payment reservation is acquired inside
+     * the same MongoDB transaction. Recognition and refund reservation
+     * both conditionally write to the payment document.
+     */
+    private boolean verifyUnrecognizedEarnings(
+            Payment payment,
+            String reservationToken,
+            String providerId) {
+
+        if (!TransactionSynchronizationManager
+                    .isActualTransactionActive()
+                || !TransactionSynchronizationManager.hasResource(
+                        mongoTemplate.getMongoDatabaseFactory())) {
+
+            throw new IllegalStateException(
+                    "Earnings verification requires an active MongoDB transaction");
+        }
+
+        Query paymentHistory = Query.query(
+                Criteria.where("paymentId").is(payment.getId()));
+
+        // Existing earnings must follow the normal allocation workflow.
+        if (mongoTemplate.exists(
+                paymentHistory, EarningsLedgerEntry.class)) {
+            return false;
+        }
+
+        Query bookingHistory = Query.query(
+                Criteria.where("bookingId").is(payment.getBookingId()));
+
+        if (mongoTemplate.exists(
+                bookingHistory, EarningsLedgerEntry.class)) {
+
+            throw new IllegalStateException(
+                    "Booking contains inconsistent earnings history");
+        }
+
+        Query initialEvent = Query.query(
+                Criteria.where("eventKey")
+                        .is("earning-pending:" + payment.getId()));
+
+        if (mongoTemplate.exists(
+                initialEvent, EarningsLedgerEntry.class)) {
+
+            throw new IllegalStateException(
+                    "Initial earnings event has inconsistent identity");
+        }
+
+        // Verify the current persisted reservation and absence of
+        // any committed transactional recognition marker.
+        Query reservedPayment = Query.query(
+                Criteria.where("_id").is(payment.getId())
+                        .and("status").is(PaymentStatus.REFUND_PENDING)
+                        .and("refundReservationToken").is(reservationToken)
+                        .and("checkoutReservationToken").is(null)
+                        .and("earningsRecognitionWriteToken").is(null));
+
+        if (!mongoTemplate.exists(reservedPayment, Payment.class)) {
+
+            throw new IllegalStateException(
+                    "Unrecognized earnings cannot be safely established");
+        }
+
+        PreRecognitionRefundHistoryValidator.validate(
+                mongoTemplate, payment, providerId, null);
+
+        if ((payment.getStatus() == PaymentStatus.CAPTURED
+                    && payment.getRefundedAmount().signum() != 0)
+                || (payment.getStatus() == PaymentStatus.PARTIALLY_REFUNDED
+                    && payment.getRefundedAmount().signum() <= 0)) {
+
+            throw new IllegalStateException(
+                    "Refund history does not match payment status");
+        }
+
+        return true;
     }
 
     /**

@@ -20,7 +20,7 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
  * Coordinates the initial provider earnings lifecycle after payment capture.
  *
  * <p>
- * This service records pending earnings for a persisted, captured payment.
+ * This service records pending earnings for a persisted, captured or partially refunded payment.
  * It uses the trusted BookingFacade to identify the associated provider
  * and delegates append-only persistence to EarningsLedgerService.
  * </p>
@@ -125,9 +125,18 @@ public class EarningsLifecycleService {
         }
 
         // Payment initiation or authorization does not establish earnings.
-        if (payment.getStatus() != PaymentStatus.CAPTURED) {
+        if (payment.getStatus() != PaymentStatus.CAPTURED
+                && payment.getStatus() != PaymentStatus.PARTIALLY_REFUNDED) {
+
             throw new IllegalStateException(
-                    "Pending earnings require a CAPTURED payment");
+                    "Pending earnings require a captured or partially refunded payment");
+        }
+
+        if (payment.getRefundReservationToken() != null
+                || payment.getCheckoutReservationToken() != null) {
+
+            throw new IllegalStateException(
+                    "Payment has an active financial reservation");
         }
 
         BigDecimal netEarnings = calculateNetEarnings(payment);
@@ -197,6 +206,12 @@ public class EarningsLifecycleService {
 
         // The ledger service validates and enforces event-key idempotency.
         if (participants.status() == BookingStatus.DISPUTED) {
+
+            if (payment.getStatus() == PaymentStatus.PARTIALLY_REFUNDED) {
+                return recognitionTransactionService
+                        .recoverExistingRecognition(payment, entry);
+            }
+
             return earningsLedgerService.findMatchingCommittedEvent(entry)
                     .orElseThrow(() -> new IllegalStateException(
                             "Disputed booking has no previously committed pending earnings event"));
@@ -240,7 +255,28 @@ public class EarningsLifecycleService {
                     "Commission cannot exceed the payment amount");
         }
 
-        return amount.subtract(commission);
+        BigDecimal refunded = payment.getRefundedAmount() == null
+                ? BigDecimal.ZERO
+                : payment.getRefundedAmount();
+
+        if (refunded.signum() < 0
+                || refunded.compareTo(amount) >= 0
+                || (payment.getStatus() == PaymentStatus.CAPTURED
+                    && refunded.signum() != 0)
+                || (payment.getStatus() == PaymentStatus.PARTIALLY_REFUNDED
+                    && refunded.signum() <= 0)) {
+
+            throw new IllegalStateException(
+                    "Payment status and refunded amount are inconsistent");
+        }
+
+        // Preserve the original commission snapshot and apply
+        // the existing cumulative refund rounding policy.
+        return new RefundCommissionCalculator()
+                .calculateRemainingProviderEarnings(
+                        amount,
+                        commission,
+                        refunded);
     }
 
     /**

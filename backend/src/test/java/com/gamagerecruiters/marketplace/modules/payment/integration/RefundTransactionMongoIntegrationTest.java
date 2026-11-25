@@ -15,7 +15,13 @@ import java.time.Instant;
 import java.util.UUID;
 import java.util.function.Consumer;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
+import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
+import org.testcontainers.containers.MongoDBContainer;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.support.MongoRepositoryFactory;
@@ -35,13 +41,36 @@ import com.mongodb.client.model.Indexes;
 /**
  * Real MongoDB integration tests for refund reservation safety.
  *
- * Each test uses an isolated temporary database on the local
- * replica set. No external payment gateway is contacted.
+ * Each test uses an isolated temporary database on a managed
+ * Testcontainers MongoDB replica set. No external payment gateway is contacted.
  */
+@Tag("integration")
+@DisabledIfSystemProperty(named = "SKIP_DOCKER_TESTS", matches = "(?i)true")
+@DisabledIfEnvironmentVariable(named = "SKIP_DOCKER_TESTS", matches = "(?i)true")
 class RefundTransactionMongoIntegrationTest {
 
-    private static final String LOCAL_URI =
-            "mongodb://127.0.0.1:27018/?replicaSet=wp07rs";
+    private static final MongoDBContainer MONGO =
+            new MongoDBContainer("mongo:7.0");
+
+    /**
+     * Starts an isolated MongoDB replica set for real transaction tests.
+     */
+    @BeforeAll
+    static void startContainer() {
+        if (!MONGO.isRunning()) {
+            MONGO.start();
+        }
+    }
+
+    /**
+     * Releases the managed MongoDB container after all tests complete.
+     */
+    @AfterAll
+    static void stopContainer() {
+        if (MONGO.isRunning()) {
+            MONGO.stop();
+        }
+    }
 
     private static final String PAYMENT_ID = "payment-001";
     private static final String BOOKING_ID = "booking-001";
@@ -1481,6 +1510,736 @@ class RefundTransactionMongoIntegrationTest {
                 .orElseThrow();
     }
 
+    /**
+     * A full refund before earnings recognition must not create
+     * artificial provider earnings or refund reservation events.
+     */
+    @Test
+    void fullRefundBeforeRecognitionCreatesNoEarnings() {
+        withDatabase(context -> {
+            seedPayment(context);
+
+            mockGatewayResult(
+                    context, "re_before_full", "1000.00",
+                    PaymentRefundGateway.RefundStatus.SUCCEEDED);
+
+            RefundOperation operation = context.executionService()
+                    .executeRefund(
+                            PAYMENT_ID, "refund-before-full",
+                            money("1000.00"));
+
+            assertEquals(RefundOperation.RefundStatus.SUCCEEDED,
+                    operation.getStatus());
+
+            assertTrue(Boolean.TRUE.equals(operation.getReservation()
+                    .verifiedUnrecognizedEarnings()));
+
+            assertMoney("150.00", operation.getReservation()
+                    .commissionReversalAmount());
+
+            assertMoney("850.00", operation.getReservation()
+                    .providerEarningsReversalAmount());
+
+            assertMoney("0.00", operation.getReservation()
+                    .totalAllocatedEarnings());
+
+            Payment payment = readPayment(context);
+
+            assertEquals(PaymentStatus.REFUNDED, payment.getStatus());
+            assertMoney("1000.00", payment.getRefundedAmount());
+            assertMoney("150.00", payment.getCommissionAmount());
+
+            assertNull(payment.getRefundReservationToken());
+            assertEquals(0L, context.ledgerRepository().count());
+
+            assertEquals(0L, context.template()
+                    .count(new org.springframework.data.mongodb.core.query.Query(),
+                            ProviderEarningsState.class));
+
+            assertThrows(IllegalStateException.class,
+                    () -> recognizeRemainingEarnings(context, "850.00"));
+
+            verifySingleGatewayCreation(context);
+        });
+    }
+
+    /**
+     * Only the remaining provider earnings may be recognized
+     * after a successful partial refund.
+     */
+    @Test
+    void partialRefundBeforeRecognitionRecognizesRemainingEarnings() {
+        withDatabase(context -> {
+            seedPayment(context);
+
+            mockGatewayResult(
+                    context, "re_before_partial", "200.00",
+                    PaymentRefundGateway.RefundStatus.SUCCEEDED);
+
+            RefundOperation operation = context.executionService()
+                    .executeRefund(
+                            PAYMENT_ID, "refund-before-partial",
+                            money("200.00"));
+
+            assertEquals(RefundOperation.RefundStatus.SUCCEEDED,
+                    operation.getStatus());
+
+            assertTrue(Boolean.TRUE.equals(operation.getReservation()
+                    .verifiedUnrecognizedEarnings()));
+
+            assertMoney("30.00", operation.getReservation()
+                    .commissionReversalAmount());
+
+            assertMoney("170.00", operation.getReservation()
+                    .providerEarningsReversalAmount());
+
+            assertMoney("0.00", operation.getReservation()
+                    .totalAllocatedEarnings());
+
+            assertEquals(0L, context.ledgerRepository().count());
+
+            Payment payment = readPayment(context);
+
+            assertEquals(PaymentStatus.PARTIALLY_REFUNDED,
+                    payment.getStatus());
+
+            assertMoney("200.00", payment.getRefundedAmount());
+            assertMoney("150.00", payment.getCommissionAmount());
+
+            EarningsLedgerEntry first =
+                    recognizeRemainingEarnings(context, "680.00");
+
+            EarningsLedgerEntry retry =
+                    recognizeRemainingEarnings(context, "680.00");
+
+            assertEquals(first.getId(), retry.getId());
+            assertEquals(1L, context.ledgerRepository().count());
+
+            assertMoney("680.00", readState(context).getPending());
+            assertMoney("0.00", readState(context).getRefundReserved());
+
+            verifySingleGatewayCreation(context);
+        });
+    }
+
+    /**
+     * Multiple refunds before recognition must use cumulative
+     * commission reversal and preserve the original snapshot.
+     */
+    @Test
+    void multipleRefundsBeforeRecognitionPreserveFinancialTotals() {
+        withDatabase(context -> {
+            seedPayment(context);
+
+            mockGatewayResult(
+                    context, "re_before_first", "200.00",
+                    PaymentRefundGateway.RefundStatus.SUCCEEDED);
+
+            context.executionService().executeRefund(
+                    PAYMENT_ID, "refund-before-first", money("200.00"));
+
+            mockGatewayResult(
+                    context, "re_before_second", "100.00",
+                    PaymentRefundGateway.RefundStatus.SUCCEEDED);
+
+            RefundOperation second = context.executionService()
+                    .executeRefund(
+                            PAYMENT_ID, "refund-before-second",
+                            money("100.00"));
+
+            assertEquals(RefundOperation.RefundStatus.SUCCEEDED,
+                    second.getStatus());
+
+            assertMoney("15.00", second.getReservation()
+                    .commissionReversalAmount());
+
+            assertMoney("85.00", second.getReservation()
+                    .providerEarningsReversalAmount());
+
+            assertMoney("300.00", readPayment(context).getRefundedAmount());
+            assertMoney("150.00", readPayment(context).getCommissionAmount());
+
+            assertEquals(0L, context.ledgerRepository().count());
+
+            recognizeRemainingEarnings(context, "595.00");
+
+            assertMoney("595.00", readState(context).getPending());
+            assertEquals(1L, context.ledgerRepository().count());
+            assertEquals(2L, context.refundRepository().count());
+        });
+    }
+
+    /**
+     * Repeated execution with the same refund key must not
+     * create another external refund or financial event.
+     */
+    @Test
+    void repeatedPreRecognitionRefundIsIdempotent() {
+        withDatabase(context -> {
+            seedPayment(context);
+
+            mockGatewayResult(
+                    context, "re_before_retry", "200.00",
+                    PaymentRefundGateway.RefundStatus.SUCCEEDED);
+
+            RefundOperation first = context.executionService()
+                    .executeRefund(
+                            PAYMENT_ID, "refund-before-retry",
+                            money("200.00"));
+
+            RefundOperation retry = context.executionService()
+                    .executeRefund(
+                            PAYMENT_ID, "refund-before-retry",
+                            money("200.00"));
+
+            assertEquals(first.getId(), retry.getId());
+
+            assertEquals(RefundOperation.RefundStatus.SUCCEEDED,
+                    retry.getStatus());
+
+            assertEquals(1L, context.refundRepository().count());
+            assertEquals(0L, context.ledgerRepository().count());
+
+            assertMoney("200.00", readPayment(context).getRefundedAmount());
+
+            verifySingleGatewayCreation(context);
+        });
+    }
+
+    /**
+     * A definitive failure before recognition must restore
+     * the original captured payment without creating earnings.
+     */
+    @Test
+    void failedRefundBeforeRecognitionRestoresCapturedPayment() {
+        withDatabase(context -> {
+            seedPayment(context);
+
+            mockGatewayResult(
+                    context, "re_before_failed", "200.00",
+                    PaymentRefundGateway.RefundStatus.FAILED);
+
+            RefundOperation operation = context.executionService()
+                    .executeRefund(
+                            PAYMENT_ID, "refund-before-failed",
+                            money("200.00"));
+
+            assertEquals(RefundOperation.RefundStatus.FAILED,
+                    operation.getStatus());
+
+            Payment payment = readPayment(context);
+
+            assertEquals(PaymentStatus.CAPTURED, payment.getStatus());
+            assertNull(payment.getRefundReservationToken());
+
+            assertMoney("0.00", payment.getRefundedAmount());
+            assertMoney("150.00", payment.getCommissionAmount());
+
+            assertEquals(0L, context.ledgerRepository().count());
+
+            recognizeRemainingEarnings(context, "850.00");
+
+            assertMoney("850.00", readState(context).getPending());
+            assertEquals(1L, context.ledgerRepository().count());
+
+            verifySingleGatewayCreation(context);
+        });
+    }
+
+    /**
+     * Uncertain external submission must retain the reservation
+     * and prevent premature earnings recognition.
+     */
+    @Test
+    void uncertainRefundBeforeRecognitionBlocksEarnings() {
+        withDatabase(context -> {
+            seedPayment(context);
+
+            when(context.gateway().createRefund(
+                    anyString(), anyString(),
+                    any(BigDecimal.class), anyString()))
+                    .thenThrow(new IllegalStateException(
+                            "Simulated uncertain gateway submission"));
+
+            RefundOperation operation = context.executionService()
+                    .executeRefund(
+                            PAYMENT_ID, "refund-before-uncertain",
+                            money("200.00"));
+
+            assertEquals(
+                    RefundOperation.RefundStatus.REQUIRES_RECONCILIATION,
+                    operation.getStatus());
+
+            Payment payment = readPayment(context);
+
+            assertEquals(PaymentStatus.REFUND_PENDING, payment.getStatus());
+
+            assertEquals("refund-before-uncertain",
+                    payment.getRefundReservationToken());
+
+            assertMoney("0.00", payment.getRefundedAmount());
+
+            assertThrows(IllegalStateException.class,
+                    () -> recognizeRemainingEarnings(context, "850.00"));
+
+            assertEquals(0L, context.ledgerRepository().count());
+
+            mockReconciliationResult(
+                    context, operation,
+                    PaymentRefundGateway.RefundStatus.SUCCEEDED);
+
+            RefundOperation reconciled = reconciliationService(context)
+                    .reconcileRefund(operation.getId());
+
+            assertEquals(RefundOperation.RefundStatus.SUCCEEDED,
+                    reconciled.getStatus());
+
+            assertEquals(0L, context.ledgerRepository().count());
+
+            recognizeRemainingEarnings(context, "680.00");
+
+            assertMoney("680.00", readState(context).getPending());
+
+            verifySingleGatewayCreation(context);
+        });
+    }
+
+    /**
+     * Recognition retries after subsequent refunds must return
+     * the original immutable earnings event.
+     */
+    @Test
+    void recognitionRetryAfterAdditionalRefundPreservesOriginalEvent() {
+        withDatabase(context -> {
+            seedPayment(context);
+
+            mockGatewayResult(
+                    context, "re_before_recognition", "200.00",
+                    PaymentRefundGateway.RefundStatus.SUCCEEDED);
+
+            context.executionService().executeRefund(
+                    PAYMENT_ID, "refund-before-recognition",
+                    money("200.00"));
+
+            EarningsLedgerEntry original =
+                    recognizeRemainingEarnings(context, "680.00");
+
+            mockGatewayResult(
+                    context, "re_after_recognition", "100.00",
+                    PaymentRefundGateway.RefundStatus.SUCCEEDED);
+
+            RefundOperation second = context.executionService()
+                    .executeRefund(
+                            PAYMENT_ID, "refund-after-recognition",
+                            money("100.00"));
+
+            assertEquals(RefundOperation.RefundStatus.SUCCEEDED,
+                    second.getStatus());
+
+            assertFalse(Boolean.TRUE.equals(second.getReservation()
+                    .verifiedUnrecognizedEarnings()));
+
+            assertMoney("85.00", second.getReservation()
+                    .totalAllocatedEarnings());
+
+            EarningsLedgerEntry recovered =
+                    recognizeRemainingEarnings(context, "595.00");
+
+            assertEquals(original.getId(), recovered.getId());
+            assertMoney("680.00", recovered.getAmount());
+
+            assertMoney("595.00", readState(context).getPending());
+            assertMoney("0.00", readState(context).getRefundReserved());
+
+            assertEquals(3L, context.ledgerRepository().count());
+        });
+    }
+
+    /**
+     * Missing refund history must prevent recognition based only
+     * on a partially refunded payment snapshot.
+     */
+    @Test
+    void rejectsPartialRefundRecognitionWithoutCommittedHistory() {
+        withDatabase(context -> {
+            seedPayment(context);
+
+            context.template().updateFirst(
+                    org.springframework.data.mongodb.core.query.Query.query(
+                            org.springframework.data.mongodb.core.query.Criteria
+                                    .where("_id").is(PAYMENT_ID)),
+                    new org.springframework.data.mongodb.core.query.Update()
+                            .set("status", PaymentStatus.PARTIALLY_REFUNDED)
+                            .set("refundedAmount", money("200.00")),
+                    Payment.class);
+
+            assertThrows(IllegalStateException.class,
+                    () -> recognizeRemainingEarnings(context, "680.00"));
+
+            assertEquals(0L, context.ledgerRepository().count());
+            assertEquals(0L, context.refundRepository().count());
+        });
+    }
+
+    /**
+     * Invokes real transactional recognition using the same
+     * MongoDB database factory as the refund services.
+     */
+    private EarningsLedgerEntry recognizeRemainingEarnings(
+            TestContext context,
+            String amount) {
+
+        MongoTransactionManager transactionManager =
+                new MongoTransactionManager(
+                        context.template().getMongoDatabaseFactory());
+
+        ProviderEarningsStateRepository stateRepository =
+                new MongoRepositoryFactory(context.template())
+                        .getRepository(ProviderEarningsStateRepository.class);
+
+        EarningsLedgerTransactionService ledgerTransaction =
+                new EarningsLedgerTransactionService(
+                        context.ledgerRepository(),
+                        stateRepository,
+                        context.template(),
+                        transactionManager);
+
+        EarningsRecognitionTransactionService recognitionService =
+                new EarningsRecognitionTransactionService(
+                        context.template(),
+                        context.ledgerService(),
+                        ledgerTransaction,
+                        transactionManager);
+
+        return recognitionService.recognizeAtomically(
+                readPayment(context),
+                newLedgerEvent(
+                        "earning-pending:" + PAYMENT_ID,
+                        EarningsLedgerEventType.EARNING_PENDING,
+                        amount));
+    }
+
+    /**
+     * Concurrent refund reservation and initial earnings recognition
+     * must never produce an inconsistent financial allocation.
+     *
+     * Recognition may commit first, allowing the refund to reserve
+     * recognized earnings. If the refund commits first, recognition
+     * must not create earnings while the reservation remains active.
+     */
+    @Test
+    void concurrentRefundAndRecognitionPreserveFinancialConsistency() {
+        withDatabase(context -> {
+            seedPayment(context);
+
+            ExecutorService executor = Executors.newFixedThreadPool(2);
+
+            CountDownLatch ready = new CountDownLatch(2);
+            CountDownLatch start = new CountDownLatch(1);
+
+            try {
+                Future<Boolean> refund = executor.submit(
+                        () -> attemptReservation(
+                                context,
+                                "refund-recognition-race",
+                                ready,
+                                start));
+
+                Future<Boolean> recognition = executor.submit(() -> {
+                    ready.countDown();
+
+                    if (!start.await(10, TimeUnit.SECONDS)) {
+                        throw new AssertionError(
+                                "Concurrent recognition start timed out");
+                    }
+
+                    try {
+                        recognizeRemainingEarnings(context, "850.00");
+                        return true;
+
+                    } catch (IllegalStateException |
+                             org.springframework.dao.DataAccessException |
+                             com.mongodb.MongoException exception) {
+
+                        return false;
+                    }
+                });
+
+                assertTrue(ready.await(10, TimeUnit.SECONDS));
+                start.countDown();
+
+                boolean refundSucceeded =
+                        refund.get(30, TimeUnit.SECONDS);
+
+                boolean recognitionSucceeded =
+                        recognition.get(30, TimeUnit.SECONDS);
+
+                assertTrue(refundSucceeded || recognitionSucceeded,
+                        "At least one financial operation must commit");
+
+                Payment payment = readPayment(context);
+
+                if (refundSucceeded) {
+
+                    assertEquals(PaymentStatus.REFUND_PENDING,
+                            payment.getStatus());
+
+                    assertEquals("refund-recognition-race",
+                            payment.getRefundReservationToken());
+
+                    assertEquals(1L,
+                            context.refundRepository().count());
+
+                    RefundOperation operation =
+                            context.refundRepository()
+                                    .findByIdempotencyKey(
+                                            "refund-recognition-race")
+                                    .orElseThrow();
+
+                    if (recognitionSucceeded) {
+
+                        // Recognition committed before refund reservation.
+                        assertFalse(Boolean.TRUE.equals(
+                                operation.getReservation()
+                                        .verifiedUnrecognizedEarnings()));
+
+                        assertMoney("170.00",
+                                operation.getReservation()
+                                        .totalAllocatedEarnings());
+
+                        assertMoney("680.00",
+                                readState(context).getPending());
+
+                        assertMoney("170.00",
+                                readState(context).getRefundReserved());
+
+                        assertEquals(2L,
+                                context.ledgerRepository().count());
+
+                    } else {
+
+                        // Refund committed before earnings recognition.
+                        assertTrue(Boolean.TRUE.equals(
+                                operation.getReservation()
+                                        .verifiedUnrecognizedEarnings()));
+
+                        assertMoney("0.00",
+                                operation.getReservation()
+                                        .totalAllocatedEarnings());
+
+                        assertEquals(0L,
+                                context.ledgerRepository().count());
+
+                        assertEquals(0L, context.template().count(
+                                new org.springframework.data.mongodb.core.query.Query(),
+                                ProviderEarningsState.class));
+                    }
+
+                    // An active refund must block further recognition.
+                    assertThrows(IllegalStateException.class,
+                            () -> recognizeRemainingEarnings(
+                                    context, "850.00"));
+
+                } else {
+
+                    // Recognition committed; refund reservation rolled back.
+                    assertTrue(recognitionSucceeded);
+
+                    assertEquals(PaymentStatus.CAPTURED,
+                            payment.getStatus());
+
+                    assertNull(payment.getRefundReservationToken());
+
+                    assertEquals(0L,
+                            context.refundRepository().count());
+
+                    assertEquals(1L,
+                            context.ledgerRepository().count());
+
+                    assertMoney("850.00",
+                            readState(context).getPending());
+
+                    assertMoney("0.00",
+                            readState(context).getRefundReserved());
+                }
+
+                assertMoney("0.00", payment.getRefundedAmount());
+                assertMoney("150.00", payment.getCommissionAmount());
+
+                // Reservation and recognition must not call Stripe.
+                verifyNoInteractions(context.gateway());
+
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(exception);
+
+            } catch (ExecutionException | TimeoutException exception) {
+                throw new AssertionError(exception);
+
+            } finally {
+                start.countDown();
+                executor.shutdownNow();
+
+                try {
+                    assertTrue(executor.awaitTermination(
+                            30, TimeUnit.SECONDS));
+
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(exception);
+                }
+            }
+        });
+    }
+
+    /**
+     * Simulates interruption after the processing claim but before
+     * external submission. Missing gateway evidence must not release funds.
+     */
+    @Test
+    void staleProcessingWithoutGatewayResultRetainsReservation() {
+        withDatabase(context -> {
+            RefundOperation operation = reserveTestRefund(context);
+
+            simulateInterruptedProcessing(context, operation, 1800);
+
+            when(context.gateway().findRefund(
+                    operation.getId(), "pi_test001", null,
+                    money("200.00"), CURRENCY))
+                    .thenReturn(java.util.Optional.empty());
+
+            var result = reconciliationService(context)
+                    .reconcileBatch(25);
+
+            assertEquals(1, result.examined());
+            assertEquals(1, result.unresolved());
+            assertEquals(0, result.errors());
+
+            RefundOperation persisted = context.refundRepository()
+                    .findById(operation.getId()).orElseThrow();
+
+            assertEquals(
+                    RefundOperation.RefundStatus.REQUIRES_RECONCILIATION,
+                    persisted.getStatus());
+
+            assertReservationRetained(context);
+            assertEquals(2L, context.ledgerRepository().count());
+
+            verify(context.gateway(), never()).createRefund(
+                    anyString(), anyString(),
+                    any(BigDecimal.class), anyString());
+        });
+    }
+
+    /**
+     * Simulates an external refund succeeding before local finalization.
+     * Repeated recovery must not duplicate financial settlement.
+     */
+    @Test
+    void staleProcessingWithSuccessfulGatewayResultSettlesOnlyOnce() {
+        withDatabase(context -> {
+            RefundOperation operation = reserveTestRefund(context);
+
+            simulateInterruptedProcessing(context, operation, 1800);
+
+            mockReconciliationResult(
+                    context, operation,
+                    PaymentRefundGateway.RefundStatus.SUCCEEDED);
+
+            RefundReconciliationService service =
+                    reconciliationService(context);
+
+            var first = service.reconcileBatch(25);
+
+            assertEquals(1, first.examined());
+            assertEquals(1, first.succeeded());
+            assertEquals(0, first.errors());
+
+            var retry = service.reconcileBatch(25);
+
+            assertEquals(0, retry.examined());
+
+            RefundOperation recovered =
+                    service.reconcileRefund(operation.getId());
+
+            assertEquals(RefundOperation.RefundStatus.SUCCEEDED,
+                    recovered.getStatus());
+
+            Payment payment = readPayment(context);
+
+            assertEquals(PaymentStatus.PARTIALLY_REFUNDED,
+                    payment.getStatus());
+
+            assertMoney("200.00", payment.getRefundedAmount());
+            assertMoney("150.00", payment.getCommissionAmount());
+            assertNull(payment.getRefundReservationToken());
+
+            assertMoney("680.00", readState(context).getPending());
+            assertMoney("0.00", readState(context).getRefundReserved());
+
+            assertEquals(1L, context.refundRepository().count());
+            assertEquals(3L, context.ledgerRepository().count());
+
+            verify(context.gateway(), times(1)).findRefund(
+                    operation.getId(), "pi_test001", null,
+                    money("200.00"), CURRENCY);
+
+            verify(context.gateway(), never()).createRefund(
+                    anyString(), anyString(),
+                    any(BigDecimal.class), anyString());
+        });
+    }
+
+    /**
+     * Recently claimed operations must not be selected by stale recovery.
+     */
+    @Test
+    void freshProcessingIsExcludedFromRecoveryBatch() {
+        withDatabase(context -> {
+            RefundOperation operation = reserveTestRefund(context);
+
+            simulateInterruptedProcessing(context, operation, 60);
+
+            var result = reconciliationService(context)
+                    .reconcileBatch(25);
+
+            assertEquals(0, result.examined());
+
+            assertEquals(RefundOperation.RefundStatus.PROCESSING,
+                    context.refundRepository()
+                            .findById(operation.getId())
+                            .orElseThrow().getStatus());
+
+            assertReservationRetained(context);
+            assertEquals(2L, context.ledgerRepository().count());
+
+            verifyNoInteractions(context.gateway());
+        });
+    }
+
+    /**
+     * Test-only fixture representing a persisted interrupted processing
+     * claim. No real gateway request is performed.
+     */
+    private void simulateInterruptedProcessing(
+            TestContext context,
+            RefundOperation operation,
+            long ageSeconds) {
+
+        var result = context.template().updateFirst(
+                org.springframework.data.mongodb.core.query.Query.query(
+                        org.springframework.data.mongodb.core.query.Criteria
+                                .where("_id").is(operation.getId())),
+                new org.springframework.data.mongodb.core.query.Update()
+                        .set("status",
+                                RefundOperation.RefundStatus.PROCESSING)
+                        .set("updatedAt",
+                                Instant.now().minusSeconds(ageSeconds)),
+                RefundOperation.class);
+
+        assertEquals(1L, result.getModifiedCount());
+    }
+
     private RefundOperation reserveTestRefund(TestContext context) {
 
         seedPayment(context);
@@ -1745,7 +2504,7 @@ class RefundTransactionMongoIntegrationTest {
         String databaseName = "wp07_refund_test_"
                 + UUID.randomUUID().toString().replace("-", "");
 
-        try (MongoClient client = MongoClients.create(LOCAL_URI)) {
+        try (MongoClient client = MongoClients.create(MONGO.getReplicaSetUrl())) {
 
             try {
                 MongoTemplate template =

@@ -1,5 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.payment.service;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -34,6 +36,10 @@ public class RefundReconciliationService {
             RefundReconciliationService.class);
 
     private static final int MAX_BATCH_SIZE = 100;
+
+    // Conservative recovery threshold for interrupted execution.
+    private static final Duration PROCESSING_TIMEOUT =
+            Duration.ofMinutes(15);
 
     private final RefundOperationRepository refundRepository;
     private final PaymentRefundGateway refundGateway;
@@ -96,6 +102,16 @@ public class RefundReconciliationService {
                     "Refund operation is not eligible for reconciliation.");
         }
 
+        // Recheck persisted processing age before contacting the gateway.
+        if (status == RefundStatus.PROCESSING
+                && (operation.getUpdatedAt() == null
+                    || operation.getUpdatedAt().isAfter(
+                            Instant.now().minus(PROCESSING_TIMEOUT)))) {
+
+            throw new IllegalStateException(
+                    "Refund processing operation is not stale.");
+        }
+
         if (operation.getReservation() == null) {
             throw new IllegalStateException(
                     "Refund reservation is missing.");
@@ -138,11 +154,11 @@ public class RefundReconciliationService {
     }
 
     /**
-     * Reconciles a bounded batch of operations already marked
-     * as requiring reconciliation.
+     * Reconciles a bounded batch of unresolved refund operations
+     * and stale PROCESSING operations.
      *
-     * PROCESSING operations are deliberately excluded from batch
-     * recovery until a stale-processing timeout policy is defined.
+     * Recovery uses persisted timestamps and read-only gateway
+     * queries. A stale operation must never be submitted again.
      *
      * A failure in one operation must not prevent other operations
      * in the batch from being examined.
@@ -157,9 +173,12 @@ public class RefundReconciliationService {
                     "Reconciliation batch size must be between 1 and 100.");
         }
 
+        Instant staleProcessingCutoff =
+                Instant.now().minus(PROCESSING_TIMEOUT);
+
         List<RefundOperation> operations = refundRepository
-                .findByStatusOrderByUpdatedAtAscIdAsc(
-                        RefundStatus.REQUIRES_RECONCILIATION,
+                .findReconciliationCandidates(
+                        staleProcessingCutoff,
                         PageRequest.of(0, batchSize));
 
         int succeeded = 0;

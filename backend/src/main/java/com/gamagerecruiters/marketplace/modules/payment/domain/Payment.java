@@ -61,6 +61,13 @@ public class Payment {
     private Instant checkoutReservedAt;
 
     /**
+     * False means gateway submission has not been authorized.
+     * True means submission may have occurred.
+     * Null represents an unknown legacy state or no active reservation.
+     */
+    private Boolean checkoutSubmissionStarted;
+
+    /**
      * Identifies the active refund operation reserved against this payment.
      * Null when no refund reservation is active.
      *
@@ -196,6 +203,15 @@ public class Payment {
 
     public void setCheckoutReservationToken(String checkoutReservationToken) {
         this.checkoutReservationToken = checkoutReservationToken;
+    }
+
+    public Boolean getCheckoutSubmissionStarted() {
+        return checkoutSubmissionStarted;
+    }
+
+    public void setCheckoutSubmissionStarted(
+            Boolean checkoutSubmissionStarted) {
+        this.checkoutSubmissionStarted = checkoutSubmissionStarted;
     }
 
     public Instant getCheckoutReservedAt() {

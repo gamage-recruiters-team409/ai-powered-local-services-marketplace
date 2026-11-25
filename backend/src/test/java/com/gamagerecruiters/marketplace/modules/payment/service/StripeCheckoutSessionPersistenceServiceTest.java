@@ -43,10 +43,59 @@ class StripeCheckoutSessionPersistenceServiceTest {
         assertDoesNotThrow(() ->
                 service.attachSession("payment-1", "cs_test_123", "reservation-123"));
 
+        org.mockito.ArgumentCaptor<Query> queryCaptor =
+                org.mockito.ArgumentCaptor.forClass(Query.class);
+
+        org.mockito.ArgumentCaptor<UpdateDefinition> updateCaptor =
+                org.mockito.ArgumentCaptor.forClass(UpdateDefinition.class);
+
         verify(mongoTemplate).updateFirst(
-                any(Query.class),
-                any(UpdateDefinition.class),
+                queryCaptor.capture(),
+                updateCaptor.capture(),
                 eq(Payment.class));
+
+        org.bson.Document query =
+                queryCaptor.getValue().getQueryObject();
+
+        org.bson.Document update =
+                updateCaptor.getValue().getUpdateObject();
+
+        org.bson.Document unset =
+                (org.bson.Document) update.get("$unset");
+
+        org.bson.Document set =
+                (org.bson.Document) update.get("$set");
+
+        org.junit.jupiter.api.Assertions.assertEquals(
+                "reservation-123",
+                query.getString("checkoutReservationToken"));
+
+        org.junit.jupiter.api.Assertions.assertEquals(
+                "cs_test_123", set.getString("gatewayRef"));
+
+        org.junit.jupiter.api.Assertions.assertTrue(
+                query.containsKey("gatewayPaymentIntentId"));
+
+        org.junit.jupiter.api.Assertions.assertNull(
+                query.get("gatewayPaymentIntentId"));
+
+        org.junit.jupiter.api.Assertions.assertEquals(
+                new org.bson.Document("$ne", null),
+                query.get("checkoutReservedAt"));
+
+        org.junit.jupiter.api.Assertions.assertEquals(
+                new org.bson.Document("$in",
+                        java.util.Arrays.asList(Boolean.TRUE, null)),
+                query.get("checkoutSubmissionStarted"));
+
+        org.junit.jupiter.api.Assertions.assertTrue(
+                unset.containsKey("checkoutReservationToken"));
+
+        org.junit.jupiter.api.Assertions.assertTrue(
+                unset.containsKey("checkoutReservedAt"));
+
+        org.junit.jupiter.api.Assertions.assertTrue(
+                unset.containsKey("checkoutSubmissionStarted"));
     }
 
     @Test

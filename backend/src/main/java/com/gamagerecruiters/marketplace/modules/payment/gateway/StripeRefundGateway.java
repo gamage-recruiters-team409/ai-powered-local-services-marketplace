@@ -52,6 +52,8 @@ public final class StripeRefundGateway implements PaymentRefundGateway {
 
     private final StripeGatewayProperties properties;
     private final StripeRefundCreator refundCreator;
+    private final StripeRefundRetriever refundRetriever;
+    private final StripeRefundLister refundLister;
 
     /**
      * Production constructor using the configured Stripe client.
@@ -73,8 +75,29 @@ public final class StripeRefundGateway implements PaymentRefundGateway {
             StripeGatewayProperties properties,
             StripeRefundCreator refundCreator) {
 
+        this(
+                properties,
+                refundCreator,
+                (secretKey, reference) -> new StripeClient(secretKey)
+                        .refunds().retrieve(reference),
+                (secretKey, params) -> new StripeClient(secretKey)
+                        .refunds().list(params));
+    }
+
+    /**
+     * Allows isolated testing of refund creation, retrieval and listing
+     * without contacting the external Stripe API.
+     */
+    StripeRefundGateway(
+            StripeGatewayProperties properties,
+            StripeRefundCreator refundCreator,
+            StripeRefundRetriever refundRetriever,
+            StripeRefundLister refundLister) {
+
         this.properties = Objects.requireNonNull(properties);
         this.refundCreator = Objects.requireNonNull(refundCreator);
+        this.refundRetriever = Objects.requireNonNull(refundRetriever);
+        this.refundLister = Objects.requireNonNull(refundLister);
     }
 
     /**
@@ -87,6 +110,28 @@ public final class StripeRefundGateway implements PaymentRefundGateway {
                 String secretKey,
                 RefundCreateParams params,
                 RequestOptions options) throws StripeException;
+    }
+
+    /**
+     * Isolates read-only retrieval of a known Stripe refund.
+     */
+    @FunctionalInterface
+    interface StripeRefundRetriever {
+
+        Refund retrieve(
+                String secretKey,
+                String reference) throws StripeException;
+    }
+
+    /**
+     * Isolates paginated read-only Stripe refund listing.
+     */
+    @FunctionalInterface
+    interface StripeRefundLister {
+
+        StripeCollection<Refund> list(
+                String secretKey,
+                RefundListParams params) throws StripeException;
     }
 
     /**
@@ -210,8 +255,7 @@ public final class StripeRefundGateway implements PaymentRefundGateway {
         String normalizedCurrency = normalizeCurrency(currency);
         long amountInMinorUnits = toMinorUnits(amount);
 
-        StripeClient client =
-                new StripeClient(properties.getSecretKey());
+
 
         try {
 
@@ -227,7 +271,8 @@ public final class StripeRefundGateway implements PaymentRefundGateway {
                             "Invalid Stripe refund reference.");
                 }
 
-                Refund refund = client.refunds().retrieve(reference);
+                Refund refund = refundRetriever.retrieve(
+                        properties.getSecretKey(), reference);
 
                 if (refund == null
                         || !reference.equals(refund.getId())) {
@@ -247,7 +292,6 @@ public final class StripeRefundGateway implements PaymentRefundGateway {
 
             // Recover a missing refund reference using metadata.
             return findRefundByOperationMetadata(
-                    client,
                     operationId,
                     paymentIntentId,
                     amountInMinorUnits,
@@ -269,7 +313,6 @@ public final class StripeRefundGateway implements PaymentRefundGateway {
      * require further investigation instead of settlement.
      */
     private Optional<RefundResult> findRefundByOperationMetadata(
-            StripeClient client,
             String operationId,
             String paymentIntentId,
             long amountInMinorUnits,
@@ -292,7 +335,8 @@ public final class StripeRefundGateway implements PaymentRefundGateway {
             }
 
             StripeCollection<Refund> refunds =
-                    client.refunds().list(builder.build());
+                    refundLister.list(
+                            properties.getSecretKey(), builder.build());
 
             if (refunds == null
                     || refunds.getData() == null

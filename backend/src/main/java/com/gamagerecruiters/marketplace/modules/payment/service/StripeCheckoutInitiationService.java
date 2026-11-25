@@ -5,9 +5,12 @@ import java.time.Instant;
 import java.util.Objects;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import com.gamagerecruiters.marketplace.modules.payment.config.StripeCheckoutRedirectPolicy;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
+import com.gamagerecruiters.marketplace.modules.payment.gateway.CheckoutNotSubmittedException;
 import com.gamagerecruiters.marketplace.modules.payment.gateway.PaymentCheckoutGateway;
 import com.gamagerecruiters.marketplace.modules.payment.gateway.TrustedBookingPaymentQuoteProvider;
 import com.gamagerecruiters.marketplace.modules.payment.gateway.TrustedBookingPaymentQuoteProvider.BookingPaymentQuote;
@@ -29,6 +32,7 @@ public class StripeCheckoutInitiationService {
     private final PaymentCheckoutGateway checkoutGateway;
     private final StripeCheckoutSessionPersistenceService sessionPersistenceService;
     private final StripeCheckoutReservationService reservationService;
+    private final StripeCheckoutRedirectPolicy redirectPolicy;
     private final PaymentDeadlineService deadlineService =
             new PaymentDeadlineService();
 
@@ -38,7 +42,8 @@ public class StripeCheckoutInitiationService {
             TrustedBookingPaymentQuoteProvider quoteProvider,
             PaymentCheckoutGateway checkoutGateway,
             StripeCheckoutSessionPersistenceService sessionPersistenceService,
-            StripeCheckoutReservationService reservationService) {
+            StripeCheckoutReservationService reservationService,
+            StripeCheckoutRedirectPolicy redirectPolicy) {
 
         this.authorizationService = Objects.requireNonNull(authorizationService);
         this.persistenceService = Objects.requireNonNull(persistenceService);
@@ -48,6 +53,8 @@ public class StripeCheckoutInitiationService {
                 Objects.requireNonNull(sessionPersistenceService);
         this.reservationService =
                 Objects.requireNonNull(reservationService);
+        this.redirectPolicy =
+                Objects.requireNonNull(redirectPolicy);
     }
 
     /**
@@ -65,10 +72,22 @@ public class StripeCheckoutInitiationService {
             String successUrl,
             String cancelUrl) {
 
+        // Reservation and submission authorization must be committed
+        // before any external payment request is submitted.
+        if (TransactionSynchronizationManager.isActualTransactionActive()
+                || TransactionSynchronizationManager.isSynchronizationActive()) {
+            throw new IllegalStateException(
+                    "Checkout initiation must run outside a database transaction");
+        }
+
         requireText(paymentId, "Payment ID");
         requireText(customerId, "Customer ID");
         requireText(successUrl, "Success URL");
         requireText(cancelUrl, "Cancel URL");
+
+        // Reject untrusted redirects before reserving a payment
+        // or submitting any external Checkout request.
+        redirectPolicy.validate(successUrl, cancelUrl);
 
         Payment payment = persistenceService.findPaymentById(paymentId)
                 .orElseThrow(() -> new IllegalStateException(
@@ -133,18 +152,42 @@ public class StripeCheckoutInitiationService {
         }
 
         /*
-         * Do not automatically release the reservation when the Stripe
-         * request fails. A timeout may occur after Stripe has created
-         * the session. Reconciliation must establish the gateway outcome
-         * before another attempt is permitted.
+         * Release only a newly acquired reservation when the gateway
+         * confirms that this invocation did not submit a request.
+         * Ambiguous failures must retain the reservation for recovery.
          */
-        PaymentCheckoutGateway.CheckoutSession session =
-                checkoutGateway.createCheckoutSession(
-                        payment.getId(),
-                        payment.getAmount(),
-                        payment.getCurrency(),
-                        successUrl,
-                        cancelUrl);
+        // Submission must be authorized atomically before contacting Stripe.
+        if (!reservationService.markSubmissionStarted(
+                payment.getId(), reservationToken)) {
+            throw new IllegalStateException(
+                    "Checkout reservation is no longer eligible for submission");
+        }
+
+        final PaymentCheckoutGateway.CheckoutSession session;
+
+        try {
+            session = checkoutGateway.createCheckoutSession(
+                    payment.getId(),
+                    payment.getAmount(),
+                    payment.getCurrency(),
+                    successUrl,
+                    cancelUrl);
+
+        } catch (CheckoutNotSubmittedException exception) {
+            try {
+                boolean released = reservationService.releaseReservation(
+                        payment.getId(), reservationToken);
+
+                if (!released) {
+                    exception.addSuppressed(new IllegalStateException(
+                            "Checkout reservation could not be released safely"));
+                }
+            } catch (RuntimeException releaseFailure) {
+                exception.addSuppressed(releaseFailure);
+            }
+
+            throw exception;
+        }
 
         if (session == null
                 || session.sessionId() == null

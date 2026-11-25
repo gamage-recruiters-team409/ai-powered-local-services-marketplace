@@ -45,11 +45,15 @@ public class StripeCheckoutReservationService {
                 Criteria.where("_id").is(paymentId.trim())
                         .and("status").is(PaymentStatus.INITIATED)
                         .and("gatewayRef").is(null)
+                        .and("gatewayPaymentIntentId").is(null)
+                        .and("checkoutReservedAt").is(null)
+                        .and("checkoutSubmissionStarted").is(null)
                         .and("checkoutReservationToken").is(null));
 
         Update update = new Update()
                 .set("checkoutReservationToken", reservationToken)
                 .set("checkoutReservedAt", now)
+                .set("checkoutSubmissionStarted", false)
                 .set("updatedAt", now);
 
         long modified = mongoTemplate.updateFirst(
@@ -59,7 +63,78 @@ public class StripeCheckoutReservationService {
     }
 
     /**
-     * Releases a reservation only when it belongs to the expected claim.
+     * Atomically authorizes gateway submission for the current owner.
+     * A recovered or replaced reservation cannot submit a request.
+     */
+    public boolean markSubmissionStarted(
+            String paymentId, String reservationToken) {
+
+        requireReservationIdentity(paymentId, reservationToken);
+
+        Query query = Query.query(
+                Criteria.where("_id").is(paymentId.trim())
+                        .and("status").is(PaymentStatus.INITIATED)
+                        .and("gatewayRef").is(null)
+                        .and("gatewayPaymentIntentId").is(null)
+                        .and("checkoutReservationToken").is(reservationToken)
+                        .and("checkoutSubmissionStarted").is(false));
+
+        Update update = new Update()
+                .set("checkoutSubmissionStarted", true)
+                .set("updatedAt", Instant.now());
+
+        return mongoTemplate.updateFirst(
+                query, update, Payment.class).getModifiedCount() == 1;
+    }
+
+    /**
+     * Releases an interrupted reservation only when gateway submission
+     * was never authorized and the reservation is at least five minutes old.
+     *
+     * The atomic condition prevents a concurrent submission from racing
+     * with recovery. Unknown legacy states are never released here.
+     */
+    public boolean releaseStaleUnsubmittedReservation(
+            String paymentId, String reservationToken) {
+
+        requireReservationIdentity(paymentId, reservationToken);
+
+        Instant now = Instant.now();
+
+        Query query = Query.query(
+                Criteria.where("_id").is(paymentId.trim())
+                        .and("status").is(PaymentStatus.INITIATED)
+                        .and("gatewayRef").is(null)
+                        .and("gatewayPaymentIntentId").is(null)
+                        .and("checkoutReservationToken").is(reservationToken)
+                        .and("checkoutSubmissionStarted").is(false)
+                        .and("checkoutReservedAt").lte(now.minusSeconds(300)));
+
+        Update update = new Update()
+                .unset("checkoutReservationToken")
+                .unset("checkoutReservedAt")
+                .unset("checkoutSubmissionStarted")
+                .set("updatedAt", now);
+
+        return mongoTemplate.updateFirst(
+                query, update, Payment.class).getModifiedCount() == 1;
+    }
+
+    private static void requireReservationIdentity(
+            String paymentId, String reservationToken) {
+
+        if (paymentId == null || paymentId.isBlank()
+                || reservationToken == null || reservationToken.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Payment ID and reservation token are required");
+        }
+    }
+
+    /**
+     * Releases an authorized reservation belonging to the expected claim.
+     *
+     * Only the current initiation workflow may invoke this operation
+     * after a definitive CheckoutNotSubmittedException.
      *
      * <p>This operation must only be used when Checkout Session creation
      * definitively failed before a gateway session was created. Ambiguous
@@ -80,11 +155,14 @@ public class StripeCheckoutReservationService {
                 Criteria.where("_id").is(paymentId.trim())
                         .and("status").is(PaymentStatus.INITIATED)
                         .and("gatewayRef").is(null)
+                        .and("gatewayPaymentIntentId").is(null)
+                        .and("checkoutSubmissionStarted").is(true)
                         .and("checkoutReservationToken").is(reservationToken));
 
         Update update = new Update()
                 .unset("checkoutReservationToken")
                 .unset("checkoutReservedAt")
+                .unset("checkoutSubmissionStarted")
                 .set("updatedAt", Instant.now());
 
         return mongoTemplate.updateFirst(

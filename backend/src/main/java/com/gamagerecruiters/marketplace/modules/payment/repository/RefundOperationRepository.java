@@ -1,11 +1,13 @@
 
 package com.gamagerecruiters.marketplace.modules.payment.repository;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.data.mongodb.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import com.gamagerecruiters.marketplace.modules.payment.domain.RefundOperation;
@@ -68,5 +70,16 @@ public interface RefundOperationRepository
      */
     List<RefundOperation> findByStatusOrderByUpdatedAtAscIdAsc(
             RefundStatus status,
+            Pageable pageable);
+
+    /**
+     * Selects unresolved refunds and stale processing operations
+     * in a single bounded, deterministically ordered batch.
+     */
+    @Query(value = "{ '$or': [ { 'status': 'REQUIRES_RECONCILIATION' }, "
+            + "{ 'status': 'PROCESSING', 'updatedAt': { '$lte': ?0 } } ] }",
+            sort = "{ 'updatedAt': 1, '_id': 1 }")
+    List<RefundOperation> findReconciliationCandidates(
+            Instant staleProcessingCutoff,
             Pageable pageable);
 }

@@ -12,6 +12,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEntry;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEventType;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
+import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import com.gamagerecruiters.marketplace.modules.payment.domain.RefundOperation;
 import com.gamagerecruiters.marketplace.modules.payment.domain.RefundReservation;
 
@@ -80,13 +81,23 @@ final class RefundReservationIntegrityValidator {
                     reservation.commissionReversalAmount()) != 0
 
                 || expected.providerEarningsReversalAmount().compareTo(
-                    reservation.providerEarningsReversalAmount()) != 0
-
-                || reservation.totalAllocatedEarnings().compareTo(
-                    expected.providerEarningsReversalAmount()) != 0) {
+                    reservation.providerEarningsReversalAmount()) != 0) {
 
             throw new IllegalStateException(
                     "Refund reservation financial calculation mismatch");
+        }
+
+        if (Boolean.TRUE.equals(
+                reservation.verifiedUnrecognizedEarnings())) {
+
+            validateUnrecognizedEarnings(
+                    mongoTemplate, payment, operation, reservation);
+
+        } else if (reservation.totalAllocatedEarnings().compareTo(
+                expected.providerEarningsReversalAmount()) != 0) {
+
+            throw new IllegalStateException(
+                    "Refund reservation financial allocation mismatch");
         }
 
         validateReservationEvent(
@@ -133,10 +144,81 @@ final class RefundReservationIntegrityValidator {
     }
 
     /**
+     * Revalidates unrecognized earnings before gateway execution
+     * and refund finalization.
+     *
+     * The persisted marker alone is insufficient. The payment must
+     * still own the refund reservation and have no recognized
+     * earnings history.
+     */
+    private static void validateUnrecognizedEarnings(
+            MongoTemplate mongoTemplate,
+            Payment payment,
+            RefundOperation operation,
+            RefundReservation reservation) {
+
+        if (operation.getDisputeId() != null
+                || reservation.totalAllocatedEarnings().signum() != 0
+                || payment.getStatus() != PaymentStatus.REFUND_PENDING
+                || !Objects.equals(
+                        payment.getRefundReservationToken(),
+                        operation.getIdempotencyKey())
+                || payment.getRefundedAmount() == null
+                || payment.getRefundedAmount().compareTo(
+                        reservation.previouslyRefundedAmount()) != 0
+                || !Objects.equals(
+                        payment.getCurrency(), operation.getCurrency())
+                || !Objects.equals(
+                        payment.getGatewayPaymentIntentId(),
+                        operation.getGatewayPaymentReference())) {
+
+            throw new IllegalStateException(
+                    "Invalid unrecognized earnings refund reservation");
+        }
+
+        Query reservedPayment = Query.query(
+                Criteria.where("_id").is(payment.getId())
+                        .and("status").is(PaymentStatus.REFUND_PENDING)
+                        .and("refundReservationToken")
+                            .is(operation.getIdempotencyKey())
+                        .and("checkoutReservationToken").is(null)
+                        .and("earningsRecognitionWriteToken").is(null));
+
+        if (!mongoTemplate.exists(reservedPayment, Payment.class)) {
+
+            throw new IllegalStateException(
+                    "Unrecognized earnings reservation is no longer valid");
+        }
+
+        PreRecognitionRefundHistoryValidator.validate(
+                mongoTemplate,
+                payment,
+                reservation.providerId(),
+                operation.getId());
+
+        // Reject any payment-specific or booking-specific ledger
+        // history, including an initial event with inconsistent identity.
+        Query history = Query.query(
+                new Criteria().orOperator(
+                        Criteria.where("paymentId")
+                                .is(payment.getId()),
+                        Criteria.where("bookingId")
+                                .is(payment.getBookingId()),
+                        Criteria.where("eventKey")
+                                .is("earning-pending:" + payment.getId())));
+
+        if (mongoTemplate.exists(history, EarningsLedgerEntry.class)) {
+
+            throw new IllegalStateException(
+                    "Unrecognized refund contains existing earnings history");
+        }
+    }
+
+    /**
      * Confirms that a committed reservation event matches the
      * expected operation identity and financial allocation.
      */
-    private static void validateReservationEvent(
+    static void validateReservationEvent(
             MongoTemplate mongoTemplate,
             RefundOperation operation,
             RefundReservation reservation,

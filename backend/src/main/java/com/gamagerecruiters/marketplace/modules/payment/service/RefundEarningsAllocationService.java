@@ -165,7 +165,8 @@ public class RefundEarningsAllocationService {
                 pendingAllocation,
                 availableAllocation,
                 heldAllocation,
-                trustedProviderId);
+                trustedProviderId,
+                entries.isEmpty() && verifiedUnrecognizedEarnings);
     }
 
     /**
