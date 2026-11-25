@@ -55,40 +55,97 @@ All endpoints require authentication with the `CUSTOMER` role (`hasRole('CUSTOME
 
 ---
 
-## 3. Order of Operations for Photo Storage
+## 3. Order of Operations, Concurrency & Durable Cleanup
 
-1. **Upload Flow:**
-   1. Validate user status is `ACTIVE`.
-   2. Validate file size (<= 5 MB), Content-Type, and magic bytes.
-   3. Upload new photo to Cloudinary under folder `localserve/customer-profile/<sanitized_userId>/<random_uuid>`.
-   4. Execute targeted MongoDB update (`$set: { profileImageUrl, profileImagePublicId }`) on `users` collection.
-   5. If MongoDB update fails, immediately execute best-effort cleanup of the new photo from Cloudinary and throw `503 PROFILE_PHOTO_UPDATE_FAILED`.
-   6. On DB success, execute best-effort deletion of the **old** image from Cloudinary (if previously had one). Old deletion failures do not fail the request.
-   7. Reload and return updated `CustomerProfileResponse`.
+### 3.1. Optimistic Concurrency Control (F1)
+To prevent concurrent requests from clobbering newer photos or creating orphaned Cloudinary images:
+1. **Initial Read:** The service reads the user document and records `expectedOldPublicId` (`null` if no photo exists).
+2. **Pre-Schedule Cleanup:** If `expectedOldPublicId` is present, a cleanup task (`ProfileImageCleanupReason.REPLACED`) is scheduled in MongoDB (`profile_image_cleanup`) in `PENDING` status before executing the DB write.
+3. **Upload to Cloudinary:** The new image is uploaded.
+4. **Conditional MongoDB Update:**
+   ```java
+   Criteria.where("_id").is(customerId)
+       .and("role").is(Role.CUSTOMER)
+       .and("status").is(UserStatus.ACTIVE)
+       .and("profileImagePublicId").is(expectedOldPublicId)
+   ```
+   *(Note: `Criteria.is(null)` matches both null and missing fields in MongoDB).*
+5. **Update Verification (`matchedCount`):**
+   - **`matchedCount == 1`:** DB update succeeded. Immediate inline deletion of `expectedOldPublicId` is attempted via `ProfileImageCleanupService.attempt(task)`.
+   - **`matchedCount == 0` (Conflict/State Change):**
+     * Immediately roll back newly uploaded image via `ProfileImageCleanupReason.CONFLICT_ROLLBACK`.
+     * Cancel/delete the pending cleanup task for `expectedOldPublicId` (the old photo was not replaced).
+     * Reload user: if status is inactive, throw `403 ACCOUNT_INACTIVE`. If `profileImagePublicId != expectedOldPublicId`, throw `409 PROFILE_PHOTO_CONFLICT` ("Your profile photo was changed by another request. Please retry.").
+6. **Exception on DB Operation:**
+   * Roll back newly uploaded image via `ProfileImageCleanupReason.UPLOAD_ROLLBACK`.
+   * Cancel scheduled cleanup task for `expectedOldPublicId`.
+   * Log exception class name only and throw `503 PROFILE_PHOTO_UPDATE_FAILED`.
 
-2. **Delete Flow:**
-   1. Validate user status is `ACTIVE`.
-   2. If user has no existing `profileImagePublicId`, return `204` immediately.
-   3. Execute targeted MongoDB update (`$unset: { profileImageUrl, profileImagePublicId }`).
-   4. Execute best-effort deletion of the old image from Cloudinary.
+### 3.2. Deletion Concurrency (`deleteProfilePhoto`)
+1. Read user: if inactive, throw `403 ACCOUNT_INACTIVE`.
+2. If `expectedPublicId` is null/blank, return `204 No Content` immediately.
+3. Pre-schedule cleanup task (`ProfileImageCleanupReason.REMOVED`).
+4. Execute conditional `$unset` matching `_id`, `role == CUSTOMER`, `status == ACTIVE`, and `profileImagePublicId == expectedPublicId`.
+5. If `matchedCount == 1`: execute inline deletion attempt via `ProfileImageCleanupService`.
+6. If `matchedCount == 0`: reload user.
+   - If photo is already null (concurrent remove succeeded): return `204` idempotently.
+   - If photo changed to another image: cancel scheduled cleanup task and throw `409 PROFILE_PHOTO_CONFLICT`.
+
+### 3.3. Durable Cleanup Collection (`profile_image_cleanup`) (F2)
+To guarantee that Cloudinary failures or process crashes never result in permanently orphaned files:
+- **Collection:** `profile_image_cleanup`
+- **Fields:**
+  - `id`: Unique task identifier.
+  - `publicId`: Cloudinary public_id (indexed unique).
+  - `ownerUserId`: Customer ID owning the image.
+  - `reason`: `REPLACED`, `REMOVED`, `UPLOAD_ROLLBACK`, `CONFLICT_ROLLBACK`.
+  - `status`: `PENDING`, `DONE`.
+  - `attempts`: Number of deletion attempts (starts at 0).
+  - `createdAt`: Timestamp when scheduled.
+  - `lastAttemptAt`: Timestamp of latest attempt.
+  - `lastErrorClass`: Simple class name of last error (never logs tokens, URLs, or secrets).
+- **Critical Safety Check in `retryPending(batchSize)`:**
+  Before executing `storage.delete(publicId)`, the service queries the `users` collection to verify that `publicId` is NOT currently referenced by ANY user's `profileImagePublicId`. If referenced, it refuses deletion, marks the task `DONE`, and logs a warning.
 
 ---
 
-## 4. Payments Page Field Mapping
+## 4. Payments Page Field Mapping & Contract (F4)
 
-Under `/account/payments`, the payments table displays customer payment and refund history:
-- **Date Column:** Shows `paidAt` formatted as `DD MMM YYYY` (e.g. `12 Oct 2026`). If `paidAt` is null (e.g. pending/failed payments), displays `'—'`.
-- **Receipt Cell:** Displays `receiptReference` as text (or `'—'` if null). Retains the disabled `View receipt` button (`data-testid="Link_ViewReceipt"` with `title="Not available yet"`).
-- **Refund Cell:**
-  - Badges mapped via `refundStatus.js`:
-    - `UNDER_REVIEW` -> "Under review" (warning)
-    - `PROCESSING` -> "Processing" (info)
-    - `COMPLETED` -> "Completed" (success)
-    - `FAILED` -> "Failed" (danger)
-    - Unknown/custom status -> Title-cased label with neutral muted badge
-  - Displays `refundReference` when present.
-  - Displays refunded amount details (e.g. "Refunded 3,000 of 9,500 LKR" or "Requested 12,000 LKR").
-  - Retains the disabled `View refund details >` button (`data-testid="Link_ViewRefundDetails"` with `title="Not available yet"`).
+### 4.1. Customer Payment Contract (`PaymentResponse`)
+Customer payments are queried via `GET /api/v1/payments/me` returning `PaymentPageResponse` containing `List<PaymentResponse>`.
+
+| JSON Field | Java Type | Source in `Payment` Entity | Nullable | Customer UI Rendering |
+| :--- | :--- | :--- | :--- | :--- |
+| `paymentId` | `String` | `payment.getId()` | No | Unique payment identifier |
+| `bookingId` | `String` | `payment.getBookingId()` | No | Associated booking identifier |
+| `amount` | `BigDecimal` | `payment.getAmount()` | No | Formatted currency amount (e.g. `2,500.00 LKR`) |
+| `currency` | `String` | `payment.getCurrency()` | No | Currency symbol/code (defaults to `LKR`) |
+| `status` | `PaymentStatus` | `payment.getStatus()` | No | Primary payment status badge (`CAPTURED`, `INITIATED`, etc.) |
+| `refundedAmount`| `BigDecimal` | `payment.getRefundedAmount()` | Yes | Displays refunded portion (e.g. "Refunded 1,000 of 5,000 LKR") |
+| `createdAt` | `Instant` | `payment.getCreatedAt()` | No | Creation timestamp |
+| `paidAt` | `Instant` | `payment.getPaidAt()` | Yes | Formatted payment date (`DD MMM YYYY`) or `'—'` |
+| `receiptReference` | `String` | `payment.getReceiptReference()` | Yes | Text receipt ID or `'—'`, with disabled receipt action |
+| `refundReference` | `String` | `payment.getRefundReference()` | Yes | Refund tracking ID or `'—'`, with disabled details action |
+| `refundStatus` | `String` | `payment.getRefundStatus()` | Yes | Badge mapped via `refundStatus.js` (see mapping table below) |
+
+*Internal fields (`gatewayRef`, `commissionRate`, `commissionAmount`, `updatedAt`) are strictly excluded from `PaymentResponse` and never exposed.*
+
+### 4.2. Refund Status Mapping (`refundStatus.js`)
+WP07 and payment workflow states are mapped to customer-facing badge styles:
+
+| Backend / WP07 State | Display Label | Badge Variant | Note |
+| :--- | :--- | :--- | :--- |
+| `UNDER_REVIEW` | Under review | `warning` | Standard review status |
+| `REQUIRES_RECONCILIATION` | Under review | `warning` | WP07 internal state mapping |
+| `PROCESSING` | Processing | `info` | Standard in-progress refund |
+| `PENDING` | Processing | `info` | WP07 pending refund movement |
+| `COMPLETED` | Completed | `success` | Standard completed refund |
+| `SUCCEEDED` | Completed | `success` | WP07 succeeded status alias |
+| `FAILED` | Failed | `danger` | Refund failure |
+| `REJECTED` | Failed | `danger` | Refund dispute rejection |
+| `CANCELLED` | Cancelled | `muted` | Cancelled refund request |
+| *(Any Unknown String)* | Title Cased String | `muted` | Robust fallback (e.g. `ESCALATED_TO_SUPPORT` -> "Escalated To Support") |
+| `null` / Absent | Fallback to `status` | Varies | Uses `status === 'REFUND_PENDING'` or `PARTIALLY_REFUNDED / REFUNDED` |
 
 ---
 
@@ -96,10 +153,11 @@ Under `/account/payments`, the payments table displays customer payment and refu
 
 ### 5.1. Backend (`application.properties`)
 ```properties
-# Multipart File Upload Limits
-spring.servlet.multipart.max-file-size=5MB
-spring.servlet.multipart.max-request-size=6MB
+# Multipart File Upload Limits (Global servlet limit allows up to 10MB verification documents)
+spring.servlet.multipart.max-file-size=10MB
+spring.servlet.multipart.max-request-size=11MB
 ```
+*(Customer profile photos remain strictly capped at 5 MB by `CloudinaryCustomerProfileImageStorage`).*
 
 ### 5.2. Cloudinary Credentials (`backend/.env`)
 Required environment variables for real Cloudinary integration:
