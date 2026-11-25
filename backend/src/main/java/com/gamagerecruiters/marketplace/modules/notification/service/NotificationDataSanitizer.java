@@ -10,17 +10,14 @@ import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Component;
 
+import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationReason;
+
 @Component
 public class NotificationDataSanitizer {
     private static final Pattern CONVERSATION_ID = Pattern.compile("[A-Za-z0-9_-]{1,64}");
     private static final Pattern REFERENCE = Pattern.compile("[A-Za-z0-9_-]{1,40}");
     private static final Pattern DISTRICT = Pattern.compile("[A-Za-z '-]{1,60}");
     private static final Pattern BOOKING_STATUS = Pattern.compile("[A-Z_]{1,40}");
-    private static final Pattern EMAIL_ADDRESS = Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}");
-    private static final Pattern URL_OR_DOMAIN = Pattern.compile("(?i)(https?://|www\\.|\\b[A-Za-z0-9-]+\\.[A-Za-z]{2,}\\b)");
-    private static final Pattern PHONE_LIKE = Pattern.compile("(?:\\d[\\s.\\-+()\\[\\]]*){7,}");
-    private static final Pattern STREET_ADDRESS = Pattern.compile(
-            "(?i)\\b\\d+\\b(?:\\s+[A-Za-z]+){0,4}\\s+(street|st\\.?|road|rd\\.?|lane|ln\\.?|avenue|ave\\.?|mawatha|mw\\.?|place|drive|floor|apartment|apt\\.?|no\\.?)\\b");
     private static final String[] FORBIDDEN = {"token", "link", "url", "password", "secret", "address", "email", "phone", "key"};
 
     public Map<String, String> sanitize(Map<String, String> source, Consumer<String> droppedKeyLogger) {
@@ -68,7 +65,7 @@ public class NotificationDataSanitizer {
             case "district" -> DISTRICT.matcher(value).matches();
             case "slotStart" -> validSlotStart(value);
             case "bookingStatus" -> BOOKING_STATUS.matcher(value).matches();
-            case "reason" -> validReason(value);
+            case "reason" -> NotificationReason.fromCode(value).isPresent();
             default -> false;
         };
     }
@@ -87,13 +84,4 @@ public class NotificationDataSanitizer {
         }
     }
 
-    private boolean validReason(String value) {
-        if (value.isBlank() || value.length() > 120 || EMAIL_ADDRESS.matcher(value).find()
-                || URL_OR_DOMAIN.matcher(value).find() || PHONE_LIKE.matcher(value).find()
-                || STREET_ADDRESS.matcher(value).find()) {
-            return false;
-        }
-        return value.chars().noneMatch(character -> Character.isISOControl(character)
-                || character == '<' || character == '>');
-    }
 }

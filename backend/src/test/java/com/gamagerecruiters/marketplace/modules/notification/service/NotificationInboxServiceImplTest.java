@@ -8,6 +8,7 @@ import static org.mockito.Mockito.*;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -105,6 +106,33 @@ class NotificationInboxServiceImplTest {
         verify(mongoTemplate).count(countQuery.capture(), eq(Notification.class));
         assertThat(updateQuery.getValue().getQueryObject().toJson()).contains("user-1", "readAt");
         assertThat(countQuery.getValue().getQueryObject().toJson()).contains("user-1", "readAt");
+    }
+
+    @Test void oldFreeTextReasonIsRemovedFromInboxResponseAndText() {
+        String legacyReason = "Please visit Blue House on Temple Road in Nugegoda";
+        Notification notification = notification("notification-1", "user-1", null);
+        notification.setType(NotificationType.BOOKING_REQUEST_RECEIVED);
+        notification.setData(Map.of("reason", legacyReason, "district", "Nugegoda"));
+        when(repository.findByUserId(eq("user-1"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(notification)));
+
+        var response = service.listMine(false, 0, 20).content().get(0);
+
+        assertThat(response.data()).doesNotContainKey("reason");
+        assertThat(response.data()).containsOnly(Map.entry("district", "Nugegoda"));
+        assertThat(response.title()).doesNotContain(legacyReason);
+        assertThat(response.message()).doesNotContain(legacyReason);
+        assertThat(response.message()).contains("Nugegoda");
+    }
+
+    @Test void validReasonCodeIsRetainedInInboxResponse() {
+        Notification notification = notification("notification-1", "user-1", null);
+        notification.setData(Map.of("reason", "PROVIDER_UNAVAILABLE"));
+        when(repository.findByUserId(eq("user-1"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(notification)));
+
+        var response = service.listMine(false, 0, 20).content().get(0);
+
+        assertThat(response.data()).containsEntry("reason", "PROVIDER_UNAVAILABLE");
+        assertThat(response.message()).contains("The provider is unavailable at that time.");
     }
 
     private static Notification notification(String id, String userId, Instant readAt) { Notification notification = new Notification(); notification.setId(id); notification.setUserId(userId); notification.setType(NotificationType.BOOKING_CONFIRMED); notification.setCreatedAt(Instant.now()); notification.setReadAt(readAt); return notification; }

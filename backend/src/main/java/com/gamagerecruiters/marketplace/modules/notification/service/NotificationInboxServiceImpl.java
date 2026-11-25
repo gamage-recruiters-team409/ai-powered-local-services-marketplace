@@ -1,7 +1,9 @@
 package com.gamagerecruiters.marketplace.modules.notification.service;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -17,6 +19,7 @@ import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.notification.domain.Notification;
+import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationReason;
 import com.gamagerecruiters.marketplace.modules.notification.dto.NotificationPageResponse;
 import com.gamagerecruiters.marketplace.modules.notification.dto.NotificationResponse;
 import com.gamagerecruiters.marketplace.modules.notification.repository.NotificationRepository;
@@ -63,7 +66,14 @@ public class NotificationInboxServiceImpl implements NotificationInboxService {
     }
     private NotificationResponse response(Notification notification) {
         NotificationText text = textBuilder.build(notification.getType(), notification.getData());
+        Map<String, String> responseData = sanitizedResponseData(notification.getData());
         return new NotificationResponse(notification.getId(), notification.getType(), text.title(), text.message(), notification.getBookingId(),
-                notification.getData(), notification.getCreatedAt(), notification.getReadAt(), notification.getReadAt() != null);
+                responseData, notification.getCreatedAt(), notification.getReadAt(), notification.getReadAt() != null);
+    }
+    private Map<String, String> sanitizedResponseData(Map<String, String> data) {
+        if (data == null) return null;
+        Map<String, String> responseData = new LinkedHashMap<>(data);
+        if (!NotificationReason.fromCode(responseData.get("reason")).isPresent()) responseData.remove("reason");
+        return responseData;
     }
 }

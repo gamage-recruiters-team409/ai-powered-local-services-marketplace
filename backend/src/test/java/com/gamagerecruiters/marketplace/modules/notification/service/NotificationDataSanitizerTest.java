@@ -48,7 +48,7 @@ class NotificationDataSanitizerTest {
                 "reference", " BK-2026-0001 ",
                 "slotStart", " 2026-11-30T09:00:00Z ",
                 "bookingStatus", " CONFIRMED ",
-                "reason", " Provider is unavailable ",
+                "reason", " PROVIDER_UNAVAILABLE ",
                 "conversationId", "conversation_1-2");
 
         Map<String, String> result = sanitizer.sanitize(data, key -> { });
@@ -57,7 +57,7 @@ class NotificationDataSanitizerTest {
         assertEquals("BK-2026-0001", result.get("reference"));
         assertEquals("2026-11-30T09:00:00Z", result.get("slotStart"));
         assertEquals("CONFIRMED", result.get("bookingStatus"));
-        assertEquals("Provider is unavailable", result.get("reason"));
+        assertEquals("PROVIDER_UNAVAILABLE", result.get("reason"));
         assertEquals("conversation_1-2", result.get("conversationId"));
     }
 
@@ -76,6 +76,23 @@ class NotificationDataSanitizerTest {
         assertTrue(result.isEmpty());
         for (String reason : List.of("Call +94 77 123 4567", "Contact person@example.com",
                 "See https://example.com", "See www.example.com", "See example.com", "Reference 1234567")) {
+            assertTrue(sanitizer.sanitize(Map.of("reason", reason), key -> { }).isEmpty());
+        }
+    }
+
+    @Test
+    void acceptsEachControlledReasonCode() {
+        for (String reason : List.of("PROVIDER_UNAVAILABLE", "CUSTOMER_REQUEST", "PROVIDER_REQUEST",
+                "SCHEDULE_CONFLICT", "OUTSIDE_SERVICE_AREA", "PAYMENT_ISSUE", "NO_RESPONSE",
+                "POLICY_VIOLATION", "OTHER")) {
+            assertEquals(Map.of("reason", reason), sanitizer.sanitize(Map.of("reason", reason), key -> { }));
+        }
+    }
+
+    @Test
+    void dropsFreeTextAndInvalidReasonCodes() {
+        for (String reason : List.of("Please visit my home at Blue House on Temple Road in Nugegoda",
+                "Provider is unavailable", "provider_unavailable", "OTHER near the temple", "", " ")) {
             assertTrue(sanitizer.sanitize(Map.of("reason", reason), key -> { }).isEmpty());
         }
     }

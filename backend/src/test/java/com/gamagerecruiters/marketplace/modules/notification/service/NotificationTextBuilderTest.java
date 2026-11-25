@@ -7,6 +7,7 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
+import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationReason;
 import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationType;
 
 class NotificationTextBuilderTest {
@@ -41,5 +42,31 @@ class NotificationTextBuilderTest {
         assertFalse(text.message().contains("123"));
         assertFalse(text.title().contains("@"));
         assertFalse(text.message().contains("@"));
+    }
+
+    @Test
+    void validReasonCodeAppendsItsFixedPlatformLabel() {
+        NotificationText text = builder.build(NotificationType.BOOKING_CONFIRMED,
+                Map.of("reason", "PROVIDER_UNAVAILABLE"));
+
+        assertTrue(text.message().contains(NotificationReason.PROVIDER_UNAVAILABLE.label()));
+        assertFalse(text.message().contains("PROVIDER_UNAVAILABLE"));
+    }
+
+    @Test
+    void legacyRawReasonNeverAppearsInNotificationText() {
+        String legacyReason = "Please visit Blue House on Temple Road in Nugegoda";
+        NotificationText text = builder.build(NotificationType.BOOKING_CONFIRMED, Map.of("reason", legacyReason));
+
+        assertFalse(text.title().contains(legacyReason));
+        assertFalse(text.message().contains(legacyReason));
+    }
+
+    @Test
+    void unknownReasonCodeDoesNotAppendStoredValue() {
+        String unknownReason = "OTHER near the temple";
+        NotificationText text = builder.build(NotificationType.BOOKING_CONFIRMED, Map.of("reason", unknownReason));
+
+        assertFalse(text.message().contains(unknownReason));
     }
 }

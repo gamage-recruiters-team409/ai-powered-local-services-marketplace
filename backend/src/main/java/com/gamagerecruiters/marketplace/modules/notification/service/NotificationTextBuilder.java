@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.notification.service;
 
 import java.util.Map;
 import org.springframework.stereotype.Component;
+import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationReason;
 import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationType;
 
 @Component
@@ -59,7 +60,8 @@ public class NotificationTextBuilder {
         if (data == null) return "";
         StringBuilder result = new StringBuilder();
         append(result, "district", data.get("district")); append(result, "slotStart", data.get("slotStart"));
-        append(result, "reference", data.get("reference")); append(result, "reason", data.get("reason"));
+        append(result, "reference", data.get("reference"));
+        NotificationReason.fromCode(data.get("reason")).ifPresent(reason -> append(result, "reason", reason.label()));
         return result.toString();
     }
     private void append(StringBuilder result, String name, String value) { if (value != null && !value.isBlank()) result.append(' ').append(name).append(": ").append(value).append('.'); }
