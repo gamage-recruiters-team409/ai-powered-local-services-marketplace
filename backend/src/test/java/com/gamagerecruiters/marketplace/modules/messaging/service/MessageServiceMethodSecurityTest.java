@@ -31,6 +31,7 @@ import com.gamagerecruiters.marketplace.modules.messaging.domain.Message;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.MessageStatus;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
+import com.gamagerecruiters.marketplace.modules.notification.service.NotificationService;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.Conversation;
 import com.gamagerecruiters.marketplace.modules.messaging.domain.FlagSource;
 import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePageResponse;
@@ -54,7 +55,8 @@ class MessageServiceMethodSecurityTest {
                                           MessageRepository messageRepository,
                                           AdminAccessPolicyService policy,
                                           MongoTemplate mongoTemplate) {
-            return new MessageServiceImpl(bookingFacade, conversationRepository, messageRepository, policy, mongoTemplate);
+            return new MessageServiceImpl(bookingFacade, conversationRepository, messageRepository, policy, mongoTemplate,
+                    org.mockito.Mockito.mock(NotificationService.class));
         }
     }
 
