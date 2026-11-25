@@ -57,7 +57,7 @@ All endpoints require authentication with the `CUSTOMER` role (`hasRole('CUSTOME
 
 ## 3. Order of Operations, Concurrency & Durable Cleanup
 
-### 3.1. Optimistic Concurrency Control (F1)
+### 3.1. Optimistic Concurrency Control & Uncertain Write Handling (F1, F4)
 To prevent concurrent requests from clobbering newer photos or creating orphaned Cloudinary images:
 1. **Initial Read:** The service reads the user document and records `expectedOldPublicId` (`null` if no photo exists).
 2. **Pre-Schedule Cleanup:** If `expectedOldPublicId` is present, a cleanup task (`ProfileImageCleanupReason.REPLACED`) is scheduled in MongoDB (`profile_image_cleanup`) in `PENDING` status before executing the DB write.
@@ -71,27 +71,31 @@ To prevent concurrent requests from clobbering newer photos or creating orphaned
    ```
    *(Note: `Criteria.is(null)` matches both null and missing fields in MongoDB).*
 5. **Update Verification (`matchedCount`):**
-   - **`matchedCount == 1`:** DB update succeeded. Immediate inline deletion of `expectedOldPublicId` is attempted via `ProfileImageCleanupService.attempt(task)`.
+   - **`matchedCount == 1` (Success):** DB update succeeded. Re-asserts the old image cleanup task via `schedule(...)` and attempts deletion via `ProfileImageCleanupService.attempt(oldCleanupTask)`.
    - **`matchedCount == 0` (Conflict/State Change):**
-     * Immediately roll back newly uploaded image via `ProfileImageCleanupReason.CONFLICT_ROLLBACK`.
-     * Cancel/delete the pending cleanup task for `expectedOldPublicId` (the old photo was not replaced).
+     * Immediately roll back newly uploaded image via `schedule(stored.publicId(), customerId, CONFLICT_ROLLBACK)` and call `attempt(rollbackTask)`.
+     * Pre-existing cleanup tasks for `expectedOldPublicId` are NEVER cancelled (F4: losing requests never cancel cleanup tasks; reference check marks them DONE safely if still referenced).
      * Reload user: if status is inactive, throw `403 ACCOUNT_INACTIVE`. If `profileImagePublicId != expectedOldPublicId`, throw `409 PROFILE_PHOTO_CONFLICT` ("Your profile photo was changed by another request. Please retry.").
-6. **Exception on DB Operation:**
-   * Roll back newly uploaded image via `ProfileImageCleanupReason.UPLOAD_ROLLBACK`.
-   * Cancel scheduled cleanup task for `expectedOldPublicId`.
-   * Log exception class name only and throw `503 PROFILE_PHOTO_UPDATE_FAILED`.
+6. **Exception on DB Operation (Uncertain Outcome Handling - F1):**
+   - When `mongoTemplate.updateFirst` throws an exception, the write outcome is treated as UNCERTAIN.
+   - Schedule (idempotently) a cleanup task for the new image with reason `UPLOAD_ROLLBACK`.
+   - Perform a targeted verification read for the user's `profileImagePublicId`:
+     * **Read fails:** The task remains `PENDING` (no deletion), and `503 PROFILE_PHOTO_UPDATE_FAILED` is thrown.
+     * **`current == new publicId`:** The write actually committed. Treat as SUCCESS: do not delete the new image, run normal replace follow-up (re-assert and attempt cleanup of old photo), and return success response.
+     * **`current != new publicId`:** The new image was not referenced; the safe cleanup path attempts deletion of the new image, and `503 PROFILE_PHOTO_UPDATE_FAILED` is thrown.
 
 ### 3.2. Deletion Concurrency (`deleteProfilePhoto`)
 1. Read user: if inactive, throw `403 ACCOUNT_INACTIVE`.
 2. If `expectedPublicId` is null/blank, return `204 No Content` immediately.
 3. Pre-schedule cleanup task (`ProfileImageCleanupReason.REMOVED`).
 4. Execute conditional `$unset` matching `_id`, `role == CUSTOMER`, `status == ACTIVE`, and `profileImagePublicId == expectedPublicId`.
-5. If `matchedCount == 1`: execute inline deletion attempt via `ProfileImageCleanupService`.
+5. If `matchedCount == 1`: re-assert task with `schedule(...)` and execute inline deletion attempt via `ProfileImageCleanupService.attempt(...)`.
 6. If `matchedCount == 0`: reload user.
    - If photo is already null (concurrent remove succeeded): return `204` idempotently.
-   - If photo changed to another image: cancel scheduled cleanup task and throw `409 PROFILE_PHOTO_CONFLICT`.
+   - If photo changed to another image: throw `409 PROFILE_PHOTO_CONFLICT`. (No cancel calls).
+7. If an exception occurs on DB unset: log warning and throw `503 PROFILE_PHOTO_DELETE_FAILED` without cancelling cleanup tasks.
 
-### 3.3. Durable Cleanup Collection (`profile_image_cleanup`) (F2)
+### 3.3. Durable Cleanup Collection (`profile_image_cleanup`) & Background Job (F2, F3)
 To guarantee that Cloudinary failures or process crashes never result in permanently orphaned files:
 - **Collection:** `profile_image_cleanup`
 - **Fields:**
@@ -104,8 +108,27 @@ To guarantee that Cloudinary failures or process crashes never result in permane
   - `createdAt`: Timestamp when scheduled.
   - `lastAttemptAt`: Timestamp of latest attempt.
   - `lastErrorClass`: Simple class name of last error (never logs tokens, URLs, or secrets).
-- **Critical Safety Check in `retryPending(batchSize)`:**
-  Before executing `storage.delete(publicId)`, the service queries the `users` collection to verify that `publicId` is NOT currently referenced by ANY user's `profileImagePublicId`. If referenced, it refuses deletion, marks the task `DONE`, and logs a warning.
+  - `nextAttemptAt`: Timestamp for next eligible attempt (for exponential backoff).
+  - `leaseUntil`: Distributed lease expiration timestamp for multi-instance safety.
+- **Indexes:**
+  - `publicId` (unique)
+  - `(status, nextAttemptAt)` compound index for efficient task claiming.
+- **Core Invariant & Reference Safety Proof:**
+  A cleanup task NEVER authorizes deletion by itself. Before deleting ANY Cloudinary image, `ProfileImageCleanupService` queries the `users` collection:
+  - If query fails/throws: task stays `PENDING` with `lastErrorClass = "ReferenceCheckFailed"`, backoff applied, returns false.
+  - If referenced by any user: marked `DONE` with `lastErrorClass = "ReferencedByUser"`, no deletion performed.
+  - If genuinely unreferenced: `storage.delete(publicId)` is called. If true -> `DONE`; if false/exception -> stays `PENDING` with exponential backoff (`now + min(2^attempts minutes, 6 hours)`).
+- **Multi-Instance Lease Claiming:**
+  Both `attempt(...)` and the background recovery job use atomic `findAndModify` to claim tasks:
+  `findAndModify(status=PENDING && nextAttemptAt<=now && (leaseUntil is null || leaseUntil<now)) -> set leaseUntil=now+lease, attempts++`.
+  Expired leases allow crashed instances' tasks to be claimed by surviving nodes.
+- **Atomic Scheduling (`schedule`):**
+  Uses `findAndModify` with `upsert=true` and `$setOnInsert`. Catches `DuplicateKeyException` to safely re-read the existing document. If the task is `DONE`, it re-opens it to `PENDING` (`status=PENDING`, `nextAttemptAt=now`, unset `leaseUntil`).
+- **Production Recovery Job (`ProfileImageCleanupJob`):**
+  - Enabled via `@Profile("!test")` and `@ConditionalOnProperty("app.customer.profile-image-cleanup.enabled")`.
+  - Runs with fixed delay (`PT5M`, default) and initial delay (`PT1M`, default).
+  - Processes up to `batch-size` (default 25) pending tasks per execution.
+  - Enabled through `ProfileImageCleanupSchedulingConfig` (`@EnableScheduling`).
 
 ---
 
@@ -156,6 +179,13 @@ WP07 and payment workflow states are mapped to customer-facing badge styles:
 # Multipart File Upload Limits (Global servlet limit allows up to 10MB verification documents)
 spring.servlet.multipart.max-file-size=10MB
 spring.servlet.multipart.max-request-size=11MB
+
+# Customer Profile Image Background Cleanup Job
+app.customer.profile-image-cleanup.enabled=true
+app.customer.profile-image-cleanup.interval=PT5M
+app.customer.profile-image-cleanup.initial-delay=PT1M
+app.customer.profile-image-cleanup.batch-size=25
+app.customer.profile-image-cleanup.lease=PT2M
 ```
 *(Customer profile photos remain strictly capped at 5 MB by `CloudinaryCustomerProfileImageStorage`).*
 

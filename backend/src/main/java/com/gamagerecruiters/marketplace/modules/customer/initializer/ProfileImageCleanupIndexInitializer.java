@@ -27,6 +27,7 @@ public class ProfileImageCleanupIndexInitializer {
     public static final String COLLECTION_NAME = "profile_image_cleanup";
     public static final String PUBLIC_ID_UNIQUE_INDEX_NAME = "publicId_1_unique";
     public static final String STATUS_CREATED_INDEX_NAME = "status_1_createdAt_1";
+    public static final String STATUS_NEXT_ATTEMPT_INDEX_NAME = "status_1_nextAttemptAt_1";
 
     private final MongoTemplate mongoTemplate;
 
@@ -44,6 +45,7 @@ public class ProfileImageCleanupIndexInitializer {
 
         initPublicIdUniqueIndex(collection);
         initStatusCreatedIndex(collection);
+        initStatusNextAttemptIndex(collection);
 
         log.info("profile_image_cleanup collection indexes verified successfully.");
     }
@@ -115,6 +117,33 @@ public class ProfileImageCleanupIndexInitializer {
         }
     }
 
+    public void initStatusNextAttemptIndex(MongoCollection<Document> collection) {
+        try {
+            for (Document indexDoc : collection.listIndexes()) {
+                String indexName = indexDoc.getString("name");
+                Document key = indexDoc.get("key", Document.class);
+
+                if (isStatusNextAttemptKey(key) || STATUS_NEXT_ATTEMPT_INDEX_NAME.equals(indexName)) {
+                    log.info("Index verified: profile_image_cleanup status+nextAttemptAt -> existing '{}' matches expected specification.", indexName);
+                    return;
+                }
+            }
+
+            @SuppressWarnings("removal")
+            String result = mongoTemplate.indexOps(ProfileImageCleanupTask.class).ensureIndex(
+                    new Index()
+                            .on("status", Sort.Direction.ASC)
+                            .on("nextAttemptAt", Sort.Direction.ASC)
+                            .named(STATUS_NEXT_ATTEMPT_INDEX_NAME)
+            );
+            log.info("Index created: profile_image_cleanup status+nextAttemptAt -> '{}'", result != null ? result : STATUS_NEXT_ATTEMPT_INDEX_NAME);
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Startup failed: Unable to create required index '" + STATUS_NEXT_ATTEMPT_INDEX_NAME + "' on profile_image_cleanup collection.", e
+            );
+        }
+    }
+
     private boolean isPublicIdKey(Document key) {
         if (key == null) return false;
         return key.size() == 1 && Integer.valueOf(1).equals(key.get("publicId"));
@@ -125,6 +154,13 @@ public class ProfileImageCleanupIndexInitializer {
         return key.size() == 2
                 && Integer.valueOf(1).equals(key.get("status"))
                 && Integer.valueOf(1).equals(key.get("createdAt"));
+    }
+
+    private boolean isStatusNextAttemptKey(Document key) {
+        if (key == null) return false;
+        return key.size() == 2
+                && Integer.valueOf(1).equals(key.get("status"))
+                && Integer.valueOf(1).equals(key.get("nextAttemptAt"));
     }
 
     private boolean isUniqueTrue(Document indexDoc) {

@@ -12,6 +12,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
  */
 @Document(collection = "profile_image_cleanup")
 @CompoundIndex(name = "status_1_createdAt_1", def = "{'status': 1, 'createdAt': 1}")
+@CompoundIndex(name = "status_1_nextAttemptAt_1", def = "{'status': 1, 'nextAttemptAt': 1}")
 public class ProfileImageCleanupTask {
 
     @Id
@@ -29,6 +30,10 @@ public class ProfileImageCleanupTask {
     private int attempts = 0;
 
     private Instant createdAt = Instant.now();
+
+    private Instant nextAttemptAt = Instant.now();
+
+    private Instant leaseUntil;
 
     private Instant lastAttemptAt;
 
@@ -48,6 +53,7 @@ public class ProfileImageCleanupTask {
         this.status = ProfileImageCleanupStatus.PENDING;
         this.attempts = 0;
         this.createdAt = Instant.now();
+        this.nextAttemptAt = this.createdAt;
     }
 
     public String getId() {
@@ -120,5 +126,21 @@ public class ProfileImageCleanupTask {
 
     public void setLastErrorClass(String lastErrorClass) {
         this.lastErrorClass = lastErrorClass;
+    }
+
+    public Instant getNextAttemptAt() {
+        return nextAttemptAt;
+    }
+
+    public void setNextAttemptAt(Instant nextAttemptAt) {
+        this.nextAttemptAt = nextAttemptAt;
+    }
+
+    public Instant getLeaseUntil() {
+        return leaseUntil;
+    }
+
+    public void setLeaseUntil(Instant leaseUntil) {
+        this.leaseUntil = leaseUntil;
     }
 }
