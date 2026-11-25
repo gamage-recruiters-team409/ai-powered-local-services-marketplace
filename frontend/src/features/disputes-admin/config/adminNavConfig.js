@@ -66,7 +66,7 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
   // ---------- Finance Admin ----------
   { id: 'finance.dashboard', area: FINANCE_ADMIN, section: null, label: 'Dashboard', path: '', icon: 'dashboard', description: 'Overview of platform finances' },
   { id: 'finance.transactions', area: FINANCE_ADMIN, section: 'Finance', label: 'Transactions', path: 'transactions', icon: 'creditCard', description: 'Payment transactions' },
-  { id: 'finance.payout-queue', area: FINANCE_ADMIN, section: 'Finance', label: 'Payout queue', path: 'payout-queue', icon: 'clock', description: 'Pending and on-hold provider payouts' },
+  { id: 'finance.payout-queue', area: FINANCE_ADMIN, section: 'Finance', label: 'Payout queue', path: 'payout-queue', icon: 'clock', description: 'Monitor and manage provider payouts', page: lazy(() => import('../../payments-earnings/pages/AdminPayoutQueuePage')) },
   { id: 'finance.refunds', area: FINANCE_ADMIN, section: 'Finance', label: 'Refunds', path: 'refunds', icon: 'refund', description: 'Refund requests and history' },
   { id: 'finance.reports', area: FINANCE_ADMIN, section: 'Insights', label: 'Reports', path: 'reports', icon: 'reports', description: 'Finance reports and reconciliation export' },
 ])

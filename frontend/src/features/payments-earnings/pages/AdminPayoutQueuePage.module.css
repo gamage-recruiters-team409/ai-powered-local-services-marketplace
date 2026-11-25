@@ -1,0 +1,206 @@
+/**
+ * WP07 - Finance Admin Payout Queue
+ *
+ * Uses the existing admin design tokens to maintain visual
+ * consistency across the administration workspace.
+ */
+
+/* Main page layout. */
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+  color: var(--adm-text, #1e293b);
+  font-family: var(--adm-font, system-ui, sans-serif);
+}
+
+/* Page heading and refresh controls. */
+.pageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.pageHeader h1 {
+  margin: 0;
+  color: var(--adm-heading, #0f172a);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.pageHeader p {
+  margin: 8px 0 0;
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* Payout queue content panel. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 24px;
+  background: var(--adm-surface, #ffffff);
+  border: 1px solid var(--adm-border, #e2e8f0);
+  border-radius: var(--adm-radius-lg, 12px);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+/* Queue heading and server-provided record count. */
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.sectionHeader h2 {
+  margin: 0;
+  color: var(--adm-heading, #0f172a);
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.recordCount {
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Modal content and financial record details. */
+.modalContent {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.detailsList {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1.2fr);
+  align-items: start;
+  gap: 14px 20px;
+  margin: 0;
+}
+
+.detailsList dt {
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.detailsList dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--adm-heading, #0f172a);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Groups lifecycle actions without changing shared button styles. */
+.actionGroup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+/* Explicit confirmation area for financial state transitions. */
+.confirmationPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  background: var(--adm-warning-bg, #fffbeb);
+  border: 1px solid var(--adm-warning-border, #fcd34d);
+  border-radius: var(--adm-radius-md, 10px);
+}
+
+.confirmationPanel h3 {
+  margin: 0;
+  color: var(--adm-warning-text, #92400e);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.confirmationPanel p {
+  margin: 0;
+  color: var(--adm-text, #1e293b);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.confirmationPanel .confirmationAmount {
+  color: var(--adm-heading, #0f172a);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Preserve visible keyboard focus for interactive controls. */
+.container :focus-visible,
+.modalContent :focus-visible {
+  outline: 2px solid var(--adm-focus, #0f766e);
+  outline-offset: 3px;
+}
+
+/* Tablet and mobile layout adjustments. */
+@media (max-width: 768px) {
+  .container {
+    gap: 20px;
+  }
+
+  .panel {
+    padding: 16px;
+  }
+
+  .pageHeader h1 {
+    font-size: 1.375rem;
+  }
+}
+
+/* Stack financial details on narrow mobile screens. */
+@media (max-width: 480px) {
+  .container {
+    gap: 16px;
+  }
+
+  .pageHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .panel,
+  .confirmationPanel {
+    padding: 14px;
+  }
+
+  .detailsList {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .detailsList dd {
+    margin-bottom: 10px;
+  }
+
+  .actionGroup {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .actionGroup > button {
+    width: 100%;
+  }
+}

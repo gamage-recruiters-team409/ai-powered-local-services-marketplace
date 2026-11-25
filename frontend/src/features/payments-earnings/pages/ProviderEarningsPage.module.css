@@ -1,0 +1,291 @@
+/*
+ * WP07 - Provider Earnings and Payouts
+ *
+ * Feature-scoped styles for the provider financial dashboard.
+ * Reuses the approved LocalServe provider design tokens.
+ *
+ * Shared form controls, tables, badges, alerts and dialogs
+ * retain their existing component-level styling.
+ */
+
+/* =========================================
+   PAGE CONTAINER
+   ========================================= */
+
+/* Maintains consistent spacing between financial sections. */
+.container {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    color: var(--prv-color-text);
+    font-family: var(--prv-font, inherit);
+}
+
+/* =========================================
+   SECTION HEADINGS
+   ========================================= */
+
+/* Keeps the section title and refresh action aligned. */
+.sectionHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    min-width: 0;
+}
+
+/* Overrides global heading sizes within this feature only. */
+.sectionHeader h2,
+.panel h2 {
+    margin: 0;
+    color: var(--prv-color-heading);
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1.4;
+    letter-spacing: normal;
+}
+
+/* =========================================
+   EARNINGS SUMMARY
+   ========================================= */
+
+/* Displays the four financial balances in a responsive grid. */
+.earningsGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit,
+            minmax(min(100%, 220px), 1fr));
+    gap: 16px;
+    min-width: 0;
+}
+
+/* Uses the approved provider surface, border and radius tokens. */
+.earningsCard {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+    padding: 20px;
+    background: var(--prv-color-surface);
+    border: 1px solid var(--prv-color-border);
+    border-radius: var(--prv-radius-lg);
+    box-shadow: var(--prv-shadow);
+    box-sizing: border-box;
+}
+
+/* Highlights available earnings using the existing primary palette. */
+.earningsCard:nth-child(2) {
+    background: var(--prv-color-primary-soft);
+    border-color: var(--prv-color-primary-border);
+}
+
+/* Uses readable body text instead of low-contrast muted labels. */
+.cardLabel {
+    color: var(--prv-color-text);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+/* Keeps financial values prominent and prevents long amounts overflowing. */
+.cardAmount {
+    display: block;
+    max-width: 100%;
+    color: var(--prv-color-heading);
+    font-size: clamp(1.125rem, 2vw, 1.5rem);
+    font-weight: 700;
+    line-height: 1.3;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+/* Emphasises the available balance without relying on colour alone. */
+.earningsCard:nth-child(2) .cardAmount {
+    color: var(--prv-color-primary-dark);
+}
+
+/* Explains the meaning of each backend-provided balance. */
+.cardDescription {
+    margin: 0;
+    color: var(--prv-color-text);
+    font-size: 0.8125rem;
+    line-height: 1.6;
+}
+
+/* =========================================
+   FINANCIAL PANELS
+   ========================================= */
+
+/* Shared visual structure for payout requests and payout history. */
+.panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+    min-width: 0;
+    padding: 24px;
+    background: var(--prv-color-surface);
+    border: 1px solid var(--prv-color-border);
+    border-radius: var(--prv-radius-lg);
+    box-shadow: var(--prv-shadow);
+    box-sizing: border-box;
+}
+
+/* Supporting instructions for financial operations. */
+.description {
+    margin: 0;
+    color: var(--prv-color-text);
+    font-size: 0.875rem;
+    line-height: 1.6;
+}
+
+/* =========================================
+   PAYOUT REQUEST FORM
+   ========================================= */
+
+/*
+ * Keeps the amount input and submit action in a compact form.
+ * Validation and disabled states are handled by shared components.
+ */
+.payoutForm {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    width: 100%;
+    max-width: 440px;
+    min-width: 0;
+    margin: 4px 0 0;
+}
+
+/* Allows the shared input wrapper to occupy the available form width. */
+.payoutForm> :first-child {
+    width: 100%;
+    min-width: 0;
+}
+
+/* =========================================
+   PAYOUT DETAILS
+   ========================================= */
+
+/* Displays payout metadata as accessible label-value pairs. */
+.detailsList {
+    display: grid;
+    grid-template-columns: minmax(100px, 0.8fr) minmax(0, 1.2fr);
+    gap: 12px 20px;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    font-family: var(--prv-font, inherit);
+    font-size: 0.875rem;
+    line-height: 1.6;
+}
+
+/* Financial field labels use the existing provider text colour. */
+.detailsList dt {
+    margin: 0;
+    color: var(--prv-color-text);
+    font-weight: 600;
+}
+
+/* Long payout identifiers and timestamps must wrap safely. */
+.detailsList dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--prv-color-heading);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+}
+
+/* =========================================
+   ACCESSIBILITY
+   ========================================= */
+
+/* Preserves visible keyboard focus within the financial feature. */
+.container :focus-visible {
+    outline: 2px solid var(--prv-color-focus);
+    outline-offset: 2px;
+}
+
+/* =========================================
+   RESPONSIVE LAYOUT
+   ========================================= */
+
+/* Reduces panel spacing on tablet and smaller desktop layouts. */
+@media (max-width: 1024px) {
+    .container {
+        gap: 20px;
+    }
+
+    .panel {
+        padding: 20px;
+    }
+
+    .earningsCard {
+        padding: 18px;
+    }
+}
+
+/* Adapts financial content to narrow mobile viewports. */
+@media (max-width: 640px) {
+    .container {
+        gap: 16px;
+    }
+
+    .earningsGrid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+    }
+
+    .earningsCard {
+        gap: 8px;
+        padding: 14px;
+    }
+
+    .panel {
+        gap: 14px;
+        padding: 16px;
+    }
+
+    .cardAmount {
+        font-size: 1.125rem;
+    }
+
+    .cardDescription {
+        font-size: 0.75rem;
+    }
+
+    .payoutForm {
+        max-width: none;
+    }
+
+    /* Provides a full-width payout action on mobile devices. */
+    .payoutForm>button {
+        width: 100%;
+    }
+
+    .detailsList {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+    }
+
+    .detailsList dd {
+        margin-bottom: 12px;
+    }
+
+    .detailsList dd:last-child {
+        margin-bottom: 0;
+    }
+}
+
+/* Prevents crowded financial cards on very narrow screens. */
+@media (max-width: 380px) {
+    .earningsGrid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
