@@ -1,7 +1,16 @@
 package com.gamagerecruiters.marketplace.modules.verification.service;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
@@ -15,6 +24,7 @@ import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProf
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification;
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerificationStatus;
 import com.gamagerecruiters.marketplace.modules.verification.domain.VerificationDocument;
+import com.gamagerecruiters.marketplace.modules.verification.domain.VerificationDocumentType;
 import com.gamagerecruiters.marketplace.modules.verification.dto.ProviderVerificationResponse;
 import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
 import com.gamagerecruiters.marketplace.modules.verification.repository.VerificationDocumentRepository;
@@ -23,9 +33,15 @@ import com.gamagerecruiters.marketplace.modules.verification.repository.Verifica
 public class ProviderVerificationServiceImpl
         implements ProviderVerificationService {
 
+    private static final ZoneId MARKETPLACE_ZONE =
+            ZoneId.of("Asia/Colombo");
+
     private final ProviderProfileRepository providerProfileRepository;
+
     private final VerificationDocumentRepository verificationDocumentRepository;
+
     private final ProviderVerificationRepository providerVerificationRepository;
+
     private final VerificationAtomicUpdates verificationAtomicUpdates;
 
     public ProviderVerificationServiceImpl(
@@ -42,19 +58,24 @@ public class ProviderVerificationServiceImpl
 
     @Override
     public ProviderVerificationResponse submitMyVerification() {
+
         ProviderProfile providerProfile = requireCurrentProviderProfile();
+
         String providerId = providerProfile.getId();
+
         Instant now = Instant.now();
 
         // Recover expired reservations before reading the revision and documents.
-        // This prevents a recovered reservation from making the first retry stale.
         verificationAtomicUpdates.recoverExpiredUploadReservations(
                 providerId,
                 now
         );
 
         ProviderVerification current =
-                verificationAtomicUpdates.ensureVerificationRecord(providerId, now);
+                verificationAtomicUpdates.ensureVerificationRecord(
+                        providerId,
+                        now
+                );
 
         if (current.getStatus() == ProviderVerificationStatus.SUBMITTED) {
             return toResponse(current);
@@ -73,13 +94,16 @@ public class ProviderVerificationServiceImpl
 
         validateSubmission(current, documents);
 
-        List<String> submittedDocumentIds = documents.stream()
+        List<VerificationDocument> submissionDocuments =
+                resolveSubmissionDocuments(current, documents);
+
+        List<String> submittedDocumentIds = submissionDocuments.stream()
                 .map(VerificationDocument::getId)
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
                 .toList();
 
-        if (submittedDocumentIds.size() != documents.size()) {
+        if (submittedDocumentIds.size() != submissionDocuments.size()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "One or more verification documents could not be identified. Please refresh and try again"
@@ -97,7 +121,6 @@ public class ProviderVerificationServiceImpl
             return toResponse(saved.get());
         }
 
-        // Another submission may have completed while this request was running.
         ProviderVerification latest =
                 providerVerificationRepository.findByProviderId(providerId)
                         .orElseThrow(() -> new ResponseStatusException(
@@ -117,6 +140,7 @@ public class ProviderVerificationServiceImpl
 
     @Override
     public ProviderVerificationResponse getMyVerificationStatus() {
+
         ProviderProfile providerProfile = requireCurrentProviderProfile();
 
         return providerVerificationRepository
@@ -136,6 +160,7 @@ public class ProviderVerificationServiceImpl
             ProviderVerification verification,
             List<VerificationDocument> documents
     ) {
+
         ProviderVerificationStatus status = verification.getStatus();
 
         if (status == null) {
@@ -146,39 +171,266 @@ public class ProviderVerificationServiceImpl
         }
 
         switch (status) {
+
             case NOT_SUBMITTED -> {
                 // Initial submission is allowed.
             }
+
             case REJECTED, RESUBMISSION_REQUESTED -> requireUpdatedDocuments(
                     documents,
                     verification.getReviewedAt()
             );
+
             case EXPIRED -> requireUpdatedDocuments(
                     documents,
-                    verification.getUpdatedAt()
+                    verification.getExpiredAt() != null
+                            ? verification.getExpiredAt()
+                            : verification.getUpdatedAt()
             );
+
             case UNDER_REVIEW -> throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Verification is already under review"
             );
+
             case APPROVED -> throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Your verification is already approved"
             );
+
             case SUSPENDED -> throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Your verification is suspended. Contact support"
             );
+
             case SUBMITTED -> {
-                // Handled before reading the document set.
+                // Already handled before reading the document set.
             }
         }
+    }
+
+    /**
+     * Preserves the existing submission behaviour for normal submissions
+     * and normal rejection/resubmission flows.
+     *
+     * For expiry-related re-verification:
+     * - Keeps previously submitted, still-valid documents.
+     * - Removes expired documents.
+     * - Replaces old documents when a newer document of the same type
+     *   has been uploaded.
+     * - Requires replacement documents for every expired document type.
+     */
+    private List<VerificationDocument> resolveSubmissionDocuments(
+            ProviderVerification verification,
+            List<VerificationDocument> documents
+    ) {
+
+        List<String> recordedExpiredIds =
+                verification.getExpiredDocumentIds();
+
+        boolean expiryReverification =
+                verification.getStatus() == ProviderVerificationStatus.EXPIRED
+                        || !recordedExpiredIds.isEmpty();
+
+        // Preserve existing behaviour outside expiry-related resubmissions.
+        if (!expiryReverification) {
+            return documents;
+        }
+
+        Instant previousDecisionTime;
+
+        if (verification.getStatus() == ProviderVerificationStatus.EXPIRED) {
+
+            previousDecisionTime = verification.getExpiredAt() != null
+                    ? verification.getExpiredAt()
+                    : verification.getUpdatedAt();
+
+        } else {
+
+            previousDecisionTime = verification.getReviewedAt();
+        }
+
+        if (previousDecisionTime == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Previous verification decision timestamp is unavailable"
+            );
+        }
+
+        List<String> previousSnapshotIds =
+                verification.getSubmittedDocumentIds();
+
+        if (previousSnapshotIds == null || previousSnapshotIds.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Previous approved document snapshot is unavailable. Please contact support"
+            );
+        }
+
+        Map<String, VerificationDocument> documentsById =
+                new HashMap<>();
+
+        for (VerificationDocument document : documents) {
+
+            if (document.getId() != null
+                    && !document.getId().isBlank()) {
+
+                documentsById.putIfAbsent(
+                        document.getId(),
+                        document
+                );
+            }
+        }
+
+        LocalDate today = LocalDate.now(MARKETPLACE_ZONE);
+
+        Set<String> expiredIds =
+                new LinkedHashSet<>(recordedExpiredIds);
+
+        // IMPORTANT: The recorded expired IDs are only a snapshot of the
+        // original expiry event. Additional previously approved documents
+        // may expire before this provider actually resubmits.
+        // Revalidate every document in the exact previous submission against
+        // today's date, including documents not in the original expired list.
+        for (String documentId : previousSnapshotIds) {
+
+            VerificationDocument previousDocument =
+                    documentsById.get(documentId);
+
+            if (previousDocument == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "A previously submitted verification document could not be found"
+                );
+            }
+
+            if (previousDocument.getExpiryDate() != null
+                    && !previousDocument.getExpiryDate().isAfter(today)) {
+
+                expiredIds.add(documentId);
+            }
+        }
+
+        if (expiredIds.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Expired document information is unavailable. Please refresh and try again"
+            );
+        }
+
+        Set<VerificationDocumentType> expiredTypes =
+                new HashSet<>();
+
+        for (String expiredId : expiredIds) {
+
+            VerificationDocument expiredDocument =
+                    documentsById.get(expiredId);
+
+            if (expiredDocument == null
+                    || expiredDocument.getDocumentType() == null) {
+
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "An expired verification document could not be identified"
+                );
+            }
+
+            expiredTypes.add(expiredDocument.getDocumentType());
+        }
+
+        // Identify valid replacement documents uploaded after expiry
+        // or after the latest Admin resubmission/rejection decision.
+        List<VerificationDocument> replacementDocuments =
+                documents.stream()
+                        .filter(document ->
+                                document.getUploadedAt() != null
+                                        && document.getUploadedAt()
+                                                .isAfter(previousDecisionTime)
+                        )
+                        .filter(document ->
+                                document.getDocumentType() != null
+                        )
+                        .filter(document ->
+                                document.getExpiryDate() == null
+                                        || document.getExpiryDate()
+                                                .isAfter(today)
+                        )
+                        .toList();
+
+        Set<VerificationDocumentType> replacementTypes =
+                new HashSet<>();
+
+        replacementDocuments.forEach(document ->
+                replacementTypes.add(document.getDocumentType())
+        );
+
+        // Every expired document type must receive a valid replacement.
+        if (!replacementTypes.containsAll(expiredTypes)) {
+
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Upload renewed documents for every expired document type before resubmitting"
+            );
+        }
+
+        // Load the exact previously submitted document snapshot.
+        List<VerificationDocument> previousSnapshot =
+                new ArrayList<>();
+
+        for (String documentId : previousSnapshotIds) {
+
+            VerificationDocument document =
+                    documentsById.get(documentId);
+
+            if (document == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "A previously submitted verification document could not be found"
+                );
+            }
+
+            previousSnapshot.add(document);
+        }
+
+        Map<String, VerificationDocument> selectedDocuments =
+                new LinkedHashMap<>();
+
+        // Preserve valid existing documents that are not being replaced.
+        for (VerificationDocument previousDocument : previousSnapshot) {
+
+            if (expiredIds.contains(previousDocument.getId())) {
+                continue;
+            }
+
+            if (replacementTypes.contains(
+                    previousDocument.getDocumentType()
+            )) {
+                continue;
+            }
+
+            selectedDocuments.put(
+                    previousDocument.getId(),
+                    previousDocument
+            );
+        }
+
+        // Add the new replacement documents.
+        for (VerificationDocument replacement : replacementDocuments) {
+
+            selectedDocuments.put(
+                    replacement.getId(),
+                    replacement
+            );
+        }
+
+        return List.copyOf(selectedDocuments.values());
     }
 
     private void requireUpdatedDocuments(
             List<VerificationDocument> documents,
             Instant previousDecisionTime
     ) {
+
         if (previousDecisionTime == null) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
@@ -189,7 +441,8 @@ public class ProviderVerificationServiceImpl
         boolean hasUpdatedDocument = documents.stream()
                 .anyMatch(document ->
                         document.getUploadedAt() != null
-                                && document.getUploadedAt().isAfter(previousDecisionTime)
+                                && document.getUploadedAt()
+                                        .isAfter(previousDecisionTime)
                 );
 
         if (!hasUpdatedDocument) {
@@ -201,10 +454,13 @@ public class ProviderVerificationServiceImpl
     }
 
     private ProviderProfile requireCurrentProviderProfile() {
+
         String userId = CurrentUser.getUserId();
 
         if (userId == null) {
-            throw new AccessDeniedException("Authentication required");
+            throw new AccessDeniedException(
+                    "Authentication required"
+            );
         }
 
         return providerProfileRepository.findByUserId(userId)
@@ -217,13 +473,20 @@ public class ProviderVerificationServiceImpl
     private ProviderVerificationResponse toResponse(
             ProviderVerification verification
     ) {
+
+        boolean expired =
+                verification.getStatus()
+                        == ProviderVerificationStatus.EXPIRED;
+
         return new ProviderVerificationResponse(
                 verification.getId(),
                 verification.getStatus(),
                 verification.getSubmittedAt(),
                 verification.getReviewedAt(),
                 verification.getDecisionReason(),
-                verification.getUpdatedAt()
+                verification.getUpdatedAt(),
+                expired ? verification.getExpiredAt() : null,
+                expired ? verification.getGracePeriodEndsAt() : null
         );
     }
 }

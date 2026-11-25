@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import org.bson.Document;
 import org.junit.jupiter.api.AfterAll;
@@ -33,13 +34,16 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MongoDBContainer;
 
+import com.gamagerecruiters.marketplace.modules.catalog.domain.Category;
 import com.gamagerecruiters.marketplace.modules.listing.domain.AddOnItem;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ExecutionModel;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ListingStatus;
 import com.gamagerecruiters.marketplace.modules.listing.domain.PricingModel;
 import com.gamagerecruiters.marketplace.modules.listing.domain.ServiceListing;
+import com.gamagerecruiters.marketplace.modules.listing.dto.ListingResponse;
 import com.gamagerecruiters.marketplace.modules.listing.initializer.ListingIndexInitializer;
 import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
+import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
 
 /**
  * Real MongoDB (Testcontainers) integration tests verifying:
@@ -87,6 +91,9 @@ class ListingMongoIntegrationTest {
     private ListingRepository listingRepository;
 
     @Autowired
+    private ListingService listingService;
+
+    @Autowired
     private ListingIndexInitializer indexInitializer;
 
     @Autowired
@@ -95,6 +102,7 @@ class ListingMongoIntegrationTest {
     @BeforeEach
     void cleanData() {
         mongoTemplate.remove(new Query(), ServiceListing.class);
+        mongoTemplate.remove(new Query(), Category.class);
         indexInitializer.initializeIndexes();
     }
 
@@ -211,6 +219,30 @@ class ListingMongoIntegrationTest {
         copyB.setTitle("Concurrent stale edit title update");
         assertThatThrownBy(() -> listingRepository.save(copyB))
                 .isInstanceOf(OptimisticLockingFailureException.class);
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: public search and provider profiles expose ACTIVE listings only")
+    void publicDiscoveryExposesActiveListingsOnly() {
+        Category category = mongoTemplate.insert(
+                new Category("Electrical", "public-discovery-electrical", null, new BigDecimal("0.10")));
+        ServiceListing active = listingRepository.save(sampleListing(
+                "public-provider", category.getId(), ListingStatus.ACTIVE, 79.8612, 6.9271));
+        listingRepository.save(sampleListing(
+                "public-provider", category.getId(), ListingStatus.PAUSED, 79.8612, 6.9271));
+        listingRepository.save(sampleListing(
+                "public-provider", category.getId(), ListingStatus.DRAFT, 79.8612, 6.9271));
+        listingRepository.save(sampleListing(
+                "public-provider", category.getId(), ListingStatus.REJECTED, 79.8612, 6.9271));
+
+        Page<ListingResponse> searchPage = listingService.searchPublicListings(
+                null, null, null, null, Set.of("public-provider"), PageRequest.of(0, 10));
+
+        assertThat(searchPage.getTotalElements()).isEqualTo(1);
+        assertThat(searchPage.getContent()).extracting(ListingResponse::id).containsExactly(active.getId());
+        assertThat(listingService.getPublicListingsByProviderId("public-provider"))
+                .extracting(ListingResponse::id)
+                .containsExactly(active.getId());
     }
 
     private Document findIndex(String indexName) {

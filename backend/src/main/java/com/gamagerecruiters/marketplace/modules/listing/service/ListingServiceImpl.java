@@ -10,12 +10,20 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -61,6 +69,8 @@ public class ListingServiceImpl implements ListingService {
     private static final String BUCKET_LISTING_CREATE = "listing-create";
     private static final int CREATE_RATE_LIMIT_MAX_REQUESTS = 20;
     private static final Duration CREATE_RATE_LIMIT_WINDOW = Duration.ofMinutes(15);
+    private static final Sort RECOMMENDED_LISTING_SORT =
+            Sort.by(Sort.Order.desc("updatedAt"), Sort.Order.asc("id"));
 
     private final ListingRepository listingRepository;
     private final ListingMapper listingMapper;
@@ -70,6 +80,7 @@ public class ListingServiceImpl implements ListingService {
     private final SriLankaDistrictGeoService districtGeoService;
     private final ObjectProvider<CategoryLookupPort> categoryLookupPortProvider;
     private final ObjectProvider<RateLimitService> rateLimitServiceProvider;
+    private final MongoTemplate mongoTemplate;
 
     public ListingServiceImpl(
             ListingRepository listingRepository,
@@ -88,6 +99,30 @@ public class ListingServiceImpl implements ListingService {
                 providerEligibilityChecker,
                 new SriLankaDistrictGeoService(districtCatalog),
                 categoryLookupPortProvider,
+                null,
+                null
+        );
+    }
+
+    public ListingServiceImpl(
+            ListingRepository listingRepository,
+            ListingMapper listingMapper,
+            ListingMediaValidator mediaValidator,
+            ListingContentScreeningService contentScreeningService,
+            ProviderEligibilityChecker providerEligibilityChecker,
+            SriLankaDistrictGeoService districtGeoService,
+            ObjectProvider<CategoryLookupPort> categoryLookupPortProvider,
+            ObjectProvider<RateLimitService> rateLimitServiceProvider
+    ) {
+        this(
+                listingRepository,
+                listingMapper,
+                mediaValidator,
+                contentScreeningService,
+                providerEligibilityChecker,
+                districtGeoService,
+                categoryLookupPortProvider,
+                rateLimitServiceProvider,
                 null
         );
     }
@@ -101,7 +136,8 @@ public class ListingServiceImpl implements ListingService {
             ProviderEligibilityChecker providerEligibilityChecker,
             SriLankaDistrictGeoService districtGeoService,
             ObjectProvider<CategoryLookupPort> categoryLookupPortProvider,
-            ObjectProvider<RateLimitService> rateLimitServiceProvider
+            ObjectProvider<RateLimitService> rateLimitServiceProvider,
+            MongoTemplate mongoTemplate
     ) {
         this.listingRepository = listingRepository;
         this.listingMapper = listingMapper;
@@ -111,6 +147,7 @@ public class ListingServiceImpl implements ListingService {
         this.districtGeoService = districtGeoService;
         this.categoryLookupPortProvider = categoryLookupPortProvider;
         this.rateLimitServiceProvider = rateLimitServiceProvider;
+        this.mongoTemplate = mongoTemplate;
     }
 
     @Override
@@ -278,6 +315,69 @@ public class ListingServiceImpl implements ListingService {
             }
         }
         return responses;
+    }
+
+    @Override
+    public Page<ListingResponse> searchPublicListings(
+            String q,
+            String location,
+            String categoryId,
+            BigDecimal maxPrice,
+            Collection<String> providerIds,
+            Pageable pageable
+    ) {
+        requireMongoTemplate();
+        Pageable effectivePageable = pageable.getSort().isUnsorted()
+                ? PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), RECOMMENDED_LISTING_SORT)
+                : pageable;
+
+        if (providerIds != null && providerIds.isEmpty()) {
+            return new PageImpl<>(List.of(), effectivePageable, 0L);
+        }
+
+        List<CategorySnapshot> activeCategories = findActiveCategoriesOrNull();
+        Set<String> activeCategoryIds = activeCategories == null
+                ? null
+                : activeCategoryIds(activeCategories);
+        Criteria criteria = buildPublicListingCriteria(
+                q, location, categoryId, maxPrice, providerIds, activeCategoryIds);
+        List<ServiceListing> content = mongoTemplate.find(new Query(criteria).with(effectivePageable), ServiceListing.class);
+        long total = mongoTemplate.count(new Query(criteria), ServiceListing.class);
+
+        Map<String, CategorySnapshot> categories =
+                resolveEffectiveCategoriesForPage(content, activeCategories);
+        return new PageImpl<>(
+                content.stream()
+                        .map(listing -> listingMapper.toResponse(
+                                listing, categories.get(listing.getCategoryId()), false))
+                        .toList(),
+                effectivePageable,
+                total
+        );
+    }
+
+    @Override
+    public List<ListingResponse> getPublicListingsByProviderId(String providerId) {
+        requireMongoTemplate();
+        String trimmedProviderId = trimToNull(providerId);
+        if (trimmedProviderId == null) {
+            return List.of();
+        }
+
+        List<CategorySnapshot> activeCategories = findActiveCategoriesOrNull();
+        Set<String> activeCategoryIds = activeCategories == null
+                ? null
+                : activeCategoryIds(activeCategories);
+        Criteria criteria = buildPublicListingCriteria(null, null, null, null, null, activeCategoryIds)
+                .and("providerId").is(trimmedProviderId);
+        List<ServiceListing> listings = mongoTemplate.find(
+                new Query(criteria).with(RECOMMENDED_LISTING_SORT), ServiceListing.class);
+        Map<String, CategorySnapshot> categories =
+                resolveEffectiveCategoriesForPage(listings, activeCategories);
+        return listings.stream()
+                .map(listing -> listingMapper.toResponse(
+                        listing, categories.get(listing.getCategoryId()), false))
+                .toList();
     }
 
     @Override
@@ -569,6 +669,92 @@ public class ListingServiceImpl implements ListingService {
         return districtGeoService.getProvincesWithCoordinates();
     }
 
+    private void requireMongoTemplate() {
+        if (mongoTemplate == null) {
+            throw new IllegalStateException("MongoTemplate is required for public listing search");
+        }
+    }
+
+    private Criteria buildPublicListingCriteria(
+            String q,
+            String location,
+            String categoryId,
+            BigDecimal maxPrice,
+            Collection<String> providerIds,
+            Collection<String> activeCategoryIds
+    ) {
+        List<Criteria> filters = new ArrayList<>();
+        filters.add(Criteria.where("status").in(ListingStatus.PUBLIC_DISCOVERY_STATUSES));
+        filters.add(Criteria.where("hiddenByProviderSuspension").ne(true));
+
+        String queryText = trimToNull(q);
+        if (queryText != null) {
+            String regex = Pattern.quote(queryText);
+            filters.add(new Criteria().orOperator(
+                    Criteria.where("title").regex(regex, "i"),
+                    Criteria.where("description").regex(regex, "i")
+            ));
+        }
+
+        String locationText = trimToNull(location);
+        if (locationText != null) {
+            String regex = Pattern.quote(locationText);
+            filters.add(new Criteria().orOperator(
+                    Criteria.where("district").regex(regex, "i"),
+                    Criteria.where("baseCity").regex(regex, "i"),
+                    Criteria.where("serviceAreas").regex(regex, "i")
+            ));
+        }
+
+        String category = trimToNull(categoryId);
+        if (category != null) {
+            filters.add(Criteria.where("categoryId").is(category));
+        }
+
+        if (maxPrice != null) {
+            filters.add(Criteria.where("basePrice").lte(maxPrice));
+        }
+
+        if (providerIds != null) {
+            filters.add(Criteria.where("providerId").in(providerIds));
+        }
+
+        if (activeCategoryIds != null) {
+            filters.add(Criteria.where("categoryId").in(activeCategoryIds));
+        }
+
+        return new Criteria().andOperator(filters.toArray(Criteria[]::new));
+    }
+
+    private List<CategorySnapshot> findActiveCategoriesOrNull() {
+        CategoryLookupPort port = categoryLookupPortProvider != null
+                ? categoryLookupPortProvider.getIfAvailable()
+                : null;
+        if (port == null) {
+            return null;
+        }
+        List<CategorySnapshot> active = port.findActiveCategories();
+        return active == null ? List.of() : active;
+    }
+
+    private Set<String> activeCategoryIds(List<CategorySnapshot> activeCategories) {
+        Set<String> ids = new LinkedHashSet<>();
+        for (CategorySnapshot category : activeCategories) {
+            if (category != null && category.id() != null && !category.id().isBlank()) {
+                ids.add(category.id());
+            }
+        }
+        return ids;
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private void checkCreateRateLimit(String providerUserId) {
         if (rateLimitServiceProvider == null) {
             return;
@@ -639,6 +825,22 @@ public class ListingServiceImpl implements ListingService {
         }
         CategorySnapshot category = port.findById(categoryId).orElse(null);
         return applyParentActiveStatus(port, category, new HashMap<>());
+    }
+
+    private Map<String, CategorySnapshot> resolveEffectiveCategoriesForPage(
+            List<ServiceListing> listings,
+            List<CategorySnapshot> activeCategories
+    ) {
+        if (activeCategories == null) {
+            return resolveEffectiveCategoriesForPage(listings);
+        }
+        Map<String, CategorySnapshot> categories = new HashMap<>();
+        for (CategorySnapshot category : activeCategories) {
+            if (category != null && category.id() != null && !category.id().isBlank()) {
+                categories.put(category.id(), category);
+            }
+        }
+        return categories;
     }
 
     private Map<String, CategorySnapshot> resolveEffectiveCategoriesForPage(List<ServiceListing> listings) {

@@ -43,6 +43,9 @@ public class ProviderEarningsState {
     @Field(targetType = FieldType.DECIMAL128)
     private BigDecimal paidOut = BigDecimal.ZERO;
 
+    @Field(targetType = FieldType.DECIMAL128)
+    private BigDecimal payoutReserved = BigDecimal.ZERO;
+
     private long lastSequenceNumber = 0L;
 
     public ProviderEarningsState() {
@@ -157,6 +160,7 @@ public class ProviderEarningsState {
         BigDecimal nextAvailable = available;
         BigDecimal nextHeld = held;
         BigDecimal nextPaidOut = paidOut;
+        BigDecimal nextPayoutReserved = getPayoutReserved();
 
         switch (entry.getEventType()) {
             case EARNING_PENDING ->
@@ -165,6 +169,11 @@ public class ProviderEarningsState {
             case EARNING_AVAILABLE -> {
                 nextPending = nextPending.subtract(amount);
                 nextAvailable = nextAvailable.add(amount);
+            }
+
+            case EARNING_HOLD_FROM_PENDING -> {
+                nextPending = nextPending.subtract(amount);
+                nextHeld = nextHeld.add(amount);
             }
 
             case EARNING_HOLD -> {
@@ -176,9 +185,28 @@ public class ProviderEarningsState {
                 nextHeld = nextHeld.subtract(amount);
                 nextAvailable = nextAvailable.add(amount);
             }
+            case EARNING_RELEASE_TO_PENDING -> {
+                nextHeld = nextHeld.subtract(amount);
+                nextPending = nextPending.add(amount);
+            }
 
             case PAYOUT_DEBIT -> {
                 nextAvailable = nextAvailable.subtract(amount);
+                nextPaidOut = nextPaidOut.add(amount);
+            }
+
+            case PAYOUT_RESERVE -> {
+                nextAvailable = nextAvailable.subtract(amount);
+                nextPayoutReserved = nextPayoutReserved.add(amount);
+            }
+
+            case PAYOUT_RELEASE -> {
+                nextPayoutReserved = nextPayoutReserved.subtract(amount);
+                nextAvailable = nextAvailable.add(amount);
+            }
+
+            case PAYOUT_SETTLE -> {
+                nextPayoutReserved = nextPayoutReserved.subtract(amount);
                 nextPaidOut = nextPaidOut.add(amount);
             }
 
@@ -195,7 +223,8 @@ public class ProviderEarningsState {
         // Reject invalid financial transitions before changing state.
         if (nextPending.signum() < 0
                 || nextAvailable.signum() < 0
-                || nextHeld.signum() < 0) {
+                || nextHeld.signum() < 0
+                || nextPayoutReserved.signum() < 0) {
             throw new IllegalStateException(
                     "Ledger event would create a negative earnings balance");
         }
@@ -204,6 +233,18 @@ public class ProviderEarningsState {
         available = nextAvailable;
         held = nextHeld;
         paidOut = nextPaidOut;
+        payoutReserved = nextPayoutReserved;
+    }
+
+    /**
+     * Returns zero when legacy MongoDB documents lack payoutReserved.
+     */
+    public BigDecimal getPayoutReserved() {
+        return payoutReserved == null ? BigDecimal.ZERO : payoutReserved;
+    }
+
+    public void setPayoutReserved(BigDecimal payoutReserved) {
+        this.payoutReserved = payoutReserved;
     }
 
     public long getLastSequenceNumber() {

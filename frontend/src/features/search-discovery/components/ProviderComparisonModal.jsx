@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import Modal from '../../../shared/components/forms/Modal';
 import { FALLBACK_PROVIDER_IMAGE } from '../fixtures/providerImages.js';
 import {
@@ -313,20 +314,18 @@ export function ProviderComparisonModal({
                         >
                           Choose {getProviderShortName(provider.name)}
                         </button>
-                        <button
-                          type="button"
+                        <Link
                           className="comparison-secondary-btn"
-                          onClick={() =>
-                            setNotice(
-                              'Provider profiles are not available in this milestone.',
-                            )
-                          }
+                          to={`/providers/${encodeURIComponent(
+                            provider.providerId || provider.id,
+                          )}`}
                           aria-describedby={ctaNoteId}
                         >
                           View profile
-                        </button>
+                        </Link>
                         <p className="comparison-cta-note" id={ctaNoteId}>
-                          Booking and provider profiles are not available in this milestone.
+                          Booking is not available in this milestone. Profile links are
+                          available from each result.
                         </p>
                       </ComparisonField>
                     </dl>

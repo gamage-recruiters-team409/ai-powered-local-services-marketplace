@@ -6,6 +6,7 @@ import java.util.List;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderType;
 
 import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
@@ -28,6 +29,9 @@ public class UpdateProviderProfileRequest {
     @Size(max = 100, message = "City must not exceed 100 characters")
     @Pattern(regexp = ".*\\S.*", message = "City must not be blank")
     private String city;
+
+    @Size(max = 25, message = "A maximum of 25 service-area districts can be selected")
+    private List<@NotBlank(message = "Service-area district cannot be blank") String> serviceAreaDistricts;
 
     @Min(value = 0, message = "Experience years cannot be negative")
     @Max(value = 80, message = "Experience years must not exceed 80")
@@ -77,6 +81,14 @@ public class UpdateProviderProfileRequest {
 
     public void setCity(String city) {
         this.city = city;
+    }
+
+    public List<String> getServiceAreaDistricts() {
+        return serviceAreaDistricts;
+    }
+
+    public void setServiceAreaDistricts(List<String> serviceAreaDistricts) {
+        this.serviceAreaDistricts = serviceAreaDistricts;
     }
 
     public Integer getExperienceYears() {

@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
@@ -59,6 +60,9 @@ class RefreshConcurrencyUnitTest {
     @Mock
     private EmailTokenService emailTokenService;
 
+    @Mock
+    private MongoTemplate mongoTemplate;
+
     private AuthServiceImpl authService;
 
     @BeforeEach
@@ -69,6 +73,7 @@ class RefreshConcurrencyUnitTest {
                 passwordEncoder,
                 tokenService,
                 emailTokenService,
+                mongoTemplate,
                 false,
                 5,
                 15,
