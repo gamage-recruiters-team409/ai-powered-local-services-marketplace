@@ -37,34 +37,49 @@ public class ProfileImageCleanupService {
     private final MongoTemplate mongoTemplate;
     private final Clock clock;
     private final Duration leaseDuration;
+    private final Duration referencedDefer;
+    private final Duration referencedStaleAfter;
 
     public ProfileImageCleanupService(
             ProfileImageCleanupRepository repository,
             CustomerProfileImageStorage storage,
             MongoTemplate mongoTemplate,
             Optional<Clock> clock,
-            @Value("${app.customer.profile-image-cleanup.lease:PT2M}") Duration leaseDuration
+            @Value("${app.customer.profile-image-cleanup.lease:PT2M}") Duration leaseDuration,
+            @Value("${app.customer.profile-image-cleanup.referenced-defer:PT5M}") Duration referencedDefer,
+            @Value("${app.customer.profile-image-cleanup.referenced-stale-after:PT6H}") Duration referencedStaleAfter
     ) {
         this.repository = repository;
         this.storage = storage;
         this.mongoTemplate = mongoTemplate;
         this.clock = clock != null && clock.isPresent() ? clock.get() : Clock.systemUTC();
         this.leaseDuration = leaseDuration != null ? leaseDuration : Duration.ofMinutes(2);
+        this.referencedDefer = referencedDefer != null ? referencedDefer : Duration.ofMinutes(5);
+        this.referencedStaleAfter = referencedStaleAfter != null ? referencedStaleAfter : Duration.ofHours(6);
+
+        if (this.referencedDefer.compareTo(Duration.ofMinutes(1)) < 0) {
+            throw new IllegalArgumentException("app.customer.profile-image-cleanup.referenced-defer must be at least PT1M");
+        }
+        if (this.referencedStaleAfter.compareTo(Duration.ofMinutes(10)) < 0) {
+            throw new IllegalArgumentException("app.customer.profile-image-cleanup.referenced-stale-after must be at least PT10M");
+        }
     }
 
     /**
      * Schedules a cleanup task atomically using upsert + returnNew.
-     * Re-opens DONE tasks to PENDING. Catches DuplicateKeyException to safely re-read.
-     * Never returns null; never throws for duplicate scheduling.
+     * Re-opens DONE tasks to PENDING with scheduledAt = now.
+     * Catches DuplicateKeyException to safely re-read the persisted document.
+     * Throws ProfileImageCleanupScheduleException on persistence failure (never returns an unpersisted task).
      *
      * @param publicId    remote Cloudinary public ID
      * @param ownerUserId customer ID owning the photo
      * @param reason      trigger reason for the cleanup
-     * @return the saved, existing, or reopened cleanup task
+     * @return the durably persisted cleanup task
+     * @throws ProfileImageCleanupScheduleException if the task cannot be persisted
      */
     public ProfileImageCleanupTask schedule(String publicId, String ownerUserId, ProfileImageCleanupReason reason) {
         if (publicId == null || publicId.isBlank()) {
-            return null;
+            throw new IllegalArgumentException("publicId must not be blank");
         }
 
         String cleanPublicId = publicId.trim();
@@ -78,7 +93,8 @@ public class ProfileImageCleanupService {
                 .setOnInsert("status", ProfileImageCleanupStatus.PENDING)
                 .setOnInsert("attempts", 0)
                 .setOnInsert("createdAt", now)
-                .setOnInsert("nextAttemptAt", now);
+                .setOnInsert("nextAttemptAt", now)
+                .set("scheduledAt", now);
         FindAndModifyOptions options = FindAndModifyOptions.options().upsert(true).returnNew(true);
 
         ProfileImageCleanupTask task;
@@ -86,20 +102,32 @@ public class ProfileImageCleanupService {
             task = mongoTemplate.findAndModify(query, update, options, ProfileImageCleanupTask.class);
         } catch (DuplicateKeyException ex) {
             log.debug("Concurrent upsert hit duplicate key for publicId={}, re-reading task", cleanPublicId);
-            task = repository.findByPublicId(cleanPublicId).orElseGet(() ->
-                    mongoTemplate.findOne(query, ProfileImageCleanupTask.class));
+            try {
+                mongoTemplate.updateFirst(query, new Update().set("scheduledAt", now), ProfileImageCleanupTask.class);
+                task = repository.findByPublicId(cleanPublicId).orElseGet(() ->
+                        mongoTemplate.findOne(query, ProfileImageCleanupTask.class));
+            } catch (Exception reReadEx) {
+                log.error("Failed to re-read task on duplicate key: ownerUserId={}, publicId={}, error={}",
+                        ownerUserId, cleanPublicId, reReadEx.getClass().getSimpleName());
+                throw new ProfileImageCleanupScheduleException("Failed to schedule cleanup task on duplicate key re-read", reReadEx);
+            }
         } catch (Exception ex) {
             log.error("Failed to schedule cleanup task: ownerUserId={}, publicId={}, error={}",
                     ownerUserId, cleanPublicId, ex.getClass().getSimpleName());
-            return new ProfileImageCleanupTask(cleanPublicId, ownerUserId, reason);
+            throw new ProfileImageCleanupScheduleException("Failed to persist cleanup task", ex);
         }
 
-        // F4 / F3: If the returned task is DONE, re-open it to PENDING
-        if (task != null && task.getStatus() == ProfileImageCleanupStatus.DONE) {
+        if (task == null || task.getId() == null) {
+            throw new ProfileImageCleanupScheduleException("Cleanup task document not found after scheduling");
+        }
+
+        // F4 / F3 / F2-A: If the returned task is DONE, re-open it to PENDING with scheduledAt = now
+        if (task.getStatus() == ProfileImageCleanupStatus.DONE) {
             Query reopenQuery = Query.query(Criteria.where("publicId").is(cleanPublicId)
                     .and("status").is(ProfileImageCleanupStatus.DONE));
             Update reopenUpdate = new Update()
                     .set("status", ProfileImageCleanupStatus.PENDING)
+                    .set("scheduledAt", now)
                     .set("nextAttemptAt", now)
                     .unset("leaseUntil");
             try {
@@ -111,10 +139,11 @@ public class ProfileImageCleanupService {
             } catch (Exception ex) {
                 log.warn("Failed to reopen DONE cleanup task: publicId={}, error={}",
                         cleanPublicId, ex.getClass().getSimpleName());
+                throw new ProfileImageCleanupScheduleException("Failed to reopen DONE cleanup task", ex);
             }
         }
 
-        return task != null ? task : new ProfileImageCleanupTask(cleanPublicId, ownerUserId, reason);
+        return task;
     }
 
     /**
@@ -142,9 +171,7 @@ public class ProfileImageCleanupService {
                                 Criteria.where("leaseUntil").lte(now)
                         ))
         );
-        Update claimUpdate = new Update()
-                .set("leaseUntil", now.plus(leaseDuration))
-                .inc("attempts", 1);
+        Update claimUpdate = new Update().set("leaseUntil", now.plus(leaseDuration));
 
         ProfileImageCleanupTask claimed;
         try {
@@ -186,9 +213,7 @@ public class ProfileImageCleanupService {
                             ))
             ).with(Sort.by(Sort.Direction.ASC, "createdAt"));
 
-            Update claimUpdate = new Update()
-                    .set("leaseUntil", now.plus(leaseDuration))
-                    .inc("attempts", 1);
+            Update claimUpdate = new Update().set("leaseUntil", now.plus(leaseDuration));
 
             ProfileImageCleanupTask claimed;
             try {
@@ -226,15 +251,23 @@ public class ProfileImageCleanupService {
         } catch (Exception ex) {
             log.warn("Reference safety check failed for publicId={}, error={}",
                     publicId, ex.getClass().getSimpleName());
-            recordFailure(task, "ReferenceCheckFailed", now);
+            deferTask(task, "ReferenceCheckFailed", now.plus(referencedDefer), now);
             return false;
         }
 
-        // 2. If referenced: mark DONE (lastErrorClass "ReferencedByUser"), do NOT delete
+        // 2. F2-A: If referenced, NEVER move to DONE immediately unless now - scheduledAt > referencedStaleAfter
         if (isReferenced) {
-            log.info("Refusing to delete publicId currently referenced by user: publicId={}, ownerUserId={}",
-                    publicId, ownerUserId);
-            markDone(task, "ReferencedByUser", now);
+            Instant scheduledAt = task.getScheduledAt() != null ? task.getScheduledAt() : task.getCreatedAt();
+            if (scheduledAt != null && Duration.between(scheduledAt, now).compareTo(referencedStaleAfter) > 0) {
+                log.info("Still-referenced cleanup task exceeded stale threshold ({}): publicId={}, ownerUserId={}, marking DONE",
+                        referencedStaleAfter, publicId, ownerUserId);
+                markDone(task, "ReferencedStale", now);
+                return false;
+            }
+
+            log.debug("Image still referenced by user: publicId={}, ownerUserId={}, deferring next attempt by {}",
+                    publicId, ownerUserId, referencedDefer);
+            deferTask(task, "ReferencedByUser", now.plus(referencedDefer), now);
             return false;
         }
 
@@ -245,15 +278,60 @@ public class ProfileImageCleanupService {
                 markDone(task, null, now);
                 return true;
             } else {
-                recordFailure(task, "StorageDeleteFailed", now);
+                recordStorageFailure(task, "StorageDeleteFailed", now);
                 return false;
             }
         } catch (Exception ex) {
             log.warn("Storage deletion failed for publicId={}, error={}",
                     publicId, ex.getClass().getSimpleName());
-            recordFailure(task, ex.getClass().getSimpleName(), now);
+            recordStorageFailure(task, ex.getClass().getSimpleName(), now);
             return false;
         }
+    }
+
+    private void deferTask(ProfileImageCleanupTask task, String errorClass, Instant nextAttempt, Instant now) {
+        Query query = Query.query(Criteria.where("publicId").is(task.getPublicId()));
+        Update update = new Update()
+                .set("lastAttemptAt", now)
+                .set("lastErrorClass", errorClass)
+                .set("nextAttemptAt", nextAttempt)
+                .unset("leaseUntil");
+        try {
+            mongoTemplate.updateFirst(query, update, ProfileImageCleanupTask.class);
+        } catch (Exception ex) {
+            log.warn("Failed to defer cleanup task: publicId={}, error={}",
+                    task.getPublicId(), ex.getClass().getSimpleName());
+        }
+
+        task.setLastAttemptAt(now);
+        task.setLastErrorClass(errorClass);
+        task.setNextAttemptAt(nextAttempt);
+        task.setLeaseUntil(null);
+    }
+
+    private void recordStorageFailure(ProfileImageCleanupTask task, String errorClass, Instant now) {
+        int newAttempts = task.getAttempts() + 1;
+        Instant nextAttempt = calculateNextAttemptAt(now, newAttempts);
+
+        Query query = Query.query(Criteria.where("publicId").is(task.getPublicId()));
+        Update update = new Update()
+                .inc("attempts", 1)
+                .set("lastAttemptAt", now)
+                .set("lastErrorClass", errorClass)
+                .set("nextAttemptAt", nextAttempt)
+                .unset("leaseUntil");
+        try {
+            mongoTemplate.updateFirst(query, update, ProfileImageCleanupTask.class);
+        } catch (Exception ex) {
+            log.warn("Failed to record storage failure for cleanup task: publicId={}, error={}",
+                    task.getPublicId(), ex.getClass().getSimpleName());
+        }
+
+        task.setAttempts(newAttempts);
+        task.setLastAttemptAt(now);
+        task.setLastErrorClass(errorClass);
+        task.setNextAttemptAt(nextAttempt);
+        task.setLeaseUntil(null);
     }
 
     private void markDone(ProfileImageCleanupTask task, String errorClass, Instant now) {
@@ -276,28 +354,6 @@ public class ProfileImageCleanupService {
         task.setLeaseUntil(null);
     }
 
-    private void recordFailure(ProfileImageCleanupTask task, String errorClass, Instant now) {
-        Instant nextAttempt = calculateNextAttemptAt(now, task.getAttempts());
-
-        Query query = Query.query(Criteria.where("publicId").is(task.getPublicId()));
-        Update update = new Update()
-                .set("lastAttemptAt", now)
-                .set("lastErrorClass", errorClass)
-                .set("nextAttemptAt", nextAttempt)
-                .unset("leaseUntil");
-        try {
-            mongoTemplate.updateFirst(query, update, ProfileImageCleanupTask.class);
-        } catch (Exception ex) {
-            log.warn("Failed to record failure for cleanup task: publicId={}, error={}",
-                    task.getPublicId(), ex.getClass().getSimpleName());
-        }
-
-        task.setLastAttemptAt(now);
-        task.setLastErrorClass(errorClass);
-        task.setNextAttemptAt(nextAttempt);
-        task.setLeaseUntil(null);
-    }
-
     private Instant calculateNextAttemptAt(Instant now, int attempts) {
         if (attempts <= 0) {
             return now.plus(Duration.ofMinutes(1));
@@ -311,5 +367,13 @@ public class ProfileImageCleanupService {
 
     private Instant now() {
         return clock.instant();
+    }
+
+    Duration getReferencedDefer() {
+        return referencedDefer;
+    }
+
+    Duration getReferencedStaleAfter() {
+        return referencedStaleAfter;
     }
 }

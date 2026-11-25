@@ -1,6 +1,5 @@
 package com.gamagerecruiters.marketplace.modules.customer.service;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -61,15 +60,30 @@ class ProfileImageCleanupServiceTest {
         now = Instant.parse("2026-03-30T10:00:00Z");
         fixedClock = Clock.fixed(now, ZoneOffset.UTC);
         cleanupService = new ProfileImageCleanupService(
-                repository, storage, mongoTemplate, Optional.of(fixedClock), Duration.ofMinutes(2));
+                repository, storage, mongoTemplate, Optional.of(fixedClock),
+                Duration.ofMinutes(2), Duration.ofMinutes(5), Duration.ofHours(6));
     }
 
     @Test
-    @DisplayName("F3: schedule performs atomic upsert with findAndModify")
-    void schedule_atomicUpsert_returnsTask() {
+    @DisplayName("F2-A #6: Startup validation: rejects referencedDefer < PT1M and referencedStaleAfter < PT10M")
+    void startupValidation_rejectsInvalidDurations() {
+        assertThrows(IllegalArgumentException.class, () ->
+                new ProfileImageCleanupService(repository, storage, mongoTemplate, Optional.of(fixedClock),
+                        Duration.ofMinutes(2), Duration.ofSeconds(30), Duration.ofHours(6)));
+
+        assertThrows(IllegalArgumentException.class, () ->
+                new ProfileImageCleanupService(repository, storage, mongoTemplate, Optional.of(fixedClock),
+                        Duration.ofMinutes(2), Duration.ofMinutes(5), Duration.ofMinutes(5)));
+    }
+
+    @Test
+    @DisplayName("F3 & F2-A #2: schedule performs atomic upsert setting and refreshing scheduledAt")
+    void schedule_atomicUpsert_setsAndRefreshesScheduledAt() {
         ProfileImageCleanupTask created = new ProfileImageCleanupTask("pub-1", "user-1", ProfileImageCleanupReason.REPLACED);
+        created.setId("task-id-1");
         created.setStatus(ProfileImageCleanupStatus.PENDING);
         created.setCreatedAt(now);
+        created.setScheduledAt(now);
         created.setNextAttemptAt(now);
 
         when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
@@ -78,6 +92,7 @@ class ProfileImageCleanupServiceTest {
         ProfileImageCleanupTask task = cleanupService.schedule("pub-1", "user-1", ProfileImageCleanupReason.REPLACED);
 
         assertNotNull(task);
+        assertEquals("task-id-1", task.getId());
         assertEquals("pub-1", task.getPublicId());
         assertEquals(ProfileImageCleanupStatus.PENDING, task.getStatus());
 
@@ -92,9 +107,10 @@ class ProfileImageCleanupServiceTest {
     }
 
     @Test
-    @DisplayName("F3: DuplicateKeyException during upsert safely re-reads existing task from repository")
-    void schedule_duplicateKeyException_reReadsTask() {
+    @DisplayName("F3 & F2-B: DuplicateKeyException during upsert safely re-reads existing persisted task from repository")
+    void schedule_duplicateKeyException_reReadsPersistedTask() {
         ProfileImageCleanupTask existing = new ProfileImageCleanupTask("pub-dup", "user-1", ProfileImageCleanupReason.REPLACED);
+        existing.setId("task-id-dup");
         existing.setStatus(ProfileImageCleanupStatus.PENDING);
 
         when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
@@ -104,18 +120,44 @@ class ProfileImageCleanupServiceTest {
         ProfileImageCleanupTask result = cleanupService.schedule("pub-dup", "user-1", ProfileImageCleanupReason.REPLACED);
 
         assertNotNull(result);
+        assertEquals("task-id-dup", result.getId());
         assertEquals("pub-dup", result.getPublicId());
         verify(repository).findByPublicId("pub-dup");
     }
 
     @Test
-    @DisplayName("F4 / F3: DONE task is re-opened to PENDING by schedule()")
-    void schedule_doneTask_reopenedToPending() {
+    @DisplayName("F2-B #1 & #11: schedule throws ProfileImageCleanupScheduleException when upsert and re-read both fail")
+    void schedule_persistenceFails_throwsProfileImageCleanupScheduleException() {
+        when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
+                .thenThrow(new RuntimeException("Mongo connection refused"));
+
+        assertThrows(ProfileImageCleanupScheduleException.class, () ->
+                cleanupService.schedule("pub-fail", "user-1", ProfileImageCleanupReason.REPLACED));
+    }
+
+    @Test
+    @DisplayName("F2-B #1 & #11: schedule throws ProfileImageCleanupScheduleException if re-read returns empty")
+    void schedule_duplicateKey_reReadEmpty_throwsScheduleException() {
+        when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
+                .thenThrow(new DuplicateKeyException("E11000 duplicate key error"));
+        when(repository.findByPublicId("pub-dup")).thenReturn(Optional.empty());
+        when(mongoTemplate.findOne(any(Query.class), eq(ProfileImageCleanupTask.class))).thenReturn(null);
+
+        assertThrows(ProfileImageCleanupScheduleException.class, () ->
+                cleanupService.schedule("pub-dup", "user-1", ProfileImageCleanupReason.REPLACED));
+    }
+
+    @Test
+    @DisplayName("F4 / F3 & F2-A #2: DONE task is re-opened to PENDING with scheduledAt = now")
+    void schedule_doneTask_reopenedToPendingWithNewScheduledAt() {
         ProfileImageCleanupTask doneTask = new ProfileImageCleanupTask("pub-done", "user-1", ProfileImageCleanupReason.REPLACED);
+        doneTask.setId("id-done");
         doneTask.setStatus(ProfileImageCleanupStatus.DONE);
 
         ProfileImageCleanupTask reopenedTask = new ProfileImageCleanupTask("pub-done", "user-1", ProfileImageCleanupReason.REPLACED);
+        reopenedTask.setId("id-done");
         reopenedTask.setStatus(ProfileImageCleanupStatus.PENDING);
+        reopenedTask.setScheduledAt(now);
         reopenedTask.setNextAttemptAt(now);
 
         when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
@@ -130,18 +172,50 @@ class ProfileImageCleanupServiceTest {
     }
 
     @Test
-    @DisplayName("schedule: blank or null publicId returns null")
-    void schedule_blankOrNull_returnsNull() {
-        assertNull(cleanupService.schedule(null, "user-1", ProfileImageCleanupReason.REPLACED));
-        assertNull(cleanupService.schedule("   ", "user-1", ProfileImageCleanupReason.REPLACED));
+    @DisplayName("schedule: blank or null publicId throws IllegalArgumentException")
+    void schedule_blankOrNull_throwsIllegalArgumentException() {
+        assertThrows(IllegalArgumentException.class, () -> cleanupService.schedule(null, "user-1", ProfileImageCleanupReason.REPLACED));
+        assertThrows(IllegalArgumentException.class, () -> cleanupService.schedule("   ", "user-1", ProfileImageCleanupReason.REPLACED));
         verifyNoInteractions(mongoTemplate, repository);
     }
 
     @Test
-    @DisplayName("F1: attempt() with referenced image marks DONE without calling storage.delete")
-    void attempt_referencedImage_marksDoneWithoutDelete() {
+    @DisplayName("F2-A #1: attempt() with still-referenced image defers nextAttemptAt, releases lease, does NOT delete, attempts unchanged")
+    void attempt_referencedImage_defersTaskWithoutIncrementingAttempts() {
         ProfileImageCleanupTask task = new ProfileImageCleanupTask("pub-ref", "user-1", ProfileImageCleanupReason.REPLACED);
+        task.setId("task-ref-1");
         task.setStatus(ProfileImageCleanupStatus.PENDING);
+        task.setScheduledAt(now.minus(Duration.ofMinutes(10))); // within 6 hour stale window
+        task.setAttempts(0);
+
+        when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
+                .thenReturn(task);
+        when(mongoTemplate.exists(any(Query.class), eq(User.class))).thenReturn(true);
+
+        boolean result = cleanupService.attempt(task);
+
+        assertFalse(result);
+        // Remains PENDING!
+        assertEquals(ProfileImageCleanupStatus.PENDING, task.getStatus());
+        assertEquals("ReferencedByUser", task.getLastErrorClass());
+        // Deferred by referencedDefer (5 minutes)
+        assertEquals(now.plus(Duration.ofMinutes(5)), task.getNextAttemptAt());
+        assertNull(task.getLeaseUntil());
+        // Attempts count remains 0! Claiming and deferral do NOT increment attempts
+        assertEquals(0, task.getAttempts());
+        verify(storage, never()).delete(any());
+        verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(ProfileImageCleanupTask.class));
+    }
+
+    @Test
+    @DisplayName("F2-A #4: still-referenced task older than referenced-stale-after (PT6H) becomes DONE (ReferencedStale)")
+    void attempt_referencedImage_olderThanStaleThreshold_marksDone() {
+        ProfileImageCleanupTask task = new ProfileImageCleanupTask("pub-stale", "user-1", ProfileImageCleanupReason.REPLACED);
+        task.setId("task-stale-1");
+        task.setStatus(ProfileImageCleanupStatus.PENDING);
+        // scheduledAt is 7 hours ago (> 6 hour stale threshold)
+        task.setScheduledAt(now.minus(Duration.ofHours(7)));
+        task.setAttempts(0);
 
         when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
                 .thenReturn(task);
@@ -151,17 +225,18 @@ class ProfileImageCleanupServiceTest {
 
         assertFalse(result);
         assertEquals(ProfileImageCleanupStatus.DONE, task.getStatus());
-        assertEquals("ReferencedByUser", task.getLastErrorClass());
+        assertEquals("ReferencedStale", task.getLastErrorClass());
+        assertNull(task.getLeaseUntil());
         verify(storage, never()).delete(any());
-        verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(ProfileImageCleanupTask.class));
     }
 
     @Test
-    @DisplayName("F1: attempt() when reference query throws leaves task PENDING with ReferenceCheckFailed")
-    void attempt_referenceCheckFails_leavesPending() {
+    @DisplayName("F1: attempt() when reference query throws leaves task PENDING with ReferenceCheckFailed and does NOT increment attempts")
+    void attempt_referenceCheckFails_defersPendingWithoutIncrementingAttempts() {
         ProfileImageCleanupTask task = new ProfileImageCleanupTask("pub-err", "user-1", ProfileImageCleanupReason.REPLACED);
+        task.setId("task-err-1");
         task.setStatus(ProfileImageCleanupStatus.PENDING);
-        task.setAttempts(1);
+        task.setAttempts(0);
 
         when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
                 .thenReturn(task);
@@ -172,6 +247,7 @@ class ProfileImageCleanupServiceTest {
         assertFalse(result);
         assertEquals(ProfileImageCleanupStatus.PENDING, task.getStatus());
         assertEquals("ReferenceCheckFailed", task.getLastErrorClass());
+        assertEquals(0, task.getAttempts()); // Not incremented
         assertNotNull(task.getNextAttemptAt());
         verify(storage, never()).delete(any());
     }
@@ -180,6 +256,7 @@ class ProfileImageCleanupServiceTest {
     @DisplayName("F1: attempt() with unreferenced image deletes from storage and marks DONE")
     void attempt_unreferencedImage_storageSuccess_marksDone() {
         ProfileImageCleanupTask task = new ProfileImageCleanupTask("pub-unref", "user-1", ProfileImageCleanupReason.REPLACED);
+        task.setId("task-unref-1");
         task.setStatus(ProfileImageCleanupStatus.PENDING);
 
         when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
@@ -196,11 +273,12 @@ class ProfileImageCleanupServiceTest {
     }
 
     @Test
-    @DisplayName("F2: attempt() storage failure records backoff and keeps PENDING")
-    void attempt_storageFailure_recordsBackoff() {
+    @DisplayName("F2: attempt() storage failure increments attempts and calculates exponential backoff")
+    void attempt_storageFailure_incrementsAttemptsAndRecordsBackoff() {
         ProfileImageCleanupTask task = new ProfileImageCleanupTask("pub-fail", "user-1", ProfileImageCleanupReason.REPLACED);
+        task.setId("task-fail-1");
         task.setStatus(ProfileImageCleanupStatus.PENDING);
-        task.setAttempts(1);
+        task.setAttempts(0); // Starts at 0
 
         when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
                 .thenReturn(task);
@@ -212,6 +290,8 @@ class ProfileImageCleanupServiceTest {
         assertFalse(result);
         assertEquals(ProfileImageCleanupStatus.PENDING, task.getStatus());
         assertEquals("StorageDeleteFailed", task.getLastErrorClass());
+        // Storage failure increments attempts from 0 to 1
+        assertEquals(1, task.getAttempts());
         // 2^1 = 2 minutes backoff
         assertEquals(now.plus(Duration.ofMinutes(2)), task.getNextAttemptAt());
     }
@@ -249,11 +329,12 @@ class ProfileImageCleanupServiceTest {
     @DisplayName("F2: retryPending processes up to batchSize with lease and backoff")
     void retryPending_processesBatch() {
         ProfileImageCleanupTask t1 = new ProfileImageCleanupTask("batch-1", "u1", ProfileImageCleanupReason.REPLACED);
+        t1.setId("batch-id-1");
         t1.setStatus(ProfileImageCleanupStatus.PENDING);
 
         when(mongoTemplate.findAndModify(any(Query.class), any(Update.class), any(FindAndModifyOptions.class), eq(ProfileImageCleanupTask.class)))
                 .thenReturn(t1)
-                .thenReturn(null); // No more tasks
+                .thenReturn(null);
 
         when(mongoTemplate.exists(any(Query.class), eq(User.class))).thenReturn(false);
         when(storage.delete("batch-1")).thenReturn(true);

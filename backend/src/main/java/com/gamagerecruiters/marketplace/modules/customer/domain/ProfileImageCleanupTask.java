@@ -31,6 +31,8 @@ public class ProfileImageCleanupTask {
 
     private Instant createdAt = Instant.now();
 
+    private Instant scheduledAt = Instant.now();
+
     private Instant nextAttemptAt = Instant.now();
 
     private Instant leaseUntil;
@@ -53,6 +55,7 @@ public class ProfileImageCleanupTask {
         this.status = ProfileImageCleanupStatus.PENDING;
         this.attempts = 0;
         this.createdAt = Instant.now();
+        this.scheduledAt = this.createdAt;
         this.nextAttemptAt = this.createdAt;
     }
 
@@ -110,6 +113,14 @@ public class ProfileImageCleanupTask {
 
     public void setCreatedAt(Instant createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Instant getScheduledAt() {
+        return scheduledAt;
+    }
+
+    public void setScheduledAt(Instant scheduledAt) {
+        this.scheduledAt = scheduledAt;
     }
 
     public Instant getLastAttemptAt() {
