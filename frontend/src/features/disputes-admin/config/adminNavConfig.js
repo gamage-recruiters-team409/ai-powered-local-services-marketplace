@@ -38,13 +38,8 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
 
   // ---------- Admin ----------
   { id: 'admin.dashboard', area: ADMIN, section: null, label: 'Dashboard', path: '', icon: 'dashboard', description: 'Overview of admin operations' },
-<<<<<<< HEAD
   { id: 'admin.disputes', area: ADMIN, section: 'Operations', label: 'Disputes', path: 'disputes', icon: 'alertCircle', description: 'Dispute console and appeals', nested: true, page: lazy(() => import('../../admin-disputes/pages/DisputesSection')) },
-  { id: 'admin.users', area: ADMIN, section: 'Operations', label: 'Users', path: 'users', icon: 'users', description: 'Customer and provider accounts' },
-=======
-  { id: 'admin.disputes', area: ADMIN, section: 'Operations', label: 'Disputes', path: 'disputes', icon: 'alertCircle', description: 'Dispute console and appeals' },
   { id: 'admin.users', area: ADMIN, section: 'Operations', label: 'Users', path: 'users', icon: 'users', description: 'Customer and provider accounts', nested: true, page: lazy(() => import('../../admin-users/pages/UsersSection')) },
->>>>>>> develop
   { id: 'admin.provider-verification', area: ADMIN, section: 'Operations', label: 'Provider verification', path: 'provider-verification', icon: 'shield', description: 'Review provider verification requests' },
   { id: 'admin.overdue-bookings', area: ADMIN, section: 'Operations', label: 'Overdue bookings', path: 'overdue-bookings', icon: 'clock', description: 'Bookings still open 72 hours after the slot ended' },
   { id: 'admin.late-cases', area: ADMIN, section: 'Operations', label: 'Late cases', path: 'late-cases', icon: 'calendar', description: 'Problems reported after the 72-hour window' },
