@@ -154,4 +154,148 @@ describe('EvidenceSection upload', () => {
     expect(screen.getByText('You can add at most 1 file.')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Upload 1 file' })).toBeTruthy()
   })
+
+  it('uploading three files successfully leaves two available slots for additional selection', async () => {
+    let currentDispute = { id: 'd-1', status: 'AWAITING_RESPONSE', evidenceFiles: [] }
+    uploadEvidence.mockImplementation((disputeId, chosen) =>
+      Promise.resolve(evidence({ id: `ev-${chosen.name}`, fileName: chosen.name, uploadedByRole: 'CUSTOMER' })))
+
+    const { rerender } = render(
+      <EvidenceSection
+        dispute={currentDispute}
+        viewerRole="CUSTOMER"
+        canUpload
+        onUploaded={(uploaded) => {
+          currentDispute = { ...currentDispute, evidenceFiles: [...currentDispute.evidenceFiles, ...uploaded] }
+        }}
+      />,
+    )
+
+    expect(screen.getByText(/You can add 5 more/)).toBeTruthy()
+
+    fireEvent.change(input(), {
+      target: { files: [file('f1.png', 'image/png'), file('f2.png', 'image/png'), file('f3.png', 'image/png')] },
+    })
+    expect(screen.getByRole('button', { name: 'Upload 3 files' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Upload 3 files' }))
+    await waitFor(() => expect(uploadEvidence).toHaveBeenCalledTimes(3))
+
+    rerender(
+      <EvidenceSection
+        dispute={currentDispute}
+        viewerRole="CUSTOMER"
+        canUpload
+        onUploaded={(uploaded) => {
+          currentDispute = { ...currentDispute, evidenceFiles: [...currentDispute.evidenceFiles, ...uploaded] }
+        }}
+      />,
+    )
+
+    expect(screen.getByText(/You can add 2 more/)).toBeTruthy()
+    expect(input().disabled).toBe(false)
+  })
+
+  it('uploading the remaining two files disables the picker only after reaching five files', async () => {
+    let currentDispute = {
+      id: 'd-1',
+      status: 'AWAITING_RESPONSE',
+      evidenceFiles: [
+        evidence({ id: 'ev-1', uploadedByRole: 'CUSTOMER' }),
+        evidence({ id: 'ev-2', uploadedByRole: 'CUSTOMER' }),
+        evidence({ id: 'ev-3', uploadedByRole: 'CUSTOMER' }),
+      ],
+    }
+    uploadEvidence.mockImplementation((disputeId, chosen) =>
+      Promise.resolve(evidence({ id: `ev-${chosen.name}`, fileName: chosen.name, uploadedByRole: 'CUSTOMER' })))
+
+    const { rerender } = render(
+      <EvidenceSection
+        dispute={currentDispute}
+        viewerRole="CUSTOMER"
+        canUpload
+        onUploaded={(uploaded) => {
+          currentDispute = { ...currentDispute, evidenceFiles: [...currentDispute.evidenceFiles, ...uploaded] }
+        }}
+      />,
+    )
+
+    expect(screen.getByText(/You can add 2 more/)).toBeTruthy()
+
+    fireEvent.change(input(), {
+      target: { files: [file('f4.png', 'image/png'), file('f5.png', 'image/png')] },
+    })
+
+    expect(screen.getByText(/File limit reached/)).toBeTruthy()
+    expect(input().disabled).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Upload 2 files' }))
+    await waitFor(() => expect(uploadEvidence).toHaveBeenCalledTimes(2))
+
+    rerender(
+      <EvidenceSection
+        dispute={currentDispute}
+        viewerRole="CUSTOMER"
+        canUpload
+      />,
+    )
+
+    expect(screen.getByText(/File limit reached/)).toBeTruthy()
+    expect(input().disabled).toBe(true)
+  })
+
+  it('allowance remains correct when uploads partially fail without deducting failed files', async () => {
+    let currentDispute = { id: 'd-1', status: 'AWAITING_RESPONSE', evidenceFiles: [] }
+    uploadEvidence.mockImplementation((disputeId, chosen) => {
+      if (chosen.name === 'f2.png') {
+        return Promise.reject(new Error('Network error'))
+      }
+      return Promise.resolve(evidence({ id: `ev-${chosen.name}`, fileName: chosen.name, uploadedByRole: 'CUSTOMER' }))
+    })
+
+    const { rerender } = render(
+      <EvidenceSection
+        dispute={currentDispute}
+        viewerRole="CUSTOMER"
+        canUpload
+        onUploaded={(uploaded) => {
+          currentDispute = { ...currentDispute, evidenceFiles: [...currentDispute.evidenceFiles, ...uploaded] }
+        }}
+      />,
+    )
+
+    fireEvent.change(input(), {
+      target: { files: [file('f1.png', 'image/png'), file('f2.png', 'image/png'), file('f3.png', 'image/png')] },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Upload 3 files' }))
+
+    await waitFor(() => expect(uploadEvidence).toHaveBeenCalledTimes(3))
+
+    rerender(
+      <EvidenceSection
+        dispute={currentDispute}
+        viewerRole="CUSTOMER"
+        canUpload
+        onUploaded={(uploaded) => {
+          currentDispute = { ...currentDispute, evidenceFiles: [...currentDispute.evidenceFiles, ...uploaded] }
+        }}
+      />,
+    )
+
+    expect(screen.getByRole('alert')).toBeTruthy()
+    expect(screen.getByText(/We could not reach the server/i)).toBeTruthy()
+    expect(screen.getByText(/You can add 3 more/)).toBeTruthy()
+    expect(input().disabled).toBe(false)
+  })
+
+  it('existing evidence uploaded by other party does not reduce current party allowance', () => {
+    const providerFiles = Array.from({ length: 4 }, (_, i) => evidence({ id: `prov-${i}`, uploadedByRole: 'PROVIDER' }))
+    renderSection({
+      dispute: { id: 'd-1', status: 'AWAITING_RESPONSE', evidenceFiles: providerFiles },
+      viewerRole: 'CUSTOMER',
+    })
+
+    expect(screen.getByText(/You can add 5 more/)).toBeTruthy()
+    expect(input().disabled).toBe(false)
+  })
 })

@@ -66,7 +66,8 @@ public record DisputeDetailResponse(
     /**
      * The decision as the parties see it. {@code providerPenaltyApplied} is shown to the provider only (null for the
      * customer). No admin identity, no note. {@code paymentNote} is a neutral text while a final decision is still
-     * being carried out ({@link #PAYMENT_IN_PROGRESS}), else null: parties never see settlement states or reasons.
+     * being carried out ({@link #PAYMENT_IN_PROGRESS}), or when payment handling requires assistance
+     * ({@link #PAYMENT_REQUIRES_ASSISTANCE}), else null: parties never see settlement states or reasons.
      */
     public record OutcomeView(
             ResolutionAction action,
@@ -78,6 +79,8 @@ public record DisputeDetailResponse(
     ) {
 
         public static final String PAYMENT_IN_PROGRESS = "Payment handling for this dispute is being processed.";
+        public static final String PAYMENT_REQUIRES_ASSISTANCE =
+                "Payment handling for this dispute requires assistance. Our support team is reviewing this case.";
     }
 
     /** The appeal as the parties see it: no reviewer identity, no review note. */

@@ -213,15 +213,32 @@ public final class DisputeMapper {
         }
         boolean viewerIsProvider = viewerId != null && viewerId.equals(dispute.getProviderId());
         boolean isFinal = dispute.getStatus() == DisputeStatus.RESOLVED_FINAL;
-        boolean carriedOut = dispute.getSettlement() != null
-                && dispute.getSettlement().getState() == SettlementState.APPLIED;
         return new OutcomeView(
                 binding.getAction(),
                 binding.getCustomerRefundPercent(),
                 viewerIsProvider ? binding.isProviderPenaltyApplied() : null,
                 binding.getDecidedAt(),
                 isFinal,
-                isFinal && !carriedOut ? OutcomeView.PAYMENT_IN_PROGRESS : null);
+                paymentNote(dispute, isFinal));
+    }
+
+    private static String paymentNote(Dispute dispute, boolean isFinal) {
+        if (!isFinal) {
+            return null;
+        }
+        DisputeSettlement settlement = dispute.getSettlement();
+        if (settlement == null) {
+            return OutcomeView.PAYMENT_IN_PROGRESS;
+        }
+        SettlementState state = settlement.getState();
+        if (state == null) {
+            return OutcomeView.PAYMENT_IN_PROGRESS;
+        }
+        return switch (state) {
+            case APPLIED -> null;
+            case MANUAL_REVIEW, REJECTED -> OutcomeView.PAYMENT_REQUIRES_ASSISTANCE;
+            case PENDING, NOT_APPLIED, FAILED -> OutcomeView.PAYMENT_IN_PROGRESS;
+        };
     }
 
     private static PartyResponseView toView(PartyResponse response) {

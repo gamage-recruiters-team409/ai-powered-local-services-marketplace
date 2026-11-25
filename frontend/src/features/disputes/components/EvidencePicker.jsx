@@ -13,7 +13,8 @@ export function EvidencePicker({ files, onChange, maxFiles = EVIDENCE_RULES.MAX_
   label = 'Add evidence (optional)' }) {
   const inputId = useId()
   const hintId = `${inputId}-hint`
-  const room = Math.max(0, maxFiles - files.length)
+  const pendingCount = files.filter((item) => item.status !== 'done' && item.status !== 'failed' && item.status !== 'skipped').length
+  const room = Math.max(0, maxFiles - pendingCount)
 
   function handleSelect(event) {
     const chosen = Array.from(event.target.files ?? [])
@@ -76,7 +77,7 @@ export function EvidencePicker({ files, onChange, maxFiles = EVIDENCE_RULES.MAX_
               )}
               {item.status === 'done' && <span className={styles.pickedDone}>Uploaded</span>}
               {item.error && <span className={styles.pickedError} role="alert">{item.error}</span>}
-              {item.status !== 'uploading' && item.status !== 'done' && (
+              {item.status !== 'uploading' && (
                 <button type="button" className={styles.linkButton} onClick={() => remove(item.key)}
                   aria-label={`Remove ${item.file.name}`} disabled={disabled}>
                   Remove
