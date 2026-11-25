@@ -147,7 +147,7 @@ export function PublicNavbar({
                         onClick={() => handleSelectCity(city.id)}
                       >
                         <span>{city.label}</span>
-                        <span className={styles.cityOptionMeta}>{city.availablePros} pros</span>
+                        <span className={styles.cityOptionMeta}>{city.region}</span>
                       </button>
                     </li>
                   )

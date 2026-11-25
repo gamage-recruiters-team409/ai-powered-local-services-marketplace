@@ -16,6 +16,53 @@ export function ArrowRightIcon({ size = 16, className = '' }) {
   )
 }
 
+export function ArrowLeftIcon({ size = 16, className = '' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M19 12H5" />
+      <path d="m12 19-7-7 7-7" />
+    </svg>
+  )
+}
+
+export function ArrowUpRightIcon({ size = 15, className = '' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M7 17 17 7" />
+      <path d="M7 7h10v10" />
+    </svg>
+  )
+}
+
+export function MapPinIcon({ size = 14, className = '' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0" />
+      <circle cx="12" cy="10" r="3" />
+    </svg>
+  )
+}
+
+export function MailIcon({ size = 16, className = '' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <rect width="20" height="16" x="2" y="4" rx="2" />
+      <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+    </svg>
+  )
+}
+
+/** Editorial 3-stroke accent burst inspired by modern studio display typography */
+export function EditorialBurstAccent({ size = 24, className = '' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 28 28" fill="none" className={className} aria-hidden="true">
+      <path d="M7 19 11.5 6" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+      <path d="M13.5 21 19.5 10.5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+      <path d="M19.5 22.5 25 17.5" stroke="#f59e0b" strokeWidth="2.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export function ShieldCheckIcon({ size = 18, className = '' }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
@@ -121,6 +168,68 @@ export function StarIcon({ size = 14, className = '' }) {
     </svg>
   )
 }
+
+/** Style C High-Trust Clay Seal: Official Verified Rosette Seal (NIC & NVQ Vetted) */
+export function TrustVerifiedSealIcon({ size = 26, className = '' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 28 28" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M14 2.5 17 5l3.8-.3 1.2 3.6 3.2 2.1-.6 3.8 1.9 3.3-2.9 2.6-.3 3.8-3.7.8-2.4 3-3.2-1.6-3.2 1.6-2.4-3-3.7-.8-.3-3.8-2.9-2.6 1.9-3.3-.6-3.8 3.2-2.1L7.2 4.7 11 5l3-2.5Z"
+        fill="#0f766e"
+      />
+      <path
+        d="M10.2 14.3 12.8 17l5.2-5.4"
+        stroke="#ffffff"
+        strokeWidth="2.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+/** Style C High-Trust Clay Seal: Solid Escrow Vault Shield + Padlock */
+export function TrustEscrowVaultIcon({ size = 26, className = '' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 28 28" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M14 2.6 5.2 6.2v6.4c0 5.6 3.7 10.4 8.8 12.5 5.1-2.1 8.8-6.9 8.8-12.5V6.2L14 2.6Z"
+        fill="#059669"
+      />
+      <rect x="10" y="13" width="8" height="6" rx="1.6" fill="#ffffff" />
+      <path
+        d="M11.8 13v-1.6a2.2 2.2 0 0 1 4.4 0V13"
+        stroke="#ffffff"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <circle cx="14" cy="16" r="1" fill="#059669" />
+    </svg>
+  )
+}
+
+/** Style C High-Trust Clay Seal: Price-Locked Upfront LKR Gold Seal (FR-LIST-005) */
+export function TrustPriceLockIcon({ size = 26, className = '' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 28 28" fill="none" className={className} aria-hidden="true">
+      <circle cx="14" cy="14" r="10.5" fill="#d97706" />
+      <text
+        x="14"
+        y="17.2"
+        textAnchor="middle"
+        fill="#ffffff"
+        fontFamily="system-ui, -apple-system, sans-serif"
+        fontWeight="800"
+        fontSize="8.2"
+        letterSpacing="0.02em"
+      >
+        LKR
+      </text>
+    </svg>
+  )
+}
+
+export const TrustZeroMarkupIcon = TrustPriceLockIcon
 
 export function CategoryTradeIcon({ iconKey, size = 20 }) {
   switch (iconKey) {

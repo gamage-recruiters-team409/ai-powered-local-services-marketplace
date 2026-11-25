@@ -3,6 +3,7 @@ import { ESCROW_SIMULATOR_STAGES, HOW_IT_WORKS_STEPS } from '../data/landingCont
 import {
   CategoryTradeIcon,
   CheckCircleIcon,
+  EditorialBurstAccent,
   LockIcon,
   ShieldCheckIcon,
   UnlockIcon,
@@ -22,13 +23,14 @@ export function HowMarketWorksSection() {
     >
       <div className={styles.sectionContainer}>
         <div className={styles.sectionHeader}>
-          <span className={styles.sectionPill}>Transparent Direct Marketplace</span>
+          <span className={styles.sectionPill}>Verified Local Services Marketplace</span>
           <h2 id="how-market-works-heading" className={styles.sectionTitle}>
-            How Market Works: Transparent Profiles, Fixed Rates, Direct Booking
+            How LocalServe Works: Verified Profiles, Locked Pricing, Protected Escrow
+            <EditorialBurstAccent size={24} className={styles.editorialBurstInline} />
           </h2>
           <p className={styles.sectionSubtitle}>
-            An open, verified marketplace connecting property owners directly with verified Sri
-            Lankan technicians without contractor commissions.
+            Connecting Sri Lankan customers with independent, Admin-approved providers through
+            atomic slot scheduling, contact-masked chat, and escrow-protected payouts.
           </p>
         </div>
 
@@ -84,9 +86,10 @@ export function HowMarketWorksSection() {
                 <ShieldCheckIcon size={20} />
               </span>
               <div>
-                <h3 className={styles.escrowSimTitle}>Escrow Protection Simulator</h3>
+                <h3 className={styles.escrowSimTitle}>Escrow &amp; Dispute Lifecycle Walkthrough</h3>
                 <p className={styles.escrowSimSub}>
-                  Interactive walkthrough for a sample <strong>Rs. 25,000</strong> home repair job
+                  How LocalServe protects every booking under <strong>SRS BR-004 – BR-009</strong>{' '}
+                  (Escrow hold, 48h review &amp; 72h dispute window)
                 </p>
               </div>
             </div>

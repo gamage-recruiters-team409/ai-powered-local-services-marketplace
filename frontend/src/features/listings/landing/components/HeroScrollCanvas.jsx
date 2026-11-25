@@ -11,8 +11,9 @@ import {
   ArrowRightIcon,
   CheckCircleIcon,
   SearchIcon,
-  ShieldCheckIcon,
-  ZapIcon,
+  TrustEscrowVaultIcon,
+  TrustPriceLockIcon,
+  TrustVerifiedSealIcon,
 } from './LandingIcons'
 import styles from '../styles/publicLanding.module.css'
 
@@ -29,6 +30,8 @@ export function HeroScrollCanvas({
   selectedCity = 'Colombo',
   onCityChange,
   cities = PUBLIC_CITIES,
+  liveListingCount = null,
+  districtCount = 25,
 }) {
   const navigate = useNavigate()
   const containerRef = useRef(null)
@@ -41,6 +44,7 @@ export function HeroScrollCanvas({
   const beat1Ref = useRef(null)
   const readabilityGradientRef = useRef(null)
   const beat2Ref = useRef(null)
+  const beat2HeadingRef = useRef(null)
   const badge1Ref = useRef(null)
   const badge2Ref = useRef(null)
   const badge3Ref = useRef(null)
@@ -166,19 +170,18 @@ export function HeroScrollCanvas({
       return
     }
 
-    // Cover-fit math (zero stretching on any aspect ratio)
+    // Cover-fit math (zero stretching and zero edge gaps on any aspect ratio)
     const baseScale = Math.max(cssWidth / img.naturalWidth, cssHeight / img.naturalHeight)
     // Gentle Apple-style dolly-in zoom so the technician's full head & smile stay cleanly framed
-    const cinematicZoom = isPosterFallback ? 1.01 + progress * 0.06 : 1 + progress * 0.03
+    const cinematicZoom = isPosterFallback ? 1.04 + progress * 0.06 : 1 + progress * 0.03
     const scale = baseScale * cinematicZoom
     const drawW = img.naturalWidth * scale
     const drawH = img.naturalHeight * scale
     const isDesktop = cssWidth >= 900
-    const horizontalBias =
-      isPosterFallback && isDesktop
-        ? Math.min(cssWidth * 0.13 * (1 - progress * 0.55), (drawW - cssWidth) * 0.45 + cssWidth * 0.13)
-        : 0
-    const drawX = (cssWidth - drawW) * 0.5 + horizontalBias
+    const maxHorizontalShift = Math.max(0, (drawW - cssWidth) * 0.5)
+    const desiredBias = isPosterFallback && isDesktop ? cssWidth * 0.06 * (1 - progress * 0.55) : 0
+    const horizontalBias = Math.min(desiredBias, maxHorizontalShift)
+    const drawX = Math.min(0, Math.max(cssWidth - drawW, (cssWidth - drawW) * 0.5 + horizontalBias))
     // Anchor close to the top (0.04) so the technician's forehead & hair always have generous headroom below the navbar
     const drawY = Math.min(0, (cssHeight - drawH) * 0.04)
 
@@ -278,26 +281,28 @@ export function HeroScrollCanvas({
         beat1Ref.current.style.pointerEvents = beat1Opacity > 0.15 ? 'auto' : 'none'
       }
       if (readabilityGradientRef.current) {
-        readabilityGradientRef.current.style.opacity = String(0.14 + beat1Opacity * 0.86)
+        readabilityGradientRef.current.style.opacity = String(0.38 + beat1Opacity * 0.62)
       }
 
-      // Beat 2: 24% – 74% (3 separate frosted-glass trust cards glide smoothly in one-by-one)
+      // Beat 2: 20% – 74% (Apple Keynote Spatial Callouts gliding in at staggered heights)
       const beat2FadeOut = rangeProgress(progress, 0.72, 0.88)
-      const badgeConfigs = [
-        { ref: badge1Ref, start: 0.22, end: 0.36 },
-        { ref: badge2Ref, start: 0.29, end: 0.43 },
-        { ref: badge3Ref, start: 0.36, end: 0.5 },
+      const spatialConfigs = [
+        { ref: beat2HeadingRef, start: 0.18, end: 0.31, xFrom: -18, yFrom: 18 },
+        { ref: badge1Ref, start: 0.23, end: 0.37, xFrom: -22, yFrom: 22 },
+        { ref: badge2Ref, start: 0.29, end: 0.43, xFrom: -18, yFrom: 26 },
+        { ref: badge3Ref, start: 0.35, end: 0.49, xFrom: 22, yFrom: 20 },
       ]
       let anyBadgeVisible = false
-      badgeConfigs.forEach(({ ref, start, end }) => {
+      spatialConfigs.forEach(({ ref, start, end, xFrom, yFrom }) => {
         if (!ref.current) return
         const enter = rangeProgress(progress, start, end)
         const opacity = enter * (1 - beat2FadeOut)
         if (opacity > 0.05) anyBadgeVisible = true
-        const translateY = (1 - enter) * 28 - beat2FadeOut * 18
+        const translateX = (1 - enter) * xFrom
+        const translateY = (1 - enter) * yFrom - beat2FadeOut * 18
         const scale = 0.96 + enter * 0.04
         ref.current.style.opacity = String(opacity)
-        ref.current.style.transform = `translate3d(0, ${translateY}px, 0) scale(${scale})`
+        ref.current.style.transform = `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`
       })
       if (beat2Ref.current) {
         beat2Ref.current.style.pointerEvents = anyBadgeVisible ? 'auto' : 'none'
@@ -333,8 +338,8 @@ export function HeroScrollCanvas({
     if (searchQuery.trim()) {
       params.set('q', searchQuery.trim())
     }
-    if (selectedCity && selectedCity !== 'Other City') {
-      params.set('city', selectedCity)
+    if (selectedCity && selectedCity !== 'All Districts') {
+      params.set('location', selectedCity)
     }
     const qs = params.toString()
     navigate(qs ? `/search?${qs}` : '/search')
@@ -383,8 +388,18 @@ export function HeroScrollCanvas({
             <div className={styles.heroEyebrow}>
               <span className={styles.liveDot} aria-hidden="true" />
               <span>
-                {activeCityObj.availablePros} vetted pros available in{' '}
-                <strong>{activeCityObj.label}</strong> today
+                {typeof liveListingCount === 'number' && liveListingCount > 0 ? (
+                  <>
+                    <strong>{liveListingCount}</strong> verified active{' '}
+                    {liveListingCount === 1 ? 'service' : 'services'} in{' '}
+                    <strong>{activeCityObj.label}</strong>
+                  </>
+                ) : (
+                  <>
+                    Admin-verified local services · <strong>{activeCityObj.label}</strong> (
+                    {activeCityObj.region})
+                  </>
+                )}
               </span>
             </div>
 
@@ -394,8 +409,9 @@ export function HeroScrollCanvas({
             </h1>
 
             <p className={styles.heroSubtext}>
-              Direct rates, verified profiles, and escrow payment protection up to{' '}
-              <strong>Rs. 1,000,000</strong> across Colombo, Kandy, Galle and suburbs.
+              Compare admin-verified providers, upfront price-locked LKR rates, and escrow
+              protection with a <strong>72-hour dispute window</strong> across{' '}
+              <strong>{districtCount} Sri Lankan districts</strong>.
             </p>
 
             {/* Elevated Interactive Search Bar */}
@@ -451,44 +467,62 @@ export function HeroScrollCanvas({
               <div className={styles.heroTrustCaption}>
                 <CheckCircleIcon size={15} className={styles.heroTrustIcon} />
                 <span>
-                  <strong>Government NIC &amp; NVQ Validated</strong> · Direct booking with zero
-                  hidden contractor markups
+                  <strong>Admin-Verified Providers</strong> · Price-locked LKR bookings with 48h
+                  review &amp; 72h dispute protection
                 </span>
               </div>
             </form>
           </div>
         </div>
 
-        {/* BEAT 2 (24% – 74%): 3 Staggered Frosted-Glass Trust Cards Docked Cleanly Over Full-Bleed Scene */}
+        {/* BEAT 2 (20% – 74%): Concept B — Apple Keynote Spatial Callouts Framed Around Technician */}
         <div ref={beat2Ref} className={styles.heroBeat2Layer} aria-label="Platform trust highlights">
-          <div className={styles.heroBeat2Dock}>
-            <div ref={badge1Ref} className={styles.glassBadge}>
-              <span className={styles.glassBadgeIcon}>
-                <CheckCircleIcon size={20} />
-              </span>
-              <div>
-                <p className={styles.glassBadgeTitle}>100% NIC &amp; NVQ Verified Pros</p>
-                <p className={styles.glassBadgeSub}>Every identity &amp; trade certificate manually audited</p>
+          <div className={styles.heroBeat2Spatial}>
+            <div className={styles.heroBeat2LeftRail}>
+              <div ref={beat2HeadingRef} className={styles.beat2EditorialHeader}>
+                <span className={styles.beat2Eyebrow}>
+                  <span className={styles.beat2EyebrowDot} aria-hidden="true" />
+                  Verified Local Marketplace
+                </span>
+                <h2 className={styles.beat2Headline}>
+                  Built for absolute <span className={styles.beat2HeadlineAccent}>certainty.</span>
+                </h2>
+                <p className={styles.beat2Subcopy}>
+                  Every provider manually audited by Admin. Every booking protected in escrow.
+                </p>
+              </div>
+
+              <div ref={badge1Ref} className={`${styles.glassBadge} ${styles.spatialCalloutPrimary}`}>
+                <span className={`${styles.glassBadgeIcon} ${styles.glassBadgeIconTeal}`}>
+                  <TrustVerifiedSealIcon size={26} />
+                </span>
+                <div>
+                  <p className={styles.glassBadgeTitle}>100% Admin-Verified Providers</p>
+                  <p className={styles.glassBadgeSub}>NIC, business &amp; trade documents audited before publishing</p>
+                </div>
+                <span className={styles.spatialAnchorDot} aria-hidden="true" />
+              </div>
+
+              <div ref={badge2Ref} className={`${styles.glassBadge} ${styles.spatialCalloutOffset}`}>
+                <span className={`${styles.glassBadgeIcon} ${styles.glassBadgeIconEmerald}`}>
+                  <TrustEscrowVaultIcon size={26} />
+                </span>
+                <div>
+                  <p className={styles.glassBadgeTitle}>Escrow &amp; 72h Dispute Protection</p>
+                  <p className={styles.glassBadgeSub}>Payments held safely through 48h review &amp; 72h dispute window</p>
+                </div>
               </div>
             </div>
 
-            <div ref={badge2Ref} className={styles.glassBadge}>
-              <span className={styles.glassBadgeIcon}>
-                <ShieldCheckIcon size={20} />
-              </span>
-              <div>
-                <p className={styles.glassBadgeTitle}>Rs. 1,000,000 Escrow Cover</p>
-                <p className={styles.glassBadgeSub}>Funds locked securely until you inspect &amp; sign off</p>
-              </div>
-            </div>
-
-            <div ref={badge3Ref} className={styles.glassBadge}>
-              <span className={styles.glassBadgeIcon}>
-                <ZapIcon size={20} />
-              </span>
-              <div>
-                <p className={styles.glassBadgeTitle}>0% Middleman Markup — Direct Rates</p>
-                <p className={styles.glassBadgeSub}>Published fixed &amp; hourly rates across 25 districts</p>
+            <div className={styles.heroBeat2RightRail}>
+              <div ref={badge3Ref} className={`${styles.glassBadge} ${styles.spatialCalloutRight}`}>
+                <span className={`${styles.glassBadgeIcon} ${styles.glassBadgeIconAmber}`}>
+                  <TrustPriceLockIcon size={26} />
+                </span>
+                <div>
+                  <p className={styles.glassBadgeTitle}>Price-Locked Upfront LKR Rates</p>
+                  <p className={styles.glassBadgeSub}>Fixed, hourly &amp; quote rates snapshot-locked across 25 districts</p>
+                </div>
               </div>
             </div>
           </div>

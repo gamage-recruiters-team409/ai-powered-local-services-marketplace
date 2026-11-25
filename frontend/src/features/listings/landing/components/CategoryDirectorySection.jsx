@@ -20,8 +20,13 @@ import {
   iconCatMoving,
   iconCatVideo,
 } from '../../assets'
-import { CURATED_CATEGORIES } from '../data/landingContent'
-import { ArrowRightIcon, CheckCircleIcon, SearchIcon } from './LandingIcons'
+import {
+  ArrowRightIcon,
+  ArrowUpRightIcon,
+  CheckCircleIcon,
+  EditorialBurstAccent,
+  SearchIcon,
+} from './LandingIcons'
 import styles from '../styles/publicLanding.module.css'
 
 const CATEGORY_ICON_MAP = {
@@ -137,17 +142,16 @@ function resolveCategoryVisual(category, index) {
 
 export function CategoryDirectorySection({
   selectedCity = 'Colombo',
-  liveCategories = null,
+  liveCategories = [],
+  loading = false,
+  error = false,
+  onRetry,
 }) {
   const navigate = useNavigate()
   const [filterText, setFilterText] = useState('')
 
   const categories = useMemo(() => {
-    const source =
-      Array.isArray(liveCategories) && liveCategories.length > 0
-        ? liveCategories
-        : CURATED_CATEGORIES
-
+    const source = Array.isArray(liveCategories) ? liveCategories : []
     return source.map((cat, idx) => {
       const visual = resolveCategoryVisual(cat, idx)
       return {
@@ -156,7 +160,7 @@ export function CategoryDirectorySection({
         slug: cat.slug,
         description:
           cat.description ||
-          'Verified LocalServe technicians with transparent rates and escrow protection.',
+          'Admin-managed service category with verified LocalServe providers.',
         iconImg: visual.img,
         panelBg: visual.panelBg,
         panelBgEnd: visual.panelBgEnd,
@@ -197,8 +201,8 @@ export function CategoryDirectorySection({
     const params = new URLSearchParams()
     if (queryText) params.set('q', queryText)
     if (slug) params.set('category', slug)
-    if (selectedCity && selectedCity !== 'Other City') {
-      params.set('city', selectedCity)
+    if (selectedCity && selectedCity !== 'All Districts') {
+      params.set('location', selectedCity)
     }
     navigate(`/search?${params.toString()}`)
   }
@@ -213,46 +217,92 @@ export function CategoryDirectorySection({
         <div className={styles.directoryHeaderRow}>
           <div>
             <span className={styles.sectionPill}>
-              {selectedCity === 'Other City'
+              {selectedCity === 'All Districts'
                 ? 'Available Islandwide (25 Districts)'
                 : `Available in ${selectedCity} & Suburbs`}
             </span>
             <h2 id="service-directory-heading" className={styles.sectionTitle}>
               Explore Service Directory By Category
+              <EditorialBurstAccent size={24} className={styles.editorialBurstInline} />
             </h2>
             <p className={styles.sectionSubtitle}>
-              Specialized trade standards, upfront estimates, and government-verified technicians.
+              Live categories and subcategories managed directly from the LocalServe catalogue
+              database.
             </p>
           </div>
 
-          <div className={styles.directoryControls}>
-            <div className={styles.directoryCountBadge}>
-              <strong>
-                {categories.length}{' '}
-                {categories.length === 1 ? 'Primary Category' : 'Primary Categories'}
-              </strong>
-              <span aria-hidden="true">·</span>
-              <span>
-                {totalSubcategories}{' '}
-                {totalSubcategories === 1 ? 'Subcategory' : 'Subcategories'}
-              </span>
-            </div>
+          {categories.length > 0 && (
+            <div className={styles.directoryControls}>
+              <div className={styles.directoryCountBadge}>
+                <strong>
+                  {categories.length}{' '}
+                  {categories.length === 1 ? 'Primary Category' : 'Primary Categories'}
+                </strong>
+                <span aria-hidden="true">·</span>
+                <span>
+                  {totalSubcategories}{' '}
+                  {totalSubcategories === 1 ? 'Subcategory' : 'Subcategories'}
+                </span>
+              </div>
 
-            <div className={styles.directorySearchWrap}>
-              <SearchIcon size={16} className={styles.directorySearchIcon} />
-              <input
-                type="search"
-                className={styles.directorySearchInput}
-                placeholder="Filter categories or services..."
-                aria-label="Filter categories or subcategories"
-                value={filterText}
-                onChange={(e) => setFilterText(e.target.value)}
-              />
+              <div className={styles.directorySearchWrap}>
+                <SearchIcon size={16} className={styles.directorySearchIcon} />
+                <input
+                  type="search"
+                  className={styles.directorySearchInput}
+                  placeholder="Filter categories or services..."
+                  aria-label="Filter categories or subcategories"
+                  value={filterText}
+                  onChange={(e) => setFilterText(e.target.value)}
+                />
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
-        {filteredCategories.length === 0 ? (
+        {loading ? (
+          <div className={styles.directoryGrid} aria-busy="true" aria-label="Loading service categories">
+            {[0, 1, 2].map((slot) => (
+              <div key={slot} className={styles.liveSkeletonCard}>
+                <div className={styles.liveSkeletonBanner} />
+                <div className={styles.liveSkeletonLineLg} />
+                <div className={styles.liveSkeletonLineSm} />
+              </div>
+            ))}
+          </div>
+        ) : error ? (
+          <div className={styles.directoryEmpty} role="status">
+            <p>
+              Unable to reach the live category catalogue right now. Start the backend server or
+              try again.
+            </p>
+            <div className={styles.emptyActionRow}>
+              {onRetry && (
+                <button type="button" className={styles.directoryClearBtn} onClick={onRetry}>
+                  Retry Loading Categories
+                </button>
+              )}
+              <button
+                type="button"
+                className={styles.directoryClearBtn}
+                onClick={() => navigate('/search')}
+              >
+                Open Service Search
+              </button>
+            </div>
+          </div>
+        ) : categories.length === 0 ? (
+          <div className={styles.directoryEmpty} role="status">
+            <p>No active service categories are published in the catalogue yet.</p>
+            <button
+              type="button"
+              className={styles.directoryClearBtn}
+              onClick={() => navigate('/search')}
+            >
+              Browse Marketplace Search
+            </button>
+          </div>
+        ) : filteredCategories.length === 0 ? (
           <div className={styles.directoryEmpty}>
             <p>
               No categories or subcategories matched <strong>&ldquo;{filterText}&rdquo;</strong>.
@@ -262,18 +312,17 @@ export function CategoryDirectorySection({
               className={styles.directoryClearBtn}
               onClick={() => setFilterText('')}
             >
-              Clear filter
+              Clear Filter
             </button>
           </div>
         ) : (
           <div className={styles.directoryGrid}>
             {filteredCategories.map((category) => {
-              const hasSubcategories = category.subcategories.length > 0
-              const shortLabel = category.name.split('&')[0].trim()
+              const subCount = category.subcategories.length
+              const shortLabel = category.name.split(/[&,]/)[0].trim()
 
               return (
                 <article key={category.id} className={styles.categoryCard}>
-                  {/* Inset Rounded Pastel Spotlight Panel */}
                   <div
                     className={styles.categoryPastelPanel}
                     style={{
@@ -286,19 +335,15 @@ export function CategoryDirectorySection({
                         <img
                           src={category.iconImg}
                           alt=""
-                          width="42"
-                          height="42"
+                          width="36"
+                          height="36"
                           className={styles.categorySvgIcon}
                         />
                       </span>
 
                       <span className={styles.categoryStatusPill}>
-                        {hasSubcategories
-                          ? `${category.subcategories.length} ${
-                              category.subcategories.length === 1
-                                ? 'Subcategory'
-                                : 'Subcategories'
-                            }`
+                        {subCount > 0
+                          ? `${subCount} ${subCount === 1 ? 'Specialty' : 'Specialties'}`
                           : 'Direct Booking'}
                       </span>
                     </div>
@@ -307,9 +352,8 @@ export function CategoryDirectorySection({
                     <p className={styles.categoryDesc}>{category.description}</p>
                   </div>
 
-                  {/* Lower White Body: Subcategory Rows OR Soft Mint Direct-Booking Banner */}
                   <div className={styles.categoryCardBody}>
-                    {hasSubcategories ? (
+                    {subCount > 0 ? (
                       <ul className={styles.subcategoryList}>
                         {category.subcategories.map((sub) => (
                           <li key={sub.id || sub.slug} className={styles.subcategoryListItem}>
@@ -332,13 +376,12 @@ export function CategoryDirectorySection({
                           onClick={() => handleOpenSearch(category.name, category.slug)}
                         >
                           <CheckCircleIcon size={16} className={styles.directBookingIcon} />
-                          <span>Verified pros available for direct booking</span>
+                          <span>Verified pros available for booking</span>
                         </button>
                       </div>
                     )}
                   </div>
 
-                  {/* Right-Aligned Footer CTA */}
                   <div className={styles.categoryCardFoot}>
                     <button
                       type="button"
@@ -346,7 +389,9 @@ export function CategoryDirectorySection({
                       onClick={() => handleOpenSearch(category.name, category.slug)}
                     >
                       <span>Explore {shortLabel}</span>
-                      <ArrowRightIcon size={15} className={styles.categoryExploreArrow} />
+                      <span className={styles.categoryExploreOrb} aria-hidden="true">
+                        <ArrowUpRightIcon size={14} className={styles.categoryExploreArrow} />
+                      </span>
                     </button>
                   </div>
                 </article>
