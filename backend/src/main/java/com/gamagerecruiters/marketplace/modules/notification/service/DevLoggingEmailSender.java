@@ -56,9 +56,11 @@ public class DevLoggingEmailSender implements EmailSender {
             return "Email data is required";
         }
 
-        String[] requiredKeys = type == EmailType.ACCOUNT_VERIFICATION
-                ? new String[]{"name", "verificationLink", "expiresInMinutes"}
-                : new String[]{"name", "resetLink", "expiresInMinutes"};
+        String[] requiredKeys = switch (type) {
+            case ACCOUNT_VERIFICATION -> new String[]{"name", "verificationLink", "expiresInMinutes"};
+            case PASSWORD_RESET -> new String[]{"name", "resetLink", "expiresInMinutes"};
+            case NOTIFICATION -> new String[]{"name", "title", "message"};
+        };
 
         for (String key : requiredKeys) {
             if (!data.containsKey(key)) {

@@ -5,5 +5,6 @@ package com.gamagerecruiters.marketplace.modules.notification.service;
  */
 public enum EmailType {
     ACCOUNT_VERIFICATION,
-    PASSWORD_RESET
+    PASSWORD_RESET,
+    NOTIFICATION
 }
