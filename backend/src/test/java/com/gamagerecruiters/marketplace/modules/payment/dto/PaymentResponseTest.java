@@ -2,14 +2,18 @@
 package com.gamagerecruiters.marketplace.modules.payment.dto;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 
 import org.junit.jupiter.api.Test;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 
@@ -158,5 +162,44 @@ class PaymentResponseTest {
         org.junit.jupiter.api.Assertions.assertEquals(
                 java.time.Instant.parse("2026-11-19T06:30:00Z"),
                 response.paidAt());
+    }
+
+    @Test
+    void serializesToExpectedCamelCaseJsonContract() throws Exception {
+        Payment payment = createPayment();
+        payment.setReceiptReference("rcpt-999");
+        payment.setRefundReference("ref-888");
+        payment.setRefundStatus("PROCESSING");
+        payment.setPaidAt(Instant.parse("2026-11-11T17:05:00Z"));
+
+        PaymentResponse response = PaymentResponse.from(payment);
+
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        String json = objectMapper.writeValueAsString(response);
+        JsonNode tree = objectMapper.readTree(json);
+
+        // Required customer contract fields in camelCase
+        assertTrue(tree.has("paymentId"), "Must have paymentId");
+        assertTrue(tree.has("bookingId"), "Must have bookingId");
+        assertTrue(tree.has("amount"), "Must have amount");
+        assertTrue(tree.has("currency"), "Must have currency");
+        assertTrue(tree.has("status"), "Must have status");
+        assertTrue(tree.has("refundedAmount"), "Must have refundedAmount");
+        assertTrue(tree.has("createdAt"), "Must have createdAt");
+        assertTrue(tree.has("receiptReference"), "Must have receiptReference");
+        assertTrue(tree.has("refundReference"), "Must have refundReference");
+        assertTrue(tree.has("refundStatus"), "Must have refundStatus");
+        assertTrue(tree.has("paidAt"), "Must have paidAt");
+
+        // Values match
+        assertEquals("payment-123", tree.get("paymentId").asText());
+        assertEquals("rcpt-999", tree.get("receiptReference").asText());
+        assertEquals("ref-888", tree.get("refundReference").asText());
+        assertEquals("PROCESSING", tree.get("refundStatus").asText());
+
+        // Internal fields never exposed
+        assertFalse(tree.has("gatewayRef"), "Internal gatewayRef must not be exposed");
+        assertFalse(tree.has("commissionRate"), "Internal commissionRate must not be exposed");
+        assertFalse(tree.has("commissionAmount"), "Internal commissionAmount must not be exposed");
     }
 }
