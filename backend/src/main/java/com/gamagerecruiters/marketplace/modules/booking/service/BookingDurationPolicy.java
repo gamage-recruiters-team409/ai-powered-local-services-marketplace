@@ -17,17 +17,24 @@ public final class BookingDurationPolicy {
     private BookingDurationPolicy() {
     }
 
-    /** Service minutes → minutes blocked in the calendar (rounded up to 15, at least 15). */
+    /**
+     * Service minutes → minutes blocked in the calendar (rounded up to 15, at least 15).
+     * Only for schedulable values (1–480): anything else is rejected BEFORE the arithmetic,
+     * so a huge value (e.g. Integer.MAX_VALUE) can never overflow into a short booking.
+     */
     public static int toScheduledMinutes(int serviceMinutes) {
-        if (serviceMinutes <= 0) {
-            throw new IllegalArgumentException("serviceMinutes must be positive");
+        if (!isSchedulable(serviceMinutes)) {
+            throw new IllegalArgumentException("serviceMinutes must be between 1 and " + MAX_SCHEDULED_MINUTES);
         }
         int rounded = ((serviceMinutes + GRID_MINUTES - 1) / GRID_MINUTES) * GRID_MINUTES;
         return Math.max(rounded, MIN_SCHEDULED_MINUTES);
     }
 
-    /** True when the service fits in one booking (1 to 480 minutes after rounding). */
+    /**
+     * True when the service fits in one booking: 1 to 480 minutes. 480 is on the grid, so every value in
+     * this range rounds up to at most 480. Range check only – no arithmetic, so no overflow.
+     */
     public static boolean isSchedulable(int serviceMinutes) {
-        return serviceMinutes > 0 && toScheduledMinutes(serviceMinutes) <= MAX_SCHEDULED_MINUTES;
+        return serviceMinutes >= 1 && serviceMinutes <= MAX_SCHEDULED_MINUTES;
     }
 }

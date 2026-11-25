@@ -35,4 +35,12 @@ public class BookingPaymentPolicy {
     public Instant expireDueBefore(Instant now) {
         return now.minus(expiryGrace);
     }
+
+    /**
+     * The one timeout rule for WP05 and WP07: payment has timed out only when paymentDueAt + grace is
+     * strictly before {@code now}. Used by both BookingExpiryJob (query) and markPaymentExpired.
+     */
+    public boolean isPaymentTimedOut(Instant paymentDueAt, Instant now) {
+        return paymentDueAt != null && paymentDueAt.isBefore(expireDueBefore(now));
+    }
 }

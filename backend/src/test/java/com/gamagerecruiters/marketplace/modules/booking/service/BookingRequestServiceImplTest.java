@@ -21,8 +21,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -417,7 +417,7 @@ class BookingRequestServiceImplTest {
     }
 
     @ParameterizedTest(name = "{0} minutes → 409 DURATION_NOT_SCHEDULABLE")
-    @ValueSource(ints = {481, 600, 1440})
+    @ValueSource(ints = {481, 600, 1440, Integer.MAX_VALUE, Integer.MAX_VALUE - 13})
     @DisplayName("WP03 allows longer services than one booking: rejected before any slot check or write")
     void overLimitDurationRejected(int totalMinutes) {
         loginAs(CUSTOMER, Role.CUSTOMER);

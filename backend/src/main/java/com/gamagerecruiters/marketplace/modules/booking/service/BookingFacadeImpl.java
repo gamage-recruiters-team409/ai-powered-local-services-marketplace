@@ -71,15 +71,17 @@ public class BookingFacadeImpl implements BookingFacade {
     }
 
     private final BookingRepository bookingRepository;
+    private final BookingPaymentPolicy paymentPolicy;
     private final Clock clock;
 
     @Autowired
-    public BookingFacadeImpl(BookingRepository bookingRepository) {
-        this(bookingRepository, Clock.systemUTC());
+    public BookingFacadeImpl(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy) {
+        this(bookingRepository, paymentPolicy, Clock.systemUTC());
     }
 
-    BookingFacadeImpl(BookingRepository bookingRepository, Clock clock) {
+    BookingFacadeImpl(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy, Clock clock) {
         this.bookingRepository = bookingRepository;
+        this.paymentPolicy = paymentPolicy;
         this.clock = clock;
     }
 
@@ -250,9 +252,11 @@ public class BookingFacadeImpl implements BookingFacade {
         }
         assertStartsFrom(booking, FROM_AWAITING_PAYMENT, BookingStatus.EXPIRED);
         Instant now = Instant.now(clock);
-        if (booking.getPaymentDueAt() == null || now.isBefore(booking.getPaymentDueAt())) {
+        // Same rule as BookingExpiryJob: only after paymentDueAt + grace, so a payment that started just
+        // before the deadline can still be confirmed during the grace period.
+        if (!paymentPolicy.isPaymentTimedOut(booking.getPaymentDueAt(), now)) {
             throw new ResourceConflictException("PAYMENT_NOT_DUE",
-                    "The payment time for this booking has not passed yet");
+                    "The payment time for this booking, including the grace period, has not passed yet");
         }
 
         booking.changeStatus(BookingStatus.EXPIRED, BookingStatusChange.SYSTEM, "Payment not completed", now);

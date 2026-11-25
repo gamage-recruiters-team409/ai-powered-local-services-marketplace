@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -65,7 +66,8 @@ class BookingFacadePaymentTest {
 
     @BeforeEach
     void setUp() {
-        facade = new BookingFacadeImpl(bookingRepository, Clock.fixed(NOW, ZoneOffset.UTC));
+        facade = new BookingFacadeImpl(bookingRepository, new BookingPaymentPolicy(15, 15),
+                Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @AfterEach
@@ -347,9 +349,10 @@ class BookingFacadePaymentTest {
     // ---- markPaymentExpired ----
 
     @Test
-    @DisplayName("Expired after paymentDueAt: AWAITING_PAYMENT → EXPIRED as SYSTEM")
+    @DisplayName("Expired after paymentDueAt + 15 min grace: AWAITING_PAYMENT → EXPIRED as SYSTEM")
     void expire() {
         Booking booking = awaitingPayment();
+        booking.setPaymentDueAt(NOW.minus(Duration.ofMinutes(16)));
         givenSaveReturnsArgument();
 
         BookingParticipants result = asPaymentModule(() -> facade.markPaymentExpired("b-1", PAY_REF));
@@ -367,6 +370,42 @@ class BookingFacadePaymentTest {
                 .isInstanceOf(ResourceConflictException.class)
                 .satisfies(e -> assertErrorCode(e, "PAYMENT_NOT_DUE"));
         verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    @ParameterizedTest(name = "paymentDueAt {0} min before now → 409 PAYMENT_NOT_DUE")
+    @ValueSource(ints = {0, 1, 5, 14, 15})
+    @DisplayName("During the grace period (up to and including due + 15 min) → 409 PAYMENT_NOT_DUE, nothing saved")
+    void expireDuringGrace(int minutesSinceDue) {
+        awaitingPayment().setPaymentDueAt(NOW.minus(Duration.ofMinutes(minutesSinceDue)));
+
+        assertThatThrownBy(() -> asPaymentModule(() -> facade.markPaymentExpired("b-1", PAY_REF)))
+                .isInstanceOf(ResourceConflictException.class)
+                .satisfies(e -> assertErrorCode(e, "PAYMENT_NOT_DUE"));
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    @ParameterizedTest(name = "paymentDueAt {0} s before now → facade and expiry job agree")
+    @ValueSource(ints = {-60, 0, 300, 899, 900, 901, 3600})
+    @DisplayName("Facade and BookingExpiryJob use the same timeout rule (paymentDueAt + grace < now)")
+    void facadeMatchesExpiryJobRule(int secondsSinceDue) {
+        BookingPaymentPolicy policy = new BookingPaymentPolicy(15, 15);
+        Instant due = NOW.minusSeconds(secondsSinceDue);
+        boolean jobWouldExpire = due.isBefore(policy.expireDueBefore(NOW));
+
+        assertThat(policy.isPaymentTimedOut(due, NOW)).isEqualTo(jobWouldExpire);
+        assertThat(jobWouldExpire).isEqualTo(secondsSinceDue > 900);
+    }
+
+    @Test
+    @DisplayName("Payment success during the grace period (after paymentDueAt) is still confirmed")
+    void confirmDuringGrace() {
+        Booking booking = awaitingPayment();
+        booking.setPaymentDueAt(NOW.minus(Duration.ofMinutes(5)));
+        givenSaveReturnsArgument();
+
+        BookingParticipants result = asPaymentModule(() -> facade.markPaymentConfirmed("b-1", PAY_REF));
+
+        assertThat(result.status()).isEqualTo(BookingStatus.CONFIRMED);
     }
 
     @Test

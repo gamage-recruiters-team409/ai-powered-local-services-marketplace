@@ -83,6 +83,8 @@ public class BookingExpiryJob {
 
         List<Booking> unpaid = bookingRepository
                 .findTop100ByStatusAndPaymentDueAtBeforeOrderByPaymentDueAtAsc(
+                        // paymentDueAt < now - grace: the same rule as BookingPaymentPolicy.isPaymentTimedOut,
+                        // which markPaymentExpired (WP07) also uses.
                         BookingStatus.AWAITING_PAYMENT, paymentPolicy.expireDueBefore(now));
         int payments = expireAll(unpaid, "Payment not completed in time", now);
 

@@ -20,16 +20,26 @@ class BookingDurationPolicyTest {
     }
 
     @ParameterizedTest(name = "{0} minutes is not schedulable")
-    @ValueSource(ints = {0, -10, 481, 495, 1440, 6240})
+    @ValueSource(ints = {0, -10, 481, 495, 1440, 6240, Integer.MAX_VALUE, Integer.MAX_VALUE - 1, Integer.MAX_VALUE - 13,
+            Integer.MAX_VALUE - 14, Integer.MAX_VALUE - 15, Integer.MIN_VALUE})
     @DisplayName("Zero, negative and longer than one working day (480) are not schedulable")
     void notSchedulable(int service) {
         assertThat(BookingDurationPolicy.isSchedulable(service)).isFalse();
     }
 
-    @Test
-    @DisplayName("toScheduledMinutes rejects non-positive input")
-    void rejectsNonPositive() {
-        assertThatThrownBy(() -> BookingDurationPolicy.toScheduledMinutes(0))
+    @ParameterizedTest(name = "toScheduledMinutes({0}) is rejected, never rounded to a short booking")
+    @ValueSource(ints = {0, -1, 481, Integer.MAX_VALUE, Integer.MAX_VALUE - 13, Integer.MAX_VALUE - 14,
+            Integer.MIN_VALUE})
+    @DisplayName("Out-of-range input is rejected before any arithmetic (no int overflow)")
+    void rejectsOutOfRangeBeforeArithmetic(int service) {
+        assertThatThrownBy(() -> BookingDurationPolicy.toScheduledMinutes(service))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("Boundary: 480 → 480 accepted, 481 rejected")
+    void limitBoundary() {
+        assertThat(BookingDurationPolicy.toScheduledMinutes(480)).isEqualTo(480);
+        assertThat(BookingDurationPolicy.isSchedulable(481)).isFalse();
     }
 }

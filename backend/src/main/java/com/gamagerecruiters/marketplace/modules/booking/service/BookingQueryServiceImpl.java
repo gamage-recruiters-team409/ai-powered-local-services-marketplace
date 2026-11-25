@@ -36,7 +36,8 @@ public class BookingQueryServiceImpl implements BookingQueryService {
 
     static final int MAX_PAGE_SIZE = 50;
 
-    private static final Sort NEWEST_SLOT_FIRST = Sort.by(Sort.Direction.DESC, "slotStart");
+    /** Newest slot first; the unique _id breaks ties so pages never repeat or skip same-time bookings. */
+    static final Sort NEWEST_SLOT_FIRST = Sort.by(Sort.Order.desc("slotStart"), Sort.Order.desc("id"));
     private static final DateTimeFormatter LOCAL_DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd")
             .withZone(SlotServiceImpl.BUSINESS_ZONE);
     private static final DateTimeFormatter LOCAL_TIME = DateTimeFormatter.ofPattern("HH:mm")

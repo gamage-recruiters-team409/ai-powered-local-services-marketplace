@@ -129,9 +129,14 @@ public interface BookingFacade {
     BookingParticipants markPaymentConfirmed(String bookingId, String paymentReference);
 
     /**
-     * Payment not completed: AWAITING_PAYMENT → EXPIRED (slot released), only once paymentDueAt has
-     * passed (409 PAYMENT_NOT_DUE). Same caller rule as {@link #markPaymentConfirmed}. Idempotent: a booking
-     * already expired from AWAITING_PAYMENT (by WP07 or the booking expiry job) is returned unchanged.
+     * Payment timed out: AWAITING_PAYMENT → EXPIRED (slot released). Only after paymentDueAt + the
+     * configured grace ({@code booking.payment.expiry-grace-minutes}, default 15) – the same rule as the
+     * booking expiry job ({@link BookingPaymentPolicy#isPaymentTimedOut}); earlier → 409 PAYMENT_NOT_DUE.
+     * There is no early expiry: a failed or cancelled payment attempt leaves the booking AWAITING_PAYMENT so
+     * the customer can retry until the timeout. Payment success is accepted at any time while
+     * AWAITING_PAYMENT, including during the grace period.
+     * Same caller rule as {@link #markPaymentConfirmed}. Idempotent: a booking already expired from
+     * AWAITING_PAYMENT (by WP07 or the booking expiry job) is returned unchanged.
      */
     BookingParticipants markPaymentExpired(String bookingId, String paymentReference);
 }

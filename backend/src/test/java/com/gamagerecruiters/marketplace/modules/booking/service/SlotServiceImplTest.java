@@ -278,7 +278,10 @@ class SlotServiceImplTest {
             "p-1, 2026-11-23, 0, INVALID_DURATION",
             "p-1, 2026-11-23, -15, INVALID_DURATION",
             "p-1, 2026-11-23, 481, INVALID_DURATION",
-            "p-1, 2026-11-23, 495, INVALID_DURATION"
+            "p-1, 2026-11-23, 495, INVALID_DURATION",
+            "p-1, 2026-11-23, 2147483647, INVALID_DURATION",
+            "p-1, 2026-11-23, 2147483634, INVALID_DURATION",
+            "p-1, 2026-11-23, 2147483648, INVALID_DURATION"
     })
     void invalidInput(String providerId, String date, String duration, String code) {
         assertThatThrownBy(() -> service.getAvailableSlots(providerId, date, duration))

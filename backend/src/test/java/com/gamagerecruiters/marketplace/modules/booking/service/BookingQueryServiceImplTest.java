@@ -105,7 +105,8 @@ class BookingQueryServiceImplTest {
 
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
         verify(bookingRepository).findByCustomerId(eq(CUSTOMER), pageable.capture());
-        assertThat(pageable.getValue().getSort()).isEqualTo(Sort.by(Sort.Direction.DESC, "slotStart"));
+        assertThat(pageable.getValue().getSort())
+                .isEqualTo(Sort.by(Sort.Order.desc("slotStart"), Sort.Order.desc("id")));
         assertThat(page.totalElements()).isEqualTo(1);
         BookingListItem item = page.content().get(0);
         assertThat(item.serviceTitle()).isEqualTo("AC Repair");
