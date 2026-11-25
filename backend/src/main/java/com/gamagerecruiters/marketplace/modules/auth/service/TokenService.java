@@ -20,6 +20,8 @@ public interface TokenService {
 
     String getEmailFromToken(String token);
 
+    String getTokenType(String token);
+
     long getAccessTokenExpirationSeconds();
 
     long getRefreshTokenExpirationSeconds();
