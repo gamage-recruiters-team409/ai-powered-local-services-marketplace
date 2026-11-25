@@ -23,7 +23,8 @@ public record AdminAuditLogResponse(
         Instant createdAt,
         Instant completedAt,
         String correlationId,
-        String relatedAuditLogId
+        String relatedAuditLogId,
+        AuditOutcome listingVisibilitySync
 ) {
 
     public static AdminAuditLogResponse from(AdminAuditLog log) {
@@ -31,6 +32,7 @@ public record AdminAuditLogResponse(
                 log.getId(), log.getActorId(), log.getActorRole(), log.getAction(),
                 log.getTargetUserId(), log.getTargetRole(), log.getFromStatus(), log.getToStatus(),
                 log.getReason(), log.getOutcome(), log.getFailureCode(), log.getCreatedAt(), log.getCompletedAt(),
-                log.getCorrelationId(), log.getRelatedAuditLogId());
+                log.getCorrelationId(), log.getRelatedAuditLogId(),
+                log.getListingVisibilitySync());
     }
 }
