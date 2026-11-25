@@ -133,6 +133,23 @@ class DisputeSettlementServiceTest {
     }
 
     @Test
+    @DisplayName("legacy settlement with booking already APPLIED and finance retried -> booking port is NOT called again; "
+            + "overall state becomes APPLIED")
+    void legacySettlementPreservesAppliedBooking() {
+        Dispute dispute = release();
+        dispute.getSettlement().setBookingState(SettlementState.APPLIED);
+        when(financePort.settle(any())).thenReturn(SettlementOutcome.APPLIED);
+
+        assertThat(service.settle("d-1")).contains(SettlementState.APPLIED);
+
+        verify(financePort).settle(any());
+        verify(store).recordFinanceApplied("d-1", "token-1", NOW);
+        verify(bookingPort, org.mockito.Mockito.never()).resolveBooking(any());
+        assertThat(recorded()).isEqualTo(new SettlementRecord(SettlementState.APPLIED, SettlementState.APPLIED,
+                SettlementState.APPLIED, false, null, null, null, null));
+    }
+
+    @Test
     @DisplayName("the real stubs: finance NOT_APPLIED (WP07_NOT_INTEGRATED), not a failure, booking never called")
     void stubsAreNeverApplied() {
         release();

@@ -42,10 +42,22 @@ public interface DisputeService {
     DisputeDetailResponse getDisputeForAdmin(String disputeId);
 
     /**
-     * Dispute content for an AI summary (WP01 AI-005). In-process only: there is no HTTP endpoint for it, and the
-     * caller must be authorized to view the dispute. Contains no personal data, ids of the parties or admins, admin
-     * notes or settlement internals (see {@link DisputeAiSummaryData}). A PENDING (unsynced) or unknown dispute:
-     * 404 DISPUTE_NOT_FOUND, as in the party view.
+     * Dispute content for an AI summary (WP01 AI-005). Enforces authorization: only parties to the dispute (customer
+     * or provider) or authorized admins (ADMIN, SUPER_ADMIN) may access it; unauthorized callers receive 403
+     * NOT_DISPUTE_PARTY. Unsynced/unknown disputes return 404 DISPUTE_NOT_FOUND.
+     *
+     * @param disputeId the dispute ID
+     * @param actorId the ID of the calling party or admin
+     * @param actorRole the role of the calling party or admin
+     * @return the AI summary data
+     */
+    DisputeAiSummaryData getDisputeForAiSummary(String disputeId, String actorId, Role actorRole);
+
+    /**
+     * In-process / trusted system overload for dispute content for an AI summary.
+     *
+     * @param disputeId the dispute ID
+     * @return the AI summary data
      */
     DisputeAiSummaryData getDisputeForAiSummary(String disputeId);
 }

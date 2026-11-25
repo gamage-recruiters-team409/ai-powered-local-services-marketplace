@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.dispute.mapper;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.Roles;
@@ -121,9 +122,26 @@ public final class DisputeMapper {
         return dispute.getEvidenceFiles().stream().map(DisputeMapper::toView).toList();
     }
 
+    private static final Pattern EMAIL_PATTERN =
+            Pattern.compile("(?i)(?<![a-z0-9])[a-z0-9][a-z0-9._%+-]*@[a-z0-9.-]+\\.[a-z]{2,}(?![a-z0-9])");
+    private static final Pattern PHONE_PATTERN =
+            Pattern.compile("(?i)(?:\\+?\\d{1,3}[-. ]?)?\\(?\\d{2,4}\\)?[-. ]?\\d{3,4}[-. ]?\\d{3,4}\\b");
+
+    /**
+     * Redacts direct personal identifiers (emails, phone numbers) from user-entered text before AI processing.
+     */
+    public static String redactPii(String text) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        String redacted = EMAIL_PATTERN.matcher(text).replaceAll("[EMAIL]");
+        return PHONE_PATTERN.matcher(redacted).replaceAll("[PHONE]");
+    }
+
     /**
      * Content for an AI summary (WP01 AI-005): only the fields of {@link DisputeAiSummaryData}. Parties become
-     * CUSTOMER / PROVIDER, history actors lose their ids and reasons, decisions are reduced to their result.
+     * CUSTOMER / PROVIDER, history actors lose their ids and reasons, decisions are reduced to their result, and
+     * user-entered text undergoes PII minimization (redacting emails and phone numbers).
      */
     public static DisputeAiSummaryData toAiSummaryData(Dispute dispute, Instant now) {
         boolean isFinal = dispute.getStatus() == DisputeStatus.RESOLVED_FINAL;
@@ -132,10 +150,10 @@ public final class DisputeMapper {
                 dispute.getStatus(),
                 dispute.getCategory(),
                 raiserSide(dispute),
-                dispute.getDescription(),
-                dispute.getResponse() == null ? null : dispute.getResponse().getText(),
+                redactPii(dispute.getDescription()),
+                dispute.getResponse() == null ? null : redactPii(dispute.getResponse().getText()),
                 dispute.getEvidenceFiles().stream()
-                        .map(f -> new DisputeAiSummaryData.EvidenceItem(f.getFileName(),
+                        .map(f -> new DisputeAiSummaryData.EvidenceItem(redactPii(f.getFileName()),
                                 f.getType() == null ? null : f.getType().name()))
                         .toList(),
                 dispute.getStatusHistory().stream()

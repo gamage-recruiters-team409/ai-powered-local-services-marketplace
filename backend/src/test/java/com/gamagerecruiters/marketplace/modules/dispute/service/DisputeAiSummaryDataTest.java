@@ -30,6 +30,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeDecision;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeSettlement;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceFile;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.PartyResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.ResolutionAction;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealStatus;
@@ -253,6 +254,60 @@ class DisputeAiSummaryDataTest {
         when(disputeRepository.findById("missing")).thenReturn(Optional.empty());
 
         assertNotFound(catchThrowable(() -> service.getDisputeForAiSummary("missing")));
+    }
+
+    @Test
+    @DisplayName("authorization enforcement: customer, provider, admin authorized; unrelated party rejected with 403 NOT_DISPUTE_PARTY")
+    void authorizationEnforcedForAiSummary() {
+        when(disputeRepository.findById(DISPUTE_ID)).thenReturn(Optional.of(fullDispute()));
+
+        // Authorized customer
+        DisputeAiSummaryData customerAccess = service.getDisputeForAiSummary(DISPUTE_ID, CUSTOMER_ID, Role.CUSTOMER);
+        assertThat(customerAccess.id()).isEqualTo(DISPUTE_ID);
+
+        // Authorized provider
+        DisputeAiSummaryData providerAccess = service.getDisputeForAiSummary(DISPUTE_ID, PROVIDER_ID, Role.PROVIDER);
+        assertThat(providerAccess.id()).isEqualTo(DISPUTE_ID);
+
+        // Authorized admin
+        DisputeAiSummaryData adminAccess = service.getDisputeForAiSummary(DISPUTE_ID, DECIDING_ADMIN, Role.ADMIN);
+        assertThat(adminAccess.id()).isEqualTo(DISPUTE_ID);
+
+        // Unrelated customer/provider -> 403 NOT_DISPUTE_PARTY
+        Throwable strangerThrown = catchThrowable(() -> service.getDisputeForAiSummary(DISPUTE_ID, "stranger-user-id", Role.CUSTOMER));
+        assertThat(strangerThrown).isInstanceOf(ApiException.class);
+        assertThat(((ApiException) strangerThrown).getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(((ApiException) strangerThrown).getErrorCode()).isEqualTo("NOT_DISPUTE_PARTY");
+
+        // Pending or unknown dispute IDs with actor
+        when(disputeRepository.findById("unknown-id")).thenReturn(Optional.empty());
+        assertNotFound(catchThrowable(() -> service.getDisputeForAiSummary("unknown-id", CUSTOMER_ID, Role.CUSTOMER)));
+    }
+
+    @Test
+    @DisplayName("unrestricted user text (description, response, filenames) undergoes PII minimization (emails and phone numbers redacted)")
+    void userTextPiiMinimization() {
+        Dispute dispute = fullDispute();
+        dispute.setDescription("Call me at +1 555-123-4567 or email customer.test@example.com regarding the sink leak.");
+        dispute.getResponse().setText("I called +94 77 123 4567 and sent receipt to provider.support@example.org.");
+        EvidenceFile evidenceFile = new EvidenceFile();
+        evidenceFile.setId("ev-pii-1");
+        evidenceFile.setFileName("receipt_customer.test@example.com_555-123-4567.pdf");
+        evidenceFile.setType(com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceType.PDF);
+        dispute.setEvidenceFiles(List.of(evidenceFile));
+        when(disputeRepository.findById(DISPUTE_ID)).thenReturn(Optional.of(dispute));
+
+        DisputeAiSummaryData data = service.getDisputeForAiSummary(DISPUTE_ID, CUSTOMER_ID, Role.CUSTOMER);
+
+        assertThat(data.raiserDescription())
+                .isEqualTo("Call me at [PHONE] or email [EMAIL] regarding the sink leak.")
+                .doesNotContain("555-123-4567").doesNotContain("customer.test@example.com");
+        assertThat(data.otherPartyResponse())
+                .isEqualTo("I called [PHONE] and sent receipt to [EMAIL].")
+                .doesNotContain("77 123 4567").doesNotContain("provider.support@example.org");
+        assertThat(data.evidence().get(0).fileName())
+                .isEqualTo("[EMAIL]_[PHONE].pdf")
+                .doesNotContain("customer.test@example.com").doesNotContain("555-123-4567");
     }
 
     private static void assertNotFound(Throwable thrown) {

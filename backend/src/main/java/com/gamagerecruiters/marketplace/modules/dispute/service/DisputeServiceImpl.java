@@ -25,6 +25,7 @@ import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.security.Roles;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.BookingSyncState;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
@@ -429,6 +430,13 @@ public class DisputeServiceImpl implements DisputeService {
     }
 
     @Override
+    public DisputeAiSummaryData getDisputeForAiSummary(String disputeId, String actorId, Role actorRole) {
+        Dispute dispute = findDispute(disputeId);
+        assertCanViewDispute(dispute, actorId, actorRole);
+        return DisputeMapper.toAiSummaryData(dispute, clock.instant());
+    }
+
+    @Override
     public DisputeAiSummaryData getDisputeForAiSummary(String disputeId) {
         return DisputeMapper.toAiSummaryData(findDispute(disputeId), clock.instant());
     }
@@ -450,6 +458,17 @@ public class DisputeServiceImpl implements DisputeService {
             throw new ApiException(HttpStatus.FORBIDDEN, "NOT_DISPUTE_PARTY",
                     "You are not a party to this dispute");
         }
+    }
+
+    private static void assertCanViewDispute(Dispute dispute, String actorId, Role actorRole) {
+        if (actorRole != null && Roles.ADMIN_ROLES.contains(actorRole)) {
+            return;
+        }
+        if (actorId != null && dispute.isParty(actorId)) {
+            return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "NOT_DISPUTE_PARTY",
+                "You are not authorized to access this dispute");
     }
 
     private static ResourceConflictException duplicateDispute() {

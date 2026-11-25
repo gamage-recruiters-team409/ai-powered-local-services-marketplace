@@ -184,6 +184,12 @@ public class DisputeSettlementService {
             }
         }
 
+        if (settlement.getBookingState() == SettlementState.APPLIED) {
+            // Historical/legacy settlements where booking was already recorded as APPLIED: preserve and do not repeat.
+            return record(dispute, new SettlementRecord(SettlementState.APPLIED, SettlementState.APPLIED,
+                    SettlementState.APPLIED, false, null, null, null, null), now);
+        }
+
         SettlementOutcome bookingOutcome;
         try {
             bookingOutcome = bookingResolutionPort.resolveBooking(instruction);
