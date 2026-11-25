@@ -46,7 +46,10 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
-/** Evidence rules with a fake storage (no real Cloudinary call) and a mocked MongoTemplate. */
+/**
+ * Evidence rules with a fake storage (no real Cloudinary call) and a mocked
+ * MongoTemplate.
+ */
 class DisputeEvidenceServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-11-20T10:00:00Z");
@@ -79,6 +82,7 @@ class DisputeEvidenceServiceTest {
     static final class FakeStorage implements EvidenceStoragePort {
         boolean available = true;
         boolean failUpload;
+        boolean failDelete;
         final List<String> stored = new ArrayList<>();
         final List<String> deleted = new ArrayList<>();
         Instant lastExpiry;
@@ -106,6 +110,9 @@ class DisputeEvidenceServiceTest {
 
         @Override
         public void delete(String publicId) {
+            if (failDelete) {
+                throw new IllegalStateException("delete failed");
+            }
             deleted.add(publicId);
         }
     }
@@ -156,7 +163,7 @@ class DisputeEvidenceServiceTest {
     // ---------- types by content ----------
 
     @ParameterizedTest
-    @CsvSource({"JPG,photo.jpg", "PNG,screen.png", "WEBP,image.webp", "PDF,receipt.pdf"})
+    @CsvSource({ "JPG,photo.jpg", "PNG,screen.png", "WEBP,image.webp", "PDF,receipt.pdf" })
     @DisplayName("JPG, PNG, WEBP and PDF are accepted, detected from the content; stored under a random id")
     void acceptedTypes(EvidenceType type, String name) {
         byte[] content = switch (type) {
@@ -219,7 +226,7 @@ class DisputeEvidenceServiceTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = DisputeStatus.class, names = {"RESOLVED", "APPEALED", "RESOLVED_FINAL", "CLOSED"})
+    @EnumSource(value = DisputeStatus.class, names = { "RESOLVED", "APPEALED", "RESOLVED_FINAL", "CLOSED" })
     @DisplayName("after the review stage -> 409 EVIDENCE_UPLOAD_CLOSED, nothing stored")
     void closedStatuses(DisputeStatus status) {
         dispute = dispute(status);
@@ -230,7 +237,7 @@ class DisputeEvidenceServiceTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = DisputeStatus.class, names = {"OPEN", "AWAITING_RESPONSE", "UNDER_REVIEW"})
+    @EnumSource(value = DisputeStatus.class, names = { "OPEN", "AWAITING_RESPONSE", "UNDER_REVIEW" })
     @DisplayName("OPEN, AWAITING_RESPONSE and UNDER_REVIEW accept evidence")
     void openStatuses(DisputeStatus status) {
         dispute = dispute(status);
@@ -335,7 +342,7 @@ class DisputeEvidenceServiceTest {
             "C:\\Users\\me\\My Photo (1).jpg|My Photo (1).png",
             "<script>alert(1)</script>.png|script_.png",
             "'.png'|evidence.png",
-            "|evidence.png"})
+            "|evidence.png" })
     @DisplayName("file names are sanitised: no path, safe characters only, detected extension")
     void sanitizedNames(String original, String expected) {
         assertThat(DisputeEvidenceService.sanitizeFileName(original, EvidenceType.PNG)).isEqualTo(expected);
@@ -350,5 +357,71 @@ class DisputeEvidenceServiceTest {
 
         assertThat(logs.list).isNotEmpty().allSatisfy(event -> assertThat(event.getFormattedMessage())
                 .doesNotContain("secret-name").doesNotContain("random-").doesNotContain("https://"));
+    }
+
+    // ---------- post-upload failure recovery (F6) ----------
+
+    @Test
+    @DisplayName("Cloudinary upload succeeds but MongoDB record throws → asset deleted, 503 EVIDENCE_UPLOAD_FAILED")
+    void mongoExceptionAfterUploadDeletesOrphan() {
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(Dispute.class)))
+                .thenThrow(new RuntimeException("database timeout"));
+
+        Throwable thrown = catchThrowable(() -> service.upload(CUSTOMER, ID, file("a.png", PNG)));
+
+        assertApiError(thrown, HttpStatus.SERVICE_UNAVAILABLE, "EVIDENCE_UPLOAD_FAILED");
+        assertThat(storage.stored).hasSize(1);
+        assertThat(storage.deleted).containsExactlyElementsOf(storage.stored);
+    }
+
+    @Test
+    @DisplayName("MongoDB returns no match and Cloudinary deletion fails → 409 still thrown, orphan logged")
+    void recordRaceWithDeleteFailure() {
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(Dispute.class)))
+                .thenReturn(com.mongodb.client.result.UpdateResult.acknowledged(0, 0L, null));
+        storage.failDelete = true;
+
+        Throwable thrown = catchThrowable(() -> service.upload(CUSTOMER, ID, file("a.png", PNG)));
+
+        assertApiError(thrown, HttpStatus.CONFLICT, "EVIDENCE_LIMIT_REACHED");
+        assertThat(storage.stored).hasSize(1);
+        // Delete was attempted (but failed): the orphan is logged for later cleanup
+        assertThat(logs.list).anyMatch(e -> e.getFormattedMessage().contains("DISPUTE_EVIDENCE_ORPHAN_DELETE_FAILED"));
+    }
+
+    @Test
+    @DisplayName("uncertain MongoDB write but evidence actually persisted → evidence kept, view returned, no deletion")
+    void uncertainWriteKeepsPersistedEvidence() {
+        // updateFirst throws — simulating a connection reset after the write actually
+        // committed.
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(Dispute.class)))
+                .thenThrow(new RuntimeException("connection reset"));
+
+        java.util.concurrent.atomic.AtomicBoolean firstCall = new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(mongoTemplate.findById(ID, Dispute.class)).thenAnswer(invocation -> {
+            Dispute d = dispute(DisputeStatus.AWAITING_RESPONSE);
+            if (firstCall.compareAndSet(true, false)) {
+                // First call: initial findVisible before upload
+                return d;
+            }
+            // Second call: re-read in evidenceActuallyPersisted finding the file persisted
+            // by publicId
+            EvidenceFile persisted = new EvidenceFile();
+            persisted.setId("persisted-id");
+            persisted.setPublicId(storage.stored.get(0));
+            persisted.setFormat("png");
+            persisted.setType(EvidenceType.PNG);
+            persisted.setUploadedByRole(Role.CUSTOMER);
+            persisted.setUploadedAt(NOW);
+            d.setEvidenceFiles(List.of(persisted));
+            return d;
+        });
+
+        EvidenceView view = service.upload(CUSTOMER, ID, file("a.png", PNG));
+
+        assertThat(view).isNotNull();
+        assertThat(view.type()).isEqualTo(EvidenceType.PNG);
+        assertThat(storage.stored).hasSize(1);
+        assertThat(storage.deleted).as("persisted evidence must NOT be deleted").isEmpty();
     }
 }

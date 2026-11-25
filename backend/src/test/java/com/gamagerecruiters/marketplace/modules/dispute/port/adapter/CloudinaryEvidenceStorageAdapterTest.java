@@ -1,7 +1,13 @@
 package com.gamagerecruiters.marketplace.modules.dispute.port.adapter;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.util.Map;
 
@@ -9,6 +15,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import com.cloudinary.Cloudinary;
+import com.cloudinary.Uploader;
 
 /** No network: availability comes from the config, and a signed download URL is built locally. */
 class CloudinaryEvidenceStorageAdapterTest {
@@ -35,5 +42,33 @@ class CloudinaryEvidenceStorageAdapterTest {
                 .contains("expires_at=" + expiresAt.getEpochSecond())
                 .contains("type=" + CloudinaryEvidenceStorageAdapter.DELIVERY_TYPE)
                 .contains("signature=");
+    }
+
+    @Test
+    @DisplayName("delete succeeds when cloudinary destroy succeeds")
+    void deleteSuccess() throws Exception {
+        Cloudinary cloudinary = mock(Cloudinary.class);
+        Uploader uploader = mock(Uploader.class);
+        when(cloudinary.uploader()).thenReturn(uploader);
+        when(uploader.destroy(eq("disputes/d-1/img"), any())).thenReturn(Map.of("result", "ok"));
+
+        CloudinaryEvidenceStorageAdapter adapter = new CloudinaryEvidenceStorageAdapter(cloudinary);
+        adapter.delete("disputes/d-1/img");
+    }
+
+    @Test
+    @DisplayName("delete rethrows IllegalStateException when cloudinary destroy fails")
+    void deleteFailureRethrows() throws Exception {
+        Cloudinary cloudinary = mock(Cloudinary.class);
+        Uploader uploader = mock(Uploader.class);
+        when(cloudinary.uploader()).thenReturn(uploader);
+        when(uploader.destroy(eq("disputes/d-1/img"), any())).thenThrow(new IOException("network error"));
+
+        CloudinaryEvidenceStorageAdapter adapter = new CloudinaryEvidenceStorageAdapter(cloudinary);
+        Throwable thrown = catchThrowable(() -> adapter.delete("disputes/d-1/img"));
+
+        assertThat(thrown).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("disputes/d-1/img")
+                .hasCauseInstanceOf(IOException.class);
     }
 }

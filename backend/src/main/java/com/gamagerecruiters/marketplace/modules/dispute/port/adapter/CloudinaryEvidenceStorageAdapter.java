@@ -15,13 +15,20 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceType;
 import com.gamagerecruiters.marketplace.modules.dispute.port.EvidenceStoragePort;
 
 /**
- * Evidence storage on Cloudinary. Reuses the application's existing {@link Cloudinary} bean, which is configured only
- * from the environment variables CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET (no new
- * dependency, no credentials in code). When any of them is missing the app still starts and {@link #isAvailable()} is
+ * Evidence storage on Cloudinary. Reuses the application's existing
+ * {@link Cloudinary} bean, which is configured only
+ * from the environment variables CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and
+ * CLOUDINARY_API_SECRET (no new
+ * dependency, no credentials in code). When any of them is missing the app
+ * still starts and {@link #isAvailable()} is
  * false, so the API answers 503 EVIDENCE_STORAGE_UNAVAILABLE.
  *
- * <p>Files are uploaded as {@code type=authenticated} (private) assets under {@code disputes/<disputeId>/} with a
- * random public id; the original file name is never sent. Signed download URLs expire. Only ids are logged.</p>
+ * <p>
+ * Files are uploaded as {@code type=authenticated} (private) assets under
+ * {@code disputes/<disputeId>/} with a
+ * random public id; the original file name is never sent. Signed download URLs
+ * expire. Only ids are logged.
+ * </p>
  */
 @Component
 public class CloudinaryEvidenceStorageAdapter implements EvidenceStoragePort {
@@ -89,7 +96,9 @@ public class CloudinaryEvidenceStorageAdapter implements EvidenceStoragePort {
             cloudinary.uploader().destroy(publicId, ObjectUtils.asMap("resource_type", RESOURCE_TYPE,
                     "type", DELIVERY_TYPE, "invalidate", true));
         } catch (Exception e) {
-            log.warn("event=DISPUTE_EVIDENCE_DELETE_FAILED cause={}", e.getClass().getSimpleName());
+            log.warn("event=DISPUTE_EVIDENCE_DELETE_FAILED publicId={} cause={}", publicId,
+                    e.getClass().getSimpleName());
+            throw new IllegalStateException("Evidence deletion failed for " + publicId, e);
         }
     }
 

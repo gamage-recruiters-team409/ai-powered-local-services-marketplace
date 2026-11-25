@@ -35,20 +35,39 @@ import com.gamagerecruiters.marketplace.modules.dispute.port.EvidenceStoragePort
 /**
  * Evidence files of a dispute.
  *
- * <p>Upload (a party of the dispute, while it is OPEN, AWAITING_RESPONSE or UNDER_REVIEW), checks in this order:</p>
+ * <p>
+ * Upload (a party of the dispute, while it is OPEN, AWAITING_RESPONSE or
+ * UNDER_REVIEW), checks in this order:
+ * </p>
  * <ol>
- *   <li>404 DISPUTE_NOT_FOUND (unknown or PENDING); 403 NOT_DISPUTE_PARTY;</li>
- *   <li>409 EVIDENCE_UPLOAD_CLOSED when the status no longer allows evidence;</li>
- *   <li>400 EVIDENCE_FILE_REQUIRED (no or empty file); 400 EVIDENCE_TOO_LARGE (over 5 MB);
- *       400 EVIDENCE_TYPE_NOT_ALLOWED (content is not JPG, PNG, WEBP or PDF: checked by magic bytes);</li>
- *   <li>409 EVIDENCE_LIMIT_REACHED (5 files per party);</li>
- *   <li>503 EVIDENCE_STORAGE_UNAVAILABLE (storage not configured) / 503 EVIDENCE_UPLOAD_FAILED.</li>
+ * <li>404 DISPUTE_NOT_FOUND (unknown or PENDING); 403 NOT_DISPUTE_PARTY;</li>
+ * <li>409 EVIDENCE_UPLOAD_CLOSED when the status no longer allows
+ * evidence;</li>
+ * <li>400 EVIDENCE_FILE_REQUIRED (no or empty file); 400 EVIDENCE_TOO_LARGE
+ * (over 5 MB);
+ * 400 EVIDENCE_TYPE_NOT_ALLOWED (content is not JPG, PNG, WEBP or PDF: checked
+ * by magic bytes);</li>
+ * <li>409 EVIDENCE_LIMIT_REACHED (5 files per party);</li>
+ * <li>503 EVIDENCE_STORAGE_UNAVAILABLE (storage not configured) / 503
+ * EVIDENCE_UPLOAD_FAILED.</li>
  * </ol>
- * The file is stored first, then recorded with ONE conditional update that repeats the status and per-party limit
- * checks, so concurrent uploads can never exceed the limit; a stored file that could not be recorded is deleted.
+ * The file is stored first, then recorded with ONE conditional update that
+ * repeats the status and per-party limit
+ * checks, so concurrent uploads can never exceed the limit. If the conditional
+ * update returns no match, the stored
+ * file is deleted (best-effort). If the MongoDB update throws, the dispute is
+ * re-read to determine whether the
+ * evidence was actually committed before deciding to delete the remote asset —
+ * a successfully recorded file is
+ * never removed by an incorrect rollback. Delete failures are logged with
+ * enough context for a cleanup process.
  *
- * <p>Signed URL: the two parties and admins who can view the disputes area; anyone else 403/404. Links expire after
- * {@link DisputeRules#EVIDENCE_URL_TTL}. Only ids are logged: never URLs, file names or contents.</p>
+ * <p>
+ * Signed URL: the two parties and admins who can view the disputes area; anyone
+ * else 403/404. Links expire after
+ * {@link DisputeRules#EVIDENCE_URL_TTL}. Only ids are logged: never URLs, file
+ * names or contents.
+ * </p>
  */
 @Service
 public class DisputeEvidenceService {
@@ -109,8 +128,27 @@ public class DisputeEvidenceService {
         evidence.setUploadedByRole(side);
         evidence.setUploadedAt(clock.instant());
 
-        if (!record(dispute.getId(), side, evidence)) {
-            storage.delete(stored.publicId());
+        boolean recorded;
+        try {
+            recorded = record(dispute.getId(), side, evidence);
+        } catch (RuntimeException e) {
+            // Uncertain write: the update may or may not have been committed.
+            // Re-read to check before deleting — a successfully recorded file must NOT be
+            // removed.
+            if (evidenceActuallyPersisted(disputeId, evidence.getId(), stored.publicId())) {
+                log.warn("event=DISPUTE_EVIDENCE_RECORD_EXCEPTION_BUT_PERSISTED disputeId={} evidenceId={} cause={}",
+                        disputeId, evidence.getId(), e.getClass().getSimpleName());
+                return DisputeMapper.toView(evidence);
+            }
+            log.error("event=DISPUTE_EVIDENCE_RECORD_FAILED disputeId={} evidenceId={} publicId={} cause={}",
+                    disputeId, evidence.getId(), stored.publicId(), e.getClass().getSimpleName());
+            safeDelete(stored.publicId(), disputeId, evidence.getId());
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "EVIDENCE_UPLOAD_FAILED",
+                    "The file could not be recorded. Please try again");
+        }
+
+        if (!recorded) {
+            safeDelete(stored.publicId(), disputeId, evidence.getId());
             Dispute latest = findVisible(disputeId);
             if (!DisputeRules.EVIDENCE_UPLOAD_STATUSES.contains(latest.getStatus())) {
                 throw uploadClosed();
@@ -123,7 +161,8 @@ public class DisputeEvidenceService {
     }
 
     /**
-     * Signed link for one file. {@code admin} is true for callers allowed to view the disputes admin area (checked by
+     * Signed link for one file. {@code admin} is true for callers allowed to view
+     * the disputes admin area (checked by
      * the controller); everyone else must be a party of the dispute.
      */
     public EvidenceUrlResponse signedUrl(String actorId, boolean admin, String disputeId, String evidenceId) {
@@ -154,7 +193,10 @@ public class DisputeEvidenceService {
         return new EvidenceUrlResponse(url, expiresAt);
     }
 
-    /** Push the file and count it, only while the status and the per-party limit still allow it. */
+    /**
+     * Push the file and count it, only while the status and the per-party limit
+     * still allow it.
+     */
     private boolean record(String disputeId, Role side, EvidenceFile evidence) {
         String countField = "evidenceCounts." + side.name();
         Query query = Query.query(Criteria.where("_id").is(disputeId)
@@ -169,6 +211,40 @@ public class DisputeEvidenceService {
         return mongoTemplate.updateFirst(query, update, Dispute.class).getModifiedCount() == 1;
     }
 
+    /**
+     * Re-reads the dispute to check whether the evidence record was actually committed.
+     * Used after an uncertain MongoDB write (exception thrown but the write may have gone through).
+     */
+
+    private boolean evidenceActuallyPersisted(String disputeId, String evidenceId, String publicId) {
+        try {
+            Dispute latest = mongoTemplate.findById(disputeId, Dispute.class);
+            return latest != null && latest.getEvidenceFiles() != null
+                    && latest.getEvidenceFiles().stream().anyMatch(e ->
+                            (evidenceId != null && evidenceId.equals(e.getId()))
+                            || (publicId != null && publicId.equals(e.getPublicId())));
+        } catch (RuntimeException e) {
+            log.warn("event=DISPUTE_EVIDENCE_REREAD_FAILED disputeId={} evidenceId={} publicId={} cause={}",
+                    disputeId, evidenceId, publicId, e.getClass().getSimpleName());
+            // Cannot confirm: treat as not persisted but log for manual recovery.
+            return false;
+        }
+    }
+
+    /**
+     * Best-effort deletion of an orphaned storage asset. Logs a warning with enough
+     * context for a cleanup
+     * process when deletion fails, so orphaned assets are never silently lost.
+     */
+    private void safeDelete(String publicId, String disputeId, String evidenceId) {
+        try {
+            storage.delete(publicId);
+        } catch (RuntimeException e) {
+            log.warn("event=DISPUTE_EVIDENCE_ORPHAN_DELETE_FAILED disputeId={} evidenceId={} publicId={} cause={}",
+                    disputeId, evidenceId, publicId, e.getClass().getSimpleName());
+        }
+    }
+
     private Dispute findVisible(String disputeId) {
         Dispute dispute = disputeId == null ? null : mongoTemplate.findById(disputeId, Dispute.class);
         if (dispute == null || !dispute.isVisible()) {
@@ -177,7 +253,10 @@ public class DisputeEvidenceService {
         return dispute;
     }
 
-    /** CUSTOMER or PROVIDER, from the dispute itself (never from the request). 403 for anyone else. */
+    /**
+     * CUSTOMER or PROVIDER, from the dispute itself (never from the request). 403
+     * for anyone else.
+     */
     private static Role partySide(Dispute dispute, String actorId) {
         if (actorId != null && actorId.equals(dispute.getCustomerId())) {
             return Role.CUSTOMER;
@@ -207,7 +286,8 @@ public class DisputeEvidenceService {
     }
 
     /**
-     * Display name only: the last path segment of the original name, unsafe characters replaced, at most 120
+     * Display name only: the last path segment of the original name, unsafe
+     * characters replaced, at most 120
      * characters, with the detected type's extension. Never used as a storage name.
      */
     static String sanitizeFileName(String original, EvidenceType type) {
