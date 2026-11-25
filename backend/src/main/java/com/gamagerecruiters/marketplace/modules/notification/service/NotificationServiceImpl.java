@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +34,8 @@ public class NotificationServiceImpl implements NotificationService {
     private final EmailSender emailSender;
     private final NotificationTextBuilder textBuilder;
     private final MongoTemplate mongoTemplate;
+    private final AtomicLong rejectedNotifications = new AtomicLong();
+    private final AtomicLong rejectedEmails = new AtomicLong();
 
     public NotificationServiceImpl(UserInternalService userInternalService, NotificationRepository notificationRepository,
             NotificationDataSanitizer sanitizer, @Qualifier("notificationExecutor") Executor executor,
@@ -83,13 +87,21 @@ public class NotificationServiceImpl implements NotificationService {
         try {
             // A failed insert could abort the caller's Mongo transaction, and a committed session cannot be reused.
             executor.execute(() -> save(notification));
+        } catch (RejectedExecutionException ex) {
+            // Best-effort contract: a rejected save is not persisted and never fails the caller.
+            rejectedNotifications.incrementAndGet();
+            log.warn("Notification save task rejected for type {}", notification.getType().name());
         } catch (Exception ex) {
-            log.warn("Notification task rejected");
+            rejectedNotifications.incrementAndGet();
+            log.warn("Notification save task rejected for type {}", notification.getType().name());
         }
     }
 
     /**
-     * The single-thread notification executor makes this check-then-save sequence race-free.
+     * The single-thread save executor serialises this check and save, so it is race-free within one
+     * backend instance. With several instances, duplicate unread NEW_MESSAGE notifications for one
+     * conversation remain possible and harmless; a database unique partial index plus upsert is
+     * deferred until multi-instance deployment is in scope.
      */
     private void save(Notification notification) {
         try {
@@ -107,9 +119,22 @@ public class NotificationServiceImpl implements NotificationService {
     private void submitEmail(Notification notification) {
         try {
             emailExecutor.execute(() -> sendEmail(notification));
+        } catch (RejectedExecutionException ex) {
+            rejectedEmails.incrementAndGet();
+            recordRejectedEmailStatus(notification);
+            log.warn("Notification email task rejected for type {}", notification.getType().name());
         } catch (Exception ex) {
+            rejectedEmails.incrementAndGet();
+            recordRejectedEmailStatus(notification);
+            log.warn("Notification email task rejected for type {}", notification.getType().name());
+        }
+    }
+
+    private void recordRejectedEmailStatus(Notification notification) {
+        try {
             updateEmailStatus(notification.getId(), "FAILED");
-            log.warn("Notification email task rejected");
+        } catch (Exception ex) {
+            log.warn("Notification email status update failed for type {}", notification.getType().name());
         }
     }
 
@@ -142,5 +167,13 @@ public class NotificationServiceImpl implements NotificationService {
 
     private void updateEmailStatus(String id, String status) {
         if (id != null) mongoTemplate.updateFirst(Query.query(Criteria.where("_id").is(id)), new Update().set("emailStatus", status), Notification.class);
+    }
+
+    public long getRejectedNotifications() {
+        return rejectedNotifications.get();
+    }
+
+    public long getRejectedEmails() {
+        return rejectedEmails.get();
     }
 }
