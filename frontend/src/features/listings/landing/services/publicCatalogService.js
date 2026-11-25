@@ -29,14 +29,16 @@ export async function getPublicDistrictLocations(signal) {
     const provinceName = prov?.province || prov?.name || ''
     const districts = Array.isArray(prov?.districts) ? prov.districts : []
     districts.forEach((d) => {
-      if (!d?.district) return
+      const districtName = d?.name || d?.district
+      if (!districtName) return
       const lat = typeof d.latitude === 'number' ? d.latitude : d?.center?.latitude
       const lng = typeof d.longitude === 'number' ? d.longitude : d?.center?.longitude
       if (typeof lat !== 'number' || typeof lng !== 'number') return
+      const resolvedProvince = d?.province || provinceName
       flattened.push({
-        id: d.district.toLowerCase().replace(/\s+/g, '-'),
-        city: d.district,
-        province: provinceName ? `${provinceName} Province` : 'Sri Lanka',
+        id: districtName.toLowerCase().replace(/\s+/g, '-'),
+        city: districtName,
+        province: resolvedProvince ? `${resolvedProvince} Province` : 'Sri Lanka',
         lat,
         lng,
         zoom: typeof d.defaultZoom === 'number' ? d.defaultZoom : 11,
