@@ -27,6 +27,7 @@ class CustomerDeactivationContextTest {
             .withBean(CustomerAddressRepository.class, () -> mock(CustomerAddressRepository.class))
             .withBean(DistrictCatalog.class, () -> mock(DistrictCatalog.class))
             .withBean(CustomerProfileImageStorage.class, () -> mock(CustomerProfileImageStorage.class))
+            .withBean(ProfileImageCleanupService.class, () -> mock(ProfileImageCleanupService.class))
             .withBean(MongoTemplate.class, () -> mock(MongoTemplate.class));
 
     @Test

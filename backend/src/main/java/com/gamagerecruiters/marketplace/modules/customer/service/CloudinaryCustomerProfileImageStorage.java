@@ -119,13 +119,14 @@ public class CloudinaryCustomerProfileImageStorage implements CustomerProfileIma
     }
 
     @Override
-    public void delete(String publicId) {
+    public boolean delete(String publicId) {
         if (publicId == null || publicId.isBlank()) {
-            return;
+            return true;
         }
 
         try {
-            cloudinary.uploader().destroy(
+            @SuppressWarnings("rawtypes")
+            Map destroyResult = cloudinary.uploader().destroy(
                     publicId.trim(),
                     ObjectUtils.asMap(
                             "resource_type", RESOURCE_TYPE,
@@ -133,9 +134,12 @@ public class CloudinaryCustomerProfileImageStorage implements CustomerProfileIma
                             "invalidate", true
                     )
             );
+            Object resultObj = destroyResult != null ? destroyResult.get("result") : null;
+            String resultStr = resultObj != null ? String.valueOf(resultObj) : "";
+            return "ok".equalsIgnoreCase(resultStr) || "not found".equalsIgnoreCase(resultStr);
         } catch (Exception ex) {
             log.warn("Failed to delete profile image from storage: error={}", ex.getClass().getSimpleName());
-            throw new ApiException(HttpStatus.BAD_GATEWAY, "STORAGE_ERROR", "Failed to delete profile image");
+            return false;
         }
     }
 

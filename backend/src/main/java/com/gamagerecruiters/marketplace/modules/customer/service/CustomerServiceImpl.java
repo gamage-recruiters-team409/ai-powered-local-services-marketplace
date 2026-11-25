@@ -24,10 +24,13 @@ import com.mongodb.client.result.UpdateResult;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 import com.gamagerecruiters.marketplace.modules.customer.domain.CustomerAddress;
+import com.gamagerecruiters.marketplace.modules.customer.domain.ProfileImageCleanupReason;
+import com.gamagerecruiters.marketplace.modules.customer.domain.ProfileImageCleanupTask;
 import com.gamagerecruiters.marketplace.modules.customer.dto.ChangePasswordRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressResponse;
@@ -49,6 +52,7 @@ public class CustomerServiceImpl implements CustomerService {
     private final DistrictCatalog districtCatalog;
     private final ObjectProvider<OpenBookingsChecker> openBookingsCheckerProvider;
     private final CustomerProfileImageStorage profileImageStorage;
+    private final ProfileImageCleanupService cleanupService;
     private final MongoTemplate mongoTemplate;
     private final int maxAddresses;
 
@@ -58,6 +62,7 @@ public class CustomerServiceImpl implements CustomerService {
             DistrictCatalog districtCatalog,
             ObjectProvider<OpenBookingsChecker> openBookingsCheckerProvider,
             CustomerProfileImageStorage profileImageStorage,
+            ProfileImageCleanupService cleanupService,
             MongoTemplate mongoTemplate,
             @Value("${app.customer.max-addresses:10}") int maxAddresses
     ) {
@@ -66,6 +71,7 @@ public class CustomerServiceImpl implements CustomerService {
         this.districtCatalog = districtCatalog;
         this.openBookingsCheckerProvider = openBookingsCheckerProvider;
         this.profileImageStorage = profileImageStorage;
+        this.cleanupService = cleanupService;
         this.mongoTemplate = mongoTemplate;
         this.maxAddresses = maxAddresses;
     }
@@ -426,50 +432,71 @@ public class CustomerServiceImpl implements CustomerService {
     @Override
     public CustomerProfileResponse uploadProfilePhoto(String customerId, MultipartFile file) {
         User user = userInternalService.getById(customerId);
-        if (user.getStatus() != UserStatus.ACTIVE) {
+        if (user.getRole() != Role.CUSTOMER || user.getStatus() != UserStatus.ACTIVE) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_INACTIVE", "Customer account must be active");
         }
 
-        String oldPublicId = user.getProfileImagePublicId();
+        String expectedOldPublicId = user.getProfileImagePublicId();
+        ProfileImageCleanupTask oldCleanupTask = null;
+        if (expectedOldPublicId != null && !expectedOldPublicId.isBlank()) {
+            oldCleanupTask = cleanupService.schedule(
+                    expectedOldPublicId, customerId, ProfileImageCleanupReason.REPLACED);
+        }
 
         // 1. Upload new image
         StoredProfileImage stored = profileImageStorage.upload(customerId, file);
 
-        // 2. Targeted $set of profileImageUrl + profileImagePublicId on the user
+        // 2. Conditional targeted $set of profileImageUrl + profileImagePublicId
         try {
-            Query query = Query.query(Criteria.where("_id").is(customerId));
+            Query query = Query.query(
+                    Criteria.where("_id").is(customerId)
+                            .and("role").is(Role.CUSTOMER)
+                            .and("status").is(UserStatus.ACTIVE)
+                            .and("profileImagePublicId").is(expectedOldPublicId)
+            );
             Update update = new Update()
                     .set("profileImageUrl", stored.secureUrl())
                     .set("profileImagePublicId", stored.publicId());
             UpdateResult result = mongoTemplate.updateFirst(query, update, User.class);
-            if (result.getMatchedCount() == 0) {
-                throw new ResourceNotFoundException("USER_NOT_FOUND", "Customer not found: " + customerId);
+
+            if (result.getMatchedCount() == 1) {
+                if (oldCleanupTask != null) {
+                    cleanupService.attempt(oldCleanupTask);
+                }
+            } else {
+                // Matched count 0: race condition, state change, or user not found
+                ProfileImageCleanupTask rollbackTask = cleanupService.schedule(
+                        stored.publicId(), customerId, ProfileImageCleanupReason.CONFLICT_ROLLBACK);
+                if (rollbackTask != null) {
+                    cleanupService.attempt(rollbackTask);
+                }
+                if (expectedOldPublicId != null && !expectedOldPublicId.isBlank()) {
+                    cleanupService.cancel(expectedOldPublicId);
+                }
+
+                User reloaded = userInternalService.getById(customerId);
+                if (reloaded.getRole() != Role.CUSTOMER || reloaded.getStatus() != UserStatus.ACTIVE) {
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_INACTIVE", "Customer account must be active");
+                }
+                throw new ResourceConflictException("PROFILE_PHOTO_CONFLICT",
+                        "Your profile photo was changed by another request. Please retry.");
             }
+        } catch (ApiException ex) {
+            throw ex;
         } catch (Exception ex) {
-            // DB update failed after successful upload: best-effort delete just-uploaded image
-            try {
-                profileImageStorage.delete(stored.publicId());
-            } catch (Exception deleteEx) {
-                log.warn("Failed to delete orphaned profile image after DB failure: userId={}, error={}",
-                        customerId, deleteEx.getClass().getSimpleName());
+            // DB error / Mongo exception: rollback newly uploaded image
+            ProfileImageCleanupTask rollbackTask = cleanupService.schedule(
+                    stored.publicId(), customerId, ProfileImageCleanupReason.UPLOAD_ROLLBACK);
+            if (rollbackTask != null) {
+                cleanupService.attempt(rollbackTask);
             }
-            if (ex instanceof ApiException) {
-                throw (ApiException) ex;
+            if (expectedOldPublicId != null && !expectedOldPublicId.isBlank()) {
+                cleanupService.cancel(expectedOldPublicId);
             }
             log.warn("DB update failed for customer profile photo: userId={}, error={}",
                     customerId, ex.getClass().getSimpleName());
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PROFILE_PHOTO_UPDATE_FAILED",
                     "Failed to save profile photo. Please try again.");
-        }
-
-        // 3. Best-effort delete of the OLD publicId
-        if (oldPublicId != null && !oldPublicId.isBlank()) {
-            try {
-                profileImageStorage.delete(oldPublicId);
-            } catch (Exception deleteEx) {
-                log.warn("Failed to delete previous profile image from storage: userId={}, error={}",
-                        customerId, deleteEx.getClass().getSimpleName());
-            }
         }
 
         User updated = userInternalService.getById(customerId);
@@ -479,35 +506,58 @@ public class CustomerServiceImpl implements CustomerService {
     @Override
     public void deleteProfilePhoto(String customerId) {
         User user = userInternalService.getById(customerId);
-        if (user.getStatus() != UserStatus.ACTIVE) {
+        if (user.getRole() != Role.CUSTOMER || user.getStatus() != UserStatus.ACTIVE) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_INACTIVE", "Customer account must be active");
         }
 
-        String oldPublicId = user.getProfileImagePublicId();
-        if (oldPublicId == null || oldPublicId.isBlank()) {
+        String expectedPublicId = user.getProfileImagePublicId();
+        if (expectedPublicId == null || expectedPublicId.isBlank()) {
             return;
         }
 
-        // Targeted $unset of both fields
+        // Schedule cleanup task BEFORE update
+        ProfileImageCleanupTask cleanupTask = cleanupService.schedule(
+                expectedPublicId, customerId, ProfileImageCleanupReason.REMOVED);
+
+        // Targeted conditional $unset
         try {
-            Query query = Query.query(Criteria.where("_id").is(customerId));
+            Query query = Query.query(
+                    Criteria.where("_id").is(customerId)
+                            .and("role").is(Role.CUSTOMER)
+                            .and("status").is(UserStatus.ACTIVE)
+                            .and("profileImagePublicId").is(expectedPublicId)
+            );
             Update update = new Update()
                     .unset("profileImageUrl")
                     .unset("profileImagePublicId");
-            mongoTemplate.updateFirst(query, update, User.class);
+            UpdateResult result = mongoTemplate.updateFirst(query, update, User.class);
+
+            if (result.getMatchedCount() == 1) {
+                if (cleanupTask != null) {
+                    cleanupService.attempt(cleanupTask);
+                }
+            } else {
+                User reloaded = userInternalService.getById(customerId);
+                if (reloaded.getRole() != Role.CUSTOMER || reloaded.getStatus() != UserStatus.ACTIVE) {
+                    cleanupService.cancel(expectedPublicId);
+                    throw new ApiException(HttpStatus.FORBIDDEN, "ACCOUNT_INACTIVE", "Customer account must be active");
+                }
+                String currentPublicId = reloaded.getProfileImagePublicId();
+                if (currentPublicId == null || currentPublicId.isBlank()) {
+                    return; // Already removed concurrently
+                }
+                cleanupService.cancel(expectedPublicId);
+                throw new ResourceConflictException("PROFILE_PHOTO_CONFLICT",
+                        "Your profile photo was changed by another request. Please retry.");
+            }
+        } catch (ApiException ex) {
+            throw ex;
         } catch (Exception ex) {
+            cleanupService.cancel(expectedPublicId);
             log.warn("DB unset failed for customer profile photo: userId={}, error={}",
                     customerId, ex.getClass().getSimpleName());
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PROFILE_PHOTO_DELETE_FAILED",
                     "Failed to delete profile photo. Please try again.");
-        }
-
-        // Best-effort delete old image from Cloudinary
-        try {
-            profileImageStorage.delete(oldPublicId);
-        } catch (Exception deleteEx) {
-            log.warn("Failed to delete profile image from storage: userId={}, error={}",
-                    customerId, deleteEx.getClass().getSimpleName());
         }
     }
 

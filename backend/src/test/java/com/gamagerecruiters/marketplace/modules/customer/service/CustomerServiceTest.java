@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -47,6 +48,8 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
 import com.gamagerecruiters.marketplace.modules.customer.domain.CustomerAddress;
+import com.gamagerecruiters.marketplace.modules.customer.domain.ProfileImageCleanupReason;
+import com.gamagerecruiters.marketplace.modules.customer.domain.ProfileImageCleanupTask;
 import com.gamagerecruiters.marketplace.modules.customer.dto.ChangePasswordRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressResponse;
@@ -76,6 +79,9 @@ class CustomerServiceTest {
     private CustomerProfileImageStorage profileImageStorage;
 
     @Mock
+    private ProfileImageCleanupService cleanupService;
+
+    @Mock
     private MongoTemplate mongoTemplate;
 
     private CustomerServiceImpl customerService;
@@ -88,6 +94,7 @@ class CustomerServiceTest {
                 districtCatalog,
                 openBookingsCheckerProvider,
                 profileImageStorage,
+                cleanupService,
                 mongoTemplate,
                 10
         );
@@ -397,6 +404,7 @@ class CustomerServiceTest {
                 districtCatalog,
                 openBookingsCheckerProvider,
                 profileImageStorage,
+                cleanupService,
                 mongoTemplate,
                 5 // Lower limit
         );
@@ -477,17 +485,83 @@ class CustomerServiceTest {
         when(userInternalService.getById("c-1")).thenReturn(userBefore, userAfter);
         MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
         when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("new-public-id", "https://new.url/new.jpg"));
+        ProfileImageCleanupTask oldCleanupTask = new ProfileImageCleanupTask("old-public-id", "c-1", ProfileImageCleanupReason.REPLACED);
+        when(cleanupService.schedule("old-public-id", "c-1", ProfileImageCleanupReason.REPLACED)).thenReturn(oldCleanupTask);
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
                 .thenReturn(UpdateResult.acknowledged(1, 1L, null));
 
         CustomerProfileResponse res = customerService.uploadProfilePhoto("c-1", file);
 
         assertEquals("https://new.url/new.jpg", res.profileImageUrl());
+        verify(cleanupService).attempt(oldCleanupTask);
+    }
 
-        InOrder order = inOrder(profileImageStorage, mongoTemplate);
-        order.verify(profileImageStorage).upload("c-1", file);
-        order.verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(User.class));
-        order.verify(profileImageStorage).delete("old-public-id");
+    @Test
+    @DisplayName("uploadProfilePhoto: initial upload when expectedOldPublicId is null criteria checks profileImagePublicId is null")
+    void uploadProfilePhoto_initialUpload_criteriaIncludesNullPublicId() {
+        User userBefore = new User();
+        userBefore.setId("c-1");
+        userBefore.setRole(Role.CUSTOMER);
+        userBefore.setStatus(UserStatus.ACTIVE);
+        userBefore.setProfileImagePublicId(null);
+
+        User userAfter = new User();
+        userAfter.setId("c-1");
+        userAfter.setRole(Role.CUSTOMER);
+        userAfter.setStatus(UserStatus.ACTIVE);
+        userAfter.setProfileImagePublicId("first-photo-id");
+        userAfter.setProfileImageUrl("https://img.url/first.jpg");
+
+        when(userInternalService.getById("c-1")).thenReturn(userBefore, userAfter);
+        MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
+        when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("first-photo-id", "https://img.url/first.jpg"));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+
+        customerService.uploadProfilePhoto("c-1", file);
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).updateFirst(queryCaptor.capture(), any(Update.class), eq(User.class));
+        Query captured = queryCaptor.getValue();
+        assertEquals("c-1", captured.getQueryObject().get("_id"));
+        assertEquals(Role.CUSTOMER, captured.getQueryObject().get("role"));
+        assertEquals(UserStatus.ACTIVE, captured.getQueryObject().get("status"));
+        assertTrue(captured.getQueryObject().containsKey("profileImagePublicId"));
+        assertNull(captured.getQueryObject().get("profileImagePublicId"));
+        verify(cleanupService, never()).schedule(any(), any(), eq(ProfileImageCleanupReason.REPLACED));
+    }
+
+    @Test
+    @DisplayName("uploadProfilePhoto: replace existing photo criteria includes old public id and attempts cleanup")
+    void uploadProfilePhoto_replaceExistingPhoto_criteriaIncludesOldPublicIdAndAttemptsCleanup() {
+        User userBefore = new User();
+        userBefore.setId("c-1");
+        userBefore.setRole(Role.CUSTOMER);
+        userBefore.setStatus(UserStatus.ACTIVE);
+        userBefore.setProfileImagePublicId("old-1");
+
+        User userAfter = new User();
+        userAfter.setId("c-1");
+        userAfter.setRole(Role.CUSTOMER);
+        userAfter.setStatus(UserStatus.ACTIVE);
+        userAfter.setProfileImagePublicId("new-2");
+        userAfter.setProfileImageUrl("https://img.url/new-2.jpg");
+
+        when(userInternalService.getById("c-1")).thenReturn(userBefore, userAfter);
+        MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
+        when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("new-2", "https://img.url/new-2.jpg"));
+        ProfileImageCleanupTask oldTask = new ProfileImageCleanupTask("old-1", "c-1", ProfileImageCleanupReason.REPLACED);
+        when(cleanupService.schedule("old-1", "c-1", ProfileImageCleanupReason.REPLACED)).thenReturn(oldTask);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+
+        CustomerProfileResponse response = customerService.uploadProfilePhoto("c-1", file);
+        assertEquals("https://img.url/new-2.jpg", response.profileImageUrl());
+
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).updateFirst(queryCaptor.capture(), any(Update.class), eq(User.class));
+        assertEquals("old-1", queryCaptor.getValue().getQueryObject().get("profileImagePublicId"));
+        verify(cleanupService).attempt(oldTask);
     }
 
     @Test
@@ -495,6 +569,7 @@ class CustomerServiceTest {
     void uploadProfilePhoto_inactiveAccount_throws403() {
         User suspendedUser = new User();
         suspendedUser.setId("c-1");
+        suspendedUser.setRole(Role.CUSTOMER);
         suspendedUser.setStatus(UserStatus.SUSPENDED);
         when(userInternalService.getById("c-1")).thenReturn(suspendedUser);
 
@@ -509,39 +584,21 @@ class CustomerServiceTest {
     }
 
     @Test
-    @DisplayName("uploadProfilePhoto: old image deletion failure does not fail request")
-    void uploadProfilePhoto_oldDeleteFails_doesNotFailRequest() {
-        User userBefore = new User();
-        userBefore.setId("c-1");
-        userBefore.setStatus(UserStatus.ACTIVE);
-        userBefore.setProfileImagePublicId("old-public-id");
-
-        User userAfter = new User();
-        userAfter.setId("c-1");
-        userAfter.setStatus(UserStatus.ACTIVE);
-        userAfter.setProfileImageUrl("https://new.url/new.jpg");
-
-        when(userInternalService.getById("c-1")).thenReturn(userBefore, userAfter);
-        MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
-        when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("new-public-id", "https://new.url/new.jpg"));
-        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
-                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
-        doThrow(new RuntimeException("Cloudinary deletion failed")).when(profileImageStorage).delete("old-public-id");
-
-        CustomerProfileResponse res = assertDoesNotThrow(() -> customerService.uploadProfilePhoto("c-1", file));
-        assertEquals("https://new.url/new.jpg", res.profileImageUrl());
-    }
-
-    @Test
-    @DisplayName("uploadProfilePhoto: DB update failure triggers cleanup of newly uploaded image and throws 503")
+    @DisplayName("uploadProfilePhoto: DB update failure triggers cleanup rollback of newly uploaded image and throws 503")
     void uploadProfilePhoto_dbFailure_cleansUpNewImageAndThrows503() {
         User user = new User();
         user.setId("c-1");
+        user.setRole(Role.CUSTOMER);
         user.setStatus(UserStatus.ACTIVE);
+        user.setProfileImagePublicId("old-1");
         when(userInternalService.getById("c-1")).thenReturn(user);
 
         MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
         when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("new-public-id", "https://new.url/new.jpg"));
+        ProfileImageCleanupTask oldCleanupTask = new ProfileImageCleanupTask("old-1", "c-1", ProfileImageCleanupReason.REPLACED);
+        when(cleanupService.schedule("old-1", "c-1", ProfileImageCleanupReason.REPLACED)).thenReturn(oldCleanupTask);
+        ProfileImageCleanupTask rollbackTask = new ProfileImageCleanupTask("new-public-id", "c-1", ProfileImageCleanupReason.UPLOAD_ROLLBACK);
+        when(cleanupService.schedule("new-public-id", "c-1", ProfileImageCleanupReason.UPLOAD_ROLLBACK)).thenReturn(rollbackTask);
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
                 .thenThrow(new RuntimeException("Mongo connection drop"));
 
@@ -549,41 +606,120 @@ class CustomerServiceTest {
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, ex.getStatus());
         assertEquals("PROFILE_PHOTO_UPDATE_FAILED", ex.getErrorCode());
 
-        verify(profileImageStorage).delete("new-public-id");
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).updateFirst(queryCaptor.capture(), any(Update.class), eq(User.class));
+        assertEquals("old-1", queryCaptor.getValue().getQueryObject().get("profileImagePublicId"));
+        assertEquals(Role.CUSTOMER, queryCaptor.getValue().getQueryObject().get("role"));
+        assertEquals(UserStatus.ACTIVE, queryCaptor.getValue().getQueryObject().get("status"));
+
+        verify(cleanupService).attempt(rollbackTask);
+        verify(cleanupService).cancel("old-1");
     }
 
     @Test
-    @DisplayName("uploadProfilePhoto: DB update matches 0 documents triggers cleanup and throws 404")
-    void uploadProfilePhoto_userNotFound_cleansUpAndThrows404() {
-        User user = new User();
-        user.setId("c-1");
-        user.setStatus(UserStatus.ACTIVE);
-        when(userInternalService.getById("c-1")).thenReturn(user);
+    @DisplayName("uploadProfilePhoto: DB update matches 0 documents (race) rolls back new photo, cancels old cleanup, throws 409")
+    void uploadProfilePhoto_raceConflict_rollsBackNewAndThrows409() {
+        User userBefore = new User();
+        userBefore.setId("c-1");
+        userBefore.setRole(Role.CUSTOMER);
+        userBefore.setStatus(UserStatus.ACTIVE);
+        userBefore.setProfileImagePublicId("old-1");
+
+        User userReloaded = new User();
+        userReloaded.setId("c-1");
+        userReloaded.setRole(Role.CUSTOMER);
+        userReloaded.setStatus(UserStatus.ACTIVE);
+        userReloaded.setProfileImagePublicId("concurrently-uploaded-id");
+
+        when(userInternalService.getById("c-1")).thenReturn(userBefore, userReloaded);
 
         MockMultipartFile file = new MockMultipartFile("file", "photo.jpg", "image/jpeg", new byte[] { 1, 2, 3 });
-        when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("new-public-id", "https://new.url/new.jpg"));
+        when(profileImageStorage.upload("c-1", file)).thenReturn(new StoredProfileImage("stale-new-id", "https://new.url/new.jpg"));
+        ProfileImageCleanupTask oldCleanupTask = new ProfileImageCleanupTask("old-1", "c-1", ProfileImageCleanupReason.REPLACED);
+        when(cleanupService.schedule("old-1", "c-1", ProfileImageCleanupReason.REPLACED)).thenReturn(oldCleanupTask);
+        ProfileImageCleanupTask rollbackTask = new ProfileImageCleanupTask("stale-new-id", "c-1", ProfileImageCleanupReason.CONFLICT_ROLLBACK);
+        when(cleanupService.schedule("stale-new-id", "c-1", ProfileImageCleanupReason.CONFLICT_ROLLBACK)).thenReturn(rollbackTask);
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
                 .thenReturn(UpdateResult.acknowledged(0, 0L, null));
 
-        ResourceNotFoundException ex = assertThrows(ResourceNotFoundException.class, () -> customerService.uploadProfilePhoto("c-1", file));
-        assertEquals("USER_NOT_FOUND", ex.getErrorCode());
+        ResourceConflictException ex = assertThrows(ResourceConflictException.class, () -> customerService.uploadProfilePhoto("c-1", file));
+        assertEquals("PROFILE_PHOTO_CONFLICT", ex.getErrorCode());
 
-        verify(profileImageStorage).delete("new-public-id");
+        ArgumentCaptor<Query> queryCaptor = ArgumentCaptor.forClass(Query.class);
+        verify(mongoTemplate).updateFirst(queryCaptor.capture(), any(Update.class), eq(User.class));
+        assertEquals("old-1", queryCaptor.getValue().getQueryObject().get("profileImagePublicId"));
+        assertEquals(Role.CUSTOMER, queryCaptor.getValue().getQueryObject().get("role"));
+        assertEquals(UserStatus.ACTIVE, queryCaptor.getValue().getQueryObject().get("status"));
+
+        verify(cleanupService).attempt(rollbackTask);
+        verify(cleanupService).cancel("old-1");
     }
 
     @Test
-    @DisplayName("deleteProfilePhoto: unsets fields in DB and deletes image from storage")
+    @DisplayName("deleteProfilePhoto: unsets fields in DB and deletes image via cleanupService")
     void deleteProfilePhoto_withExistingPhoto_unsetsAndDeletes() {
         User user = new User();
         user.setId("c-1");
+        user.setRole(Role.CUSTOMER);
         user.setStatus(UserStatus.ACTIVE);
         user.setProfileImagePublicId("existing-public-id");
         when(userInternalService.getById("c-1")).thenReturn(user);
 
+        ProfileImageCleanupTask cleanupTask = new ProfileImageCleanupTask("existing-public-id", "c-1", ProfileImageCleanupReason.REMOVED);
+        when(cleanupService.schedule("existing-public-id", "c-1", ProfileImageCleanupReason.REMOVED)).thenReturn(cleanupTask);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+
         customerService.deleteProfilePhoto("c-1");
 
         verify(mongoTemplate).updateFirst(any(Query.class), any(Update.class), eq(User.class));
-        verify(profileImageStorage).delete("existing-public-id");
+        verify(cleanupService).attempt(cleanupTask);
+    }
+
+    @Test
+    @DisplayName("deleteProfilePhoto: matchedCount 0 when photo already removed concurrently returns 204 no-op")
+    void deleteProfilePhoto_matchedCount0_alreadyRemovedConcurrently_noop() {
+        User userBefore = new User();
+        userBefore.setId("c-1");
+        userBefore.setRole(Role.CUSTOMER);
+        userBefore.setStatus(UserStatus.ACTIVE);
+        userBefore.setProfileImagePublicId("existing-public-id");
+
+        User userReloaded = new User();
+        userReloaded.setId("c-1");
+        userReloaded.setRole(Role.CUSTOMER);
+        userReloaded.setStatus(UserStatus.ACTIVE);
+        userReloaded.setProfileImagePublicId(null);
+
+        when(userInternalService.getById("c-1")).thenReturn(userBefore, userReloaded);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(0, 0L, null));
+
+        assertDoesNotThrow(() -> customerService.deleteProfilePhoto("c-1"));
+    }
+
+    @Test
+    @DisplayName("deleteProfilePhoto: matchedCount 0 when photo changed concurrently cancels cleanup and throws 409")
+    void deleteProfilePhoto_matchedCount0_changedConcurrently_throws409() {
+        User userBefore = new User();
+        userBefore.setId("c-1");
+        userBefore.setRole(Role.CUSTOMER);
+        userBefore.setStatus(UserStatus.ACTIVE);
+        userBefore.setProfileImagePublicId("old-public-id");
+
+        User userReloaded = new User();
+        userReloaded.setId("c-1");
+        userReloaded.setRole(Role.CUSTOMER);
+        userReloaded.setStatus(UserStatus.ACTIVE);
+        userReloaded.setProfileImagePublicId("concurrent-different-id");
+
+        when(userInternalService.getById("c-1")).thenReturn(userBefore, userReloaded);
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(User.class)))
+                .thenReturn(UpdateResult.acknowledged(0, 0L, null));
+
+        ResourceConflictException ex = assertThrows(ResourceConflictException.class, () -> customerService.deleteProfilePhoto("c-1"));
+        assertEquals("PROFILE_PHOTO_CONFLICT", ex.getErrorCode());
+        verify(cleanupService).cancel("old-public-id");
     }
 
     @Test
@@ -591,6 +727,7 @@ class CustomerServiceTest {
     void deleteProfilePhoto_noExistingPhoto_noop() {
         User user = new User();
         user.setId("c-1");
+        user.setRole(Role.CUSTOMER);
         user.setStatus(UserStatus.ACTIVE);
         user.setProfileImagePublicId(null);
         when(userInternalService.getById("c-1")).thenReturn(user);
@@ -598,7 +735,7 @@ class CustomerServiceTest {
         customerService.deleteProfilePhoto("c-1");
 
         verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
-        verify(profileImageStorage, never()).delete(any());
+        verify(cleanupService, never()).schedule(any(), any(), any());
     }
 
     @Test
@@ -606,6 +743,7 @@ class CustomerServiceTest {
     void deleteProfilePhoto_inactiveAccount_throws403() {
         User deactivated = new User();
         deactivated.setId("c-1");
+        deactivated.setRole(Role.CUSTOMER);
         deactivated.setStatus(UserStatus.DEACTIVATED);
         when(userInternalService.getById("c-1")).thenReturn(deactivated);
 
@@ -614,7 +752,7 @@ class CustomerServiceTest {
         assertEquals("ACCOUNT_INACTIVE", ex.getErrorCode());
 
         verify(mongoTemplate, never()).updateFirst(any(Query.class), any(Update.class), eq(User.class));
-        verify(profileImageStorage, never()).delete(any());
+        verify(cleanupService, never()).schedule(any(), any(), any());
     }
 
     @Test

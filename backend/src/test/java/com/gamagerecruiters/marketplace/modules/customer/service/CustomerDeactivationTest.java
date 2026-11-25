@@ -47,6 +47,9 @@ class CustomerDeactivationTest {
     private CustomerProfileImageStorage profileImageStorage;
 
     @Mock
+    private ProfileImageCleanupService cleanupService;
+
+    @Mock
     private MongoTemplate mongoTemplate;
 
     private CustomerServiceImpl customerService;
@@ -59,6 +62,7 @@ class CustomerDeactivationTest {
                 districtCatalog,
                 openBookingsCheckerProvider,
                 profileImageStorage,
+                cleanupService,
                 mongoTemplate,
                 10
         );

@@ -189,6 +189,18 @@ class CloudinaryCustomerProfileImageStorageTest {
     }
 
     @Test
+    @DisplayName("upload: rejects 6 MB file with 400 FILE_TOO_LARGE (below 10MB servlet limit, above 5MB customer limit)")
+    void upload_sixMegabytesFile_throws400FileTooLarge() {
+        MultipartFile sixMbFile = org.mockito.Mockito.mock(MultipartFile.class);
+        when(sixMbFile.isEmpty()).thenReturn(false);
+        when(sixMbFile.getSize()).thenReturn(6L * 1024L * 1024L);
+
+        ApiException ex = assertThrows(ApiException.class, () -> storage.upload("cust-1", sixMbFile));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        assertEquals("FILE_TOO_LARGE", ex.getErrorCode());
+    }
+
+    @Test
     @DisplayName("upload: rejects webp content type with 400 INVALID_FILE_TYPE")
     void upload_webp_throws400() {
         MockMultipartFile file = new MockMultipartFile("file", "a.webp", "image/webp", new byte[] { 1, 2, 3 });
@@ -273,21 +285,22 @@ class CloudinaryCustomerProfileImageStorageTest {
     }
 
     @Test
-    @DisplayName("delete: does nothing when publicId is null or blank")
+    @DisplayName("delete: returns true when publicId is null or blank")
     void delete_nullOrBlankPublicId_noop() {
-        storage.delete(null);
-        storage.delete("   ");
+        assertTrue(storage.delete(null));
+        assertTrue(storage.delete("   "));
         verify(cloudinary, never()).uploader();
     }
 
     @Test
-    @DisplayName("delete: calls cloudinary destroy with invalidate=true")
+    @DisplayName("delete: calls cloudinary destroy with invalidate=true and returns true on 'ok'")
     @SuppressWarnings("unchecked")
     void delete_validPublicId_callsDestroy() throws Exception {
         when(cloudinary.uploader()).thenReturn(uploader);
         when(uploader.destroy(eq("some-public-id"), anyMap())).thenReturn(Map.of("result", "ok"));
 
-        storage.delete("some-public-id");
+        boolean result = storage.delete("some-public-id");
+        assertTrue(result);
 
         ArgumentCaptor<Map<String, Object>> optionsCaptor = ArgumentCaptor.forClass(Map.class);
         verify(uploader).destroy(eq("some-public-id"), optionsCaptor.capture());
@@ -298,14 +311,35 @@ class CloudinaryCustomerProfileImageStorageTest {
     }
 
     @Test
-    @DisplayName("delete: throws 502 STORAGE_ERROR when destroy throws exception")
+    @DisplayName("delete: returns true when Cloudinary result is 'not found'")
     @SuppressWarnings("unchecked")
-    void delete_destroyThrows_throws502() throws Exception {
+    void delete_notFoundResult_returnsTrue() throws Exception {
+        when(cloudinary.uploader()).thenReturn(uploader);
+        when(uploader.destroy(eq("missing-id"), anyMap())).thenReturn(Map.of("result", "not found"));
+
+        boolean result = storage.delete("missing-id");
+        assertTrue(result);
+    }
+
+    @Test
+    @DisplayName("delete: returns false when Cloudinary result is not ok/not found")
+    @SuppressWarnings("unchecked")
+    void delete_errorResult_returnsFalse() throws Exception {
+        when(cloudinary.uploader()).thenReturn(uploader);
+        when(uploader.destroy(eq("error-id"), anyMap())).thenReturn(Map.of("result", "error"));
+
+        boolean result = storage.delete("error-id");
+        assertFalse(result);
+    }
+
+    @Test
+    @DisplayName("delete: catches exception, logs warning and returns false without throwing")
+    @SuppressWarnings("unchecked")
+    void delete_destroyThrows_returnsFalse() throws Exception {
         when(cloudinary.uploader()).thenReturn(uploader);
         when(uploader.destroy(eq("failing-id"), anyMap())).thenThrow(new RuntimeException("Cloudinary destroy error"));
 
-        ApiException ex = assertThrows(ApiException.class, () -> storage.delete("failing-id"));
-        assertEquals(HttpStatus.BAD_GATEWAY, ex.getStatus());
-        assertEquals("STORAGE_ERROR", ex.getErrorCode());
+        boolean result = storage.delete("failing-id");
+        assertFalse(result);
     }
 }

@@ -20,6 +20,7 @@ public interface CustomerProfileImageStorage {
      * Deletes a customer profile image from remote storage.
      *
      * @param publicId Cloudinary public_id of the image to delete
+     * @return true if deletion succeeded or image was already absent, false otherwise
      */
-    void delete(String publicId);
+    boolean delete(String publicId);
 }
