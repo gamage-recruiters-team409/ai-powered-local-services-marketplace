@@ -12,6 +12,8 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
  * One administrative action. Immutable from the outside: there is no update or delete endpoint, and the
  * only change after insert is the one-time outcome update (PENDING -> SUCCESS or FAILED) made by
  * {@code AdminAuditLogService}. AUDIT_RECONCILIATION_REQUIRED records are complete at insert and never updated.
+ * The one other field set after insert is {@code listingVisibilitySync} on a provider's status change: the result of
+ * the follow-up listing visibility update (FAILED when it could not be applied, SUCCESS once a retry applied it).
  *
  * <p>Never stores passwords, tokens, secrets or emails. Only ids, roles, statuses, the reason and an
  * error code.</p>
@@ -28,6 +30,7 @@ public class AdminAuditLog {
     public static final String FIELD_FAILURE_CODE = "failureCode";
     public static final String FIELD_COMPLETED_AT = "completedAt";
     public static final String FIELD_CREATED_AT = "createdAt";
+    public static final String FIELD_LISTING_VISIBILITY_SYNC = "listingVisibilitySync";
 
     @Id
     private String id;
@@ -47,6 +50,8 @@ public class AdminAuditLog {
     private String failureCode;
     private Instant createdAt;
     private Instant completedAt;
+    /** Only on a provider's status change: null (not needed or applied), FAILED, or SUCCESS after a retry. */
+    private AuditOutcome listingVisibilitySync;
 
     /** For the MongoDB mapper. */
     protected AdminAuditLog() {
@@ -155,5 +160,9 @@ public class AdminAuditLog {
 
     public Instant getCompletedAt() {
         return completedAt;
+    }
+
+    public AuditOutcome getListingVisibilitySync() {
+        return listingVisibilitySync;
     }
 }

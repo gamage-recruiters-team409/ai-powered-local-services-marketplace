@@ -111,7 +111,8 @@ public class AdminAccountService {
     /**
      * Rules owned here: status ACTIVE/SUSPENDED only, reason 10..500, target is an admin account, status changes.
      * Rules owned by auth (self change, hierarchy, inactive actor, deactivated target, last active SUPER_ADMIN)
-     * are applied by auth's changeStatus; their errors are recorded as FAILED and passed through unchanged.
+     * are applied by auth's atomic changeStatus; their errors are recorded as FAILED and passed through unchanged,
+     * except 409 CONCURRENT_MODIFICATION, which keeps its code but gets the "reload and try again" message.
      *
      * <p>STATUS_UNCHANGED is not checked when the target is the actor: auth owns the self-change rule and
      * must answer 403 CANNOT_MODIFY_SELF even when the requested status is the current one.</p>
@@ -148,10 +149,15 @@ public class AdminAccountService {
                 target.getId(), target.getRole(), target.getStatus(), newStatus,
                 cleanReason, clock.instant()));
 
+        // Atomic in auth: applied only while the account still has the status read above. If another Super Admin
+        // changed it meanwhile: 409 CONCURRENT_MODIFICATION, recorded as FAILED, nothing changed.
         User updated;
         try {
-            updated = userInternalService.changeStatus(target.getId(), newStatus);
-        } catch (RuntimeException | Error e) {
+            updated = userInternalService.changeStatus(actorId, target.getId(), target.getStatus(), newStatus);
+        } catch (RuntimeException e) {
+            markFailedQuietly(pending.getId(), AdminErrors.failureCodeOf(e));
+            throw AdminErrors.fromStatusChange(e);
+        } catch (Error e) {
             markFailedQuietly(pending.getId(), AdminErrors.failureCodeOf(e));
             throw e;
         }
