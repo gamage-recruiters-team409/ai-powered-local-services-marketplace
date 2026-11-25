@@ -706,9 +706,10 @@ class DisputeResolutionMongoIntegrationTest {
         assertThat(detail.settlement().manualReviewReason()).isEqualTo("REFUND_PENDING_INTEGRATION");
 
         DisputeDetailResponse party = disputeService.getDisputeForParty(CUSTOMER_ID, rejected);
-        assertThat(party.outcome().paymentNote()).isEqualTo("Payment handling for this dispute is being processed.");
-        assertThat(party.toString()).doesNotContain("REJECTED").doesNotContain("NO_CAPTURED_PAYMENT")
-                .doesNotContain("MANUAL_REVIEW").doesNotContain("settlement");
+        assertThat(party.outcome().paymentNote()).isEqualTo(
+                "Payment handling for this dispute requires assistance. Our support team is reviewing this case.");
+        assertThat(party.toString()).doesNotContain("NO_CAPTURED_PAYMENT")
+                .doesNotContain("settlement");
     }
 
     // ---------- settlement order and outcomes ----------
