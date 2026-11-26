@@ -11,6 +11,19 @@ const AUTH_STATUS = {
   UNAUTHENTICATED: 'unauthenticated',
 };
 
+const ALLOWED_CURRENT_USER_PATCH_KEYS = ['name', 'phone', 'profileImageUrl'];
+
+function pickCurrentUserPatch(patch) {
+  if (!patch || typeof patch !== 'object') return {};
+  const picked = {};
+  for (const key of ALLOWED_CURRENT_USER_PATCH_KEYS) {
+    if (key in patch && patch[key] !== undefined) {
+      picked[key] = patch[key];
+    }
+  }
+  return picked;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [status, setStatus] = useState(AUTH_STATUS.LOADING);
@@ -41,7 +54,17 @@ export function AuthProvider({ children }) {
           return;
         }
 
-        const userData = refreshData.user || (await authApi.getCurrentUser());
+        let userData;
+        try {
+          userData = await authApi.getCurrentUser();
+        } catch (userErr) {
+          if (refreshData.user) {
+            userData = refreshData.user;
+          } else {
+            throw userErr;
+          }
+        }
+
         if (!cancelled) {
           setUser(userData);
           setStatus(AUTH_STATUS.AUTHENTICATED);
@@ -197,6 +220,15 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  const updateCurrentUser = useCallback((patch) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const picked = pickCurrentUserPatch(patch);
+      if (Object.keys(picked).length === 0) return prev;
+      return { ...prev, ...picked };
+    });
+  }, []);
+
   const hasRole = useCallback(
     (role) => {
       if (!user || !user.role) return false;
@@ -217,9 +249,10 @@ export function AuthProvider({ children }) {
       register,
       logout,
       refreshUser,
+      updateCurrentUser,
       hasRole,
     }),
-    [user, status, mustChangePassword, login, register, logout, refreshUser, hasRole]
+    [user, status, mustChangePassword, login, register, logout, refreshUser, updateCurrentUser, hasRole]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
