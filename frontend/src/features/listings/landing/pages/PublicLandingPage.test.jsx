@@ -669,28 +669,59 @@ describe('PublicLandingPage (100% SRS-Accurate, Live-API Public UI)', () => {
     expect(
       within(menu).getByRole('menuitem', { name: 'Verification' }).getAttribute('href')
     ).toBe('/provider/verification')
+    expect(
+      within(menu).getByRole('menuitem', { name: 'Earnings & Payouts' }).getAttribute('href')
+    ).toBe('/provider/earnings')
+    expect(
+      within(menu).getByRole('menuitem', { name: 'My Disputes' }).getAttribute('href')
+    ).toBe('/provider/disputes')
 
     await user.click(within(menu).getByRole('menuitem', { name: 'Provider Profile' }))
     expect(await screen.findByTestId('provider-profile-destination')).toBeTruthy()
   })
 
-  it('shows Admin Dashboard link and hides Become a Provider when signed in as ADMIN', async () => {
+  it.each(['SUPER_ADMIN', 'ADMIN', 'SUPPORT_ADMIN', 'MODERATOR', 'FINANCE_ADMIN'])(
+    'routes backend admin role %s to Admin Dashboard (/admin) and never exposes Customer links',
+    async (adminRole) => {
+      const user = userEvent.setup()
+
+      renderLanding('/', {
+        isAuthenticated: true,
+        mustChangePassword: false,
+        user: { name: 'System Admin', email: 'admin@localserve.lk', role: adminRole },
+        logout: vi.fn(),
+      })
+
+      const header = screen.getByRole('banner')
+      expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
+      await user.click(within(header).getByRole('button', { name: 'Account menu: System Admin' }))
+      const menu = screen.getByRole('menu', { name: 'Account navigation' })
+      expect(within(menu).queryByRole('menuitem', { name: 'Profile' })).toBeNull()
+      await user.click(within(menu).getByRole('menuitem', { name: 'Admin Dashboard' }))
+      expect(await screen.findByTestId('admin-destination')).toBeTruthy()
+    }
+  )
+
+  it('routes mustChangePassword users strictly to /change-password + Log out', async () => {
     const user = userEvent.setup()
 
     renderLanding('/', {
       isAuthenticated: true,
-      mustChangePassword: false,
-      user: { name: 'System Admin', email: 'admin@localserve.lk', role: 'ADMIN' },
+      mustChangePassword: true,
+      user: { mustChangePassword: true },
       logout: vi.fn(),
     })
 
     const header = screen.getByRole('banner')
     expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
 
-    await user.click(within(header).getByRole('button', { name: 'Account menu: System Admin' }))
+    await user.click(within(header).getByRole('button', { name: 'Account menu: Account' }))
     const menu = screen.getByRole('menu', { name: 'Account navigation' })
-    await user.click(within(menu).getByRole('menuitem', { name: 'Admin Dashboard' }))
-    expect(await screen.findByTestId('admin-destination')).toBeTruthy()
+    expect(
+      within(menu).getByRole('menuitem', { name: 'Change Password' }).getAttribute('href')
+    ).toBe('/change-password')
+    expect(within(menu).queryByRole('menuitem', { name: 'Profile' })).toBeNull()
   })
 
   it('logs out from PublicNavbar, restores guest Log in/Sign up actions, and refreshes reviews to guest state', async () => {

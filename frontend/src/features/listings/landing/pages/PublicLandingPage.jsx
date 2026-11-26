@@ -1,7 +1,7 @@
 import { useContext, useEffect, useMemo, useState } from 'react'
 import { PublicLayout } from '../../../../shared/layouts/public'
 import { AuthContext } from '../../../auth/context/authContextValue'
-import { ADMIN_ROLES, ROLES } from '../../../auth/constants/roles'
+import { ROLES } from '../../../auth/constants/roles'
 import {
   getFeaturedPublicServices,
   getLiveCustomerReviews,
@@ -19,6 +19,15 @@ import { VerifiedReviewsMarquee } from '../components/VerifiedReviewsMarquee'
 import { LandingFaqSection } from '../components/LandingFaqSection'
 import styles from '../styles/publicLanding.module.css'
 
+// Matches all 5 backend Role.java / disputes-admin ADMIN_ROLES values
+const ALL_ADMIN_ROLES = new Set([
+  'SUPER_ADMIN',
+  'ADMIN',
+  'SUPPORT_ADMIN',
+  'MODERATOR',
+  'FINANCE_ADMIN',
+])
+
 function resolveAccountNavigation(user, mustChangePassword) {
   if (!user) {
     return { items: [], showBecomeProvider: true }
@@ -29,7 +38,7 @@ function resolveAccountNavigation(user, mustChangePassword) {
       showBecomeProvider: false,
     }
   }
-  if (user.role && ADMIN_ROLES.includes(user.role)) {
+  if (user.role && ALL_ADMIN_ROLES.has(user.role)) {
     return {
       items: [{ id: 'admin-dashboard', label: 'Admin Dashboard', to: '/admin' }],
       showBecomeProvider: false,
@@ -40,20 +49,25 @@ function resolveAccountNavigation(user, mustChangePassword) {
       items: [
         { id: 'provider-profile', label: 'Provider Profile', to: '/provider/profile' },
         { id: 'provider-verification', label: 'Verification', to: '/provider/verification' },
+        { id: 'provider-earnings', label: 'Earnings & Payouts', to: '/provider/earnings' },
+        { id: 'provider-disputes', label: 'My Disputes', to: '/provider/disputes' },
       ],
       showBecomeProvider: false,
     }
   }
-  return {
-    items: [
-      { id: 'profile', label: 'Profile', to: '/customer/account/profile' },
-      { id: 'addresses', label: 'Saved Addresses', to: '/customer/account/addresses' },
-      { id: 'favorites', label: 'Favorites', to: '/customer/account/favorites' },
-      { id: 'payments', label: 'Payments', to: '/customer/account/payments' },
-      { id: 'settings', label: 'Settings', to: '/customer/account/settings' },
-    ],
-    showBecomeProvider: true,
+  if (user.role === ROLES.CUSTOMER) {
+    return {
+      items: [
+        { id: 'profile', label: 'Profile', to: '/customer/account/profile' },
+        { id: 'addresses', label: 'Saved Addresses', to: '/customer/account/addresses' },
+        { id: 'favorites', label: 'Favorites', to: '/customer/account/favorites' },
+        { id: 'payments', label: 'Payments', to: '/customer/account/payments' },
+        { id: 'settings', label: 'Settings', to: '/customer/account/settings' },
+      ],
+      showBecomeProvider: true,
+    }
   }
+  return { items: [], showBecomeProvider: false }
 }
 
 export default function PublicLandingPage() {

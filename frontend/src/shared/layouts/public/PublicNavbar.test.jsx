@@ -117,4 +117,23 @@ describe('PublicNavbar (guest & auth-aware navigation)', () => {
     await user.click(screen.getByRole('button', { name: 'Log out' }))
     expect(onLogout).toHaveBeenCalledTimes(1)
   })
+
+  it.each([
+    ['SUPER_ADMIN', 'Super Admin'],
+    ['SUPPORT_ADMIN', 'Support Admin'],
+    ['MODERATOR', 'Moderator'],
+    ['FINANCE_ADMIN', 'Finance Admin'],
+  ])('displays accurate badge label for backend admin role %s', async (role, expectedLabel) => {
+    const user = userEvent.setup()
+    renderNavbar({
+      user: { name: 'Ops User', email: 'ops@localserve.lk', role },
+      accountMenuItems: [{ id: 'admin-dashboard', label: 'Admin Dashboard', to: '/admin' }],
+      showBecomeProvider: false,
+      onLogout: vi.fn(),
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Account menu: Ops User' }))
+    const menu = screen.getByRole('menu', { name: 'Account navigation' })
+    expect(within(menu).getByText(expectedLabel)).toBeTruthy()
+  })
 })

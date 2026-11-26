@@ -450,6 +450,9 @@
   top: 72px;
   left: 0;
   right: 0;
+  max-height: calc(100dvh - 72px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: rgba(255, 255, 255, 0.98);
   backdrop-filter: blur(18px);
   border-bottom: 1px solid rgba(13, 148, 136, 0.18);

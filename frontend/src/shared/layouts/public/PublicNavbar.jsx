@@ -24,12 +24,19 @@ function getUserInitials(name) {
   return (parts[0] || 'U').slice(0, 2).toUpperCase()
 }
 
+const ROLE_LABELS = Object.freeze({
+  SUPER_ADMIN: 'Super Admin',
+  ADMIN: 'Admin',
+  SUPPORT_ADMIN: 'Support Admin',
+  MODERATOR: 'Moderator',
+  FINANCE_ADMIN: 'Finance Admin',
+  PROVIDER: 'Provider',
+  CUSTOMER: 'Customer',
+})
+
 function formatRoleLabel(role) {
   if (!role) return null
-  if (role === 'SUPER_ADMIN' || role === 'ADMIN') return 'Admin'
-  if (role === 'PROVIDER') return 'Provider'
-  if (role === 'CUSTOMER') return 'Customer'
-  return null
+  return ROLE_LABELS[role] || null
 }
 
 export function PublicNavbar({
