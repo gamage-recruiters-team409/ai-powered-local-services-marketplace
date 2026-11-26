@@ -5,8 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.when;
 
+import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -41,6 +44,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.MongoDBContainer;
 
@@ -56,13 +60,18 @@ import com.gamagerecruiters.marketplace.modules.booking.dto.BookingAddressReques
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingResponse;
 import com.gamagerecruiters.marketplace.modules.booking.dto.CreateBookingRequest;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingRequestService;
+import com.gamagerecruiters.marketplace.modules.listing.domain.PricingModel;
+import com.gamagerecruiters.marketplace.modules.listing.dto.PriceSnapshotResponse;
+import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
+import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationFacade;
 import com.gamagerecruiters.marketplace.modules.booking.service.SlotService;
 import com.gamagerecruiters.marketplace.modules.booking.service.SlotServiceImpl;
 
 /**
  * Booking request against a real MongoDB (Testcontainers): stored booking, slot re-check and
  * double-booking protection under simultaneous requests (MongoDB transaction + provider guard).
- * Booking creation is gated off by default; these tests switch it on for the test context only.
+ * WP03 listing snapshot and WP02 provider approval are mocked (their own modules test them); the
+ * booking, snapshot and transaction behaviour run against real MongoDB.
  * Requires Docker. Skip explicitly with -DSKIP_DOCKER_TESTS=true.
  */
 @SpringBootTest(properties = "booking.creation.enabled=true")
@@ -111,6 +120,14 @@ class BookingRequestIntegrationTest {
     @Autowired
     private MongoTemplate mongoTemplate;
 
+    /** WP03 listing contract: listing-1 (60 min, LKR 5000, 10% commission) owned by PROVIDER. */
+    @MockitoBean
+    private ListingService listingService;
+
+    /** WP02 provider approval: PROVIDER is APPROVED. */
+    @MockitoBean
+    private ProviderVerificationFacade providerVerification;
+
     /** Real SlotService; only the regression test below slows one call down. */
     @MockitoSpyBean
     private SlotService slotService;
@@ -124,6 +141,11 @@ class BookingRequestIntegrationTest {
             week.add(new WeeklyHoursRequest(day, true, "08:00", "20:00"));
         }
         availabilityService.updateAvailability(PROVIDER, new UpdateAvailabilityRequest(week, 30));
+
+        when(listingService.getListingPriceSnapshot(anyString(), anyList())).thenReturn(new PriceSnapshotResponse(
+                "listing-1", PROVIDER, "cat-1", "Home Cleaning", PricingModel.FIXED, new BigDecimal("5000.00"), 60,
+                new BigDecimal("0.10"), List.of(), new BigDecimal("5000.00"), 60, Instant.now()));
+        when(providerVerification.isApprovedProvider(PROVIDER)).thenReturn(true);
     }
 
     @AfterEach
@@ -144,7 +166,7 @@ class BookingRequestIntegrationTest {
     }
 
     private static CreateBookingRequest request(Instant slotStart) {
-        return new CreateBookingRequest(PROVIDER, "listing-1", slotStart, 60,
+        return new CreateBookingRequest(PROVIDER, "listing-1", slotStart, List.of(),
                 new BookingAddressRequest("12 Temple Road", null, "Nugegoda", "Colombo", "10250"), null);
     }
 
@@ -170,6 +192,13 @@ class BookingRequestIntegrationTest {
         assertThat(stored.getAddress().getDistrict()).isEqualTo("Colombo");
         assertThat(stored.getResponseDeadline()).isNotNull();
         assertThat(stored.getTimeline()).hasSize(1);
+        // Price snapshot survives the MongoDB round trip unchanged.
+        assertThat(stored.getDurationMinutes()).isEqualTo(60);
+        assertThat(stored.getPriceSnapshot()).isNotNull();
+        assertThat(stored.getPriceSnapshot().totalPrice()).isEqualByComparingTo("5000.00");
+        assertThat(stored.getPriceSnapshot().commissionRate()).isEqualByComparingTo("0.10");
+        assertThat(stored.getPriceSnapshot().currency()).isEqualTo("LKR");
+        assertThat(stored.getPriceSnapshot().serviceTitle()).isEqualTo("Home Cleaning");
     }
 
     @Test
