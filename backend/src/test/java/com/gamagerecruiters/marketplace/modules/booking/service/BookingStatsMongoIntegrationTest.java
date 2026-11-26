@@ -171,6 +171,31 @@ class BookingStatsMongoIntegrationTest {
     }
 
     @Test
+    @DisplayName("User stats for a user without bookings: all zeros, six zero months (aggregation on an empty match)")
+    void userStatsEmpty() {
+        save("someone-else", "prov-9", BookingStatus.COMPLETED, daysAgo(2), daysAgo(3));
+
+        BookingUserStats s = stats.getUserStats("nobody");
+
+        assertThat(s.total()).isZero();
+        assertThat(s.completed()).isZero();
+        assertThat(s.cancelled()).isZero();
+        assertThat(s.disputed()).isZero();
+        assertThat(s.lastSixMonths()).hasSize(6).allSatisfy(m -> assertThat(m.count()).isZero());
+        assertThat(s.nextBookings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Monthly counts use Colombo time: 31 May 19:00 UTC is already June in Sri Lanka")
+    void userStatsMonthBoundary() {
+        save("cust-tz", "prov-tz", BookingStatus.COMPLETED, daysAgo(100), Instant.parse("2026-05-31T19:00:00Z"));
+
+        BookingUserStats s = stats.getUserStats("cust-tz");
+
+        assertThat(s.lastSixMonths().get(0)).isEqualTo(new MonthlyCount(YearMonth.of(2026, 6), 1));
+    }
+
+    @Test
     @DisplayName("Overdue: CONFIRMED / IN_PROGRESS whose slot already ended, oldest first, limited")
     void overdue() {
         Booking yesterday = save("c", "p", BookingStatus.CONFIRMED, daysAgo(1), daysAgo(5));

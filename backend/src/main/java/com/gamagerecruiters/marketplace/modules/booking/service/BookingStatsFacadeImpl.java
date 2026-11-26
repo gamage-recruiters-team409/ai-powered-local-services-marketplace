@@ -8,6 +8,7 @@ import java.time.YearMonth;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -50,6 +51,7 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
     static final int MAX_DAY_RANGE = 366;
     static final int NEXT_BOOKINGS = 5;
     static final int MONTHS = 6;
+    static final String BOOKINGS_COLLECTION = "bookings";
 
     private static final Set<BookingStatus> CANCELLED = EnumSet.of(
             BookingStatus.CANCELLED_BY_CUSTOMER, BookingStatus.CANCELLED_BY_PROVIDER);
@@ -81,31 +83,43 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
         Criteria ofUser = new Criteria().orOperator(
                 Criteria.where("customerId").is(userId), Criteria.where("providerId").is(userId));
 
-        Query all = new Query(ofUser);
-        all.fields().include("status", "createdAt", "timeline.toStatus");
-        List<Booking> bookings = mongoTemplate.find(all, Booking.class);
-
-        long completed = 0;
-        long cancelled = 0;
-        long disputed = 0;
+        // Counted inside MongoDB (TL review): one $facet aggregation instead of loading every booking.
+        // The $or match is index-backed: customerId_1_status_1 and providerId_1_slotStart_1 both start with the
+        // matched field, so MongoDB answers each branch from an index.
         YearMonth thisMonth = YearMonth.now(clock.withZone(SlotServiceImpl.BUSINESS_ZONE));
+        YearMonth firstMonth = thisMonth.minusMonths(MONTHS - 1L);
+        Date monthsFrom = Date.from(firstMonth.atDay(1).atStartOfDay(SlotServiceImpl.BUSINESS_ZONE).toInstant());
+
+        Document totalsGroup = new Document("$group", new Document("_id", null)
+                .append("total", new Document("$sum", 1))
+                .append("completed", countWhen(new Document("$eq",
+                        List.of("$status", BookingStatus.COMPLETED.name()))))
+                .append("cancelled", countWhen(new Document("$in", List.of("$status",
+                        CANCELLED.stream().map(Enum::name).toList()))))
+                .append("disputed", countWhen(new Document("$in", List.of(BookingStatus.DISPUTED.name(),
+                        new Document("$ifNull", List.of("$timeline.toStatus", List.of())))))));
+        List<Document> monthsPipeline = List.of(
+                new Document("$match", new Document("createdAt", new Document("$gte", monthsFrom))),
+                new Document("$group", new Document("_id", new Document("$dateToString",
+                        new Document("format", "%Y-%m").append("date", "$createdAt")
+                                .append("timezone", SlotServiceImpl.BUSINESS_ZONE.getId())))
+                        .append("count", new Document("$sum", 1))));
+        Document facet = new Document("$facet", new Document("totals", List.of(totalsGroup))
+                .append("months", monthsPipeline));
+
+        Aggregation aggregation = Aggregation.newAggregation(Aggregation.match(ofUser), context -> facet);
+        Document result = mongoTemplate.aggregate(aggregation, BOOKINGS_COLLECTION, Document.class)
+                .getUniqueMappedResult();
+
+        Document totals = firstOrEmpty(result, "totals");
         Map<YearMonth, Long> months = new LinkedHashMap<>();
         for (int i = MONTHS - 1; i >= 0; i--) {
             months.put(thisMonth.minusMonths(i), 0L);
         }
-        for (Booking b : bookings) {
-            if (b.getStatus() == BookingStatus.COMPLETED) {
-                completed++;
-            }
-            if (CANCELLED.contains(b.getStatus())) {
-                cancelled++;
-            }
-            if (b.getTimeline().stream().anyMatch(c -> c.getToStatus() == BookingStatus.DISPUTED)) {
-                disputed++;
-            }
-            if (b.getCreatedAt() != null) {
-                YearMonth m = YearMonth.from(b.getCreatedAt().atZone(SlotServiceImpl.BUSINESS_ZONE));
-                months.computeIfPresent(m, (k, v) -> v + 1);
+        if (result != null && result.getList("months", Document.class) != null) {
+            for (Document m : result.getList("months", Document.class)) {
+                YearMonth month = YearMonth.parse(m.getString("_id"));
+                months.computeIfPresent(month, (k, v) -> v + number(m, "count"));
             }
         }
 
@@ -119,8 +133,25 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
 
         List<MonthlyCount> lastSixMonths = months.entrySet().stream()
                 .map(e -> new MonthlyCount(e.getKey(), e.getValue())).toList();
-        return new BookingUserStats(userId, bookings.size(), completed, cancelled, disputed, lastSixMonths,
-                nextBookings);
+        return new BookingUserStats(userId, number(totals, "total"), number(totals, "completed"),
+                number(totals, "cancelled"), number(totals, "disputed"), lastSixMonths, nextBookings);
+    }
+
+    private static Document countWhen(Document condition) {
+        return new Document("$sum", new Document("$cond", List.of(condition, 1, 0)));
+    }
+
+    private static Document firstOrEmpty(Document result, String key) {
+        if (result == null) {
+            return new Document();
+        }
+        List<Document> list = result.getList(key, Document.class);
+        return list == null || list.isEmpty() ? new Document() : list.get(0);
+    }
+
+    private static long number(Document document, String key) {
+        Object value = document.get(key);
+        return value instanceof Number n ? n.longValue() : 0L;
     }
 
     @Override
