@@ -3,16 +3,64 @@ import { Link, useLocation } from 'react-router-dom'
 import { PUBLIC_BRAND, PUBLIC_CITIES } from './publicBrand'
 import styles from './PublicNavbar.module.css'
 
+function getUserDisplayName(user) {
+  if (!user) return ''
+  return (
+    user.fullName?.trim() ||
+    user.name?.trim() ||
+    user.email?.trim() ||
+    'Account'
+  )
+}
+
+function getUserInitials(name) {
+  const parts = String(name || 'U')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+  }
+  return (parts[0] || 'U').slice(0, 2).toUpperCase()
+}
+
+const ROLE_LABELS = Object.freeze({
+  SUPER_ADMIN: 'Super Admin',
+  ADMIN: 'Admin',
+  SUPPORT_ADMIN: 'Support Admin',
+  MODERATOR: 'Moderator',
+  FINANCE_ADMIN: 'Finance Admin',
+  PROVIDER: 'Provider',
+  CUSTOMER: 'Customer',
+})
+
+function formatRoleLabel(role) {
+  if (!role) return null
+  return ROLE_LABELS[role] || null
+}
+
 export function PublicNavbar({
   selectedCity = 'Colombo',
   onCityChange,
   cities = PUBLIC_CITIES,
+  user = null,
+  accountMenuItems = [],
+  showBecomeProvider = true,
+  onLogout,
 }) {
   const location = useLocation()
   const [scrolled, setScrolled] = useState(false)
   const [cityMenuOpen, setCityMenuOpen] = useState(false)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
   const cityRef = useRef(null)
+  const accountRef = useRef(null)
+
+  const displayName = getUserDisplayName(user)
+  const initials = getUserInitials(displayName)
+  const roleLabel = formatRoleLabel(user?.role)
+  const menuItems = Array.isArray(accountMenuItems) ? accountMenuItems : []
 
   useEffect(() => {
     const onScroll = () => {
@@ -28,10 +76,14 @@ export function PublicNavbar({
       if (cityRef.current && !cityRef.current.contains(event.target)) {
         setCityMenuOpen(false)
       }
+      if (accountRef.current && !accountRef.current.contains(event.target)) {
+        setAccountMenuOpen(false)
+      }
     }
     const handleEscape = (event) => {
       if (event.key === 'Escape') {
         setCityMenuOpen(false)
+        setAccountMenuOpen(false)
         setMobileMenuOpen(false)
       }
     }
@@ -46,6 +98,19 @@ export function PublicNavbar({
   const handleSelectCity = (cityId) => {
     onCityChange?.(cityId)
     setCityMenuOpen(false)
+  }
+
+  const handleLogoutClick = async () => {
+    if (loggingOut) return
+    setAccountMenuOpen(false)
+    setMobileMenuOpen(false)
+    if (typeof onLogout !== 'function') return
+    setLoggingOut(true)
+    try {
+      await onLogout()
+    } finally {
+      setLoggingOut(false)
+    }
   }
 
   return (
@@ -97,7 +162,10 @@ export function PublicNavbar({
               aria-haspopup="listbox"
               aria-expanded={cityMenuOpen}
               aria-label={`Selected city: ${selectedCity}`}
-              onClick={() => setCityMenuOpen((prev) => !prev)}
+              onClick={() => {
+                setAccountMenuOpen(false)
+                setCityMenuOpen((prev) => !prev)
+              }}
             >
               <svg
                 width="15"
@@ -156,15 +224,121 @@ export function PublicNavbar({
             )}
           </div>
 
-          <Link to="/register?role=provider" className={styles.providerBtn}>
-            Become a Provider
-          </Link>
-          <Link to="/login" className={styles.loginLink}>
-            Log in
-          </Link>
-          <Link to="/register" className={styles.signupBtn}>
-            Sign up
-          </Link>
+          {showBecomeProvider && (
+            <Link to="/register?role=provider" className={styles.providerBtn}>
+              Become a Provider
+            </Link>
+          )}
+
+          {user ? (
+            <div className={styles.accountDropdownWrap} ref={accountRef}>
+              <button
+                type="button"
+                className={styles.accountTrigger}
+                aria-haspopup="menu"
+                aria-expanded={accountMenuOpen}
+                aria-label={`Account menu: ${displayName}`}
+                onClick={() => {
+                  setCityMenuOpen(false)
+                  setAccountMenuOpen((prev) => !prev)
+                }}
+              >
+                <span className={styles.accountAvatar} aria-hidden="true">
+                  {initials}
+                </span>
+                <span className={styles.accountName}>{displayName}</span>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className={`${styles.chevron} ${accountMenuOpen ? styles.chevronOpen : ''}`}
+                  aria-hidden="true"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+
+              {accountMenuOpen && (
+                <div
+                  className={styles.accountMenu}
+                  role="menu"
+                  aria-label="Account navigation"
+                >
+                  <div className={styles.accountMenuHeader}>
+                    <span className={styles.accountMenuNameRow}>
+                      <strong className={styles.accountMenuName}>{displayName}</strong>
+                      {roleLabel && (
+                        <span className={styles.accountMenuRole}>{roleLabel}</span>
+                      )}
+                    </span>
+                    {user.email && (
+                      <span className={styles.accountMenuEmail}>{user.email}</span>
+                    )}
+                  </div>
+
+                  {menuItems.length > 0 && (
+                    <div className={styles.accountMenuList}>
+                      {menuItems.map((item) => (
+                        <Link
+                          key={item.id || item.to}
+                          to={item.to}
+                          role="menuitem"
+                          className={styles.accountMenuItem}
+                          onClick={() => setAccountMenuOpen(false)}
+                        >
+                          {item.label}
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+
+                  {typeof onLogout === 'function' && (
+                    <>
+                      <div className={styles.accountMenuDivider} role="separator" />
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={styles.accountLogoutBtn}
+                        disabled={loggingOut}
+                        onClick={handleLogoutClick}
+                      >
+                        <svg
+                          width="15"
+                          height="15"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                          <polyline points="16 17 21 12 16 7" />
+                          <line x1="21" y1="12" x2="9" y2="12" />
+                        </svg>
+                        <span>{loggingOut ? 'Logging out...' : 'Log out'}</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <Link to="/login" className={styles.loginLink}>
+                Log in
+              </Link>
+              <Link to="/register" className={styles.signupBtn}>
+                Sign up
+              </Link>
+            </>
+          )}
 
           <button
             type="button"
@@ -222,29 +396,79 @@ export function PublicNavbar({
           </div>
 
           <div className={styles.mobileActions}>
-            <Link
-              to="/register?role=provider"
-              className={styles.mobileProviderBtn}
-              onClick={() => setMobileMenuOpen(false)}
-            >
-              Become a Provider
-            </Link>
-            <div className={styles.mobileAuthRow}>
+            {showBecomeProvider && (
               <Link
-                to="/login"
-                className={styles.mobileLoginBtn}
+                to="/register?role=provider"
+                className={styles.mobileProviderBtn}
                 onClick={() => setMobileMenuOpen(false)}
               >
-                Log in
+                Become a Provider
               </Link>
-              <Link
-                to="/register"
-                className={styles.mobileSignupBtn}
-                onClick={() => setMobileMenuOpen(false)}
-              >
-                Sign up
-              </Link>
-            </div>
+            )}
+
+            {user ? (
+              <div className={styles.mobileAccountSection}>
+                <div className={styles.mobileAccountCard}>
+                  <span className={styles.accountAvatar} aria-hidden="true">
+                    {initials}
+                  </span>
+                  <div className={styles.mobileAccountMeta}>
+                    <span className={styles.accountMenuNameRow}>
+                      <strong className={styles.accountMenuName}>{displayName}</strong>
+                      {roleLabel && (
+                        <span className={styles.accountMenuRole}>{roleLabel}</span>
+                      )}
+                    </span>
+                    {user.email && (
+                      <span className={styles.accountMenuEmail}>{user.email}</span>
+                    )}
+                  </div>
+                </div>
+
+                {menuItems.length > 0 && (
+                  <nav className={styles.mobileAccountLinks} aria-label="Account links">
+                    {menuItems.map((item) => (
+                      <Link
+                        key={item.id || item.to}
+                        to={item.to}
+                        className={styles.mobileAccountLink}
+                        onClick={() => setMobileMenuOpen(false)}
+                      >
+                        {item.label}
+                      </Link>
+                    ))}
+                  </nav>
+                )}
+
+                {typeof onLogout === 'function' && (
+                  <button
+                    type="button"
+                    className={styles.mobileLogoutBtn}
+                    disabled={loggingOut}
+                    onClick={handleLogoutClick}
+                  >
+                    {loggingOut ? 'Logging out...' : 'Log out'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className={styles.mobileAuthRow}>
+                <Link
+                  to="/login"
+                  className={styles.mobileLoginBtn}
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  Log in
+                </Link>
+                <Link
+                  to="/register"
+                  className={styles.mobileSignupBtn}
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  Sign up
+                </Link>
+              </div>
+            )}
           </div>
         </div>
       )}
