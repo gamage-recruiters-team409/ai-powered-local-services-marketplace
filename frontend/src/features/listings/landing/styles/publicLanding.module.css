@@ -2617,6 +2617,17 @@
   color: #0f172a;
 }
 
+.featuredCardDesc {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: #475569;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .featuredMetaRow {
   display: flex;
   align-items: center;
@@ -2638,6 +2649,12 @@
   gap: 4px;
   font-weight: 600;
   color: #0f766e;
+}
+
+.featuredRadiusChip {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
 }
 
 .featuredCardFooter {

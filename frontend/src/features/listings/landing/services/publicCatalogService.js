@@ -50,11 +50,12 @@ export async function getPublicDistrictLocations(signal) {
 }
 
 /**
- * Fetches live verified public listings (`GET /api/v1/search`) for the Featured Services showcase
- * and honest real listing counts. Uses `_skipAuth: true` and never fabricates demo records.
+ * Fetches live verified public listings (`GET /api/v1/search?verified=true`) for the Featured Services
+ * showcase and honest real listing counts. Uses `_skipAuth: true` and never fabricates demo records.
  */
 export async function getFeaturedPublicServices({ location, size = 6, signal } = {}) {
   const params = {
+    verified: true,
     sort: 'recommended',
     page: 0,
     size,
@@ -71,19 +72,32 @@ export async function getFeaturedPublicServices({ location, size = 6, signal } =
 
   const data = response?.data || {}
   const rawList = Array.isArray(data.results) ? data.results : []
-  const totalCount =
+  const verifiedList = rawList.filter((item) => item?.verified === true)
+  const droppedUnverified = rawList.length - verifiedList.length
+  const parsedTotal =
     Number.isFinite(Number(data.totalCount)) && data.totalCount != null
       ? Number(data.totalCount)
       : rawList.length
+  const totalCount =
+    droppedUnverified > 0 ? Math.max(0, parsedTotal - droppedUnverified) : parsedTotal
 
-  const results = rawList.map((item, idx) => ({
+  const results = verifiedList.map((item, idx) => ({
     id: item.listingId ?? item.providerId ?? `live-service-${idx}`,
+    listingId: item.listingId ?? null,
     providerId: item.providerId ?? null,
     profileId: item.profileId ?? null,
-    title: item.title || item.name || 'Verified Local Service',
-    categoryName: item.category || 'Local Service',
-    providerName: item.providerName || item.name || 'Verified Provider',
-    location: item.location || location || 'Sri Lanka',
+    providerName: item.name?.trim() || 'Verified Provider',
+    categoryName: item.category?.trim() || 'Local Service',
+    description:
+      typeof item.description === 'string' && item.description.trim()
+        ? item.description.trim()
+        : null,
+    location:
+      item.location || (location && location !== 'All Districts' ? location : 'Sri Lanka'),
+    coverageRadiusKm:
+      typeof item.coverageRadiusKm === 'number' && Number.isFinite(item.coverageRadiusKm)
+        ? item.coverageRadiusKm
+        : null,
     imageUrl: item.image || null,
     priceAmount:
       typeof item.pricing?.amount === 'number' && Number.isFinite(item.pricing.amount)
@@ -92,8 +106,8 @@ export async function getFeaturedPublicServices({ location, size = 6, signal } =
     pricingModel: item.pricing?.model || 'FIXED',
     rating: typeof item.rating === 'number' ? item.rating : null,
     reviewCount: typeof item.reviewCount === 'number' ? item.reviewCount : null,
-    verified: Boolean(item.verified),
-    badge: item.verified ? 'Admin-Verified Pro' : 'Active Listing',
+    verified: true,
+    badge: 'Admin-Verified Pro',
   }))
 
   return { results, totalCount }
@@ -127,11 +141,12 @@ function formatReviewDate(isoDate) {
 /**
  * Fetches real published Customer-to-Provider reviews (`GET /api/v1/providers/{providerId}/reviews`).
  * Because `ProviderReviewController` currently enforces `@PreAuthorize("isAuthenticated()")`,
- * anonymous guests receive `{ reviews: [], requiresAuth: true }` cleanly with zero 401 console spam.
+ * anonymous guests receive `{ reviews: [], requiresAuth: true, failed: false }` cleanly with zero 401 console spam.
+ * Request failures return `{ reviews: [], requiresAuth: false, failed: true }` so errors are never disguised as empty data.
  */
 export async function getLiveCustomerReviews({ services = [], signal } = {}) {
   if (!tokenStore.hasAccessToken()) {
-    return { reviews: [], requiresAuth: true }
+    return { reviews: [], requiresAuth: true, failed: false }
   }
 
   const providerById = new Map()
@@ -143,7 +158,7 @@ export async function getLiveCustomerReviews({ services = [], signal } = {}) {
 
   const uniqueProviders = Array.from(providerById.entries()).slice(0, 4)
   if (uniqueProviders.length === 0) {
-    return { reviews: [], requiresAuth: false }
+    return { reviews: [], requiresAuth: false, failed: false }
   }
 
   const settled = await Promise.allSettled(
@@ -156,8 +171,16 @@ export async function getLiveCustomerReviews({ services = [], signal } = {}) {
   )
 
   const collected = []
+  let failedCount = 0
+
   settled.forEach((entry, idx) => {
-    if (entry.status !== 'fulfilled') return
+    if (entry.status !== 'fulfilled') {
+      const reason = entry.reason
+      if (reason?.name !== 'CanceledError' && reason?.name !== 'AbortError') {
+        failedCount += 1
+      }
+      return
+    }
     const [, serviceMeta] = uniqueProviders[idx]
     const content = Array.isArray(entry.value?.data?.content)
       ? entry.value.data.content
@@ -180,5 +203,9 @@ export async function getLiveCustomerReviews({ services = [], signal } = {}) {
     })
   })
 
-  return { reviews: collected, requiresAuth: false }
+  if (collected.length === 0 && failedCount > 0) {
+    return { reviews: [], requiresAuth: false, failed: true }
+  }
+
+  return { reviews: collected, requiresAuth: false, failed: false }
 }

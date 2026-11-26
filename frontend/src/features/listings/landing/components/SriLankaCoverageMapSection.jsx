@@ -88,6 +88,8 @@ export function SriLankaCoverageMapSection({
 
   const [selectedTrade, setSelectedTrade] = useState('All Services')
   const effectiveTrade = tradeOptions.includes(selectedTrade) ? selectedTrade : tradeOptions[0]
+  const isIslandwide = selectedCity === 'All Districts'
+  const effectiveViewMode = isIslandwide ? 'island' : viewMode
 
   const activePin = useMemo(() => {
     return (
@@ -97,16 +99,18 @@ export function SriLankaCoverageMapSection({
     )
   }, [districts, selectedCity])
 
+  const displayDistrictLabel = isIslandwide ? 'All Districts' : activePin.city
+
   // 5 well-spaced canonical pins on Island View + active district if user picked another of the 25
   const mapPins = useMemo(() => {
     const highlighted = HIGHLIGHT_DISTRICT_NAMES.map((name) =>
       districts.find((d) => d.city === name)
     ).filter(Boolean)
-    if (activePin && !highlighted.some((p) => p.city === activePin.city)) {
+    if (!isIslandwide && activePin && !highlighted.some((p) => p.city === activePin.city)) {
       highlighted.push(activePin)
     }
     return highlighted.length > 0 ? highlighted : districts.slice(0, 5)
-  }, [districts, activePin])
+  }, [districts, activePin, isIslandwide])
 
   useEffect(() => {
     if (!openMenu) return undefined
@@ -220,7 +224,7 @@ export function SriLankaCoverageMapSection({
       markersLayer.clearLayers()
 
       mapPins.forEach((pin) => {
-        const isAct = pin.city === activePin.city
+        const isAct = !isIslandwide && pin.city === activePin.city
         const marker = L.marker([pin.lat, pin.lng], {
           icon: buildDistrictMarkerIcon(pin, isAct),
           zIndexOffset: isAct ? 600 : 100,
@@ -232,11 +236,16 @@ export function SriLankaCoverageMapSection({
       })
 
       if (circle) {
-        circle.setLatLng([activePin.lat, activePin.lng])
+        if (isIslandwide) {
+          circle.setStyle({ opacity: 0, fillOpacity: 0 })
+        } else {
+          circle.setLatLng([activePin.lat, activePin.lng])
+          circle.setStyle({ opacity: 0.85, fillOpacity: 0.16 })
+        }
       }
 
       if (routeLine) {
-        if (activePin.city === 'Colombo') {
+        if (isIslandwide || activePin.city === 'Colombo') {
           routeLine.setLatLngs([])
         } else {
           routeLine.setLatLngs([COLOMBO_COORDS, [activePin.lat, activePin.lng]])
@@ -248,8 +257,8 @@ export function SriLankaCoverageMapSection({
         window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
 
       const targetCenter =
-        viewMode === 'city' ? [activePin.lat, activePin.lng] : SRI_LANKA_ISLAND_CENTER
-      const targetZoom = viewMode === 'city' ? SRI_LANKA_CITY_ZOOM : SRI_LANKA_ISLAND_ZOOM
+        effectiveViewMode === 'city' ? [activePin.lat, activePin.lng] : SRI_LANKA_ISLAND_CENTER
+      const targetZoom = effectiveViewMode === 'city' ? SRI_LANKA_CITY_ZOOM : SRI_LANKA_ISLAND_ZOOM
 
       if (reducedMotion || typeof map.flyTo !== 'function') {
         map.setView(targetCenter, targetZoom)
@@ -259,10 +268,16 @@ export function SriLankaCoverageMapSection({
     } catch {
       // Ignore viewport animation errors in non-layout environments
     }
-  }, [activePin, mapPins, viewMode])
+  }, [activePin, effectiveViewMode, isIslandwide, mapPins])
 
   const handlePickDistrict = (pin) => {
     handleSelectPin(pin, true)
+    setOpenMenu(null)
+  }
+
+  const handlePickAllDistricts = () => {
+    onCityChange?.('All Districts')
+    setViewMode('island')
     setOpenMenu(null)
   }
 
@@ -278,7 +293,7 @@ export function SriLankaCoverageMapSection({
     if (effectiveTrade && effectiveTrade !== 'All Services') {
       params.set('q', effectiveTrade)
     }
-    if (activePin?.city) {
+    if (!isIslandwide && activePin?.city) {
       params.set('location', activePin.city)
     }
     const qs = params.toString()
@@ -304,33 +319,39 @@ export function SriLankaCoverageMapSection({
               >
                 <button
                   type="button"
-                  aria-pressed={viewMode === 'island'}
+                  aria-pressed={effectiveViewMode === 'island'}
                   onClick={() => setViewMode('island')}
                   className={`${styles.coverageModeBtn} ${
-                    viewMode === 'island' ? styles.coverageModeBtnActive : ''
+                    effectiveViewMode === 'island' ? styles.coverageModeBtnActive : ''
                   }`}
                 >
                   Island View
                 </button>
-                <button
-                  type="button"
-                  aria-pressed={viewMode === 'city'}
-                  onClick={() => setViewMode('city')}
-                  className={`${styles.coverageModeBtn} ${
-                    viewMode === 'city' ? styles.coverageModeBtnActive : ''
-                  }`}
-                >
-                  Focus {activePin.city}
-                </button>
+                {!isIslandwide && (
+                  <button
+                    type="button"
+                    aria-pressed={effectiveViewMode === 'city'}
+                    onClick={() => setViewMode('city')}
+                    className={`${styles.coverageModeBtn} ${
+                      effectiveViewMode === 'city' ? styles.coverageModeBtnActive : ''
+                    }`}
+                  >
+                    Focus {activePin.city}
+                  </button>
+                )}
               </div>
 
               <div
                 ref={mapContainerRef}
                 className={styles.coverageLeafletCanvas}
                 data-testid="landing-leaflet-map"
-                data-city={activePin.city}
-                data-view-mode={viewMode}
-                aria-label={`Interactive Sri Lanka service coverage map focused on ${activePin.city}`}
+                data-city={displayDistrictLabel}
+                data-view-mode={effectiveViewMode}
+                aria-label={
+                  isIslandwide
+                    ? 'Interactive Sri Lanka service coverage map showing all districts'
+                    : `Interactive Sri Lanka service coverage map focused on ${activePin.city}`
+                }
               />
             </div>
 
@@ -341,7 +362,7 @@ export function SriLankaCoverageMapSection({
               aria-label="Interactive Sri Lanka district coverage map"
             >
               {mapPins.map((pin) => {
-                const isActive = pin.city === activePin.city
+                const isActive = !isIslandwide && pin.city === activePin.city
                 return (
                   <button
                     key={pin.id}
@@ -390,7 +411,7 @@ export function SriLankaCoverageMapSection({
                   type="button"
                   aria-haspopup="listbox"
                   aria-expanded={openMenu === 'district'}
-                  aria-label={`Select district: ${activePin.city}`}
+                  aria-label={`Select district: ${displayDistrictLabel}`}
                   onClick={() =>
                     setOpenMenu((prev) => (prev === 'district' ? null : 'district'))
                   }
@@ -403,7 +424,7 @@ export function SriLankaCoverageMapSection({
                     <span>District</span>
                   </span>
                   <span className={styles.coverageTriggerValueRow}>
-                    <span className={styles.coverageTriggerValue}>{activePin.city}</span>
+                    <span className={styles.coverageTriggerValue}>{displayDistrictLabel}</span>
                     <svg
                       width="14"
                       height="14"
@@ -429,8 +450,25 @@ export function SriLankaCoverageMapSection({
                     role="listbox"
                     aria-label="Available Sri Lankan districts"
                   >
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={isIslandwide}
+                      onClick={handlePickAllDistricts}
+                      className={`${styles.coveragePopoverOption} ${
+                        isIslandwide ? styles.coveragePopoverOptionActive : ''
+                      }`}
+                    >
+                      <span className={styles.coveragePopoverMain}>
+                        <strong>All Districts</strong>
+                        <small>Islandwide ({districts.length > 5 ? districts.length : 25} Districts)</small>
+                      </span>
+                      {isIslandwide && (
+                        <CheckCircleIcon size={15} className={styles.coveragePopoverCheck} />
+                      )}
+                    </button>
                     {districts.map((pin) => {
-                      const selected = pin.city === activePin.city
+                      const selected = !isIslandwide && pin.city === activePin.city
                       return (
                         <button
                           key={pin.id}
@@ -529,16 +567,29 @@ export function SriLankaCoverageMapSection({
               <button
                 type="submit"
                 className={styles.coverageSearchSubmit}
-                aria-label={`Search ${effectiveTrade} in ${activePin.city}`}
+                aria-label={
+                  isIslandwide
+                    ? `Search ${effectiveTrade} across Sri Lanka`
+                    : `Search ${effectiveTrade} in ${activePin.city}`
+                }
               >
                 <SearchIcon size={18} />
               </button>
             </form>
 
             <p className={styles.coverageHintLine}>
-              Tip: Click any marker on the map or toggle{' '}
-              <strong>Island View / Focus {activePin.city}</strong> to inspect live district
-              coverage.
+              {isIslandwide ? (
+                <>
+                  Tip: Viewing <strong>All Districts</strong> islandwide — click any marker or
+                  choose a district above to focus locally.
+                </>
+              ) : (
+                <>
+                  Tip: Click any marker on the map or toggle{' '}
+                  <strong>Island View / Focus {activePin.city}</strong> to inspect live district
+                  coverage.
+                </>
+              )}
             </p>
           </div>
         </div>

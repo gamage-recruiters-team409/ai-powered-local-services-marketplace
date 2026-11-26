@@ -31,7 +31,7 @@ const ICON_ASSET_BY_KEY = {
 }
 
 function resolveVisualForItem(item) {
-  const haystack = `${item.categoryName || ''} ${item.title || ''}`.toLowerCase()
+  const haystack = `${item.categoryName || ''} ${item.description || ''} ${item.providerName || ''}`.toLowerCase()
   if (/(plumb|pipe|leak|water(?!proof)|drain)/.test(haystack)) return ICON_ASSET_BY_KEY.water
   if (/(solar|inverter)/.test(haystack)) return ICON_ASSET_BY_KEY.sun
   if (/(elec|wiring|breaker)/.test(haystack)) return ICON_ASSET_BY_KEY.electrician
@@ -62,7 +62,7 @@ function FeaturedCardMedia({ item, visual }) {
     return (
       <img
         src={item.imageUrl}
-        alt={item.title}
+        alt={`${item.providerName || 'Verified Provider'} — ${item.categoryName || 'Local Service'}`}
         className={styles.featuredPhoto}
         loading="lazy"
         onError={() => setImgFailed(true)}
@@ -124,18 +124,22 @@ export function FeaturedServicesSection({
   }, [effectiveCategory, items])
 
   const handleOpenService = (item) => {
-    if (item.profileId) {
-      navigate(`/providers/${item.profileId}`)
+    const targetProviderId = item.profileId || item.providerId
+    if (targetProviderId) {
+      navigate(`/providers/${encodeURIComponent(targetProviderId)}`)
       return
     }
     const params = new URLSearchParams()
-    params.set('q', item.title)
+    if (item.categoryName) {
+      params.set('q', item.categoryName)
+    }
     if (selectedCity && selectedCity !== 'All Districts') {
       params.set('location', selectedCity)
-    } else if (item.location) {
+    } else if (item.location && item.location !== 'Sri Lanka') {
       params.set('location', item.location)
     }
-    navigate(`/search?${params.toString()}`)
+    const qs = params.toString()
+    navigate(qs ? `/search?${qs}` : '/search')
   }
 
   return (
@@ -310,16 +314,26 @@ export function FeaturedServicesSection({
 
                   <div className={styles.featuredCardBody}>
                     <span className={styles.featuredCategoryLabel}>{item.categoryName}</span>
-                    <h3 className={styles.featuredCardTitle}>{item.title}</h3>
+                    <h3 className={styles.featuredCardTitle}>
+                      {item.providerName || 'Verified Provider'}
+                    </h3>
+                    {item.description && (
+                      <p className={styles.featuredCardDesc}>{item.description}</p>
+                    )}
 
                     <div className={styles.featuredMetaRow}>
-                      <span className={styles.featuredProviderName}>
-                        {item.providerName || 'Verified Provider'}
-                      </span>
                       <span className={styles.featuredLocationChip}>
                         <MapPinIcon size={12} />
-                        <span>{item.location || selectedCity}</span>
+                        <span>
+                          {item.location ||
+                            (selectedCity !== 'All Districts' ? selectedCity : 'Sri Lanka')}
+                        </span>
                       </span>
+                      {typeof item.coverageRadiusKm === 'number' && item.coverageRadiusKm > 0 && (
+                        <span className={styles.featuredRadiusChip}>
+                          {item.coverageRadiusKm} km radius
+                        </span>
+                      )}
                     </div>
 
                     <div className={styles.featuredCardFooter}>
@@ -342,7 +356,7 @@ export function FeaturedServicesSection({
                         className={styles.featuredCtaBtn}
                         onClick={() => handleOpenService(item)}
                       >
-                        <span>View Service</span>
+                        <span>{item.profileId || item.providerId ? 'View Provider' : 'View in Search'}</span>
                         <ArrowUpRightIcon size={14} className={styles.featuredCtaArrow} />
                       </button>
                     </div>

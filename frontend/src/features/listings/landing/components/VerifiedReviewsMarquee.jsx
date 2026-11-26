@@ -71,6 +71,8 @@ export function VerifiedReviewsMarquee({
   reviews = [],
   loading = false,
   requiresAuth = false,
+  error = false,
+  onRetry,
 }) {
   const sectionRef = useRef(null)
   const inView = useInViewOnce(sectionRef, 0.14)
@@ -110,6 +112,59 @@ export function VerifiedReviewsMarquee({
             ))}
           </div>
         </div>
+      ) : requiresAuth ? (
+        <div className={styles.sectionContainer}>
+          <div className={styles.reviewsEmptyCard} role="status">
+            <div className={styles.reviewsEmptyStars} aria-hidden="true">
+              {STAR_SLOTS.map((slot) => (
+                <StarIcon key={slot} size={18} className={styles.warmAmberStar} />
+              ))}
+            </div>
+            <h3 className={styles.reviewsEmptyTitle}>
+              Sign In to View Verified Customer Reviews
+            </h3>
+            <p className={styles.reviewsEmptyCopy}>
+              Published customer reviews from completed bookings are available when signed in. Sign
+              in to read verified provider ratings or continue browsing active local services.
+            </p>
+            <div className={styles.emptyActionRow}>
+              <Link to="/login" className={styles.directoryPrimaryLink}>
+                <span>Sign In to View Reviews</span>
+                <ArrowRightIcon size={14} className={styles.reviewsEmptyBtnIcon} />
+              </Link>
+              <Link to="/search" className={styles.directorySecondaryLink}>
+                Browse Verified Services
+              </Link>
+            </div>
+          </div>
+        </div>
+      ) : error ? (
+        <div className={styles.sectionContainer}>
+          <div className={styles.reviewsEmptyCard} role="status">
+            <div className={styles.reviewsEmptyStars} aria-hidden="true">
+              {STAR_SLOTS.map((slot) => (
+                <StarIcon key={slot} size={18} className={styles.warmAmberStar} />
+              ))}
+            </div>
+            <h3 className={styles.reviewsEmptyTitle}>
+              Unable to Load Customer Reviews Right Now
+            </h3>
+            <p className={styles.reviewsEmptyCopy}>
+              We could not retrieve published customer reviews from the server right now. Retry
+              loading reviews or browse verified local services.
+            </p>
+            <div className={styles.emptyActionRow}>
+              {onRetry && (
+                <button type="button" className={styles.directoryClearBtn} onClick={onRetry}>
+                  Retry Loading Reviews
+                </button>
+              )}
+              <Link to="/search" className={styles.directorySecondaryLink}>
+                Browse Verified Services
+              </Link>
+            </div>
+          </div>
+        </div>
       ) : list.length === 0 ? (
         <div className={styles.sectionContainer}>
           <div className={styles.reviewsEmptyCard} role="status">
@@ -120,20 +175,14 @@ export function VerifiedReviewsMarquee({
             </div>
             <h3 className={styles.reviewsEmptyTitle}>No Customer Reviews Published Yet</h3>
             <p className={styles.reviewsEmptyCopy}>
-              {requiresAuth
-                ? 'Customer reviews for verified providers are written strictly after completed bookings. Sign in to view published provider reviews or explore active listings.'
-                : 'Verified customers can leave one 1–5 star review after each completed booking. Real customer feedback for providers will appear here automatically as jobs complete.'}
+              Verified customers can leave one 1–5 star review after each completed booking. Real
+              customer feedback for providers will appear here automatically as jobs complete.
             </p>
             <div className={styles.emptyActionRow}>
               <Link to="/search" className={styles.directoryPrimaryLink}>
                 <span>Browse Verified Services</span>
                 <ArrowRightIcon size={14} className={styles.reviewsEmptyBtnIcon} />
               </Link>
-              {requiresAuth && (
-                <Link to="/login" className={styles.directorySecondaryLink}>
-                  Sign In to View Reviews
-                </Link>
-              )}
             </div>
           </div>
         </div>

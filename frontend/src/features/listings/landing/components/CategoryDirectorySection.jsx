@@ -344,7 +344,7 @@ export function CategoryDirectorySection({
                       <span className={styles.categoryStatusPill}>
                         {subCount > 0
                           ? `${subCount} ${subCount === 1 ? 'Specialty' : 'Specialties'}`
-                          : 'Direct Booking'}
+                          : 'Service Category'}
                       </span>
                     </div>
 
@@ -376,7 +376,7 @@ export function CategoryDirectorySection({
                           onClick={() => handleOpenSearch(category.name, category.slug)}
                         >
                           <CheckCircleIcon size={16} className={styles.directBookingIcon} />
-                          <span>Verified pros available for booking</span>
+                          <span>Browse services in this category</span>
                         </button>
                       </div>
                     )}

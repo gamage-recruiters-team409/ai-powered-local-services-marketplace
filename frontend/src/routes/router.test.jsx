@@ -25,7 +25,11 @@ vi.mock(
     getPublicCategoryTree: vi.fn().mockResolvedValue([]),
     getPublicDistrictLocations: vi.fn().mockResolvedValue([]),
     getFeaturedPublicServices: vi.fn().mockResolvedValue({ results: [], totalCount: 0 }),
-    getLiveCustomerReviews: vi.fn().mockResolvedValue({ reviews: [], requiresAuth: true }),
+    getLiveCustomerReviews: vi.fn().mockResolvedValue({
+      reviews: [],
+      requiresAuth: true,
+      failed: false,
+    }),
   }),
 );
 

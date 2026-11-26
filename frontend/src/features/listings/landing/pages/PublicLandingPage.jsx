@@ -38,15 +38,17 @@ export default function PublicLandingPage() {
     error: false,
   })
 
+  const [reviewsRetryNonce, setReviewsRetryNonce] = useState(0)
   const [reviewsState, setReviewsState] = useState({
     resolvedKey: null,
     items: [],
     requiresAuth: false,
+    error: false,
   })
 
   const categoriesKey = `cat-${categoriesRetryNonce}`
   const servicesKey = `svc-${selectedCity}-${servicesRetryNonce}`
-  const reviewsKey = `rev-${servicesState.resolvedKey || 'init'}`
+  const reviewsKey = `rev-${servicesState.resolvedKey || 'init'}-${reviewsRetryNonce}`
 
   // 1. Live active public category tree (GET /api/v1/categories)
   useEffect(() => {
@@ -174,6 +176,7 @@ export default function PublicLandingPage() {
           resolvedKey: reviewsKey,
           items: Array.isArray(res?.reviews) ? res.reviews : [],
           requiresAuth: Boolean(res?.requiresAuth),
+          error: Boolean(res?.failed),
         })
       })
       .catch((err) => {
@@ -182,6 +185,7 @@ export default function PublicLandingPage() {
           resolvedKey: reviewsKey,
           items: [],
           requiresAuth: false,
+          error: true,
         })
       })
 
@@ -202,6 +206,7 @@ export default function PublicLandingPage() {
         <HeroScrollCanvas
           selectedCity={selectedCity}
           onCityChange={setSelectedCity}
+          liveDistricts={liveDistricts}
           liveListingCount={servicesState.totalCount}
           districtCount={districtCount}
         />
@@ -233,6 +238,8 @@ export default function PublicLandingPage() {
           reviews={reviewsState.items}
           loading={reviewsLoading}
           requiresAuth={reviewsState.requiresAuth}
+          error={reviewsState.error}
+          onRetry={() => setReviewsRetryNonce((n) => n + 1)}
         />
         <LandingFaqSection />
       </div>

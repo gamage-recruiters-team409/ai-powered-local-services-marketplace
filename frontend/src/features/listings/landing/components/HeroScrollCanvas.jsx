@@ -30,6 +30,7 @@ export function HeroScrollCanvas({
   selectedCity = 'Colombo',
   onCityChange,
   cities = PUBLIC_CITIES,
+  liveDistricts = [],
   liveListingCount = null,
   districtCount = 25,
 }) {
@@ -57,10 +58,44 @@ export function HeroScrollCanvas({
   const [firstPaintReady, setFirstPaintReady] = useState(false)
   const [preloadPercent, setPreloadPercent] = useState(0)
 
-  const activeCityObj = useMemo(
-    () => cities.find((c) => c.id === selectedCity) || cities[0],
-    [cities, selectedCity]
-  )
+  const activeCityObj = useMemo(() => {
+    if (!selectedCity || selectedCity === 'All Districts') {
+      return {
+        id: 'All Districts',
+        label: 'All Districts',
+        region: `Islandwide (${districtCount} Districts)`,
+        isIslandwide: true,
+      }
+    }
+    const presetMatch = cities.find((c) => c.id === selectedCity)
+    if (presetMatch) {
+      return { ...presetMatch, isIslandwide: false }
+    }
+    const liveMatch = Array.isArray(liveDistricts)
+      ? liveDistricts.find((d) => d.city === selectedCity)
+      : null
+    if (liveMatch) {
+      return {
+        id: liveMatch.city,
+        label: liveMatch.city,
+        region: liveMatch.province || 'Sri Lanka',
+        isIslandwide: false,
+      }
+    }
+    return {
+      id: selectedCity,
+      label: selectedCity,
+      region: 'Sri Lanka',
+      isIslandwide: false,
+    }
+  }, [cities, districtCount, liveDistricts, selectedCity])
+
+  const heroCityPills = useMemo(() => {
+    if (activeCityObj.isIslandwide || cities.some((c) => c.id === activeCityObj.id)) {
+      return cities
+    }
+    return [{ id: activeCityObj.id, label: activeCityObj.label, region: activeCityObj.region }, ...cities]
+  }, [activeCityObj, cities])
 
   // Animated typing / rotating placeholder in the search input
   useEffect(() => {
@@ -389,10 +424,23 @@ export function HeroScrollCanvas({
               <span className={styles.liveDot} aria-hidden="true" />
               <span>
                 {typeof liveListingCount === 'number' && liveListingCount > 0 ? (
+                  activeCityObj.isIslandwide ? (
+                    <>
+                      <strong>{liveListingCount}</strong> verified active{' '}
+                      {liveListingCount === 1 ? 'service' : 'services'} across{' '}
+                      <strong>Sri Lanka</strong>
+                    </>
+                  ) : (
+                    <>
+                      <strong>{liveListingCount}</strong> verified active{' '}
+                      {liveListingCount === 1 ? 'service' : 'services'} in{' '}
+                      <strong>{activeCityObj.label}</strong>
+                    </>
+                  )
+                ) : activeCityObj.isIslandwide ? (
                   <>
-                    <strong>{liveListingCount}</strong> verified active{' '}
-                    {liveListingCount === 1 ? 'service' : 'services'} in{' '}
-                    <strong>{activeCityObj.label}</strong>
+                    Admin-verified local services · <strong>Islandwide</strong> ({districtCount}{' '}
+                    Districts)
                   </>
                 ) : (
                   <>
@@ -447,8 +495,8 @@ export function HeroScrollCanvas({
               <div className={styles.heroCityRow}>
                 <span className={styles.heroCityLabel}>Coverage:</span>
                 <div className={styles.heroCityPills} role="group" aria-label="Select service city">
-                  {cities.map((city) => {
-                    const active = city.id === selectedCity
+                  {heroCityPills.map((city) => {
+                    const active = city.id === activeCityObj.id
                     return (
                       <button
                         key={city.id}
