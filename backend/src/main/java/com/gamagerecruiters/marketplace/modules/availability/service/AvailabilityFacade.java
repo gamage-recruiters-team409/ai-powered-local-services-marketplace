@@ -2,6 +2,8 @@ package com.gamagerecruiters.marketplace.modules.availability.service;
 
 import java.time.LocalDate;
 
+import com.gamagerecruiters.marketplace.modules.availability.dto.BlockedDateResponse;
+import com.gamagerecruiters.marketplace.modules.availability.dto.CreateBlockedDateRequest;
 import com.gamagerecruiters.marketplace.modules.availability.dto.ProviderSchedule;
 
 /**
@@ -18,4 +20,10 @@ public interface AvailabilityFacade {
 
     /** Returns true if the provider has blocked this whole day. */
     boolean isDateBlocked(String providerId, LocalDate date);
+
+    /**
+     * Blocks a date for the provider with the same rules as POST /availability/me/blocked-dates
+     * (used by the booking module's "block a date with bookings" flow after it has handled the bookings).
+     */
+    BlockedDateResponse createBlockedDate(String providerId, CreateBlockedDateRequest request);
 }

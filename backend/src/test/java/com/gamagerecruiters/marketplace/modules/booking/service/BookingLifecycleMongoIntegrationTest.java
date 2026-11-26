@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -41,12 +42,20 @@ import org.testcontainers.containers.MongoDBContainer;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
+import com.gamagerecruiters.marketplace.modules.availability.domain.BlockReason;
+import com.gamagerecruiters.marketplace.modules.availability.dto.CreateBlockedDateRequest;
+import com.gamagerecruiters.marketplace.modules.availability.service.AvailabilityFacade;
+import com.gamagerecruiters.marketplace.modules.availability.service.AvailabilityService;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingPriceSnapshot;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
 import com.gamagerecruiters.marketplace.modules.booking.domain.RescheduleRequest;
 import com.gamagerecruiters.marketplace.modules.booking.domain.RescheduleStatus;
+import com.gamagerecruiters.marketplace.modules.booking.dto.BlockDateAction;
+import com.gamagerecruiters.marketplace.modules.booking.dto.BlockDateDecision;
+import com.gamagerecruiters.marketplace.modules.booking.dto.BlockDateResult;
+import com.gamagerecruiters.marketplace.modules.booking.dto.BlockDateWithBookingsRequest;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingListItem;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingPageResponse;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
@@ -318,5 +327,44 @@ class BookingLifecycleMongoIntegrationTest {
         r.setRequestedAt(NOW.minus(Duration.ofHours(12)));
         r.setExpiresAt(expiresAt);
         return r;
+    }
+
+    // ---------- Block a date with bookings (real MongoDB, real availability module) ----------
+
+    @Autowired
+    private AvailabilityService availabilityService;
+
+    @Autowired
+    private BookingBlockDateService blockDateService;
+
+    @Autowired
+    private AvailabilityFacade availabilityFacade;
+
+    @Test
+    @DisplayName("Block a date: plain availability POST is refused while bookings exist; the booking flow keeps the "
+            + "confirmed booking, declines the pending one and blocks the date")
+    void blockDateWithBookings() {
+        LocalDate day = LocalDate.now(SlotServiceImpl.BUSINESS_ZONE).plusDays(10);
+        String provider = "prov-block-" + UUID.randomUUID();
+        Instant nine = day.atTime(9, 0).atZone(SlotServiceImpl.BUSINESS_ZONE).toInstant();
+        Booking confirmed = save("cust-b1", provider, BookingStatus.CONFIRMED, nine);
+        Booking pending = save("cust-b2", provider, BookingStatus.PENDING_PROVIDER, nine.plus(Duration.ofHours(4)));
+        CreateBlockedDateRequest plain = new CreateBlockedDateRequest(day.toString(), BlockReason.PERSONAL, null);
+
+        assertThatThrownBy(() -> availabilityService.createBlockedDate(provider, plain))
+                .isInstanceOfSatisfying(ResourceConflictException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo("BOOKINGS_ON_DATE"));
+        assertThat(availabilityFacade.isDateBlocked(provider, day)).isFalse();
+
+        loginAs(provider, Role.PROVIDER);
+        BlockDateResult result = blockDateService.blockWithBookings(new BlockDateWithBookingsRequest(day.toString(),
+                BlockReason.PERSONAL, "Family function",
+                List.of(new BlockDateDecision(confirmed.getId(), BlockDateAction.KEEP, null, null))));
+
+        assertThat(result.keptBookingIds()).containsExactly(confirmed.getId());
+        assertThat(result.declinedBookingIds()).containsExactly(pending.getId());
+        assertThat(availabilityFacade.isDateBlocked(provider, day)).isTrue();
+        assertThat(statusOf(confirmed.getId())).isEqualTo(BookingStatus.CONFIRMED);
+        assertThat(statusOf(pending.getId())).isEqualTo(BookingStatus.DECLINED);
     }
 }

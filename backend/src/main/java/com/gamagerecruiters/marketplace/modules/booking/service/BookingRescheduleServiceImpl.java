@@ -95,7 +95,15 @@ public class BookingRescheduleServiceImpl implements BookingRescheduleService {
         String userId = currentUserId();
         Booking booking = loadForParticipant(bookingId, userId);
         Instant now = Instant.now(clock);
+        validateNewRequest(booking, body.newSlotStart(), now);
+        return submit(booking, userId, body.newSlotStart(), body.note(), now);
+    }
 
+    /**
+     * All checks for a new request on this booking, without saving anything. Also used by the block-date flow
+     * to check every "request new time" decision before it changes any booking.
+     */
+    void validateNewRequest(Booking booking, Instant newSlotStart, Instant now) {
         assertConfirmed(booking);
         if (booking.pendingReschedule().isPresent()) {
             throw new ResourceConflictException("RESCHEDULE_ALREADY_PENDING",
@@ -109,25 +117,28 @@ public class BookingRescheduleServiceImpl implements BookingRescheduleService {
             throw new ResourceConflictException("RESCHEDULE_TOO_LATE",
                     "A new time can only be requested at least 6 hours before the start");
         }
-        if (body.newSlotStart().equals(booking.getSlotStart())) {
+        if (newSlotStart.equals(booking.getSlotStart())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "RESCHEDULE_SAME_TIME",
                     "Please choose a time different from the current one");
         }
-        if (!slotService.isSlotAvailable(booking.getProviderId(), body.newSlotStart(), booking.getDurationMinutes(),
+        if (!slotService.isSlotAvailable(booking.getProviderId(), newSlotStart, booking.getDurationMinutes(),
                 booking.getId())) {
             throw new ResourceConflictException("SLOT_UNAVAILABLE",
                     "This time slot is not available. Please choose another slot.");
         }
+    }
 
+    /** Saves a new PENDING request (already validated) and notifies the other party. */
+    RescheduleResponse submit(Booking booking, String userId, Instant newSlotStart, String note, Instant now) {
         RescheduleRequest request = new RescheduleRequest();
         request.setId(UUID.randomUUID().toString());
         request.setRequestedBy(userId);
         request.setRequestedByRole(roleOf(booking, userId));
         request.setPreviousSlotStart(booking.getSlotStart());
         request.setPreviousSlotEnd(booking.getSlotEnd());
-        request.setProposedSlotStart(body.newSlotStart());
-        request.setProposedSlotEnd(body.newSlotStart().plus(Duration.ofMinutes(booking.getDurationMinutes())));
-        request.setNote(body.note() == null || body.note().isBlank() ? null : body.note().trim());
+        request.setProposedSlotStart(newSlotStart);
+        request.setProposedSlotEnd(newSlotStart.plus(Duration.ofMinutes(booking.getDurationMinutes())));
+        request.setNote(note == null || note.isBlank() ? null : note.trim());
         request.setStatus(RescheduleStatus.PENDING);
         request.setRequestedAt(now);
         request.setExpiresAt(policy.expiresAt(now, booking.getSlotStart()));
