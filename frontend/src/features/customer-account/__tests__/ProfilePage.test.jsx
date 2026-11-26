@@ -7,6 +7,16 @@ import * as customerAccountApi from '../services/customerAccountApi';
 
 vi.mock('../services/customerAccountApi');
 
+const mockRefreshUser = vi.fn().mockResolvedValue({ id: 'cust-1' });
+const mockUpdateCurrentUser = vi.fn();
+vi.mock('../../auth/hooks/useAuth', () => ({
+  useAuth: () => ({
+    refreshUser: mockRefreshUser,
+    updateCurrentUser: mockUpdateCurrentUser,
+    user: { id: 'cust-1' },
+  }),
+}));
+
 const mockToast = {
   success: vi.fn(),
   error: vi.fn(),
@@ -43,6 +53,14 @@ describe('ProfilePage', () => {
       emailVerified: true,
       status: 'ACTIVE',
       profileImageUrl: null,
+    });
+
+    customerAccountApi.getRecentBookings.mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 5,
+      totalElements: 0,
+      totalPages: 0,
     });
   });
 
@@ -115,6 +133,8 @@ describe('ProfilePage', () => {
     expect(screen.getByText(/invalid sri lankan phone number format/i)).toBeTruthy();
 
     expect(customerAccountApi.updateProfile).not.toHaveBeenCalled();
+    expect(mockRefreshUser).not.toHaveBeenCalled();
+    expect(mockUpdateCurrentUser).not.toHaveBeenCalled();
   });
 
   it('saves updated profile successfully, updates input from server response, and shows success toast', async () => {
@@ -149,6 +169,8 @@ describe('ProfilePage', () => {
         fullName: 'Nimal P. Updated',
         phone: '0779999999',
       });
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
+      expect(mockUpdateCurrentUser).not.toHaveBeenCalled();
       expect(mockToast.success).toHaveBeenCalledWith('Profile updated successfully');
     });
 
@@ -328,6 +350,7 @@ describe('ProfilePage', () => {
 
     await waitFor(() => {
       expect(customerAccountApi.uploadProfilePhoto).toHaveBeenCalledWith(validFile);
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
       expect(mockToast.success).toHaveBeenCalledWith('Profile photo updated successfully');
     });
 
@@ -358,6 +381,8 @@ describe('ProfilePage', () => {
       expect(screen.getByText('Network error uploading photo')).toBeTruthy();
     });
 
+    expect(mockRefreshUser).not.toHaveBeenCalled();
+    expect(mockUpdateCurrentUser).not.toHaveBeenCalled();
     expect(screen.getByText('NP')).toBeTruthy();
     expect(window.URL.revokeObjectURL).toHaveBeenCalled();
   });
@@ -389,10 +414,239 @@ describe('ProfilePage', () => {
 
     await waitFor(() => {
       expect(customerAccountApi.removeProfilePhoto).toHaveBeenCalled();
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
       expect(mockToast.success).toHaveBeenCalledWith('Profile photo removed');
     });
 
     expect(screen.getByText('NP')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /remove photo/i })).toBeNull();
+  });
+
+  it('handles photo removal failure without calling refreshUser', async () => {
+    customerAccountApi.getProfile.mockResolvedValueOnce({
+      id: 'cust-1',
+      fullName: 'Nimal Perera',
+      email: 'nimal@email.com',
+      phone: '+94 77 123 4567',
+      emailVerified: true,
+      status: 'ACTIVE',
+      profileImageUrl: 'https://res.cloudinary.com/test/current.jpg',
+    });
+    customerAccountApi.removeProfilePhoto.mockRejectedValueOnce(new Error('Failed to delete photo'));
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByAltText('Profile photo')).toBeTruthy();
+    });
+
+    const removeBtn = screen.getByRole('button', { name: /remove photo/i });
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to delete photo')).toBeTruthy();
+    });
+
+    expect(mockRefreshUser).not.toHaveBeenCalled();
+    expect(mockUpdateCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('recent bookings failure does not hide the profile form or break profile editing', async () => {
+    customerAccountApi.getRecentBookings.mockRejectedValueOnce(new Error('Bookings unavailable'));
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Nimal Perera')).toBeTruthy();
+      expect(screen.getByText('Recent bookings are unavailable right now.')).toBeTruthy();
+    });
+
+    // Profile form is intact and visible
+    expect(screen.getByRole('heading', { name: /personal details/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeTruthy();
+  });
+
+  it('handles profile update failure without calling refreshUser or updateCurrentUser', async () => {
+    customerAccountApi.updateProfile.mockRejectedValueOnce(new Error('Update failed'));
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Nimal Perera')).toBeTruthy();
+    });
+
+    const nameInput = screen.getByDisplayValue('Nimal Perera');
+    const saveBtn = screen.getByRole('button', { name: /save changes/i });
+
+    fireEvent.change(nameInput, { target: { value: 'New Name' } });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Update failed')).toBeTruthy();
+    });
+
+    expect(mockRefreshUser).not.toHaveBeenCalled();
+    expect(mockUpdateCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('calls updateCurrentUser with name and phone when save succeeds but refreshUser returns null', async () => {
+    mockRefreshUser.mockResolvedValueOnce(null);
+    customerAccountApi.updateProfile.mockResolvedValueOnce({
+      id: 'cust-1',
+      fullName: 'Fallback Name',
+      email: 'nimal@email.com',
+      phone: '+94775555555',
+      emailVerified: true,
+    });
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Nimal Perera')).toBeTruthy();
+    });
+
+    const nameInput = screen.getByDisplayValue('Nimal Perera');
+    const phoneInput = screen.getByDisplayValue('+94 77 123 4567');
+    const saveBtn = screen.getByRole('button', { name: /save changes/i });
+
+    fireEvent.change(nameInput, { target: { value: 'Fallback Name' } });
+    fireEvent.change(phoneInput, { target: { value: '0775555555' } });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(customerAccountApi.updateProfile).toHaveBeenCalled();
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
+      expect(mockUpdateCurrentUser).toHaveBeenCalledWith({
+        name: 'Fallback Name',
+        phone: '+94775555555',
+      });
+      expect(mockToast.success).toHaveBeenCalledWith('Profile updated successfully');
+    });
+
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('does not call updateCurrentUser when save succeeds and refreshUser returns a user', async () => {
+    mockRefreshUser.mockResolvedValueOnce({ id: 'cust-1', name: 'Refreshed User' });
+    customerAccountApi.updateProfile.mockResolvedValueOnce({
+      id: 'cust-1',
+      fullName: 'Refreshed User',
+      email: 'nimal@email.com',
+      phone: '+94774444444',
+      emailVerified: true,
+    });
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Nimal Perera')).toBeTruthy();
+    });
+
+    const nameInput = screen.getByDisplayValue('Nimal Perera');
+    const phoneInput = screen.getByDisplayValue('+94 77 123 4567');
+    const saveBtn = screen.getByRole('button', { name: /save changes/i });
+
+    fireEvent.change(nameInput, { target: { value: 'Refreshed User' } });
+    fireEvent.change(phoneInput, { target: { value: '0774444444' } });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
+      expect(mockToast.success).toHaveBeenCalledWith('Profile updated successfully');
+    });
+
+    expect(mockUpdateCurrentUser).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('calls updateCurrentUser with profileImageUrl when photo upload succeeds but refreshUser returns null', async () => {
+    mockRefreshUser.mockResolvedValueOnce(null);
+    customerAccountApi.uploadProfilePhoto.mockResolvedValueOnce({
+      id: 'cust-1',
+      profileImageUrl: 'https://res.cloudinary.com/test/fallback-photo.jpg',
+    });
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('NP')).toBeTruthy();
+    });
+
+    const fileInput = screen.getByTestId('file-input-photo');
+    const validFile = new File(['image-bits'], 'avatar.png', { type: 'image/png' });
+    fireEvent.change(fileInput, { target: { files: [validFile] } });
+
+    await waitFor(() => {
+      expect(customerAccountApi.uploadProfilePhoto).toHaveBeenCalledWith(validFile);
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
+      expect(mockUpdateCurrentUser).toHaveBeenCalledWith({
+        profileImageUrl: 'https://res.cloudinary.com/test/fallback-photo.jpg',
+      });
+      expect(mockToast.success).toHaveBeenCalledWith('Profile photo updated successfully');
+    });
+
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('calls updateCurrentUser with null profileImageUrl when photo removal succeeds but refreshUser returns null', async () => {
+    customerAccountApi.getProfile.mockResolvedValueOnce({
+      id: 'cust-1',
+      fullName: 'Nimal Perera',
+      email: 'nimal@email.com',
+      phone: '+94 77 123 4567',
+      emailVerified: true,
+      status: 'ACTIVE',
+      profileImageUrl: 'https://res.cloudinary.com/test/current.jpg',
+    });
+    customerAccountApi.removeProfilePhoto.mockResolvedValueOnce({});
+    mockRefreshUser.mockResolvedValueOnce(null);
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByAltText('Profile photo')).toBeTruthy();
+    });
+
+    const removeBtn = screen.getByRole('button', { name: /remove photo/i });
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(customerAccountApi.removeProfilePhoto).toHaveBeenCalled();
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
+      expect(mockUpdateCurrentUser).toHaveBeenCalledWith({
+        profileImageUrl: null,
+      });
+      expect(mockToast.success).toHaveBeenCalledWith('Profile photo removed');
+    });
+
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

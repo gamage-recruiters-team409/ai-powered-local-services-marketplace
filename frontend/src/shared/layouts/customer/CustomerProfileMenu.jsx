@@ -2,8 +2,9 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import styles from './CustomerLayout.module.css'
+import { CustomerAvatar } from './CustomerAvatar'
 import { CustomerIcon } from './CustomerIcon'
-import { getInitials, getShortName } from './customerLayoutUtils'
+import { getShortName } from './customerLayoutUtils'
 
 export function CustomerProfileMenu({
   user,
@@ -105,9 +106,11 @@ export function CustomerProfileMenu({
         aria-label={`Account menu for ${name}`}
         onClick={() => setOpen((value) => !value)}
       >
-        <span className={styles.headerAvatar} aria-hidden="true">
-          {getInitials(name)}
-        </span>
+        <CustomerAvatar
+          name={name}
+          src={user?.avatarUrl}
+          className={styles.headerAvatar}
+        />
 
         <span className={styles.headerProfileName}>
           {getShortName(name)}
@@ -130,9 +133,11 @@ export function CustomerProfileMenu({
           onKeyDown={handleMenuKeyDown}
         >
           <div className={styles.profileMenuIdentity} role="presentation">
-            <span className={styles.menuAvatar} aria-hidden="true">
-              {getInitials(name)}
-            </span>
+            <CustomerAvatar
+              name={name}
+              src={user?.avatarUrl}
+              className={styles.menuAvatar}
+            />
 
             <span className={styles.identityText}>
               <strong>{name}</strong>

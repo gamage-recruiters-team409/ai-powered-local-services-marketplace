@@ -103,4 +103,34 @@ describe('CustomerPage', () => {
 
     expect(screen.queryByRole('button', { name: 'Go back' })).toBeNull()
   })
+
+  it('renders avatar image in account identity when avatarUrl is provided', () => {
+    const userWithAvatar = { ...user, avatarUrl: 'https://cdn.example.com/account-avatar.jpg' }
+    const { container } = render(
+      <MemoryRouter>
+        <CustomerAccountMenu user={userWithAvatar} sections={sections} footerItems={footerItems} onLogout={vi.fn()} />
+      </MemoryRouter>
+    )
+
+    const img = container.querySelector('img')
+    expect(img).toBeTruthy()
+    expect(img.getAttribute('src')).toBe('https://cdn.example.com/account-avatar.jpg')
+    expect(screen.queryByText('NP')).toBeNull()
+  })
+
+  it('falls back to initials in account menu when avatar image fails to load', () => {
+    const userWithAvatar = { ...user, avatarUrl: 'https://broken.example.com/account-avatar.jpg' }
+    const { container } = render(
+      <MemoryRouter>
+        <CustomerAccountMenu user={userWithAvatar} sections={sections} footerItems={footerItems} onLogout={vi.fn()} />
+      </MemoryRouter>
+    )
+
+    const img = container.querySelector('img')
+    expect(img).toBeTruthy()
+    fireEvent.error(img)
+
+    expect(screen.getByText('NP')).toBeTruthy()
+    expect(container.querySelector('img')).toBeNull()
+  })
 })

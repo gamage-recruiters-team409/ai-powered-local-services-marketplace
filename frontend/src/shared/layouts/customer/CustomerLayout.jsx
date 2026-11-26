@@ -20,6 +20,7 @@ const MAIN_ID = 'customer-main'
 const FALLBACK_USER = Object.freeze({
   name: 'Customer',
   email: '',
+  avatarUrl: null,
 })
 
 /**
@@ -29,7 +30,7 @@ const FALLBACK_USER = Object.freeze({
  * - showAccountNav: adds the account sidebar (MY ACTIVITY / MY ACCOUNT) on desktop.
  * - Mobile: compact header + bottom navigation; account items are reached from the Account tab.
  *
- * This component only renders. Login state, the current user, logout and unread counts
+ * This component only renders. Login state, the current user (name, email, avatarUrl), logout and unread counts
  * are passed in by the route that uses it.
  */
 export function CustomerLayout({

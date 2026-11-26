@@ -13,6 +13,7 @@ import {
   deactivateAccount,
   uploadProfilePhoto,
   removeProfilePhoto,
+  getRecentBookings,
 } from '../services/customerAccountApi';
 
 vi.mock('../../../shared/services/apiClient');
@@ -126,5 +127,27 @@ describe('customerAccountApi', () => {
     apiClient.delete.mockResolvedValueOnce({});
     await removeProfilePhoto();
     expect(apiClient.delete).toHaveBeenCalledWith('/customers/me/photo');
+  });
+
+  it('getRecentBookings calls GET /bookings/customer with default size 5 and page 0', async () => {
+    const mockData = { content: [], totalElements: 0 };
+    apiClient.get.mockResolvedValueOnce({ data: mockData });
+
+    const result = await getRecentBookings();
+    expect(apiClient.get).toHaveBeenCalledWith('/bookings/customer', {
+      params: { page: 0, size: 5 },
+    });
+    expect(result).toEqual(mockData);
+  });
+
+  it('getRecentBookings accepts custom size parameter', async () => {
+    const mockData = { content: [], totalElements: 0 };
+    apiClient.get.mockResolvedValueOnce({ data: mockData });
+
+    const result = await getRecentBookings({ size: 10 });
+    expect(apiClient.get).toHaveBeenCalledWith('/bookings/customer', {
+      params: { page: 0, size: 10 },
+    });
+    expect(result).toEqual(mockData);
   });
 });

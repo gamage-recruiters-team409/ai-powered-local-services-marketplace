@@ -334,7 +334,8 @@ public class AuthServiceImpl implements AuthService {
                 user.getRole(),
                 user.getStatus(),
                 user.isEmailVerified(),
-                user.getCreatedAt()
+                user.getCreatedAt(),
+                user.getProfileImageUrl()
         );
     }
 

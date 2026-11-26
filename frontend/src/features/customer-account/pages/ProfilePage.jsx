@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CustomerPage } from '../../../shared/layouts/customer/CustomerPage';
+import { useAuth } from '../../auth/hooks/useAuth';
 import { useToast } from '../../../shared/components/feedback/useToast';
 import {
   getProfile,
@@ -8,6 +9,7 @@ import {
   uploadProfilePhoto,
 } from '../services/customerAccountApi';
 import { StatusBadge } from '../components/StatusBadge';
+import { RecentBookings } from '../components/RecentBookings';
 import styles from '../customerAccount.module.css';
 
 /**
@@ -36,6 +38,7 @@ function getInitials(name = '') {
 }
 
 export function ProfilePage() {
+  const { refreshUser, updateCurrentUser } = useAuth();
   const toast = useToast();
   const [profile, setProfile] = useState(null);
   const [fullName, setFullName] = useState('');
@@ -123,6 +126,14 @@ export function ProfilePage() {
       setProfile(updated);
       setFullName(updated.fullName || '');
       setPhone(updated.phone || '');
+      const refreshed = await refreshUser();
+      if (!refreshed && typeof updateCurrentUser === 'function') {
+        try {
+          updateCurrentUser({ name: updated.fullName, phone: updated.phone });
+        } catch {
+          // Fallback failure must not throw
+        }
+      }
       toast.success('Profile updated successfully');
     } catch (err) {
       setErrorMessage(err.message || 'Failed to update profile');
@@ -165,6 +176,14 @@ export function ProfilePage() {
       }
       setPhotoPreview(null);
       setProfile((prev) => (prev ? { ...prev, profileImageUrl: updated.profileImageUrl } : updated));
+      const refreshed = await refreshUser();
+      if (!refreshed && typeof updateCurrentUser === 'function') {
+        try {
+          updateCurrentUser({ profileImageUrl: updated.profileImageUrl ?? null });
+        } catch {
+          // Fallback failure must not throw
+        }
+      }
       toast.success('Profile photo updated successfully');
     } catch (err) {
       if (previewUrlRef.current) {
@@ -189,6 +208,14 @@ export function ProfilePage() {
       }
       setPhotoPreview(null);
       setProfile((prev) => (prev ? { ...prev, profileImageUrl: null } : prev));
+      const refreshed = await refreshUser();
+      if (!refreshed && typeof updateCurrentUser === 'function') {
+        try {
+          updateCurrentUser({ profileImageUrl: null });
+        } catch {
+          // Fallback failure must not throw
+        }
+      }
       toast.success('Profile photo removed');
     } catch (err) {
       setPhotoError(err.message || 'Failed to remove profile photo');
@@ -355,6 +382,8 @@ export function ProfilePage() {
             </div>
           </form>
         </div>
+
+        <RecentBookings />
       </div>
     </CustomerPage>
   );
