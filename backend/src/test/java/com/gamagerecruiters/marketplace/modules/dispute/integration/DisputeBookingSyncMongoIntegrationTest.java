@@ -74,6 +74,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeEligibilityP
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeBookingSyncReconciler;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeBookingSyncStore;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
+import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 
 /**
  * Booking/dispute consistency against a REAL MongoDB in a throw-away Testcontainers instance (never Atlas or the
@@ -143,6 +144,14 @@ class DisputeBookingSyncMongoIntegrationTest {
     private DisputeEligibilityPort eligibilityPort;
     @MockitoSpyBean
     private DisputeBookingSyncStore syncStore;
+
+    /**
+     * WP07's real payout hold (@Primary DisputePayoutHoldAdapter) needs a captured payment, earnings ledger entries and
+     * a provider balance. This test covers the dispute flow, not WP07 money movement (tested in the payment module),
+     * so the hold is a no-op here, as in the dispute unit and web tests.
+     */
+    @MockitoBean
+    private PayoutHoldPort payoutHoldPort;
 
     @Autowired
     private DisputeService disputeService;

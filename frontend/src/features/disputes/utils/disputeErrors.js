@@ -15,6 +15,17 @@ const MESSAGES = Object.freeze({
   'window-closed': 'The response window for this dispute has closed, or a response was already submitted.',
   'not-responder': 'Only the other party can respond to this dispute.',
   conflict: 'This dispute was changed by someone else. Reload it and try again.',
+  'appeal-closed': 'The appeal window for this dispute has closed.',
+  'appeal-used': 'An appeal has already been filed for this dispute.',
+  'raise-window-closed': 'The time to raise a dispute for this booking has passed.',
+  'already-exists': 'A dispute already exists for this booking.',
+  'not-disputable': 'This booking cannot be disputed in its current state.',
+  'booking-not-found': 'We could not find this booking.',
+  'evidence-type': 'Only JPG, PNG, WEBP or PDF files can be uploaded.',
+  'evidence-size': 'Each file must be 5 MB or smaller.',
+  'evidence-limit': 'You can upload at most 5 files to this dispute.',
+  'evidence-closed': 'Evidence can no longer be added to this dispute.',
+  'evidence-unavailable': 'File uploads are not available right now. Please try again later.',
   error: 'Something went wrong. Please try again.',
 })
 
@@ -28,6 +39,18 @@ const KIND_BY_CODE = Object.freeze({
   DISPUTE_NOT_FOUND: 'not-found',
   DISPUTE_CONCURRENT_UPDATE: 'conflict',
   UNAUTHORIZED: 'unauthorized',
+  APPEAL_WINDOW_CLOSED: 'appeal-closed',
+  APPEAL_ALREADY_FILED: 'appeal-used',
+  DISPUTE_WINDOW_CLOSED: 'raise-window-closed',
+  DISPUTE_ALREADY_EXISTS: 'already-exists',
+  INVALID_STATUS_TRANSITION: 'not-disputable',
+  BOOKING_NOT_FOUND: 'booking-not-found',
+  EVIDENCE_TYPE_NOT_ALLOWED: 'evidence-type',
+  EVIDENCE_TOO_LARGE: 'evidence-size',
+  EVIDENCE_LIMIT_REACHED: 'evidence-limit',
+  EVIDENCE_UPLOAD_CLOSED: 'evidence-closed',
+  EVIDENCE_STORAGE_UNAVAILABLE: 'evidence-unavailable',
+  EVIDENCE_UPLOAD_FAILED: 'evidence-unavailable',
 })
 
 const KIND_BY_STATUS = Object.freeze({

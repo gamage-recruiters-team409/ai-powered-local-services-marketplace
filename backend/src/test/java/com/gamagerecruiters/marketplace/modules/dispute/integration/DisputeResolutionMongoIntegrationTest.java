@@ -3,8 +3,10 @@ package com.gamagerecruiters.marketplace.modules.dispute.integration;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -31,6 +33,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
 import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.QueryTimeoutException;
@@ -57,6 +61,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeRules;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.ResolutionAction;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.SettlementState;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeSettlement;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.StatusHistoryEntry;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealDecisionRequest;
@@ -69,19 +74,23 @@ import com.gamagerecruiters.marketplace.modules.dispute.port.BookingResolutionPo
 import com.gamagerecruiters.marketplace.modules.dispute.port.BookingSnapshot;
 import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeEligibilityPort;
 import com.gamagerecruiters.marketplace.modules.dispute.port.DisputeSettlementPort;
+import com.gamagerecruiters.marketplace.modules.dispute.port.SettlementInstruction;
 import com.gamagerecruiters.marketplace.modules.dispute.port.SettlementOutcome;
+import com.gamagerecruiters.marketplace.modules.dispute.port.SettlementRejectedException;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeFinalizer;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeResolutionService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeResolutionStore;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeSettlementService;
+import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 
 /**
  * Decision, appeal, appeal decision, finalizer and settlement against a REAL MongoDB in a throw-away Testcontainers
  * instance (never Atlas or the shared database). Everything in the dispute module is real; the booking resolution
- * port is the real stub (spied) and the payout settlement port is mocked so failures can be simulated. Refuses to
- * run against a database named "marketplace".
+ * port is the real stub (spied) and the finance settlement port is mocked so outcomes can be simulated. Refunds and
+ * the provider penalty go to MANUAL_REVIEW without any port call (TL decision); the port path is exercised with
+ * RELEASE_TO_PROVIDER decisions. Refuses to run against a database named "marketplace".
  */
 @SpringBootTest
 @ActiveProfiles("integration-test")
@@ -93,7 +102,9 @@ import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeSettlemen
         // The test drives the finalizer itself; no background runs. Failed settlements may be retried at once.
         "app.dispute.booking-sync.enabled=false",
         "app.dispute.finalizer.enabled=false",
-        "app.dispute.settlement.retry-delay=PT0S"
+        "app.dispute.settlement.backoff.initial=PT0S",
+        "app.dispute.settlement.backoff.max=PT0S",
+        "app.dispute.settlement.max-attempts=3"
 })
 class DisputeResolutionMongoIntegrationTest {
 
@@ -143,6 +154,14 @@ class DisputeResolutionMongoIntegrationTest {
      */
     @MockitoBean
     private DisputeEligibilityPort eligibilityPort;
+
+    /**
+     * WP07's real payout hold (@Primary DisputePayoutHoldAdapter) needs a captured payment, earnings ledger entries and
+     * a provider balance. This test covers the dispute flow, not WP07 money movement (tested in the payment module),
+     * so the hold is a no-op here, as in the dispute unit and web tests.
+     */
+    @MockitoBean
+    private PayoutHoldPort payoutHoldPort;
 
     @Autowired
     private DisputeResolutionService resolutionService;
@@ -202,6 +221,22 @@ class DisputeResolutionMongoIntegrationTest {
 
     private static ResolveDisputeRequest refundPartial(int percent, boolean penalty) {
         return new ResolveDisputeRequest(ResolutionAction.REFUND_PARTIAL, percent, penalty, "  " + NOTE + "  ");
+    }
+
+    private static ResolveDisputeRequest release() {
+        return new ResolveDisputeRequest(ResolutionAction.RELEASE_TO_PROVIDER, null, false, NOTE);
+    }
+
+    /** RELEASE_TO_PROVIDER by admin A, appeal window already passed (the finalizer makes it final). */
+    private String releaseReadyToFinalize() {
+        String id = insert(DisputeStatus.UNDER_REVIEW).getId();
+        resolutionService.resolve(ADMIN_A, Role.ADMIN, id, release());
+        expireAppealWindow(id);
+        return id;
+    }
+
+    private DisputeSettlement settlementOf(String id) {
+        return load(id).getSettlement();
     }
 
     private String resolvedByAdminA() {
@@ -394,8 +429,8 @@ class DisputeResolutionMongoIntegrationTest {
     }
 
     @Test
-    @DisplayName("appeal decision CHANGE by a different admin -> RESOLVED_FINAL with the new binding decision, "
-            + "settlement attempted once and left NOT_APPLIED by the stubs")
+    @DisplayName("appeal decision CHANGE by a different admin -> RESOLVED_FINAL with the new binding decision; the "
+            + "refund goes to MANUAL_REVIEW REFUND_PENDING_INTEGRATION without calling any port")
     void differentAdminChangesDecision() {
         String id = appealedByCustomer();
 
@@ -412,17 +447,17 @@ class DisputeResolutionMongoIntegrationTest {
         assertThat(stored.getFinalDecision().getDecidedBy()).isEqualTo(ADMIN_B);
         assertThat(stored.getAppeal().getVerdict()).isEqualTo(AppealVerdict.CHANGE);
         assertThat(stored.getAppeal().getReviewedBy()).isEqualTo(ADMIN_B);
-        assertThat(stored.getSettlement().getState()).isEqualTo(SettlementState.NOT_APPLIED);
-        assertThat(stored.getSettlement().getBookingState()).isEqualTo(SettlementState.NOT_APPLIED);
-        assertThat(stored.getSettlement().getPayoutState()).isEqualTo(SettlementState.NOT_APPLIED);
-        assertThat(stored.getSettlement().getAttempts()).isEqualTo(1);
+        assertThat(stored.getSettlement().getState()).isEqualTo(SettlementState.MANUAL_REVIEW);
+        assertThat(stored.getSettlement().getManualReviewReason()).isEqualTo("REFUND_PENDING_INTEGRATION");
+        assertThat(stored.getSettlement().getAttempts()).isZero();
         assertThat(result.appealStatus()).isEqualTo(AppealStatus.CHANGED);
-        verify(bookingResolutionPort, times(1)).resolveBooking(any());
-        verify(settlementPort, times(1)).settle(any());
+        assertThat(result.settlement().state()).isEqualTo(SettlementState.MANUAL_REVIEW);
+        verify(bookingResolutionPort, never()).resolveBooking(any());
+        verify(settlementPort, never()).settle(any());
 
-        // A finalizer run afterwards does not settle again: NOT_APPLIED is not retried automatically.
+        // A finalizer run afterwards does not pick it up: MANUAL_REVIEW is never retried automatically.
         assertThat(finalizer.run().settled()).isZero();
-        verify(settlementPort, times(1)).settle(any());
+        verify(settlementPort, never()).settle(any());
 
         // Final and binding: no second appeal and no second decision.
         assertApiError(catchThrowable(() -> resolutionService.appeal(PROVIDER_ID, Role.PROVIDER, id,
@@ -439,9 +474,7 @@ class DisputeResolutionMongoIntegrationTest {
     void finalizerIsIdempotentAcrossInstances() throws Exception {
         List<String> ids = new ArrayList<>();
         for (int i = 0; i < 6; i++) {
-            String id = resolvedByAdminA();
-            expireAppealWindow(id);
-            ids.add(id);
+            ids.add(releaseReadyToFinalize());
         }
         String stillOpen = resolvedByAdminA();
         DisputeFinalizer second = new DisputeFinalizer(store, settlementService, true, 50);
@@ -455,8 +488,9 @@ class DisputeResolutionMongoIntegrationTest {
             assertThat(stored.getStatus()).isEqualTo(DisputeStatus.RESOLVED_FINAL);
             assertThat(entriesTo(stored, DisputeStatus.RESOLVED_FINAL)).isEqualTo(1);
             assertThat(stored.getFinalDecision().getAction()).isEqualTo(stored.getDecision().getAction());
-            assertThat(stored.getSettlement().getAttempts()).as("settled once").isEqualTo(1);
+            assertThat(stored.getSettlement().getAttempts()).as("NOT_APPLIED is not a failed attempt").isZero();
             assertThat(stored.getSettlement().getState()).isEqualTo(SettlementState.NOT_APPLIED);
+            assertThat(stored.getSettlement().getNotAppliedReason()).isEqualTo("WP07_NOT_INTEGRATED");
         }
         assertThat(load(stillOpen).getStatus()).as("window still open").isEqualTo(DisputeStatus.RESOLVED);
         verify(settlementPort, times(6)).settle(any());
@@ -466,34 +500,40 @@ class DisputeResolutionMongoIntegrationTest {
     }
 
     @Test
-    @DisplayName("settlement: the payout port fails or times out -> decision and RESOLVED_FINAL kept, state FAILED; "
-            + "a retry calls only the failed part and the decision is never reverted")
+    @DisplayName("settlement: the finance port fails or times out -> decision and RESOLVED_FINAL kept, FAILED, booking "
+            + "NOT called; when finance recovers it is APPLIED first, then the booking step runs; never reverted")
     void failingSettlementNeverRevertsDecision() {
         doThrow(new QueryTimeoutException("payout service timed out")).when(settlementPort).settle(any());
-        String id = appealedByCustomer();
+        String id = insert(DisputeStatus.UNDER_REVIEW).getId();
+        resolutionService.resolve(ADMIN_A, Role.ADMIN, id, release());
+        resolutionService.appeal(CUSTOMER_ID, Role.CUSTOMER, id, new AppealDisputeRequest("Please review", List.of()));
 
         resolutionService.decideAppeal(ADMIN_B, Role.ADMIN, id,
                 new AppealDecisionRequest(AppealVerdict.UPHOLD, null, null, null, NOTE));
 
         Dispute afterFailure = load(id);
         assertThat(afterFailure.getStatus()).isEqualTo(DisputeStatus.RESOLVED_FINAL);
-        assertThat(afterFailure.getFinalDecision().getAction()).isEqualTo(ResolutionAction.REFUND_PARTIAL);
+        assertThat(afterFailure.getFinalDecision().getAction()).isEqualTo(ResolutionAction.RELEASE_TO_PROVIDER);
         assertThat(afterFailure.getSettlement().getState()).isEqualTo(SettlementState.FAILED);
-        assertThat(afterFailure.getSettlement().getPayoutState()).isEqualTo(SettlementState.FAILED);
-        assertThat(afterFailure.getSettlement().getBookingState()).isEqualTo(SettlementState.NOT_APPLIED);
+        assertThat(afterFailure.getSettlement().getFinanceState()).isEqualTo(SettlementState.FAILED);
+        assertThat(afterFailure.getSettlement().getBookingState()).isEqualTo(SettlementState.PENDING);
+        assertThat(afterFailure.getSettlement().getLastErrorCode()).isEqualTo("QueryTimeoutException");
+        assertThat(afterFailure.getSettlement().getAttempts()).isEqualTo(1);
+        verify(bookingResolutionPort, never()).resolveBooking(any());
 
-        // The payout module recovers and confirms on the retry.
+        // The finance module recovers and confirms on the retry; only then is the booking step called.
         doReturn(SettlementOutcome.APPLIED).when(settlementPort).settle(any());
         assertThat(finalizer.run().settled()).isEqualTo(1);
 
         Dispute afterRetry = load(id);
         assertThat(afterRetry.getStatus()).isEqualTo(DisputeStatus.RESOLVED_FINAL);
-        assertThat(afterRetry.getFinalDecision().getAction()).isEqualTo(ResolutionAction.REFUND_PARTIAL);
-        assertThat(afterRetry.getSettlement().getPayoutState()).isEqualTo(SettlementState.APPLIED);
-        assertThat(afterRetry.getSettlement().getBookingState()).as("stub: still nothing applied")
+        assertThat(afterRetry.getFinalDecision().getAction()).isEqualTo(ResolutionAction.RELEASE_TO_PROVIDER);
+        assertThat(afterRetry.getSettlement().getFinanceState()).isEqualTo(SettlementState.APPLIED);
+        assertThat(afterRetry.getSettlement().getBookingState()).as("booking stub: nothing applied")
                 .isEqualTo(SettlementState.NOT_APPLIED);
         assertThat(afterRetry.getSettlement().getState()).isEqualTo(SettlementState.NOT_APPLIED);
-        assertThat(afterRetry.getSettlement().getAttempts()).isEqualTo(2);
+        assertThat(afterRetry.getSettlement().getNotAppliedReason()).isEqualTo("WP05_NOT_INTEGRATED");
+        assertThat(afterRetry.getSettlement().getAttempts()).as("only the failure counted").isEqualTo(1);
         verify(bookingResolutionPort, times(1)).resolveBooking(any());
         verify(settlementPort, times(2)).settle(any());
     }
@@ -527,7 +567,7 @@ class DisputeResolutionMongoIntegrationTest {
 
         Dispute finalDispute = load(id);
         assertThat(finalDispute.getStatus()).isEqualTo(DisputeStatus.RESOLVED_FINAL);
-        assertThat(finalDispute.getSettlement().getBookingState()).isEqualTo(SettlementState.NOT_APPLIED);
+        assertThat(finalDispute.getSettlement().getBookingState()).isNotEqualTo(SettlementState.APPLIED);
         assertThat(finalDispute.getActiveBookingKey()).isEqualTo(bookingId);
         // Nothing moved the booking out of DISPUTED (the stub never calls the Booking module).
         verifyNoInteractions(bookingFacade);
@@ -560,16 +600,21 @@ class DisputeResolutionMongoIntegrationTest {
     @Test
     @DisplayName("booking resolution confirmed APPLIED -> only then is the booking's dispute key released")
     void appliedBookingResolutionReleasesKey() {
+        doReturn(SettlementOutcome.APPLIED).when(settlementPort).settle(any());
         doReturn(SettlementOutcome.APPLIED).when(bookingResolutionPort).resolveBooking(any());
-        String id = resolvedByAdminA();
-        expireAppealWindow(id);
+        String id = releaseReadyToFinalize();
 
         finalizer.run();
 
         Dispute stored = load(id);
         assertThat(stored.getStatus()).isEqualTo(DisputeStatus.RESOLVED_FINAL);
+        assertThat(stored.getSettlement().getState()).isEqualTo(SettlementState.APPLIED);
         assertThat(stored.getSettlement().getBookingState()).isEqualTo(SettlementState.APPLIED);
         assertThat(stored.getActiveBookingKey()).isNull();
+        // One dispute per booking still holds after the key is released.
+        bookingIsDisputedAndEligible(stored.getBookingId());
+        assertApiError(catchThrowable(() -> disputeService.raiseDispute(CUSTOMER_ID, Role.CUSTOMER,
+                raiseRequest(stored.getBookingId()))), 409, "DISPUTE_ALREADY_EXISTS");
     }
 
     @Test
@@ -635,5 +680,208 @@ class DisputeResolutionMongoIntegrationTest {
         assertThat(summary.underReview()).as("PENDING not counted").isEqualTo(1);
         assertThat(summary.appealed()).isEqualTo(1);
         assertThat(summary.resolvedLast30Days()).isEqualTo(2);
+        assertThat(summary.manualReview()).isZero();
+    }
+
+    @Test
+    @DisplayName("admin summary counts MANUAL_REVIEW and REJECTED settlements; the list and detail show the state and "
+            + "reason read-only; the party view only gets the neutral payment note")
+    void adminSeesSettlementStateParticipantsDoNot() {
+        String refund = resolvedByAdminA();
+        expireAppealWindow(refund);
+        String rejected = releaseReadyToFinalize();
+        doThrow(new SettlementRejectedException("NO_CAPTURED_PAYMENT", "no payment")).when(settlementPort).settle(any());
+        finalizer.run();
+
+        assertThat(settlementOf(refund).getState()).isEqualTo(SettlementState.MANUAL_REVIEW);
+        assertThat(settlementOf(rejected).getState()).isEqualTo(SettlementState.REJECTED);
+        assertThat(adminQueryService.summary().manualReview()).isEqualTo(2);
+        assertThat(adminQueryService.search(null, null, rejected, null, null, null, 0, 20).content()).singleElement()
+                .satisfies(row -> {
+                    assertThat(row.settlementState()).isEqualTo(SettlementState.REJECTED);
+                    assertThat(row.manualReviewReason()).isEqualTo("SETTLEMENT_REJECTED:NO_CAPTURED_PAYMENT");
+                });
+        AdminDisputeDetailResponse detail = adminQueryService.getDetail(refund);
+        assertThat(detail.settlement().state()).isEqualTo(SettlementState.MANUAL_REVIEW);
+        assertThat(detail.settlement().manualReviewReason()).isEqualTo("REFUND_PENDING_INTEGRATION");
+
+        DisputeDetailResponse party = disputeService.getDisputeForParty(CUSTOMER_ID, rejected);
+        assertThat(party.outcome().paymentNote()).isEqualTo(
+                "Payment handling for this dispute requires assistance. Our support team is reviewing this case.");
+        assertThat(party.toString()).doesNotContain("NO_CAPTURED_PAYMENT")
+                .doesNotContain("settlement");
+    }
+
+    // ---------- settlement order and outcomes ----------
+
+    @Test
+    @DisplayName("RELEASE_TO_PROVIDER + finance APPLIED -> the booking port is called AFTER the settlement port, never "
+            + "before; same idempotency key; APPLIED")
+    void bookingStepOnlyAfterFinanceApplied() {
+        doReturn(SettlementOutcome.APPLIED).when(settlementPort).settle(any());
+        doReturn(SettlementOutcome.APPLIED).when(bookingResolutionPort).resolveBooking(any());
+        String id = releaseReadyToFinalize();
+
+        finalizer.run();
+
+        InOrder order = inOrder(settlementPort, bookingResolutionPort);
+        ArgumentCaptor<SettlementInstruction> finance = ArgumentCaptor.forClass(SettlementInstruction.class);
+        ArgumentCaptor<SettlementInstruction> booking = ArgumentCaptor.forClass(SettlementInstruction.class);
+        order.verify(settlementPort).settle(finance.capture());
+        order.verify(bookingResolutionPort).resolveBooking(booking.capture());
+        assertThat(finance.getValue().idempotencyKey()).isEqualTo("dispute-" + id);
+        assertThat(booking.getValue().idempotencyKey()).isEqualTo("dispute-" + id);
+        assertThat(settlementOf(id).getState()).isEqualTo(SettlementState.APPLIED);
+        assertThat(settlementOf(id).getFinanceState()).isEqualTo(SettlementState.APPLIED);
+    }
+
+    @Test
+    @DisplayName("finance runtime exception -> counted, booking NOT called; after max-attempts (3) -> MANUAL_REVIEW "
+            + "RETRY_LIMIT_REACHED and never claimed again")
+    void retryLimitLeadsToManualReview() {
+        doThrow(new IllegalStateException("finance down")).when(settlementPort).settle(any());
+        String id = releaseReadyToFinalize();
+
+        finalizer.run();
+        assertThat(settlementOf(id).getState()).isEqualTo(SettlementState.FAILED);
+        assertThat(settlementOf(id).getAttempts()).isEqualTo(1);
+        finalizer.run();
+        finalizer.run();
+
+        DisputeSettlement settlement = settlementOf(id);
+        assertThat(settlement.getState()).isEqualTo(SettlementState.MANUAL_REVIEW);
+        assertThat(settlement.getManualReviewReason()).isEqualTo("RETRY_LIMIT_REACHED");
+        assertThat(settlement.getAttempts()).isEqualTo(3);
+        assertThat(settlement.getLastErrorCode()).isEqualTo("IllegalStateException");
+        assertThat(finalizer.run().settled()).isZero();
+        verify(settlementPort, times(3)).settle(any());
+        verify(bookingResolutionPort, never()).resolveBooking(any());
+        assertThat(load(id).getStatus()).isEqualTo(DisputeStatus.RESOLVED_FINAL);
+    }
+
+    @Test
+    @DisplayName("SettlementRejectedException -> REJECTED with the reason code stored; the next recovery run does not "
+            + "retry it; booking never called")
+    void permanentRejectionIsTerminal() {
+        doThrow(new SettlementRejectedException("NO_CAPTURED_PAYMENT", "no payment")).when(settlementPort).settle(any());
+        String id = releaseReadyToFinalize();
+
+        finalizer.run();
+        assertThat(finalizer.run().settled()).as("not retried").isZero();
+
+        DisputeSettlement settlement = settlementOf(id);
+        assertThat(settlement.getState()).isEqualTo(SettlementState.REJECTED);
+        assertThat(settlement.getFinanceState()).isEqualTo(SettlementState.REJECTED);
+        assertThat(settlement.getManualReviewReason()).isEqualTo("SETTLEMENT_REJECTED:NO_CAPTURED_PAYMENT");
+        assertThat(settlement.getAttempts()).isZero();
+        verify(settlementPort, times(1)).settle(any());
+        verify(bookingResolutionPort, never()).resolveBooking(any());
+        assertThat(load(id).getActiveBookingKey()).as("booking still DISPUTED: key kept").isNotNull();
+    }
+
+    @Test
+    @DisplayName("finance APPLIED + booking exception -> the retry calls ONLY the booking port, never settlement again")
+    void retryRepeatsOnlyBookingStep() {
+        doReturn(SettlementOutcome.APPLIED).when(settlementPort).settle(any());
+        doThrow(new IllegalStateException("booking down")).when(bookingResolutionPort).resolveBooking(any());
+        String id = releaseReadyToFinalize();
+
+        finalizer.run();
+        DisputeSettlement afterFailure = settlementOf(id);
+        assertThat(afterFailure.getState()).isEqualTo(SettlementState.FAILED);
+        assertThat(afterFailure.getFinanceState()).isEqualTo(SettlementState.APPLIED);
+        assertThat(afterFailure.getBookingState()).isEqualTo(SettlementState.FAILED);
+
+        doReturn(SettlementOutcome.APPLIED).when(bookingResolutionPort).resolveBooking(any());
+        finalizer.run();
+
+        assertThat(settlementOf(id).getState()).isEqualTo(SettlementState.APPLIED);
+        verify(settlementPort, times(1)).settle(any());
+        verify(bookingResolutionPort, times(2)).resolveBooking(any());
+    }
+
+    @Test
+    @DisplayName("REFUND_FULL, REFUND_PARTIAL and the penalty -> MANUAL_REVIEW REFUND_PENDING_INTEGRATION, the "
+            + "settlement port is never called; the decision stays final")
+    void refundsAndPenaltyGoToManualReview() {
+        List<String> ids = new ArrayList<>();
+        for (ResolveDisputeRequest request : List.of(
+                new ResolveDisputeRequest(ResolutionAction.REFUND_FULL, null, false, NOTE),
+                new ResolveDisputeRequest(ResolutionAction.REFUND_PARTIAL, 30, false, NOTE),
+                new ResolveDisputeRequest(ResolutionAction.REFUND_PARTIAL, 60, true, NOTE))) {
+            String id = insert(DisputeStatus.UNDER_REVIEW).getId();
+            resolutionService.resolve(ADMIN_A, Role.ADMIN, id, request);
+            expireAppealWindow(id);
+            ids.add(id);
+        }
+
+        finalizer.run();
+        finalizer.run();
+
+        for (String id : ids) {
+            Dispute stored = load(id);
+            assertThat(stored.getStatus()).isEqualTo(DisputeStatus.RESOLVED_FINAL);
+            assertThat(stored.getSettlement().getState()).isEqualTo(SettlementState.MANUAL_REVIEW);
+            assertThat(stored.getSettlement().getManualReviewReason()).isEqualTo("REFUND_PENDING_INTEGRATION");
+            assertThat(stored.getSettlement().getAttempts()).isZero();
+        }
+        verify(settlementPort, never()).settle(any());
+        verify(bookingResolutionPort, never()).resolveBooking(any());
+    }
+
+    @Test
+    @DisplayName("NOT_APPLIED (WP07 not connected) -> not counted as a failure; re-checked only after the normal "
+            + "interval")
+    void notAppliedIsNotAFailure() {
+        String id = releaseReadyToFinalize();
+
+        finalizer.run();
+        assertThat(finalizer.run().settled()).as("not re-checked before the interval").isZero();
+
+        DisputeSettlement settlement = settlementOf(id);
+        assertThat(settlement.getState()).isEqualTo(SettlementState.NOT_APPLIED);
+        assertThat(settlement.getAttempts()).isZero();
+        assertThat(settlement.getLastErrorCode()).isNull();
+        assertThat(settlement.getNotAppliedReason()).isEqualTo("WP07_NOT_INTEGRATED");
+
+        // After the re-check interval (default 1h) the recovery job looks at it again.
+        mongoTemplate.updateFirst(Query.query(Criteria.where("_id").is(id)),
+                new Update().set("settlement.lastAttemptAt", Instant.now().minus(Duration.ofHours(2))), Dispute.class);
+        assertThat(finalizer.run().settled()).isEqualTo(1);
+        assertThat(settlementOf(id).getAttempts()).isZero();
+        verify(settlementPort, times(2)).settle(any());
+    }
+
+    @Test
+    @DisplayName("two finalizer runs at the same moment -> only one works on the dispute (lease); the port is called once")
+    void leaseAllowsOnlyOneWorker() throws Exception {
+        String id = releaseReadyToFinalize();
+        // Finalize first, so both runs compete only for the settlement.
+        mongoTemplate.updateFirst(Query.query(Criteria.where("_id").is(id)), new Update()
+                .set("status", DisputeStatus.RESOLVED_FINAL)
+                .set("finalDecision", load(id).getDecision())
+                .set("settlement", DisputeSettlement.pending()), Dispute.class);
+        CountDownLatch insidePort = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            insidePort.countDown();
+            assertThat(release.await(20, TimeUnit.SECONDS)).isTrue();
+            return SettlementOutcome.NOT_APPLIED;
+        }).when(settlementPort).settle(any());
+        DisputeFinalizer second = new DisputeFinalizer(store, settlementService, true, 50);
+
+        ExecutorService pool = Executors.newFixedThreadPool(1);
+        try {
+            Future<DisputeFinalizer.Result> first = pool.submit(() -> finalizer.run());
+            assertThat(insidePort.await(20, TimeUnit.SECONDS)).isTrue();
+            // The first run holds the lease while it is inside the port: the second run finds nothing to claim.
+            assertThat(second.run().settled()).isZero();
+            release.countDown();
+            assertThat(first.get(30, TimeUnit.SECONDS).settled()).isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+        verify(settlementPort, times(1)).settle(any());
+        assertThat(settlementOf(id).getLeaseOwner()).as("lease released after recording").isNull();
     }
 }
