@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.dispute.service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -52,10 +53,16 @@ public class DisputeResolutionStore {
     static final String F_ACTIVE_KEY = "activeBookingKey";
     static final String F_SETTLEMENT = "settlement";
     static final String F_S_STATE = "settlement.state";
+    static final String F_S_FINANCE = "settlement.financeState";
     static final String F_S_BOOKING = "settlement.bookingState";
-    static final String F_S_PAYOUT = "settlement.payoutState";
+    /** Written before the finance/booking split; removed on the next recorded attempt. */
+    static final String F_S_LEGACY_PAYOUT = "settlement.payoutState";
     static final String F_S_ATTEMPTS = "settlement.attempts";
     static final String F_S_LAST = "settlement.lastAttemptAt";
+    static final String F_S_NEXT = "settlement.nextAttemptAt";
+    static final String F_S_ERROR = "settlement.lastErrorCode";
+    static final String F_S_NOT_APPLIED_REASON = "settlement.notAppliedReason";
+    static final String F_S_REVIEW_REASON = "settlement.manualReviewReason";
     static final String F_S_LEASE = "settlement.leaseUntil";
     static final String F_S_OWNER = "settlement.leaseOwner";
 
@@ -167,23 +174,43 @@ public class DisputeResolutionStore {
     }
 
     /**
-     * Takes the settlement lease of one RESOLVED_FINAL dispute that still needs settling: PENDING, or FAILED and last
-     * tried at or before {@code retryFailedBefore}, with fewer than {@code maxAttempts} attempts and a free lease.
-     * {@code disputeId} null means any such dispute. The returned record carries the new lease token.
+     * Takes the settlement lease of one RESOLVED_FINAL dispute that is due, with a free lease:
+     * <ul>
+     *   <li>PENDING (never attempted);</li>
+     *   <li>FAILED whose backoff has passed ({@code nextAttemptAt <= now}; a record without it is due);</li>
+     *   <li>NOT_APPLIED (integration not connected yet) last checked at or before {@code recheckNotAppliedBefore}.</li>
+     * </ul>
+     * APPLIED, REJECTED and MANUAL_REVIEW are never claimed. {@code disputeId} null means any due dispute. Every branch
+     * filters on {@code settlement.state} first, so the partial index {@code settlement.state_1_settlement.lastAttemptAt_1}
+     * serves the query. The returned record carries the new lease token.
      */
-    public Optional<Dispute> claimSettlement(String disputeId, Instant now, Duration lease, Instant retryFailedBefore,
-                                             int maxAttempts) {
+    public Optional<Dispute> claimSettlement(String disputeId, Instant now, Duration lease,
+                                             Instant recheckNotAppliedBefore) {
+        return claimSettlement(disputeId, now, lease, recheckNotAppliedBefore, List.of());
+    }
+
+    /** As above, skipping {@code excludeIds} (disputes this run already worked on: at most one attempt per run). */
+    public Optional<Dispute> claimSettlement(String disputeId, Instant now, Duration lease,
+                                             Instant recheckNotAppliedBefore, Collection<String> excludeIds) {
         Criteria due = new Criteria().orOperator(
                 Criteria.where(F_S_STATE).is(SettlementState.PENDING),
-                Criteria.where(F_S_STATE).is(SettlementState.FAILED).and(F_S_LAST).lte(retryFailedBefore));
+                Criteria.where(F_S_STATE).is(SettlementState.FAILED).orOperator(
+                        Criteria.where(F_S_NEXT).lte(now),
+                        Criteria.where(F_S_NEXT).exists(false),
+                        Criteria.where(F_S_NEXT).is(null)),
+                Criteria.where(F_S_STATE).is(SettlementState.NOT_APPLIED).orOperator(
+                        Criteria.where(F_S_LAST).lte(recheckNotAppliedBefore),
+                        Criteria.where(F_S_LAST).exists(false),
+                        Criteria.where(F_S_LAST).is(null)));
         Criteria leaseFree = new Criteria().orOperator(
                 Criteria.where(F_S_LEASE).exists(false),
                 Criteria.where(F_S_LEASE).is(null),
                 Criteria.where(F_S_LEASE).lt(now));
-        Criteria criteria = Criteria.where(F_STATUS).is(DisputeStatus.RESOLVED_FINAL)
-                .and(F_S_ATTEMPTS).lt(maxAttempts);
+        Criteria criteria = Criteria.where(F_STATUS).is(DisputeStatus.RESOLVED_FINAL);
         if (disputeId != null) {
             criteria = criteria.and(F_ID).is(disputeId);
+        } else if (!excludeIds.isEmpty()) {
+            criteria = criteria.and(F_ID).nin(excludeIds);
         }
         criteria = criteria.andOperator(due, leaseFree);
         Update update = new Update()
@@ -194,28 +221,64 @@ public class DisputeResolutionStore {
     }
 
     /**
-     * Records one settlement attempt, only while the caller still holds the lease. Never touches the status or the
-     * decision. Only when the booking resolution is confirmed APPLIED (the booking has left DISPUTED) is the
-     * booking's active-dispute key released; NOT_APPLIED (stub) or FAILED keep it, so no second dispute can be
-     * created for a booking that is still DISPUTED. True if recorded.
+     * Saves that the finance step is APPLIED right away (lease kept), before the booking step runs, so a later retry
+     * repeats only the booking step and never calls the settlement port again. True if saved (lease still held).
      */
-    public boolean recordSettlement(String disputeId, String leaseOwner, SettlementState bookingState,
-                                    SettlementState payoutState, Instant now) {
+    public boolean recordFinanceApplied(String disputeId, String leaseOwner, Instant now) {
         Query query = Query.query(Criteria.where(F_ID).is(disputeId)
                 .and(F_STATUS).is(DisputeStatus.RESOLVED_FINAL)
                 .and(F_S_OWNER).is(leaseOwner));
         Update update = new Update()
-                .set(F_S_BOOKING, bookingState)
-                .set(F_S_PAYOUT, payoutState)
-                .set(F_S_STATE, DisputeSettlement.overall(bookingState, payoutState))
+                .set(F_S_FINANCE, SettlementState.APPLIED)
                 .set(F_S_LAST, now)
-                .inc(F_S_ATTEMPTS, 1)
+                .unset(F_S_NOT_APPLIED_REASON)
+                .inc(F_VERSION, 1);
+        return mongoTemplate.updateFirst(query, update, Dispute.class).getModifiedCount() == 1;
+    }
+
+    /** The result of one settlement attempt (see {@link #recordSettlement}). Null strings/times are removed. */
+    public record SettlementRecord(SettlementState state, SettlementState financeState, SettlementState bookingState,
+                                   boolean countsAsAttempt, Instant nextAttemptAt, String lastErrorCode,
+                                   String notAppliedReason, String manualReviewReason) {
+    }
+
+    /**
+     * Records one settlement attempt and releases the lease, only while the caller still holds it. Never touches the
+     * status or the decision. Only when the booking step is confirmed APPLIED (the booking has left DISPUTED) is the
+     * booking's active-dispute key released; every other state keeps it, so no second dispute can be created for a
+     * booking that is still DISPUTED. True if recorded.
+     */
+    public boolean recordSettlement(String disputeId, String leaseOwner, SettlementRecord result, Instant now) {
+        Query query = Query.query(Criteria.where(F_ID).is(disputeId)
+                .and(F_STATUS).is(DisputeStatus.RESOLVED_FINAL)
+                .and(F_S_OWNER).is(leaseOwner));
+        Update update = new Update()
+                .set(F_S_STATE, result.state())
+                .set(F_S_FINANCE, result.financeState())
+                .set(F_S_BOOKING, result.bookingState())
+                .set(F_S_LAST, now)
+                .unset(F_S_LEGACY_PAYOUT)
                 .unset(F_S_LEASE)
                 .unset(F_S_OWNER)
                 .inc(F_VERSION, 1);
-        if (bookingState == SettlementState.APPLIED) {
+        if (result.countsAsAttempt()) {
+            update.inc(F_S_ATTEMPTS, 1);
+        }
+        setOrUnset(update, F_S_NEXT, result.nextAttemptAt());
+        setOrUnset(update, F_S_ERROR, result.lastErrorCode());
+        setOrUnset(update, F_S_NOT_APPLIED_REASON, result.notAppliedReason());
+        setOrUnset(update, F_S_REVIEW_REASON, result.manualReviewReason());
+        if (result.bookingState() == SettlementState.APPLIED) {
             update.unset(F_ACTIVE_KEY);
         }
         return mongoTemplate.updateFirst(query, update, Dispute.class).getModifiedCount() == 1;
+    }
+
+    private static void setOrUnset(Update update, String field, Object value) {
+        if (value == null) {
+            update.unset(field);
+        } else {
+            update.set(field, value);
+        }
     }
 }

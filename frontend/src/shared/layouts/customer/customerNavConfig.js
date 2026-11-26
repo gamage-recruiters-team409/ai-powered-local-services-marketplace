@@ -53,6 +53,12 @@ export const CUSTOMER_NAV_SECTIONS = Object.freeze([
         to: '/customer/account/payments',
         icon: 'payments',
       },
+      {
+        id: 'disputes',
+        label: 'My Disputes',
+        to: '/customer/disputes',
+        icon: 'disputes',
+      },
     ],
   },
   {

@@ -39,6 +39,16 @@ public final class DisputeRules {
     public static final int MAX_EVIDENCE_ITEMS = 10;
     public static final int MAX_EVIDENCE_REFERENCE_LENGTH = 500;
 
+    /** Evidence uploads: at most 5 MB per file and 5 files per party per dispute; signed links live 5 minutes. */
+    public static final long MAX_EVIDENCE_FILE_BYTES = 5L * 1024 * 1024;
+    public static final int MAX_EVIDENCE_FILES_PER_PARTY = 5;
+    public static final Duration EVIDENCE_URL_TTL = Duration.ofMinutes(5);
+    public static final int MAX_EVIDENCE_FILE_NAME_LENGTH = 120;
+
+    /** Statuses in which the parties may still add evidence. */
+    public static final java.util.Set<DisputeStatus> EVIDENCE_UPLOAD_STATUSES = java.util.EnumSet.of(
+            DisputeStatus.OPEN, DisputeStatus.AWAITING_RESPONSE, DisputeStatus.UNDER_REVIEW);
+
     /** Paging limits for list endpoints. */
     public static final int DEFAULT_PAGE_SIZE = 20;
     public static final int MAX_PAGE_SIZE = 100;

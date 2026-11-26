@@ -55,6 +55,73 @@ class DisputeMapperTest {
     }
 
     @Test
+    @DisplayName("party view of a dispute finalized by the finalizer (SYSTEM entry without a role) does not fail; the "
+            + "entry has no actor, role or reason; neutral payment note while not carried out")
+    void systemEntryWithoutRole() {
+        Dispute dispute = resolved(NOW.minusSeconds(30));
+        dispute.setFinalDecision(dispute.getDecision());
+        dispute.changeStatus(DisputeStatus.RESOLVED_FINAL, "SYSTEM", null, "Appeal window closed without an appeal",
+                NOW);
+        dispute.setSettlement(com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeSettlement.pending());
+
+        DisputeDetailResponse view = DisputeMapper.toPartyDetail(dispute, "cust-1", NOW);
+
+        DisputeDetailResponse.StatusHistoryView system = view.statusHistory().get(3);
+        assertThat(system.actorId()).isNull();
+        assertThat(system.actorRole()).isNull();
+        assertThat(system.reason()).isNull();
+        assertThat(view.outcome().finalDecision()).isTrue();
+        assertThat(view.outcome().paymentNote()).isEqualTo("Payment handling for this dispute is being processed.");
+    }
+
+    @Test
+    @DisplayName("final dispute settlement states: PENDING, NOT_APPLIED and FAILED -> PAYMENT_IN_PROGRESS; "
+            + "MANUAL_REVIEW and REJECTED -> PAYMENT_REQUIRES_ASSISTANCE; APPLIED -> null; hides internal reasons")
+    void finalDisputeSettlementStatesOutcomeNote() {
+        Dispute dispute = resolved(NOW.minusSeconds(30));
+        dispute.setFinalDecision(dispute.getDecision());
+        dispute.changeStatus(DisputeStatus.RESOLVED_FINAL, "SYSTEM", null, "Finalized", NOW);
+
+        // 1. PENDING
+        dispute.setSettlement(com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeSettlement.pending());
+        DisputeDetailResponse view = DisputeMapper.toPartyDetail(dispute, "cust-1", NOW);
+        assertThat(view.outcome().paymentNote()).isEqualTo(DisputeDetailResponse.OutcomeView.PAYMENT_IN_PROGRESS);
+
+        // 2. NOT_APPLIED
+        dispute.getSettlement().setState(com.gamagerecruiters.marketplace.modules.dispute.domain.SettlementState.NOT_APPLIED);
+        dispute.getSettlement().setNotAppliedReason("FINANCE_NOT_INTEGRATED");
+        view = DisputeMapper.toPartyDetail(dispute, "cust-1", NOW);
+        assertThat(view.outcome().paymentNote()).isEqualTo(DisputeDetailResponse.OutcomeView.PAYMENT_IN_PROGRESS);
+        assertThat(view.toString()).doesNotContain("NOT_APPLIED").doesNotContain("FINANCE_NOT_INTEGRATED");
+
+        // 3. FAILED
+        dispute.getSettlement().setState(com.gamagerecruiters.marketplace.modules.dispute.domain.SettlementState.FAILED);
+        dispute.getSettlement().setLastErrorCode("TIMEOUT");
+        view = DisputeMapper.toPartyDetail(dispute, "cust-1", NOW);
+        assertThat(view.outcome().paymentNote()).isEqualTo(DisputeDetailResponse.OutcomeView.PAYMENT_IN_PROGRESS);
+        assertThat(view.toString()).doesNotContain("FAILED").doesNotContain("TIMEOUT");
+
+        // 4. MANUAL_REVIEW
+        dispute.getSettlement().setState(com.gamagerecruiters.marketplace.modules.dispute.domain.SettlementState.MANUAL_REVIEW);
+        dispute.getSettlement().setManualReviewReason("REFUND_PENDING_INTEGRATION");
+        view = DisputeMapper.toPartyDetail(dispute, "cust-1", NOW);
+        assertThat(view.outcome().paymentNote()).isEqualTo(DisputeDetailResponse.OutcomeView.PAYMENT_REQUIRES_ASSISTANCE);
+        assertThat(view.toString()).doesNotContain("MANUAL_REVIEW").doesNotContain("REFUND_PENDING_INTEGRATION");
+
+        // 5. REJECTED
+        dispute.getSettlement().setState(com.gamagerecruiters.marketplace.modules.dispute.domain.SettlementState.REJECTED);
+        dispute.getSettlement().setLastErrorCode("SETTLEMENT_REJECTED:ACCOUNT_CLOSED");
+        view = DisputeMapper.toPartyDetail(dispute, "cust-1", NOW);
+        assertThat(view.outcome().paymentNote()).isEqualTo(DisputeDetailResponse.OutcomeView.PAYMENT_REQUIRES_ASSISTANCE);
+        assertThat(view.toString()).doesNotContain("REJECTED").doesNotContain("SETTLEMENT_REJECTED");
+
+        // 6. APPLIED
+        dispute.getSettlement().setState(com.gamagerecruiters.marketplace.modules.dispute.domain.SettlementState.APPLIED);
+        view = DisputeMapper.toPartyDetail(dispute, "cust-1", NOW);
+        assertThat(view.outcome().paymentNote()).isNull();
+    }
+
+    @Test
     @DisplayName("party view: the penalty flag is shown to the provider only")
     void penaltyOnlyForProvider() {
         Dispute dispute = resolved(NOW.plusSeconds(60));
@@ -95,7 +162,8 @@ class DisputeMapperTest {
     @Test
     @DisplayName("admin view: includes the deciding admin, the note and names")
     void adminViewIsComplete() {
-        AdminDisputeDetailResponse view = DisputeMapper.toAdminDetail(resolved(NOW.plusSeconds(60)), "Cust", "Prov", NOW);
+        AdminDisputeDetailResponse view = DisputeMapper.toAdminDetail(resolved(NOW.plusSeconds(60)), "Cust", "Prov", NOW,
+                new AdminDisputeDetailResponse.Actions(false, false, "VIEW_ONLY"));
 
         assertThat(view.decision().decidedBy()).isEqualTo(ADMIN);
         assertThat(view.decision().note()).isEqualTo(NOTE);
