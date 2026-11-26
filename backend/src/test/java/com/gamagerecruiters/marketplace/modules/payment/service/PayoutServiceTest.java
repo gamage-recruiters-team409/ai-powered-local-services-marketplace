@@ -18,6 +18,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payout;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutRepository;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
@@ -64,9 +65,14 @@ class PayoutServiceTest {
         when(providerProfileRepository.findByUserId("user-1"))
                 .thenReturn(Optional.empty());
 
-        assertThrows(IllegalStateException.class,
+        var error = assertThrows(ResourceNotFoundException.class,
                 () -> service.requestPayout(
                         "user-1", "request-key-1", new BigDecimal("5000.00")));
+
+        assertEquals(404, error.getStatus().value());
+        assertEquals("PROVIDER_PROFILE_NOT_FOUND", error.getErrorCode());
+        org.mockito.Mockito.verifyNoInteractions(
+                payoutRepository, transactionService);
     }
 
     @Test
@@ -170,6 +176,36 @@ class PayoutServiceTest {
         assertThrows(IllegalStateException.class,
                 () -> service.requestPayout(
                         "user-1", "request-key-1", new BigDecimal("5000.00")));
+    }
+
+    /** Missing profiles must produce a business error before payout retrieval. */
+    @Test
+    void providerHistoryRejectsMissingProviderProfile() {
+        when(providerProfileRepository.findByUserId("user-1"))
+                .thenReturn(Optional.empty());
+
+        var error = assertThrows(ResourceNotFoundException.class,
+                () -> service.getMyPayoutHistory("user-1", 0, 10));
+
+        assertEquals(404, error.getStatus().value());
+        assertEquals("PROVIDER_PROFILE_NOT_FOUND", error.getErrorCode());
+        org.mockito.Mockito.verifyNoInteractions(
+                payoutRepository, transactionService);
+    }
+
+    /** Missing profiles must not permit access to individual payout records. */
+    @Test
+    void providerDetailsRejectMissingProviderProfile() {
+        when(providerProfileRepository.findByUserId("user-1"))
+                .thenReturn(Optional.empty());
+
+        var error = assertThrows(ResourceNotFoundException.class,
+                () -> service.getMyPayout("user-1", "payout-1"));
+
+        assertEquals(404, error.getStatus().value());
+        assertEquals("PROVIDER_PROFILE_NOT_FOUND", error.getErrorCode());
+        org.mockito.Mockito.verifyNoInteractions(
+                payoutRepository, transactionService);
     }
 
     private ProviderProfile profile(String id) {

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ProviderPage } from "../../../shared/layouts/provider/ProviderPage";
 import Button from "../../../shared/components/forms/Button";
 import Input from "../../../shared/components/forms/Input";
+import Checkbox from "../../../shared/components/forms/Checkbox";
 import Badge from "../../../shared/components/forms/Badge";
 import DataTable from "../../../shared/components/forms/DataTable";
 import Pagination from "../../../shared/components/forms/Pagination";
@@ -184,6 +185,9 @@ function ProviderEarningsContent({ providerId }) {
     Boolean(recovery.payload),
   );
 
+  const [requestOpen, setRequestOpen] = useState(false);
+  const [requestConfirmed, setRequestConfirmed] = useState(false);
+
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [details, setDetails] = useState(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -199,6 +203,25 @@ function ProviderEarningsContent({ providerId }) {
   const detailsVersionRef = useRef(0);
 
   const currency = summary?.currency ?? "LKR";
+
+  const insufficientBalance =
+    !summaryLoading &&
+    summary != null &&
+    Number(summary.available) < MINIMUM_PAYOUT;
+
+  /** Opens the payout dialog without discarding recovery information. */
+  function openRequest() {
+    setRequestConfirmed(false);
+    setRequestOpen(true);
+  }
+
+  /** Prevents dismissal while a financial submission is in progress. */
+  function closeRequest() {
+    if (submissionLockRef.current) return;
+
+    setRequestOpen(false);
+    setRequestConfirmed(false);
+  }
 
   useEffect(() => {
     let active = true;
@@ -272,6 +295,7 @@ function ProviderEarningsContent({ providerId }) {
     if (pendingRequestRef.current) return;
 
     setAmount(event.target.value);
+    setRequestConfirmed(false);
     setAmountError("");
     setSubmitError("");
     setSuccessMessage("");
@@ -285,6 +309,11 @@ function ProviderEarningsContent({ providerId }) {
     event.preventDefault();
 
     if (submissionLockRef.current || storageError) return;
+
+    if (!requestConfirmed) {
+      setSubmitError("Confirm the payout amount before submitting.");
+      return;
+    }
 
     let payload;
     let wasRecovery;
@@ -301,6 +330,7 @@ function ProviderEarningsContent({ providerId }) {
         setAmountError("");
         setSuccessMessage("");
         setRetryRequired(true);
+        setRequestConfirmed(false);
         setSubmitError(
           "An unresolved payout request was found. Review the original amount and select Retry Payout Request.",
         );
@@ -390,6 +420,8 @@ function ProviderEarningsContent({ providerId }) {
 
       if (cleared) {
         setAmount("");
+        setRequestOpen(false);
+        setRequestConfirmed(false);
       }
 
       setSuccessMessage(
@@ -495,14 +527,19 @@ function ProviderEarningsContent({ providerId }) {
 
   return (
     <ProviderPage
-      title="Earnings & Payouts"
+      title="Earnings Overview"
       subtitle="Track your earnings and manage payout requests."
       showBack={false}
       plain
     >
       <div className={styles.container}>
+        <Alert variant="info">
+          Captured funds are held until the service is completed and the
+          72-hour holding period is satisfied. Held earnings cannot be withdrawn.
+        </Alert>
+
         <div className={styles.sectionHeader}>
-          <h2>Earnings Overview</h2>
+          <h2>Earnings Balances</h2>
 
           <Button
             onClick={refreshData}
@@ -521,17 +558,17 @@ function ProviderEarningsContent({ providerId }) {
         ) : summary ? (
           <div className={styles.earningsGrid}>
             <EarningsCard
+              label="Available Balance"
+              amount={summary.available}
+              currency={currency}
+              description="Available earnings, subject to payout eligibility."
+            />
+
+            <EarningsCard
               label="Pending Earnings"
               amount={summary.pending}
               currency={currency}
               description="Earnings awaiting release."
-            />
-
-            <EarningsCard
-              label="Available Earnings"
-              amount={summary.available}
-              currency={currency}
-              description="Available balance, subject to payout eligibility."
             />
 
             <EarningsCard
@@ -551,7 +588,79 @@ function ProviderEarningsContent({ providerId }) {
         ) : null}
 
         <section className={styles.panel}>
-          <h2>Request a Payout</h2>
+          <div className={styles.sectionHeader}>
+            <div>
+              <h2>Payout Actions</h2>
+              <p className={styles.description}>
+                Manual payouts require Finance Admin review.
+                Minimum payout: LKR 5,000.00.
+              </p>
+            </div>
+
+            <div className={styles.payoutActions}>
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  document.getElementById("wp07-payout-history")
+                    ?.scrollIntoView({ behavior: "smooth" })
+                }
+              >
+                View Payout History
+              </Button>
+
+              <Button onClick={openRequest}>
+                Request Payout
+              </Button>
+            </div>
+          </div>
+
+          {successMessage && (
+            <Alert
+              variant="success"
+              title="Payout request received"
+              onClose={() => setSuccessMessage("")}
+            >
+              {successMessage}
+            </Alert>
+          )}
+
+          {retryRequired && (
+            <Alert variant="warning" title="Request not confirmed">
+              Open Request Payout to recover the original request safely.
+            </Alert>
+          )}
+
+          {storageError && (
+            <Alert variant="error" title="Payout recovery unavailable">
+              {storageError}
+            </Alert>
+          )}
+        </section>
+
+        <Modal
+          isOpen={requestOpen}
+          onClose={closeRequest}
+          title="Request Payout"
+          closeOnBackdrop={false}
+          showCloseButton={!submitting}
+        >
+          <div className={styles.requestContent}>
+            <div
+              className={`${styles.balancePanel} ${
+                insufficientBalance ? styles.balanceWarning : ""
+              }`}
+            >
+              <span>Available payout balance</span>
+              <strong>{formatMoney(summary?.available, currency)}</strong>
+              <small>Held earnings: {formatMoney(summary?.held, currency)}</small>
+              <small>Minimum manual payout: LKR 5,000.00</small>
+            </div>
+
+            {insufficientBalance && !retryRequired && (
+              <Alert variant="warning" title="Insufficient balance">
+                Your available balance is below the minimum payout amount.
+              </Alert>
+            )}
 
           <p className={styles.description}>
             Request a manual payout from your eligible earnings. The minimum
@@ -563,16 +672,6 @@ function ProviderEarningsContent({ providerId }) {
             period. Disputed or refunded bookings may be excluded. The final
             eligible amount is verified by the server.
           </Alert>
-
-          {successMessage && (
-            <Alert
-              variant="success"
-              title="Payout request received"
-              onClose={() => setSuccessMessage("")}
-            >
-              {successMessage}
-            </Alert>
-          )}
 
           {submitError && (
             <Alert variant="error" title="Payout request issue">
@@ -611,15 +710,43 @@ function ProviderEarningsContent({ providerId }) {
                 currency,
               )}`}
               disabled={
-                submitting || retryRequired || Boolean(storageError)
+                submitting ||
+                retryRequired ||
+                Boolean(storageError) ||
+                insufficientBalance
               }
               required
             />
+
+            <p className={styles.description}>
+              Payouts are reviewed manually. Bank account details are not
+              available in this view. Submission does not confirm a transfer.
+            </p>
+
+            <Checkbox
+              label="I confirm that the payout amount is correct."
+              checked={requestConfirmed}
+              onChange={(event) =>
+                setRequestConfirmed(event.target.checked)
+              }
+              disabled={submitting || Boolean(storageError)}
+            />
+
+            <div className={styles.modalActions}>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={closeRequest}
+                disabled={submitting}
+              >
+                Cancel
+              </Button>
 
             <Button
               type="submit"
               loading={submitting}
               disabled={
+                !requestConfirmed ||
                 Boolean(storageError) ||
                 (!retryRequired &&
                   (summaryLoading ||
@@ -627,12 +754,14 @@ function ProviderEarningsContent({ providerId }) {
                     Number(summary.available) < MINIMUM_PAYOUT))
               }
             >
-              {retryRequired ? "Retry Payout Request" : "Request Payout"}
+              {retryRequired ? "Retry Payout Request" : "Submit Payout Request"}
             </Button>
+            </div>
           </form>
-        </section>
+          </div>
+        </Modal>
 
-        <section className={styles.panel}>
+        <section id="wp07-payout-history" className={styles.panel}>
           <h2>Payout History</h2>
 
           <DataTable

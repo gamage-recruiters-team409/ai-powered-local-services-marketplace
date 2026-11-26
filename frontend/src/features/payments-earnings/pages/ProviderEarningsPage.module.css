@@ -78,7 +78,7 @@
 }
 
 /* Highlights available earnings using the existing primary palette. */
-.earningsCard:nth-child(2) {
+.earningsCard:first-child {
     background: var(--prv-color-primary-soft);
     border-color: var(--prv-color-primary-border);
 }
@@ -104,7 +104,7 @@
 }
 
 /* Emphasises the available balance without relying on colour alone. */
-.earningsCard:nth-child(2) .cardAmount {
+.earningsCard:first-child .cardAmount {
     color: var(--prv-color-primary-dark);
 }
 
@@ -287,5 +287,73 @@
 @media (max-width: 380px) {
     .earningsGrid {
         grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+/* Hi-Fi aligned payout actions and request dialog. */
+.payoutActions,
+.modalActions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.requestContent {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+}
+
+.balancePanel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
+    background: #f0fdfa;
+    border: 1px solid #99f6e4;
+    border-radius: 10px;
+    color: #115e59;
+}
+
+.balancePanel strong {
+    font-size: 1.5rem;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+}
+
+.balancePanel small {
+    font-size: 0.8125rem;
+    line-height: 1.5;
+}
+
+.balanceWarning {
+    background: #fffbeb;
+    border-color: #fde68a;
+    color: #92400e;
+}
+
+.requestContent .payoutForm {
+    max-width: none;
+}
+
+.modalActions {
+    width: 100%;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+}
+
+@media (max-width: 640px) {
+    .payoutActions,
+    .modalActions {
+        width: 100%;
+    }
+
+    .payoutActions > button,
+    .modalActions > button {
+        flex: 1 1 140px;
     }
 }

@@ -90,15 +90,30 @@ function renderPage() {
   );
 }
 
-/** Waits until the earnings summary and payout form are ready. */
+/** Waits for the summary and opens the payout request dialog. */
 async function waitForPage() {
-  await waitFor(() => {
-    expect(
-      screen.getByRole("button", {
-        name: /^request payout$/i,
-      }).disabled,
-    ).toBe(false);
+  await screen.findByText("Available Balance", { exact: true });
+  openRequestDialog();
+}
+
+/** Opens the actual shared payout request modal. */
+function openRequestDialog() {
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: /^request payout$/i,
+    }),
+  );
+}
+
+/** Confirms the amount without bypassing the shared checkbox. */
+function confirmRequest() {
+  const checkbox = screen.getByRole("checkbox", {
+    name: /I confirm that the payout amount is correct/i,
   });
+
+  if (!checkbox.checked) {
+    fireEvent.click(checkbox);
+  }
 }
 
 /** Retrieves the actual payout amount input. */
@@ -114,9 +129,11 @@ function submitAmount(amount) {
     target: { value: amount },
   });
 
+  confirmRequest();
+
   fireEvent.click(
     screen.getByRole("button", {
-      name: /^request payout$/i,
+      name: /^submit payout request$/i,
     }),
   );
 }
@@ -163,7 +180,7 @@ describe("ProviderEarningsPage", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: /earnings & payouts/i,
+        name: /^earnings overview$/i,
       }),
     ).toBeTruthy();
 
@@ -322,6 +339,9 @@ describe("ProviderEarningsPage", () => {
 
     renderPage();
 
+    await waitForPage();
+    confirmRequest();
+
     const retryButton = await screen.findByRole("button", {
       name: /retry payout request/i,
     });
@@ -369,6 +389,9 @@ describe("ProviderEarningsPage", () => {
 
     renderPage();
 
+    await waitForPage();
+    confirmRequest();
+
     fireEvent.click(
       await screen.findByRole("button", {
         name: /retry payout request/i,
@@ -389,14 +412,16 @@ describe("ProviderEarningsPage", () => {
     renderPage();
 
     expect(
-      await screen.findByText(/payout recovery unavailable/i),
+      (await screen.findAllByText(/payout recovery unavailable/i))[0],
     ).toBeTruthy();
+
+    openRequestDialog();
 
     expect(getAmountInput().disabled).toBe(true);
 
     expect(
       screen.getByRole("button", {
-        name: /^request payout$/i,
+        name: /^submit payout request$/i,
       }).disabled,
     ).toBe(true);
 
@@ -442,9 +467,12 @@ describe("ProviderEarningsPage", () => {
       await screen.findByText("Unable to retrieve earnings."),
     ).toBeTruthy();
 
+    openRequestDialog();
+    confirmRequest();
+
     expect(
       screen.getByRole("button", {
-        name: /^request payout$/i,
+        name: /^submit payout request$/i,
       }).disabled,
     ).toBe(true);
 
@@ -493,7 +521,9 @@ describe("Provider payout recovery safety", () => {
       loadPendingPayoutRequest(PROVIDER_ID),
     ).toEqual(storedPayload);
 
-    // Only an explicit retry may submit the original request.
+    // Only an explicitly confirmed retry may submit the original request.
+    confirmRequest();
+
     fireEvent.click(
       screen.getByRole("button", {
         name: /^retry payout request$/i,
@@ -533,6 +563,9 @@ describe("Provider payout recovery safety", () => {
     );
 
     renderPage();
+
+    await waitForPage();
+    confirmRequest();
 
     fireEvent.click(
       await screen.findByRole("button", {
@@ -601,3 +634,72 @@ describe("Provider payout recovery safety", () => {
     ).toBeNull();
   });
 });
+
+
+describe("Provider payout confirmation dialog", () => {
+  it("requires confirmation before submitting a payout", async () => {
+    renderPage();
+    await waitForPage();
+
+    fireEvent.change(getAmountInput(), {
+      target: { value: "7500" },
+    });
+
+    const submitButton = screen.getByRole("button", {
+      name: /^submit payout request$/i,
+    });
+
+    expect(submitButton.disabled).toBe(true);
+
+    fireEvent.submit(getAmountInput().closest("form"));
+
+    expect(requestProviderPayout).not.toHaveBeenCalled();
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+
+    confirmRequest();
+
+    expect(submitButton.disabled).toBe(false);
+
+    fireEvent.change(getAmountInput(), {
+      target: { value: "8000" },
+    });
+
+    expect(submitButton.disabled).toBe(true);
+  });
+
+  it("blocks new payouts below the minimum available balance", async () => {
+    getProviderEarningsSummary.mockResolvedValue({
+      ...SUMMARY,
+      available: 3200,
+    });
+
+    renderPage();
+    await waitForPage();
+
+    expect(screen.getByText("Insufficient balance")).toBeTruthy();
+    expect(getAmountInput().disabled).toBe(true);
+
+    confirmRequest();
+
+    expect(
+      screen.getByRole("button", {
+        name: /^submit payout request$/i,
+      }).disabled,
+    ).toBe(true);
+
+    expect(requestProviderPayout).not.toHaveBeenCalled();
+  });
+});
+
+// Native dialog support for the jsdom test environment.
+if (typeof HTMLDialogElement.prototype.showModal !== "function") {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
+}
+
+if (typeof HTMLDialogElement.prototype.close !== "function") {
+  HTMLDialogElement.prototype.close = function () {
+    this.removeAttribute("open");
+  };
+}

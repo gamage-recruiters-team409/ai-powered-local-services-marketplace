@@ -2,24 +2,31 @@ import { useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ProviderLayout } from "../../../shared/layouts/provider";
-import { endSession, LOGIN_PATH } from "../../disputes-admin/services/authBridge";
+import { useAuth } from "../../auth/hooks/useAuth";
 
 import ProviderEarningsPage from "../pages/ProviderEarningsPage";
 
 /**
- * Provides the shared provider layout and established logout
- * behaviour for the WP07 earnings and payout page.
+ * Connects the shared provider layout to the authenticated
+ * account and the central authentication logout lifecycle.
  */
 export default function ProviderEarningsShell() {
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
 
-  const logout = useCallback(() => {
-    endSession();
-    navigate(LOGIN_PATH, { replace: true });
-  }, [navigate]);
+  const handleLogout = useCallback(async () => {
+    await logout();
+    navigate("/login", { replace: true });
+  }, [logout, navigate]);
 
   return (
-    <ProviderLayout onLogout={logout}>
+    <ProviderLayout
+      user={{
+        name: user?.name || "Provider",
+        email: user?.email || "",
+      }}
+      onLogout={handleLogout}
+    >
       <ProviderEarningsPage />
     </ProviderLayout>
   );
