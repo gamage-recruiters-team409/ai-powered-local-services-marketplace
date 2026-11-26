@@ -38,7 +38,7 @@ function getInitials(name = '') {
 }
 
 export function ProfilePage() {
-  const { refreshUser } = useAuth();
+  const { refreshUser, updateCurrentUser } = useAuth();
   const toast = useToast();
   const [profile, setProfile] = useState(null);
   const [fullName, setFullName] = useState('');
@@ -126,7 +126,14 @@ export function ProfilePage() {
       setProfile(updated);
       setFullName(updated.fullName || '');
       setPhone(updated.phone || '');
-      await refreshUser();
+      const refreshed = await refreshUser();
+      if (!refreshed && typeof updateCurrentUser === 'function') {
+        try {
+          updateCurrentUser({ name: updated.fullName, phone: updated.phone });
+        } catch {
+          // Fallback failure must not throw
+        }
+      }
       toast.success('Profile updated successfully');
     } catch (err) {
       setErrorMessage(err.message || 'Failed to update profile');
@@ -169,7 +176,14 @@ export function ProfilePage() {
       }
       setPhotoPreview(null);
       setProfile((prev) => (prev ? { ...prev, profileImageUrl: updated.profileImageUrl } : updated));
-      await refreshUser();
+      const refreshed = await refreshUser();
+      if (!refreshed && typeof updateCurrentUser === 'function') {
+        try {
+          updateCurrentUser({ profileImageUrl: updated.profileImageUrl ?? null });
+        } catch {
+          // Fallback failure must not throw
+        }
+      }
       toast.success('Profile photo updated successfully');
     } catch (err) {
       if (previewUrlRef.current) {
@@ -194,7 +208,14 @@ export function ProfilePage() {
       }
       setPhotoPreview(null);
       setProfile((prev) => (prev ? { ...prev, profileImageUrl: null } : prev));
-      await refreshUser();
+      const refreshed = await refreshUser();
+      if (!refreshed && typeof updateCurrentUser === 'function') {
+        try {
+          updateCurrentUser({ profileImageUrl: null });
+        } catch {
+          // Fallback failure must not throw
+        }
+      }
       toast.success('Profile photo removed');
     } catch (err) {
       setPhotoError(err.message || 'Failed to remove profile photo');

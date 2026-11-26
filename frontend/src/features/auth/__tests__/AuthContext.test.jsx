@@ -235,4 +235,131 @@ describe('AuthContext', () => {
     expect(tokenStore.getAccessToken()).toBeNull();
     expect(tokenStore.getRefreshToken()).toBeNull();
   });
+
+  describe('updateCurrentUser', () => {
+    it('merges name, phone, and profileImageUrl into the current user', async () => {
+      tokenStore.setRefreshToken('saved-refresh-token');
+      refreshSession.mockResolvedValueOnce({
+        accessToken: 'new-acc',
+        refreshToken: 'new-ref',
+        user: {
+          id: 'u-1',
+          name: 'Original Name',
+          email: 'orig@example.lk',
+          phone: '+94770000000',
+          role: 'CUSTOMER',
+          status: 'ACTIVE',
+          profileImageUrl: 'https://cdn.example.com/orig.jpg',
+        },
+        mustChangePassword: false,
+      });
+      authApi.getCurrentUser.mockRejectedValueOnce(new Error('fail restore'));
+
+      const { result } = renderHook(() => useAuth(), {
+        wrapper: AuthProvider,
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(result.current.user?.name).toBe('Original Name');
+
+      act(() => {
+        result.current.updateCurrentUser({
+          name: 'Updated Name',
+          phone: '+94771111111',
+          profileImageUrl: 'https://cdn.example.com/updated.jpg',
+        });
+      });
+
+      expect(result.current.user).toEqual({
+        id: 'u-1',
+        name: 'Updated Name',
+        email: 'orig@example.lk',
+        phone: '+94771111111',
+        role: 'CUSTOMER',
+        status: 'ACTIVE',
+        profileImageUrl: 'https://cdn.example.com/updated.jpg',
+      });
+      // Does not trigger any new API call
+      expect(authApi.getCurrentUser).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores id, role, status, mustChangePassword, email and unknown keys', async () => {
+      tokenStore.setRefreshToken('saved-refresh-token');
+      refreshSession.mockResolvedValueOnce({
+        accessToken: 'new-acc',
+        refreshToken: 'new-ref',
+        user: {
+          id: 'u-1',
+          name: 'Original Name',
+          email: 'orig@example.lk',
+          phone: '+94770000000',
+          role: 'CUSTOMER',
+          status: 'ACTIVE',
+          profileImageUrl: null,
+          emailVerified: true,
+        },
+        mustChangePassword: false,
+      });
+      authApi.getCurrentUser.mockRejectedValueOnce(new Error('fail restore'));
+
+      const { result } = renderHook(() => useAuth(), {
+        wrapper: AuthProvider,
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      act(() => {
+        result.current.updateCurrentUser({
+          id: 'malicious-id',
+          role: 'ADMIN',
+          status: 'SUSPENDED',
+          mustChangePassword: true,
+          email: 'hacked@example.lk',
+          emailVerified: false,
+          randomField: 'forbidden',
+          name: 'New Allowed Name',
+        });
+      });
+
+      expect(result.current.user?.name).toBe('New Allowed Name');
+      expect(result.current.user?.id).toBe('u-1');
+      expect(result.current.user?.role).toBe('CUSTOMER');
+      expect(result.current.user?.status).toBe('ACTIVE');
+      expect(result.current.user?.email).toBe('orig@example.lk');
+      expect(result.current.user?.emailVerified).toBe(true);
+      expect(result.current.mustChangePassword).toBe(false);
+      expect(result.current.user?.randomField).toBeUndefined();
+      expect(authApi.getCurrentUser).toHaveBeenCalledTimes(1);
+    });
+
+    it('does nothing when there is no user and does not call the API', async () => {
+      const { result } = renderHook(() => useAuth(), {
+        wrapper: AuthProvider,
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(result.current.user).toBeNull();
+      expect(result.current.isAuthenticated).toBe(false);
+
+      act(() => {
+        result.current.updateCurrentUser({
+          name: 'Ghost Name',
+          phone: '+94779999999',
+          profileImageUrl: 'https://cdn.example.com/ghost.jpg',
+        });
+      });
+
+      expect(result.current.user).toBeNull();
+      expect(authApi.getCurrentUser).not.toHaveBeenCalled();
+      expect(authApi.login).not.toHaveBeenCalled();
+    });
+  });
 });

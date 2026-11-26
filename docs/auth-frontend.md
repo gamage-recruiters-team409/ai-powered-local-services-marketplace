@@ -53,6 +53,7 @@ The user interface implements the 15 high-fidelity visual designs matching the L
   ```
   * `profileImageUrl`: Nullable HTTPS image URL (or `null` when no photo is set). `profileImagePublicId` is strictly internal and is never returned.
 - **Session Restore:** On application startup, after `refreshSession()` successfully obtains rotated tokens, `AuthContext.jsx` restores the complete user profile by calling `authApi.getCurrentUser()` (`GET /api/v1/users/me`) inside an inner try/catch block. This ensures fields not present in `UserSummaryResponse` (such as `profileImageUrl`) persist across page reloads. If `/users/me` fails, it falls back to `refreshData.user`.
+- **Fallback User Updates:** `updateCurrentUser(patch)` lets a page apply authoritative fields (`name`, `phone`, `profileImageUrl` only) to the shared user when the follow-up `/users/me` refresh fails; it never changes role, status, id or session fields.
 
 ---
 
