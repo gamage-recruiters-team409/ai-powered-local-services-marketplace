@@ -177,6 +177,17 @@ public class ProviderProfileServiceImpl implements ProviderProfileService {
         String userId = requireCurrentUserId();
         ProviderProfile original = requireProviderProfile(userId);
 
+        // Provider classification is fixed at creation. Changing it here could
+        // keep an old APPROVED verification without the documentation required
+        // for the new classification. Enforce this in the backend, not only UI.
+        if (request.getProviderType() != null
+                && request.getProviderType() != original.getProviderType()) {
+            throw new ResourceConflictException(
+                    "PROVIDER_TYPE_IMMUTABLE",
+                    "Provider type cannot be changed after profile creation"
+            );
+        }
+
         // Validate all requested values before changing anything in MongoDB.
         // Use a targeted update rather than saving a stale ProviderProfile.
         Update update = new Update();

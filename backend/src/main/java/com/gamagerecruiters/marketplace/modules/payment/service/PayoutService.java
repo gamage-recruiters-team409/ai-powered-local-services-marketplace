@@ -9,6 +9,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
+import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payout;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutRepository;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
@@ -103,7 +104,9 @@ public class PayoutService {
     private String resolveFinancialProviderId(String authenticatedUserId) {
         String userId = requireText(authenticatedUserId, "Authenticated user ID");
         providerProfileRepository.findByUserId(userId)
-                .orElseThrow(() -> new IllegalStateException("Provider profile not found"));
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "PROVIDER_PROFILE_NOT_FOUND",
+                        "Provider profile not found"));
         return userId;
     }
 
