@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.customer.controller;
 import java.util.List;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -12,8 +13,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
@@ -106,6 +109,20 @@ public class CustomerController {
         String currentUserId = CurrentUser.getUserId();
         rateLimitService.checkSensitive(currentUserId);
         customerService.deactivateAccount(currentUserId, request);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PutMapping(value = "/photo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<CustomerProfileResponse> uploadPhoto(@RequestParam("file") MultipartFile file) {
+        String currentUserId = CurrentUser.getUserId();
+        return ResponseEntity.ok(customerService.uploadProfilePhoto(currentUserId, file));
+    }
+
+    @DeleteMapping("/photo")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public ResponseEntity<Void> deletePhoto() {
+        String currentUserId = CurrentUser.getUserId();
+        customerService.deleteProfilePhoto(currentUserId);
         return ResponseEntity.noContent().build();
     }
 }
