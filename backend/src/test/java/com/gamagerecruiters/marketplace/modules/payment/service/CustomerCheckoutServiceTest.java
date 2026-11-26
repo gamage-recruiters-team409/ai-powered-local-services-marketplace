@@ -210,6 +210,9 @@ class CustomerCheckoutServiceTest {
                         "complete",
                         paymentStatus));
 
+        when(paymentRepository.findById(PAYMENT_ID))
+                .thenReturn(Optional.of(attachedPayment()));
+
         var result = checkout();
 
         assertEquals(PAYMENT_ID, result.paymentId());
@@ -484,6 +487,38 @@ class CustomerCheckoutServiceTest {
         verifyNoGatewayOperations();
     }
 
+    /**
+     * Unsupported gateway currencies must stop checkout orchestration
+     * before initiation, recovery or additional persistence operations.
+     */
+    @Test
+    void unsupportedGatewayCurrencyStopsCheckoutOrchestration() {
+
+        IllegalArgumentException rejection =
+                new IllegalArgumentException(
+                        "Payment currency is not supported by the checkout gateway.");
+
+        when(creationService.createOrGetPayment(
+                BOOKING_ID,
+                CUSTOMER_ID))
+                .thenThrow(rejection);
+
+        IllegalArgumentException result = assertThrows(
+                IllegalArgumentException.class,
+                this::checkout);
+
+        org.junit.jupiter.api.Assertions.assertSame(
+                rejection, result);
+
+        verify(creationService).createOrGetPayment(
+                BOOKING_ID, CUSTOMER_ID);
+
+        verifyNoInteractions(quoteProvider);
+
+        verifyNoGatewayOperations();
+    }
+
+
     @Test
     void rejectsTrustedCurrencyMismatch() {
 
@@ -544,6 +579,206 @@ class CustomerCheckoutServiceTest {
                 this::checkout);
 
         verifyNoGatewayOperations();
+    }
+
+    /**
+     * Completed attached sessions remain inspectable after the
+     * initiation deadline without authorizing another submission.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"paid", "unpaid"})
+    void completedSessionAfterDeadlineReturnsVerificationPending(
+            String paymentStatus) {
+
+        stubPayment(attachedPayment());
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(expiredQuote());
+
+        stubCompletedSession(paymentStatus);
+
+        when(paymentRepository.findById(PAYMENT_ID))
+                .thenReturn(Optional.of(attachedPayment()));
+
+        var result = checkout();
+
+        assertEquals(PAYMENT_ID, result.paymentId());
+        assertEquals(
+                CheckoutState.PAYMENT_VERIFICATION_PENDING,
+                result.state());
+
+        assertNull(result.checkoutUrl());
+
+        verifyReadOnlySessionInspection();
+    }
+
+    @Test
+    void rejectsOpenSessionAfterDeadlineWithoutReturningUrl() {
+
+        stubPayment(attachedPayment());
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(expiredQuote());
+
+        stubOpenSession();
+
+        when(paymentRepository.findById(PAYMENT_ID))
+                .thenReturn(Optional.of(attachedPayment()));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                this::checkout);
+
+        verifyReadOnlySessionInspection();
+    }
+
+    @Test
+    void completedSessionRemainsInspectableWhenDeadlineExpiresDuringRetrieval() {
+
+        stubPayment(attachedPayment());
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(
+                        validQuote(),
+                        validQuote(),
+                        expiredQuote());
+
+        stubCompletedSession("paid");
+
+        when(paymentRepository.findById(PAYMENT_ID))
+                .thenReturn(Optional.of(attachedPayment()));
+
+        var result = checkout();
+
+        assertEquals(
+                CheckoutState.PAYMENT_VERIFICATION_PENDING,
+                result.state());
+
+        assertNull(result.checkoutUrl());
+
+        verifyReadOnlySessionInspection();
+    }
+
+    @Test
+    void rejectsUnattachedReservationAfterDeadlineWithoutRecovery() {
+
+        stubPayment(reservedPayment());
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(expiredQuote());
+
+        assertThrows(
+                IllegalArgumentException.class,
+                this::checkout);
+
+        verifyNoGatewayOperations();
+    }
+
+    @Test
+    void rejectsCompletedSessionWhenBookingBecomesIneligibleDuringRetrieval() {
+
+        stubPayment(attachedPayment());
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(expiredQuote());
+
+        when(checkoutGateway.retrieveCheckoutSession(
+                SESSION_ID,
+                PAYMENT_ID,
+                AMOUNT,
+                CURRENCY))
+                .thenAnswer(invocation -> {
+
+                    doThrow(new IllegalStateException(
+                            "Booking is no longer awaiting payment"))
+                            .when(authorizationService)
+                            .requirePaymentInitiationStatus(
+                                    BOOKING_ID, CUSTOMER_ID);
+
+                    return new RecoveredCheckoutSession(
+                            SESSION_ID,
+                            null,
+                            "complete",
+                            "paid");
+                });
+
+        when(paymentRepository.findById(PAYMENT_ID))
+                .thenReturn(Optional.of(attachedPayment()));
+
+        assertThrows(
+                IllegalStateException.class,
+                this::checkout);
+
+        verifyReadOnlySessionInspection();
+    }
+
+    @Test
+    void rejectsCompletedSessionWhenPaymentStateChangesDuringRetrieval() {
+
+        stubPayment(attachedPayment());
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(expiredQuote());
+
+        stubCompletedSession("paid");
+
+        Payment capturedPayment = attachedPayment();
+        capturedPayment.setStatus(PaymentStatus.CAPTURED);
+
+        when(paymentRepository.findById(PAYMENT_ID))
+                .thenReturn(Optional.of(capturedPayment));
+
+        assertThrows(
+                IllegalStateException.class,
+                this::checkout);
+
+        verifyReadOnlySessionInspection();
+    }
+
+    @Test
+    void rejectsCompletedSessionWhenGatewayReferenceChangesDuringRetrieval() {
+
+        stubPayment(attachedPayment());
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(expiredQuote());
+
+        stubCompletedSession("paid");
+
+        Payment changedPayment = attachedPayment();
+        changedPayment.setGatewayRef("cs_different_session");
+
+        when(paymentRepository.findById(PAYMENT_ID))
+                .thenReturn(Optional.of(changedPayment));
+
+        assertThrows(
+                IllegalStateException.class,
+                this::checkout);
+
+        verifyReadOnlySessionInspection();
+    }
+
+    @Test
+    void rejectsCompletedSessionWhenPaymentOwnershipChangesDuringRetrieval() {
+
+        stubPayment(attachedPayment());
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(expiredQuote());
+
+        stubCompletedSession("paid");
+
+        Payment changedPayment = attachedPayment();
+        changedPayment.setCustomerId("different-customer");
+
+        when(paymentRepository.findById(PAYMENT_ID))
+                .thenReturn(Optional.of(changedPayment));
+
+        assertThrows(
+                AccessDeniedException.class,
+                this::checkout);
+
+        verifyReadOnlySessionInspection();
     }
 
     @Test
@@ -1117,6 +1352,47 @@ class CustomerCheckoutServiceTest {
                         CHECKOUT_URL,
                         "open",
                         "unpaid"));
+    }
+
+    private void stubCompletedSession(String paymentStatus) {
+
+        when(checkoutGateway.retrieveCheckoutSession(
+                SESSION_ID,
+                PAYMENT_ID,
+                AMOUNT,
+                CURRENCY))
+                .thenReturn(new RecoveredCheckoutSession(
+                        SESSION_ID,
+                        null,
+                        "complete",
+                        paymentStatus));
+    }
+
+    /**
+     * Existing-session inspection must not submit another Checkout
+     * request, invoke reservation recovery or persist financial changes.
+     */
+    private void verifyReadOnlySessionInspection() {
+
+        verify(checkoutGateway).retrieveCheckoutSession(
+                SESSION_ID,
+                PAYMENT_ID,
+                AMOUNT,
+                CURRENCY);
+
+        verifyNoMoreInteractions(checkoutGateway);
+
+        verify(paymentRepository).findById(PAYMENT_ID);
+
+        verify(paymentRepository, never())
+                .insert(any(Payment.class));
+
+        verify(paymentRepository, never())
+                .save(any(Payment.class));
+
+        verifyNoInteractions(
+                initiationService,
+                recoveryService);
     }
 
     private void stubSuccessfulInitiation() {

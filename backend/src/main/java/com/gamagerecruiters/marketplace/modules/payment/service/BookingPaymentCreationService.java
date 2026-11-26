@@ -14,6 +14,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
+import com.gamagerecruiters.marketplace.modules.payment.gateway.PaymentCheckoutGateway;
 import com.gamagerecruiters.marketplace.modules.payment.gateway.TrustedBookingPaymentQuoteProvider;
 import com.gamagerecruiters.marketplace.modules.payment.gateway.TrustedBookingPaymentQuoteProvider.BookingPaymentQuote;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
@@ -35,6 +36,7 @@ public class BookingPaymentCreationService {
     private final TrustedBookingPaymentQuoteProvider quoteProvider;
     private final PaymentCreationService creationService;
     private final PaymentRepository paymentRepository;
+    private final PaymentCheckoutGateway checkoutGateway;
 
     private final PaymentDeadlineService deadlineService =
             new PaymentDeadlineService();
@@ -43,13 +45,15 @@ public class BookingPaymentCreationService {
             PaymentBookingAuthorizationService authorizationService,
             TrustedBookingPaymentQuoteProvider quoteProvider,
             PaymentCreationService creationService,
-            PaymentRepository paymentRepository) {
+            PaymentRepository paymentRepository,
+            PaymentCheckoutGateway checkoutGateway) {
 
         this.authorizationService =
                 Objects.requireNonNull(authorizationService);
         this.quoteProvider = Objects.requireNonNull(quoteProvider);
         this.creationService = Objects.requireNonNull(creationService);
         this.paymentRepository = Objects.requireNonNull(paymentRepository);
+        this.checkoutGateway = Objects.requireNonNull(checkoutGateway);
     }
 
     /**
@@ -87,11 +91,6 @@ public class BookingPaymentCreationService {
                     "Trusted booking payment quote is unavailable");
         }
 
-        deadlineService.validateAuthoritativePaymentInitiation(
-                quote.providerAcceptedAt(),
-                quote.paymentDueAt(),
-                Instant.now());
-
         // Reuse existing validation and commission calculation.
         Payment candidate = creationService.createPayment(
                 normalizedBookingId,
@@ -110,8 +109,25 @@ public class BookingPaymentCreationService {
                         "Multiple payment attempts require reconciliation");
             }
 
-            return validateReusablePayment(
+            Payment existing = validateReusablePayment(
                     existingPayments.get(0), candidate);
+
+            // Only an already attached session may be inspected after
+            // the initiation deadline. This does not authorize submission.
+            validateExistingPaymentDeadline(existing, quote);
+
+            return existing;
+        }
+
+        // A valid ISO currency is not necessarily supported by the
+        // configured Checkout gateway. Reject unsupported currencies
+        // before inserting a new financial record.
+        //
+        // This local capability check never submits a gateway request
+        // and does not modify existing payment attempts.
+        if (!checkoutGateway.supportsCurrency(candidate.getCurrency())) {
+            throw new IllegalArgumentException(
+                    "Payment currency is not supported by the checkout gateway");
         }
 
         candidate.setId(initialPaymentId(normalizedBookingId));
@@ -134,7 +150,12 @@ public class BookingPaymentCreationService {
                             "Payment creation conflict requires reconciliation",
                             exception));
 
-            return validateReusablePayment(existing, candidate);
+            Payment reusable = validateReusablePayment(existing, candidate);
+
+            // Apply the same deadline boundary during duplicate-key recovery.
+            validateExistingPaymentDeadline(reusable, quote);
+
+            return reusable;
         }
     }
 
@@ -176,6 +197,49 @@ public class BookingPaymentCreationService {
         }
 
         return existing;
+    }
+
+    /**
+     * Separates existing attached-session retrieval from payment initiation.
+     *
+     * <p>An elapsed initiation deadline must not prevent inspection of
+     * an existing attached session while the booking remains eligible.
+     * Payments without an attached session remain subject to the current
+     * initiation deadline.</p>
+     *
+     * @param payment validated existing payment
+     * @param quote authoritative booking payment quote
+     */
+    private void validateExistingPaymentDeadline(
+            Payment payment,
+            BookingPaymentQuote quote) {
+
+        Instant now = Instant.now();
+
+        boolean hasAttachedSession =
+                payment.getGatewayRef() != null
+                        && !payment.getGatewayRef().isBlank()
+                        && payment.getGatewayPaymentIntentId() == null
+                        && payment.getCheckoutReservationToken() == null
+                        && payment.getCheckoutReservedAt() == null
+                        && payment.getCheckoutSubmissionStarted() == null;
+
+        Instant validationTime = now;
+
+        if (hasAttachedSession
+                && quote.paymentDueAt() != null
+                && now.isAfter(quote.paymentDueAt())) {
+
+            // Validate the authoritative window without extending it.
+            // The caller must independently enforce the deadline before
+            // returning an actionable Checkout URL.
+            validationTime = quote.paymentDueAt();
+        }
+
+        deadlineService.validateAuthoritativePaymentInitiation(
+                quote.providerAcceptedAt(),
+                quote.paymentDueAt(),
+                validationTime);
     }
 
     /**

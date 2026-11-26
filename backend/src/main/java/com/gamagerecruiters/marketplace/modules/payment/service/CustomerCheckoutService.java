@@ -13,6 +13,7 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import com.gamagerecruiters.marketplace.modules.payment.gateway.PaymentCheckoutGateway;
 import com.gamagerecruiters.marketplace.modules.payment.gateway.TrustedBookingPaymentQuoteProvider;
+import com.gamagerecruiters.marketplace.modules.payment.gateway.TrustedBookingPaymentQuoteProvider.BookingPaymentQuote;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
 
 /**
@@ -108,12 +109,13 @@ public class CustomerCheckoutService {
                 normalizedBookingId,
                 normalizedCustomerId);
 
-        validatePaymentEligibility(
+        BookingPaymentQuote quote = validatePaymentEligibility(
                 payment,
                 normalizedBookingId,
                 normalizedCustomerId);
 
-        // Reuse an attached session instead of submitting another request.
+        // Existing attached sessions may be inspected after the
+        // initiation deadline without authorizing another submission.
         if (payment.getGatewayRef() != null) {
 
             return retrieveExistingSession(
@@ -121,6 +123,10 @@ public class CustomerCheckoutService {
                     normalizedBookingId,
                     normalizedCustomerId);
         }
+
+        // Payments without an attached session remain subject to
+        // the strict initiation deadline.
+        validateInitiationDeadline(quote);
 
         // An existing reservation may represent an interrupted or
         // ambiguous external submission. Never clear it directly.
@@ -166,10 +172,12 @@ public class CustomerCheckoutService {
         // exposing a newly created hosted Checkout URL.
         Payment persistedPayment = reloadPayment(payment.getId());
 
-        validatePaymentEligibility(
+        BookingPaymentQuote latestQuote = validatePaymentEligibility(
                 persistedPayment,
                 normalizedBookingId,
                 normalizedCustomerId);
+
+        validateInitiationDeadline(latestQuote);
 
         if (!session.sessionId().equals(
                 persistedPayment.getGatewayRef())
@@ -221,41 +229,54 @@ public class CustomerCheckoutService {
                     "Existing Checkout session identity mismatch.");
         }
 
-        if ("complete".equals(session.status())
-                && ("paid".equals(session.paymentStatus())
-                        || "unpaid".equals(session.paymentStatus()))) {
+        boolean completedSession =
+                "complete".equals(session.status())
+                        && ("paid".equals(session.paymentStatus())
+                                || "unpaid".equals(session.paymentStatus()));
 
-            // Gateway retrieval is not authoritative payment capture.
-            return new CheckoutResult(
-                    payment.getId(),
-                    CheckoutState.PAYMENT_VERIFICATION_PENDING,
-                    null);
-        }
+        boolean openSession =
+                "open".equals(session.status())
+                        && "unpaid".equals(session.paymentStatus())
+                        && session.checkoutUrl() != null
+                        && !session.checkoutUrl().isBlank();
 
-        if (!"open".equals(session.status())
-                || !"unpaid".equals(session.paymentStatus())
-                || session.checkoutUrl() == null
-                || session.checkoutUrl().isBlank()) {
-
+        if (!completedSession && !openSession) {
             throw new IllegalStateException(
                     "Existing Checkout session is not reusable.");
         }
 
-        // Recheck local state after the external read-only request.
+        // Recheck ownership, booking eligibility and persisted state
+        // after the external read-only request for both response paths.
         Payment latestPayment = reloadPayment(payment.getId());
 
-        validatePaymentEligibility(
+        BookingPaymentQuote latestQuote = validatePaymentEligibility(
                 latestPayment,
                 bookingId,
                 customerId);
 
-        if (!session.sessionId().equals(
-                latestPayment.getGatewayRef())
+        if (!payment.getId().equals(latestPayment.getId())
+                || !session.sessionId().equals(
+                        latestPayment.getGatewayRef())
                 || hasCheckoutReservation(latestPayment)) {
 
             throw new IllegalStateException(
                     "Checkout session state changed during retrieval.");
         }
+
+        if (completedSession) {
+
+            // Gateway retrieval is not authoritative payment capture.
+            // A completed session may await verified processing even
+            // after the initiation deadline while the booking is eligible.
+            return new CheckoutResult(
+                    latestPayment.getId(),
+                    CheckoutState.PAYMENT_VERIFICATION_PENDING,
+                    null);
+        }
+
+        // Never expose an actionable URL after the initiation deadline.
+        // Read-only retrieval does not extend or renew the payment window.
+        validateInitiationDeadline(latestQuote);
 
         return new CheckoutResult(
                 latestPayment.getId(),
@@ -265,9 +286,15 @@ public class CustomerCheckoutService {
 
     /**
      * Revalidates ownership, booking eligibility, financial consistency
-     * and the authoritative payment deadline.
+     * and the authoritative payment window.
+     *
+     * <p>An elapsed initiation deadline does not invalidate an existing
+     * session inspection. Callers must enforce the strict deadline
+     * before initiating payment or exposing an actionable Checkout URL.</p>
+     *
+     * @return validated authoritative booking payment quote
      */
-    private void validatePaymentEligibility(
+    private BookingPaymentQuote validatePaymentEligibility(
             Payment payment,
             String bookingId,
             String customerId) {
@@ -314,6 +341,32 @@ public class CustomerCheckoutService {
             throw new IllegalStateException(
                     "Checkout payment does not match trusted booking data.");
         }
+
+        // Validate the authoritative window without treating an elapsed
+        // initiation deadline as a failure of read-only session inspection.
+        Instant now = Instant.now();
+
+        Instant validationTime =
+                quote.paymentDueAt() != null
+                        && now.isAfter(quote.paymentDueAt())
+                        ? quote.paymentDueAt()
+                        : now;
+
+        deadlineService.validateAuthoritativePaymentInitiation(
+                quote.providerAcceptedAt(),
+                quote.paymentDueAt(),
+                validationTime);
+
+        return quote;
+    }
+
+    /**
+     * Enforces the authoritative initiation deadline before any new
+     * Checkout submission or exposure of an actionable Checkout URL.
+     *
+     * @param quote validated authoritative booking payment quote
+     */
+    private void validateInitiationDeadline(BookingPaymentQuote quote) {
 
         deadlineService.validateAuthoritativePaymentInitiation(
                 quote.providerAcceptedAt(),

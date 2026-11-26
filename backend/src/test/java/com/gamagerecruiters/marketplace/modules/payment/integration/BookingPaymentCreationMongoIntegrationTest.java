@@ -14,11 +14,18 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.MongoDBContainer;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 import org.springframework.data.mongodb.repository.support.MongoRepositoryFactory;
 
+import com.gamagerecruiters.marketplace.modules.payment.config.StripeGatewayProperties;
+import com.gamagerecruiters.marketplace.modules.payment.gateway.PaymentCheckoutGateway;
+import com.gamagerecruiters.marketplace.modules.payment.gateway.StripeCheckoutGateway;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import com.gamagerecruiters.marketplace.modules.payment.gateway.TrustedBookingPaymentQuoteProvider;
@@ -35,19 +42,38 @@ import com.mongodb.client.MongoClients;
 /**
  * Verifies concurrent initial payment creation against real MongoDB.
  *
- * <p>Each execution uses an isolated temporary database. No application
- * database or existing financial records are modified.</p>
+ * <p>Each execution uses a Testcontainers-managed MongoDB instance
+ * and an isolated temporary database. No application database or
+ * existing financial records are modified.</p>
+ *
+ * <p>Docker is required. Container startup failures fail the test
+ * rather than silently skipping database verification.</p>
  */
+@Tag("integration")
 class BookingPaymentCreationMongoIntegrationTest {
 
-    private static final String LOCAL_URI =
-            "mongodb://127.0.0.1:27017";
+    private static final MongoDBContainer MONGO =
+            new MongoDBContainer("mongo:7.0");
 
     private static final String BOOKING_ID = "booking-concurrent-001";
 
     private static final String CUSTOMER_ID = "customer-001";
 
     private static final int REQUEST_COUNT = 8;
+
+    @BeforeAll
+    static void startContainer() {
+        if (!MONGO.isRunning()) {
+            MONGO.start();
+        }
+    }
+
+    @AfterAll
+    static void stopContainer() {
+        if (MONGO.isRunning()) {
+            MONGO.stop();
+        }
+    }
 
     @Test
     void concurrentRequestsCreateExactlyOneInitialPayment()
@@ -56,7 +82,8 @@ class BookingPaymentCreationMongoIntegrationTest {
         String databaseName = "wp07_payment_creation_test_"
                 + UUID.randomUUID().toString().replace("-", "");
 
-        try (MongoClient client = MongoClients.create(LOCAL_URI)) {
+        try (MongoClient client =
+                MongoClients.create(MONGO.getReplicaSetUrl())) {
 
             ExecutorService executor =
                     Executors.newFixedThreadPool(REQUEST_COUNT);
@@ -94,6 +121,12 @@ class BookingPaymentCreationMongoIntegrationTest {
                 PaymentCreationService creationService =
                         new PaymentCreationService(
                                 new CommissionCalculator());
+
+                // Use the real local currency capability without
+                // enabling external Stripe requests.
+                PaymentCheckoutGateway checkoutGateway =
+                        new StripeCheckoutGateway(
+                                new StripeGatewayProperties(false, "", ""));
 
                 // Synchronize all initial reads before allowing inserts.
                 // This forces the concurrent creation conflict rather than
@@ -141,7 +174,8 @@ class BookingPaymentCreationMongoIntegrationTest {
                                     authorization,
                                     quoteProvider,
                                     creationService,
-                                    synchronizedRepository);
+                                    synchronizedRepository,
+                                    checkoutGateway);
 
                     results.add(executor.submit(() -> {
                         ready.countDown();
@@ -219,7 +253,8 @@ class BookingPaymentCreationMongoIntegrationTest {
                                 authorization,
                                 quoteProvider,
                                 creationService,
-                                repository);
+                                repository,
+                                checkoutGateway);
 
                 Payment retry = retryService.createOrGetPayment(
                         BOOKING_ID, CUSTOMER_ID);

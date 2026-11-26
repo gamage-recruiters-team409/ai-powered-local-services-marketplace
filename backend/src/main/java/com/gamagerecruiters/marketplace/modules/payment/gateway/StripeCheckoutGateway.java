@@ -36,6 +36,13 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
     private final StripeSessionLister sessionLister;
     private final StripeSessionRetriever sessionRetriever;
 
+    /**
+     * Currencies supported by the current two-decimal Checkout adapter.
+     * Creation, recovery and retrieval share this authoritative rule.
+     */
+    private static final Set<String> SUPPORTED_CURRENCIES =
+            Set.of("USD", "EUR", "GBP", "LKR");
+
     private static final int MAX_RECOVERY_PAGES = 20;
     private static final long RECOVERY_PAGE_SIZE = 100L;
 
@@ -86,6 +93,19 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
                 RequestOptions options) throws StripeException;
     }
 
+    /**
+     * Checks the configured Checkout adapter's currency capability
+     * without submitting a Stripe request.
+     */
+    @Override
+    public boolean supportsCurrency(String currency) {
+
+        return currency != null
+                && !currency.isBlank()
+                && SUPPORTED_CURRENCIES.contains(
+                        currency.trim().toUpperCase(Locale.ROOT));
+    }
+
     @Override
     public CheckoutSession createCheckoutSession(
             String paymentId,
@@ -114,8 +134,7 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
         // supporting zero-decimal or other special-case currencies.
         String normalizedCurrency = currency.trim().toUpperCase(java.util.Locale.ROOT);
 
-        if (!java.util.Set.of("USD", "EUR", "GBP", "LKR")
-                .contains(normalizedCurrency)) {
+        if (!supportsCurrency(normalizedCurrency)) {
             throw new CheckoutNotSubmittedException(
                     "Unsupported Stripe checkout currency.");
         }
@@ -226,8 +245,7 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
         String normalizedCurrency =
                 currency.trim().toUpperCase(Locale.ROOT);
 
-        if (!Set.of("USD", "EUR", "GBP", "LKR")
-                .contains(normalizedCurrency)) {
+        if (!supportsCurrency(normalizedCurrency)) {
             throw new IllegalArgumentException(
                     "Unsupported checkout recovery currency.");
         }
@@ -383,8 +401,7 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
         String normalizedCurrency =
                 currency.trim().toUpperCase(Locale.ROOT);
 
-        if (!Set.of("USD", "EUR", "GBP", "LKR")
-                .contains(normalizedCurrency)) {
+        if (!supportsCurrency(normalizedCurrency)) {
 
             throw new IllegalArgumentException(
                     "Unsupported checkout retrieval currency.");

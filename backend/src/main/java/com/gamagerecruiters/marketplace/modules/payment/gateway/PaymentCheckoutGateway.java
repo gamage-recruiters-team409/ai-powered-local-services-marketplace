@@ -16,6 +16,19 @@ import java.util.Optional;
 public interface PaymentCheckoutGateway {
 
     /**
+     * Determines whether the gateway supports the supplied currency
+     * for new hosted checkout sessions.
+     *
+     * <p>This is a local capability check. It must not submit an
+     * external request, modify financial records or depend on
+     * whether gateway activation is currently enabled.</p>
+     *
+     * @param currency trusted payment currency
+     * @return true when the currency is supported
+     */
+    boolean supportsCurrency(String currency);
+
+    /**
      * Creates or retrieves a hosted checkout session for a payment attempt.
      *
      * @param paymentId persisted internal payment attempt identifier
