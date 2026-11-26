@@ -8,7 +8,10 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsCaseAction;
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsCaseStatus;
@@ -39,19 +42,29 @@ public class OverdueBookingsService {
         this.clock = clock;
     }
 
-    /** All overdue rows (unpaged), used by both the screen and the CSV export. */
-    List<OverdueBookings.Row> allRows(String search) {
+    /** Export rows, distinguishing source unavailability from a valid empty set. */
+    record ExportData(List<OverdueBookings.Row> rows, boolean sourceLimited) {}
+
+    /**
+     * All overdue rows (unpaged), used by the CSV export. Throws 503 when the source is unavailable so the
+     * export endpoint returns an error instead of a header-only CSV. Applies search and delayBucket filters and
+     * reports whether the source reached its fetch limit (indicating possible omissions).
+     */
+    ExportData allRows(String search, String delayBucket) {
         OverdueBookingsPort.Result result = overduePort.findOverdue(OperationsRules.OVERDUE_FETCH_LIMIT);
         if (!result.available()) {
-            return List.of();
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "OPS_SOURCE_UNAVAILABLE", result.reason());
         }
+        boolean sourceLimited = result.bookings().size() >= OperationsRules.OVERDUE_FETCH_LIMIT;
         Instant now = clock.instant();
         List<String> ids = result.bookings().stream().map(OverdueBookingsPort.OverdueBooking::bookingId).toList();
         Map<String, OpsCaseAction> latest = actionStore.latestBySubject(OpsCaseType.OVERDUE_BOOKING, ids);
-        return result.bookings().stream()
+        List<OverdueBookings.Row> rows = result.bookings().stream()
                 .filter(b -> matches(b, search))
                 .map(b -> toRow(b, now, latest.get(b.bookingId())))
+                .filter(r -> bucketMatches(r.daysOverdue(), delayBucket))
                 .toList();
+        return new ExportData(rows, sourceLimited);
     }
 
     public OpsSection<OverdueBookings.Data> screen(String search, String delayBucket, int page, int size) {

@@ -10,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
+import com.gamagerecruiters.marketplace.modules.adminusers.dto.AccountActionResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUserAccountService;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsActionType;
@@ -77,19 +78,46 @@ public class OpsCaseActionService {
         eligibility.assertEligible(caseType, subjectId);
 
         boolean suspensionApplied = false;
+        Boolean listingVisibilitySynced = null;
         if (action == OpsActionType.SUSPEND) {
             // Runs the existing Admin Users suspend flow (its audit, 409 handling and listing-visibility cascade).
-            adminUserAccountService.suspend(actorId, actorRole, subjectId, SUSPEND_REASON_CODE, cleanNote);
-            suspensionApplied = true;
+            // The AccountActionResponse carries the authoritative listing-visibility sync status.
+            AccountActionResponse suspendResponse =
+                    adminUserAccountService.suspend(actorId, actorRole, subjectId, SUSPEND_REASON_CODE, cleanNote);
+            suspensionApplied = suspendResponse.changed();
+            listingVisibilitySynced = suspendResponse.listingVisibilitySynced();
         }
 
-        OpsCaseAction recorded = store.insert(new OpsCaseAction(caseType, subjectId, action, cleanNote, actorId,
-                actorArea, clock.instant(), action.resultingStatus()));
+        OpsCaseAction recorded;
+        try {
+            recorded = store.insert(new OpsCaseAction(caseType, subjectId, action, cleanNote, actorId,
+                    actorArea, clock.instant(), action.resultingStatus()));
+        } catch (RuntimeException e) {
+            if (!suspensionApplied) {
+                throw e; // No side-effect to reconcile: propagate as-is.
+            }
+            // Suspension succeeded but ops log failed: retry once before accepting partial success.
+            log.error("event=OPS_RECORD_FAILED_AFTER_SUSPEND caseType={} subjectId={} actorId={} cause={}",
+                    caseType, subjectId, actorId, e.getClass().getSimpleName());
+            try {
+                recorded = store.insert(new OpsCaseAction(caseType, subjectId, action, cleanNote, actorId,
+                        actorArea, clock.instant(), action.resultingStatus()));
+            } catch (RuntimeException retryEx) {
+                log.error("event=OPS_RECORD_RETRY_FAILED caseType={} subjectId={} actorId={} cause={}",
+                        caseType, subjectId, actorId, retryEx.getClass().getSimpleName());
+                // Return partial success: the suspension is authoritative (Admin Users audit proves it happened),
+                // and the caller must not interpret this as a no-op. The opsRecordPending flag signals that the
+                // operations log needs reconciliation. Never roll back a legitimately applied suspension.
+                return new OpsActionResult(caseType, subjectId, action, action.resultingStatus(),
+                        clock.instant(), true, listingVisibilitySynced, true);
+            }
+        }
+
         log.info("event=OPS_CASE_ACTION_RECORDED caseType={} subjectId={} action={} area={} actorId={} status={}",
                 caseType, subjectId, action, actorArea, actorId, recorded.getCaseStatus());
 
         return new OpsActionResult(caseType, subjectId, action, recorded.getCaseStatus(), recorded.getCreatedAt(),
-                suspensionApplied);
+                suspensionApplied, listingVisibilitySynced, false);
     }
 
     private static OpsActionType parseAction(String actionName) {

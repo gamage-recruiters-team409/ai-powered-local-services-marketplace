@@ -87,8 +87,9 @@ public class OperationsController {
     }
 
     @GetMapping("/overdue-bookings/export.csv")
-    public ResponseEntity<byte[]> overdueExport(@RequestParam(required = false) String search) {
-        return csv(csvExporter.overdue(currentUserId(), search));
+    public ResponseEntity<byte[]> overdueExport(@RequestParam(required = false) String search,
+                                                 @RequestParam(required = false) String delayBucket) {
+        return csv(csvExporter.overdue(currentUserId(), search, delayBucket));
     }
 
     // ---- Late cases ----
@@ -155,6 +156,7 @@ public class OperationsController {
                 .cacheControl(CacheControl.noStore())
                 .header("X-Export-Rows", String.valueOf(export.rows()))
                 .header("X-Export-Truncated", String.valueOf(export.truncated()))
+                .header("X-Export-Source-Limited", String.valueOf(export.sourceLimited()))
                 .body(export.content());
     }
 

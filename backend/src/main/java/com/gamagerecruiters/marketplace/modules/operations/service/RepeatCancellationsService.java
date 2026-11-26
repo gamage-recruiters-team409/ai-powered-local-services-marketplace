@@ -6,7 +6,10 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsCaseAction;
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsCaseStatus;
@@ -50,20 +53,28 @@ public class RepeatCancellationsService {
         return days;
     }
 
-    /** All flagged rows (unpaged), used by the screen and the CSV export. */
-    List<RepeatCancellations.Row> allRows(String search, String role) {
+    /** Export rows, distinguishing source unavailability from a valid empty set. */
+    record ExportData(List<RepeatCancellations.Row> rows, boolean sourceLimited) {}
+
+    /**
+     * All flagged rows (unpaged), used by the CSV export. Throws 503 when the source is unavailable so the
+     * export endpoint returns an error instead of a successful header-only CSV.
+     */
+    ExportData allRows(String search, String role) {
         RepeatCancellationsPort.Result result =
                 repeatPort.findRepeatCancellations(minCount, days);
         if (!result.available()) {
-            return List.of();
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "OPS_SOURCE_UNAVAILABLE", result.reason());
         }
+        boolean sourceLimited = result.cancellers().size() >= OperationsRules.REPEAT_FETCH_LIMIT;
         List<String> ids = result.cancellers().stream().map(RepeatCancellationsPort.RepeatCanceller::userId).toList();
         Map<String, OpsCaseAction> latest = actionStore.latestBySubject(OpsCaseType.REPEAT_CANCELLATION, ids);
-        return result.cancellers().stream()
+        List<RepeatCancellations.Row> rows = result.cancellers().stream()
                 .map(c -> toRow(c, latest.get(c.userId())))
                 .filter(r -> matches(search, r.userId(), r.role()))
                 .filter(r -> role == null || role.isBlank() || r.role().equalsIgnoreCase(role.strip()))
                 .toList();
+        return new ExportData(rows, sourceLimited);
     }
 
     public OpsSection<RepeatCancellations.Data> screen(String search, String role, int page, int size) {

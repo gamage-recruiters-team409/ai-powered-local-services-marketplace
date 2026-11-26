@@ -10,7 +10,10 @@ import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsCaseAction;
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsCaseStatus;
@@ -86,17 +89,25 @@ public class LateCasesService {
         return OpsSection.of(new LateCases.LateStartsData(rows, summary, perDay(all, now)));
     }
 
-    /** All No-show report rows (unpaged), used by the CSV export. Empty when the source is unavailable. */
-    List<LateCases.NoShowReportRow> allNoShowRows(String search) {
+    /** Export rows, distinguishing source unavailability from a valid empty set. */
+    record ExportData(List<LateCases.NoShowReportRow> rows, boolean sourceLimited) {}
+
+    /**
+     * All No-show report rows (unpaged), used by the CSV export. Throws 503 when the source is unavailable so the
+     * export endpoint returns an error instead of a successful header-only CSV.
+     */
+    ExportData allNoShowRows(String search) {
         NoShowDisputesPort.Result result = noShowPort.findNoShowDisputes(NO_SHOW_FETCH_LIMIT);
         if (!result.available()) {
-            return List.of();
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "OPS_SOURCE_UNAVAILABLE", result.reason());
         }
-        return result.disputes().stream()
+        boolean sourceLimited = result.disputes().size() >= NO_SHOW_FETCH_LIMIT;
+        List<LateCases.NoShowReportRow> rows = result.disputes().stream()
                 .map(d -> new LateCases.NoShowReportRow(d.disputeId(), d.bookingId(), d.customerId(), d.providerId(),
                         d.status(), d.createdAt()))
                 .filter(r -> matches(search, r.disputeId(), r.bookingId(), r.customerId(), r.providerId(), r.status()))
                 .toList();
+        return new ExportData(rows, sourceLimited);
     }
 
     OpsSection<LateCases.NoShowReportsData> noShowSection(String search, int page, int size) {

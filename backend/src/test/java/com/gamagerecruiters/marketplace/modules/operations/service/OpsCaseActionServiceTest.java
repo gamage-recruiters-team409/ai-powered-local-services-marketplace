@@ -23,14 +23,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
+import com.gamagerecruiters.marketplace.modules.adminusers.dto.AccountActionResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUserAccountService;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsActionType;
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsCaseStatus;
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsCaseType;
 import com.gamagerecruiters.marketplace.modules.operations.dto.OpsActionResult;
 
-/** Role rules, note validation, and the SUSPEND flow for recording operations case actions (WP09). */
+/** Role rules, note validation, the SUSPEND flow, and F3 partial-success recovery for recording operations case actions (WP09). */
 @ExtendWith(MockitoExtension.class)
 class OpsCaseActionServiceTest {
 
@@ -70,6 +72,10 @@ class OpsCaseActionServiceTest {
     @Test
     @DisplayName("ADMIN SUSPEND calls the Admin Users suspend flow and records SUSPENDED")
     void adminSuspendCallsFlow() {
+        when(adminUserAccountService.suspend(eq(ADMIN_ID), eq(Role.ADMIN), eq(USER), any(), any()))
+                .thenReturn(new AccountActionResponse(USER, Role.CUSTOMER, UserStatus.ACTIVE,
+                        UserStatus.SUSPENDED, true, "audit-1", true));
+
         OpsActionResult result = service.record(OpsCaseType.REPEAT_CANCELLATION, USER, "SUSPEND", NOTE, ADMIN_ID,
                 Role.ADMIN);
 
@@ -77,6 +83,8 @@ class OpsCaseActionServiceTest {
                 OpsCaseActionService.SUSPEND_REASON_CODE, NOTE);
         assertThat(result.caseStatus()).isEqualTo(OpsCaseStatus.SUSPENDED);
         assertThat(result.suspensionApplied()).isTrue();
+        assertThat(result.listingVisibilitySynced()).isTrue();
+        assertThat(result.opsRecordPending()).isFalse();
     }
 
     @Test
@@ -185,5 +193,117 @@ class OpsCaseActionServiceTest {
 
         assertThat(ex.getStatus()).isEqualTo(HttpStatus.CONFLICT);
         verify(store, never()).insert(any());
+    }
+
+    // ---- F3: Partial-success and recovery tests ----
+
+    @Test
+    @DisplayName("F3: suspension succeeds, ops log fails → account stays SUSPENDED; partial success returned")
+    void suspensionSucceedsOpsLogFails_partialSuccess() {
+        when(adminUserAccountService.suspend(eq(ADMIN_ID), eq(Role.ADMIN), eq(USER), any(), any()))
+                .thenReturn(new AccountActionResponse(USER, Role.CUSTOMER, UserStatus.ACTIVE,
+                        UserStatus.SUSPENDED, true, "audit-1", true));
+        when(store.insert(any())).thenThrow(new RuntimeException("MongoDB timeout"));
+
+        OpsActionResult result = service.record(OpsCaseType.REPEAT_CANCELLATION, USER, "SUSPEND", NOTE, ADMIN_ID,
+                Role.ADMIN);
+
+        // The account's true status is preserved — suspension was applied and not rolled back.
+        assertThat(result.suspensionApplied()).isTrue();
+        // The partial outcome is NOT misrepresented as a no-op.
+        assertThat(result.caseStatus()).isEqualTo(OpsCaseStatus.SUSPENDED);
+        assertThat(result.opsRecordPending()).isTrue();
+        // Listing visibility sync status is propagated from the authoritative suspension response.
+        assertThat(result.listingVisibilitySynced()).isTrue();
+    }
+
+    @Test
+    @DisplayName("F3: suspension succeeds, first insert fails, retry succeeds → opsRecordPending is false")
+    void suspensionSucceedsOpsLogFailsThenRetrySucceeds() {
+        when(adminUserAccountService.suspend(eq(ADMIN_ID), eq(Role.ADMIN), eq(USER), any(), any()))
+                .thenReturn(new AccountActionResponse(USER, Role.CUSTOMER, UserStatus.ACTIVE,
+                        UserStatus.SUSPENDED, true, "audit-1", true));
+        when(store.insert(any()))
+                .thenThrow(new RuntimeException("first attempt fails"))
+                .thenAnswer(inv -> inv.getArgument(0)); // retry succeeds
+
+        OpsActionResult result = service.record(OpsCaseType.REPEAT_CANCELLATION, USER, "SUSPEND", NOTE, ADMIN_ID,
+                Role.ADMIN);
+
+        assertThat(result.suspensionApplied()).isTrue();
+        assertThat(result.opsRecordPending()).isFalse();
+        assertThat(result.caseStatus()).isEqualTo(OpsCaseStatus.SUSPENDED);
+    }
+
+    @Test
+    @DisplayName("F3: non-suspend action ops log failure propagates (no side-effect to reconcile)")
+    void nonSuspendOpsLogFailurePropagates() {
+        when(store.insert(any())).thenThrow(new RuntimeException("MongoDB down"));
+
+        RuntimeException ex = catchThrowableOfType(() -> service.record(OpsCaseType.OVERDUE_BOOKING, "b1",
+                "CONTACT_PROVIDER", NOTE, ADMIN_ID, Role.SUPPORT_ADMIN), RuntimeException.class);
+
+        assertThat(ex.getMessage()).isEqualTo("MongoDB down");
+        verifyNoInteractions(adminUserAccountService);
+    }
+
+    @Test
+    @DisplayName("F3: listing-visibility sync failure is faithfully propagated (not hidden as fully synced)")
+    void listingVisibilitySyncFailurePropagated() {
+        when(adminUserAccountService.suspend(eq(ADMIN_ID), eq(Role.ADMIN), eq(USER), any(), any()))
+                .thenReturn(new AccountActionResponse(USER, Role.PROVIDER, UserStatus.ACTIVE,
+                        UserStatus.SUSPENDED, true, "audit-1", false)); // listings NOT synced
+
+        OpsActionResult result = service.record(OpsCaseType.REPEAT_CANCELLATION, USER, "SUSPEND", NOTE, ADMIN_ID,
+                Role.ADMIN);
+
+        assertThat(result.suspensionApplied()).isTrue();
+        assertThat(result.listingVisibilitySynced()).isFalse();
+        assertThat(result.opsRecordPending()).isFalse();
+    }
+
+    @Test
+    @DisplayName("F3: idempotent suspend (account already SUSPENDED) → changed=false, ops log still recorded")
+    void idempotentSuspendAlreadySuspended() {
+        when(adminUserAccountService.suspend(eq(ADMIN_ID), eq(Role.ADMIN), eq(USER), any(), any()))
+                .thenReturn(new AccountActionResponse(USER, Role.CUSTOMER, UserStatus.SUSPENDED,
+                        UserStatus.SUSPENDED, false, null)); // already suspended, changed=false
+
+        OpsActionResult result = service.record(OpsCaseType.REPEAT_CANCELLATION, USER, "SUSPEND", NOTE, ADMIN_ID,
+                Role.ADMIN);
+
+        // suspensionApplied reflects changed=false (no new suspension applied)
+        assertThat(result.suspensionApplied()).isFalse();
+        // But the ops record is still created for audit purposes
+        verify(store).insert(any());
+        assertThat(result.opsRecordPending()).isFalse();
+    }
+
+    @Test
+    @DisplayName("F3: retrying after partial success does not create duplicate decisions")
+    void retryAfterPartialSuccessNoDuplicates() {
+        // First call: suspend succeeds, ops log permanently fails → partial success
+        when(adminUserAccountService.suspend(eq(ADMIN_ID), eq(Role.ADMIN), eq(USER), any(), any()))
+                .thenReturn(new AccountActionResponse(USER, Role.CUSTOMER, UserStatus.ACTIVE,
+                        UserStatus.SUSPENDED, true, "audit-1", true));
+        when(store.insert(any())).thenThrow(new RuntimeException("DB down"));
+
+        OpsActionResult partial = service.record(OpsCaseType.REPEAT_CANCELLATION, USER, "SUSPEND", NOTE, ADMIN_ID,
+                Role.ADMIN);
+        assertThat(partial.opsRecordPending()).isTrue();
+
+        // Retry: suspend returns idempotent (already suspended), ops log now succeeds
+        when(adminUserAccountService.suspend(eq(ADMIN_ID), eq(Role.ADMIN), eq(USER), any(), any()))
+                .thenReturn(new AccountActionResponse(USER, Role.CUSTOMER, UserStatus.SUSPENDED,
+                        UserStatus.SUSPENDED, false, null));
+        org.mockito.Mockito.doAnswer(inv -> inv.getArgument(0)).when(store).insert(any());
+
+        OpsActionResult retry = service.record(OpsCaseType.REPEAT_CANCELLATION, USER, "SUSPEND", NOTE, ADMIN_ID,
+                Role.ADMIN);
+
+        // Retry did not create a duplicate suspension (changed=false), and ops log succeeded.
+        assertThat(retry.suspensionApplied()).isFalse();
+        assertThat(retry.opsRecordPending()).isFalse();
+        assertThat(retry.caseStatus()).isEqualTo(OpsCaseStatus.SUSPENDED);
     }
 }

@@ -19,6 +19,11 @@ import com.gamagerecruiters.marketplace.modules.operations.dto.RepeatCancellatio
  * CSV exports for the operations screens (WP09). Formula-injection safe (same cell rule as the Admin Users exporter),
  * capped at {@link OperationsRules#CSV_MAX_ROWS} rows, and carrying ids / refs and already-shown fields only — never
  * emails or phone numbers. Logs ids and counts only.
+ *
+ * <p>Source-failure distinction (F4): when a data source is unavailable the service throws 503; it no longer silently
+ * returns a header-only CSV. Source-limit tracking: when the source reached its fetch cap (meaning additional records
+ * may exist beyond this export), {@link Export#sourceLimited} is true and the response header X-Export-Source-Limited
+ * reports it.</p>
  */
 @Service
 public class OperationsCsvExporter {
@@ -39,48 +44,50 @@ public class OperationsCsvExporter {
         this.repeatService = repeatService;
     }
 
-    public record Export(byte[] content, String filename, int rows, boolean truncated) {
+    public record Export(byte[] content, String filename, int rows, boolean truncated, boolean sourceLimited) {
     }
 
-    public Export overdue(String actorId, String search) {
-        List<OverdueBookings.Row> all = overdueService.allRows(search);
+    public Export overdue(String actorId, String search, String delayBucket) {
+        OverdueBookingsService.ExportData data = overdueService.allRows(search, delayBucket);
         return build(actorId, "overdue-bookings.csv",
                 "bookingRef,service,customerId,providerId,serviceDate,daysOverdue,caseStatus,lastAction",
-                all, r -> String.join(",",
+                data.rows(), data.sourceLimited(), r -> String.join(",",
                         cell(r.ref()), cell(r.serviceTitle()), cell(r.customerId()), cell(r.providerId()),
                         cell(iso(r.serviceDate())), cell(String.valueOf(r.daysOverdue())),
                         cell(String.valueOf(r.caseStatus())), cell(lastAction(r.lastAction()))));
     }
 
     public Export lateCases(String actorId, String search) {
-        List<LateCases.NoShowReportRow> all = lateCasesService.allNoShowRows(search);
+        LateCasesService.ExportData data = lateCasesService.allNoShowRows(search);
         return build(actorId, "late-cases-no-show-reports.csv",
                 "disputeId,bookingId,customerId,providerId,disputeStatus,createdAt",
-                all, r -> String.join(",",
+                data.rows(), data.sourceLimited(), r -> String.join(",",
                         cell(r.disputeId()), cell(r.bookingId()), cell(r.customerId()), cell(r.providerId()),
                         cell(r.status()), cell(iso(r.createdAt()))));
     }
 
     public Export repeatCancellations(String actorId, String search, String role) {
-        List<RepeatCancellations.Row> all = repeatService.allRows(search, role);
+        RepeatCancellationsService.ExportData data = repeatService.allRows(search, role);
         return build(actorId, "repeat-cancellations.csv",
                 "userId,role,cancellations,lastCancelled,caseStatus,lastAction",
-                all, r -> String.join(",",
+                data.rows(), data.sourceLimited(), r -> String.join(",",
                         cell(r.userId()), cell(r.role()), cell(String.valueOf(r.count())),
                         cell(iso(r.lastCancelledAt())), cell(String.valueOf(r.caseStatus())),
                         cell(lastAction(r.lastAction()))));
     }
 
-    private <T> Export build(String actorId, String filename, String header, List<T> all, Function<T, String> toLine) {
+    private <T> Export build(String actorId, String filename, String header, List<T> all, boolean sourceLimited,
+                             Function<T, String> toLine) {
         boolean truncated = all.size() > OperationsRules.CSV_MAX_ROWS;
         List<T> rows = truncated ? all.subList(0, OperationsRules.CSV_MAX_ROWS) : all;
         StringBuilder csv = new StringBuilder(header).append("\r\n");
         for (T row : rows) {
             csv.append(toLine.apply(row)).append("\r\n");
         }
-        log.info("event=OPS_EXPORTED actorId={} file={} rows={} truncated={}", actorId, filename, rows.size(),
-                truncated);
-        return new Export(csv.toString().getBytes(StandardCharsets.UTF_8), filename, rows.size(), truncated);
+        log.info("event=OPS_EXPORTED actorId={} file={} rows={} truncated={} sourceLimited={}", actorId, filename,
+                rows.size(), truncated, sourceLimited);
+        return new Export(csv.toString().getBytes(StandardCharsets.UTF_8), filename, rows.size(), truncated,
+                sourceLimited);
     }
 
     private static String lastAction(LastActionView lastAction) {
