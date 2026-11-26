@@ -36,7 +36,22 @@ public class EarningsBalanceCalculator {
             BigDecimal available,
             BigDecimal held,
             BigDecimal paidOut,
-            BigDecimal payoutReserved) {
+            BigDecimal payoutReserved,
+            BigDecimal refundReserved) {
+
+        /**
+         * Preserves compatibility with existing five-balance callers.
+         */
+        public EarningsBalance(
+                BigDecimal pending,
+                BigDecimal available,
+                BigDecimal held,
+                BigDecimal paidOut,
+                BigDecimal payoutReserved) {
+
+            this(pending, available, held, paidOut,
+                    payoutReserved, BigDecimal.ZERO);
+        }
 
         /**
          * Preserves compatibility with existing four-balance callers.
@@ -46,7 +61,7 @@ public class EarningsBalanceCalculator {
                 BigDecimal available,
                 BigDecimal held,
                 BigDecimal paidOut) {
-            this(pending, available, held, paidOut, BigDecimal.ZERO);
+            this(pending, available, held, paidOut, BigDecimal.ZERO, BigDecimal.ZERO);
         }
     }
 
@@ -94,6 +109,7 @@ public class EarningsBalanceCalculator {
         BigDecimal held = BigDecimal.ZERO;
         BigDecimal paidOut = BigDecimal.ZERO;
         BigDecimal payoutReserved = BigDecimal.ZERO;
+        BigDecimal refundReserved = BigDecimal.ZERO;
 
         String providerId = null;
         String currency = null;
@@ -175,13 +191,47 @@ public class EarningsBalanceCalculator {
 
                 case REFUND_FROM_HELD ->
                     held = held.subtract(amount);
+
+                case REFUND_RESERVE_FROM_PENDING -> {
+                    pending = pending.subtract(amount);
+                    refundReserved = refundReserved.add(amount);
+                }
+
+                case REFUND_RESERVE_FROM_AVAILABLE -> {
+                    available = available.subtract(amount);
+                    refundReserved = refundReserved.add(amount);
+                }
+
+                case REFUND_RESERVE_FROM_HELD -> {
+                    held = held.subtract(amount);
+                    refundReserved = refundReserved.add(amount);
+                }
+
+                case REFUND_RELEASE_TO_PENDING -> {
+                    refundReserved = refundReserved.subtract(amount);
+                    pending = pending.add(amount);
+                }
+
+                case REFUND_RELEASE_TO_AVAILABLE -> {
+                    refundReserved = refundReserved.subtract(amount);
+                    available = available.add(amount);
+                }
+
+                case REFUND_RELEASE_TO_HELD -> {
+                    refundReserved = refundReserved.subtract(amount);
+                    held = held.add(amount);
+                }
+
+                case REFUND_SETTLE ->
+                    refundReserved = refundReserved.subtract(amount);
             }
 
             // Reject events that consume more than the available balance.
             if (pending.signum() < 0
                     || available.signum() < 0
                     || held.signum() < 0
-                    || payoutReserved.signum() < 0) {
+                    || payoutReserved.signum() < 0
+                    || refundReserved.signum() < 0) {
                 throw new IllegalStateException(
                         "Ledger event creates a negative earnings balance: "
                                 + entry.getEventKey());
@@ -193,6 +243,7 @@ public class EarningsBalanceCalculator {
                 available,
                 held,
                 paidOut,
-                payoutReserved);
+                payoutReserved,
+                refundReserved);
     }
 }

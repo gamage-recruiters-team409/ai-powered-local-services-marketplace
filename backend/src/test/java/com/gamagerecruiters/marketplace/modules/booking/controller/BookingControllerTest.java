@@ -51,7 +51,7 @@ class BookingControllerTest {
 
     private static final String URL = "/api/v1/bookings";
     private static final String VALID_BODY = """
-            {"providerId":"prov-1","listingId":"listing-1","slotStart":"2026-11-23T03:30:00Z","durationMinutes":60,
+            {"providerId":"prov-1","listingId":"listing-1","slotStart":"2026-11-23T03:30:00Z","addOnIds":[],
              "address":{"line1":"12 Temple Road","city":"Nugegoda","district":"Colombo","postalCode":"10250"},
              "notes":"Gate code 1234"}
             """;
@@ -108,14 +108,18 @@ class BookingControllerTest {
                 Instant.parse("2026-11-23T03:30:00Z"), Instant.parse("2026-11-23T04:30:00Z"),
                 "2026-11-23", "09:00", "10:00", 60,
                 new BookingAddressRequest("12 Temple Road", null, "Nugegoda", "Colombo", "10250"),
-                "Gate code 1234", Instant.parse("2026-11-20T14:30:00Z"), Instant.parse("2026-11-20T02:30:00Z")));
+                "Gate code 1234", Instant.parse("2026-11-20T14:30:00Z"), Instant.parse("2026-11-20T02:30:00Z"),
+                "Home Cleaning", new java.math.BigDecimal("5000.00"), "LKR"));
 
         mockMvc.perform(post(URL).header("Authorization", "Bearer cust-token")
                         .contentType(MediaType.APPLICATION_JSON).content(VALID_BODY))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.ref").value("BK-20261120-ABCDEF"))
                 .andExpect(jsonPath("$.status").value("PENDING_PROVIDER"))
-                .andExpect(jsonPath("$.localStart").value("09:00"));
+                .andExpect(jsonPath("$.localStart").value("09:00"))
+                .andExpect(jsonPath("$.serviceTitle").value("Home Cleaning"))
+                .andExpect(jsonPath("$.totalPrice").value(5000.00))
+                .andExpect(jsonPath("$.currency").value("LKR"));
     }
 
     @Test
@@ -125,7 +129,7 @@ class BookingControllerTest {
 
         mockMvc.perform(post(URL).header("Authorization", "Bearer cust-token")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"providerId\":\"prov-1\",\"listingId\":\"l-1\",\"slotStart\":\"2026-11-23T03:30:00Z\",\"durationMinutes\":60}"))
+                        .content("{\"providerId\":\"prov-1\",\"listingId\":\"l-1\",\"slotStart\":\"2026-11-23T03:30:00Z\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
         verify(bookingRequestService, never()).createBookingRequest(any());

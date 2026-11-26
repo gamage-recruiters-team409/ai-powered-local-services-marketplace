@@ -39,12 +39,15 @@ import com.gamagerecruiters.marketplace.modules.listing.service.CatalogCategoryL
 import com.gamagerecruiters.marketplace.modules.listing.service.ProviderVerificationLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
+import com.gamagerecruiters.marketplace.modules.notification.repository.NotificationRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.DisputePayoutHoldRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutAllocationRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.RefundOperationRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.StripeWebhookEventRepository;
 import com.gamagerecruiters.marketplace.modules.payment.service.DisputePayoutHoldAdapter;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
@@ -117,10 +120,21 @@ class ApplicationContextRealStartupTest {
         private MessageRepository messageRepository;
 
         @MockitoBean
+        private NotificationRepository notificationRepository;
+
+        @MockitoBean
         private EarningsLedgerRepository earningsLedgerRepository;
 
         @MockitoBean
         private ProviderEarningsStateRepository providerEarningsStateRepository;
+
+        // Isolates refund operation persistence in the startup test.
+        @MockitoBean
+        private RefundOperationRepository refundOperationRepository;
+
+        // Isolates Stripe webhook persistence in the startup test.
+        @MockitoBean
+        private StripeWebhookEventRepository stripeWebhookEventRepository;
 
         @MockitoBean
         private PayoutRepository payoutRepository;
