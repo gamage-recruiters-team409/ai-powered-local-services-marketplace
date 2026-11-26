@@ -21,7 +21,11 @@ const mockPaymentsResponse = {
       currency: 'LKR',
       status: 'CAPTURED',
       refundedAmount: 0,
-      createdAt: '2026-10-12T10:00:00Z',
+      paidAt: '2026-10-12T10:00:00Z',
+      receiptReference: 'RCPT-2026-001',
+      refundStatus: null,
+      refundReference: null,
+      createdAt: '2026-10-12T09:50:00Z',
     },
     {
       paymentId: 'pay-2',
@@ -30,6 +34,10 @@ const mockPaymentsResponse = {
       currency: 'LKR',
       status: 'REFUND_PENDING',
       refundedAmount: 12000,
+      paidAt: '2026-09-28T14:35:00Z',
+      receiptReference: 'RCPT-2026-002',
+      refundStatus: 'PROCESSING',
+      refundReference: 'REF-REV-8801',
       createdAt: '2026-09-28T14:30:00Z',
     },
     {
@@ -39,6 +47,10 @@ const mockPaymentsResponse = {
       currency: 'LKR',
       status: 'PARTIALLY_REFUNDED',
       refundedAmount: 3000,
+      paidAt: '2026-09-02T09:20:00Z',
+      receiptReference: 'RCPT-2026-003',
+      refundStatus: 'COMPLETED',
+      refundReference: 'REF-REV-8802',
       createdAt: '2026-09-02T09:15:00Z',
     },
     {
@@ -48,6 +60,10 @@ const mockPaymentsResponse = {
       currency: 'LKR',
       status: 'FAILED',
       refundedAmount: 0,
+      paidAt: null,
+      receiptReference: null,
+      refundStatus: null,
+      refundReference: null,
       createdAt: '2026-08-18T16:00:00Z',
     },
     {
@@ -57,6 +73,10 @@ const mockPaymentsResponse = {
       currency: 'LKR',
       status: 'INITIATED',
       refundedAmount: 0,
+      paidAt: null,
+      receiptReference: null,
+      refundStatus: null,
+      refundReference: null,
       createdAt: '2026-08-01T12:00:00Z',
     },
   ],
@@ -115,6 +135,17 @@ describe('PaymentsPage', () => {
     expect(screen.getByText(/requested 12,000 lkr/i)).toBeTruthy();
     expect(screen.getByText(/refunded 3,000 of 9,500 lkr/i)).toBeTruthy();
 
+    // Receipt references
+    expect(screen.getByText('RCPT-2026-001')).toBeTruthy();
+    expect(screen.getByText('RCPT-2026-002')).toBeTruthy();
+
+    // Refund references
+    expect(screen.getByText('REF-REV-8801')).toBeTruthy();
+    expect(screen.getByText('REF-REV-8802')).toBeTruthy();
+
+    // Date (paidAt) formatting
+    expect(screen.getByText('12 Oct 2026')).toBeTruthy();
+
     // Disabled links with correct testid and title
     const receiptBtns = screen.getAllByTestId('Link_ViewReceipt');
     expect(receiptBtns[0].hasAttribute('disabled')).toBe(true);
@@ -146,6 +177,68 @@ describe('PaymentsPage', () => {
 
     await waitFor(() => {
       expect(paymentsApi.getMyPayments).toHaveBeenCalledWith(1, 10);
+    });
+  });
+
+  it('renders all refundStatus values and handles unknown refundStatus gracefully', async () => {
+    paymentsApi.getMyPayments.mockResolvedValueOnce({
+      content: [
+        {
+          paymentId: 'pay-rev',
+          bookingId: 'bk-1',
+          amount: 5000,
+          currency: 'LKR',
+          status: 'PARTIALLY_REFUNDED',
+          refundedAmount: 1000,
+          paidAt: '2026-10-01T10:00:00Z',
+          receiptReference: 'RCPT-REV',
+          refundStatus: 'UNDER_REVIEW',
+          refundReference: 'REF-REV',
+          createdAt: '2026-10-01T09:00:00Z',
+        },
+        {
+          paymentId: 'pay-fail',
+          bookingId: 'bk-2',
+          amount: 6000,
+          currency: 'LKR',
+          status: 'CAPTURED',
+          refundedAmount: 0,
+          paidAt: '2026-10-02T10:00:00Z',
+          receiptReference: 'RCPT-FAIL',
+          refundStatus: 'FAILED',
+          refundReference: 'REF-FAIL',
+          createdAt: '2026-10-02T09:00:00Z',
+        },
+        {
+          paymentId: 'pay-unk',
+          bookingId: 'bk-3',
+          amount: 7000,
+          currency: 'LKR',
+          status: 'CAPTURED',
+          refundedAmount: 0,
+          paidAt: '2026-10-03T10:00:00Z',
+          receiptReference: 'RCPT-UNK',
+          refundStatus: 'ESCALATED_TO_SUPPORT',
+          refundReference: 'REF-UNK',
+          createdAt: '2026-10-03T09:00:00Z',
+        },
+      ],
+      page: 0,
+      size: 10,
+      totalElements: 3,
+      totalPages: 1,
+    });
+
+    render(
+      <MemoryRouter>
+        <PaymentsPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Under review')).toBeTruthy();
+      expect(screen.getByText('Failed')).toBeTruthy();
+      expect(screen.getByText('Escalated To Support')).toBeTruthy();
     });
   });
 });

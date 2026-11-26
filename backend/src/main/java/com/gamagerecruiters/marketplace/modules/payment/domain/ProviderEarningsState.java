@@ -46,6 +46,10 @@ public class ProviderEarningsState {
     @Field(targetType = FieldType.DECIMAL128)
     private BigDecimal payoutReserved = BigDecimal.ZERO;
 
+    // Earnings reserved exclusively for active refund operations.
+    @Field(targetType = FieldType.DECIMAL128)
+    private BigDecimal refundReserved = BigDecimal.ZERO;
+
     private long lastSequenceNumber = 0L;
 
     public ProviderEarningsState() {
@@ -161,6 +165,7 @@ public class ProviderEarningsState {
         BigDecimal nextHeld = held;
         BigDecimal nextPaidOut = paidOut;
         BigDecimal nextPayoutReserved = getPayoutReserved();
+        BigDecimal nextRefundReserved = getRefundReserved();
 
         switch (entry.getEventType()) {
             case EARNING_PENDING ->
@@ -218,13 +223,47 @@ public class ProviderEarningsState {
 
             case REFUND_FROM_HELD ->
                 nextHeld = nextHeld.subtract(amount);
+
+            case REFUND_RESERVE_FROM_PENDING -> {
+                nextPending = nextPending.subtract(amount);
+                nextRefundReserved = nextRefundReserved.add(amount);
+            }
+
+            case REFUND_RESERVE_FROM_AVAILABLE -> {
+                nextAvailable = nextAvailable.subtract(amount);
+                nextRefundReserved = nextRefundReserved.add(amount);
+            }
+
+            case REFUND_RESERVE_FROM_HELD -> {
+                nextHeld = nextHeld.subtract(amount);
+                nextRefundReserved = nextRefundReserved.add(amount);
+            }
+
+            case REFUND_RELEASE_TO_PENDING -> {
+                nextRefundReserved = nextRefundReserved.subtract(amount);
+                nextPending = nextPending.add(amount);
+            }
+
+            case REFUND_RELEASE_TO_AVAILABLE -> {
+                nextRefundReserved = nextRefundReserved.subtract(amount);
+                nextAvailable = nextAvailable.add(amount);
+            }
+
+            case REFUND_RELEASE_TO_HELD -> {
+                nextRefundReserved = nextRefundReserved.subtract(amount);
+                nextHeld = nextHeld.add(amount);
+            }
+
+            case REFUND_SETTLE ->
+                nextRefundReserved = nextRefundReserved.subtract(amount);
         }
 
         // Reject invalid financial transitions before changing state.
         if (nextPending.signum() < 0
                 || nextAvailable.signum() < 0
                 || nextHeld.signum() < 0
-                || nextPayoutReserved.signum() < 0) {
+                || nextPayoutReserved.signum() < 0
+                || nextRefundReserved.signum() < 0) {
             throw new IllegalStateException(
                     "Ledger event would create a negative earnings balance");
         }
@@ -234,6 +273,7 @@ public class ProviderEarningsState {
         held = nextHeld;
         paidOut = nextPaidOut;
         payoutReserved = nextPayoutReserved;
+        refundReserved = nextRefundReserved;
     }
 
     /**
@@ -245,6 +285,19 @@ public class ProviderEarningsState {
 
     public void setPayoutReserved(BigDecimal payoutReserved) {
         this.payoutReserved = payoutReserved;
+    }
+
+    /**
+     * Returns zero for legacy documents without refundReserved.
+     */
+    public BigDecimal getRefundReserved() {
+        return refundReserved == null
+                ? BigDecimal.ZERO
+                : refundReserved;
+    }
+
+    public void setRefundReserved(BigDecimal refundReserved) {
+        this.refundReserved = refundReserved;
     }
 
     public long getLastSequenceNumber() {

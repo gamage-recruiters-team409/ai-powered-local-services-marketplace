@@ -743,3 +743,65 @@
   font-weight: 400;
   color: #64748b;
 }
+
+/* Customer Profile Avatar / Photo */
+.avatarSection {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding-bottom: 24px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.avatarCircle {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: #f1f5f9;
+  border: 2px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.avatarImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatarInitials {
+  font-size: 24px;
+  font-weight: 600;
+  color: #475569;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.avatarActions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.avatarButtons {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.photoHelpText {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0;
+}
+
+.photoError {
+  font-size: 13px;
+  color: #dc2626;
+  margin-top: 4px;
+}

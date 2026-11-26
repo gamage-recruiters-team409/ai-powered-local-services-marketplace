@@ -11,6 +11,8 @@ import {
   getDistricts,
   changePassword,
   deactivateAccount,
+  uploadProfilePhoto,
+  removeProfilePhoto,
 } from '../services/customerAccountApi';
 
 vi.mock('../../../shared/services/apiClient');
@@ -93,5 +95,36 @@ describe('customerAccountApi', () => {
     apiClient.post.mockResolvedValueOnce({});
     await deactivateAccount({ password: 'secret' });
     expect(apiClient.post).toHaveBeenCalledWith('/customers/me/deactivate', { password: 'secret' });
+  });
+
+  it('uploadProfilePhoto calls PUT /customers/me/photo with FormData and unsets Content-Type', async () => {
+    const mockResponse = { id: 'c1', profileImageUrl: 'https://example.com/photo.jpg' };
+    apiClient.put.mockResolvedValueOnce({ data: mockResponse });
+
+    const file = new File(['dummy content'], 'avatar.jpg', { type: 'image/jpeg' });
+    const result = await uploadProfilePhoto(file);
+
+    expect(apiClient.put).toHaveBeenCalledWith(
+      '/customers/me/photo',
+      expect.any(FormData),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'Content-Type': undefined,
+        }),
+      })
+    );
+
+    const callArgs = apiClient.put.mock.calls[0];
+    const headers = callArgs[2]?.headers;
+    expect(headers?.['Content-Type']).toBeUndefined();
+    expect(headers?.['Content-Type']).not.toBe('application/json');
+    expect(headers?.['Content-Type']).not.toBe('multipart/form-data');
+    expect(result).toEqual(mockResponse);
+  });
+
+  it('removeProfilePhoto calls DELETE /customers/me/photo', async () => {
+    apiClient.delete.mockResolvedValueOnce({});
+    await removeProfilePhoto();
+    expect(apiClient.delete).toHaveBeenCalledWith('/customers/me/photo');
   });
 });

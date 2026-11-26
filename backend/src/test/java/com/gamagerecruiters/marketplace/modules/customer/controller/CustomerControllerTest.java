@@ -8,6 +8,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -22,7 +23,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -431,5 +434,93 @@ class CustomerControllerTest {
                 .andExpect(jsonPath("$.message").value("Too many requests. Please try again later."));
 
         verify(customerService, never()).deactivateAccount(any(), any());
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/customers/me/photo returns 401 when unauthenticated")
+    void uploadPhoto_unauthenticated_returns401() throws Exception {
+        MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", new byte[] { 1, 2 });
+        mockMvc.perform(multipart(HttpMethod.PUT, "/api/v1/customers/me/photo").file(file))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/customers/me/photo returns 403 when authenticated as PROVIDER")
+    void uploadPhoto_providerRole_returns403() throws Exception {
+        mockAuth("prov-token", "prov-1", Role.PROVIDER);
+        MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", new byte[] { 1, 2 });
+        mockMvc.perform(multipart(HttpMethod.PUT, "/api/v1/customers/me/photo")
+                        .file(file)
+                        .header("Authorization", "Bearer prov-token"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/customers/me/photo returns 200 with profileImageUrl and never exposes publicId")
+    void uploadPhoto_success_returnsProfileWithUrl() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", new byte[] { 1, 2 });
+
+        CustomerProfileResponse res = new CustomerProfileResponse(
+                "cust-1", "Kamal Perera", "kamal@marketplace.local", "+94771234567",
+                Role.CUSTOMER, UserStatus.ACTIVE, true, "https://res.cloudinary.com/demo/image/upload/photo.jpg"
+        );
+        when(customerService.uploadProfilePhoto(eq("cust-1"), any())).thenReturn(res);
+
+        mockMvc.perform(multipart(HttpMethod.PUT, "/api/v1/customers/me/photo")
+                        .file(file)
+                        .header("Authorization", "Bearer cust-token"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("cust-1"))
+                .andExpect(jsonPath("$.profileImageUrl").value("https://res.cloudinary.com/demo/image/upload/photo.jpg"))
+                .andExpect(jsonPath("$.profileImagePublicId").doesNotExist())
+                .andExpect(jsonPath("$.publicId").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/customers/me/photo returns 401 when unauthenticated")
+    void deletePhoto_unauthenticated_returns401() throws Exception {
+        mockMvc.perform(delete("/api/v1/customers/me/photo"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/customers/me/photo returns 403 when authenticated as PROVIDER")
+    void deletePhoto_providerRole_returns403() throws Exception {
+        mockAuth("prov-token", "prov-1", Role.PROVIDER);
+        mockMvc.perform(delete("/api/v1/customers/me/photo")
+                        .header("Authorization", "Bearer prov-token"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/customers/me/photo returns 204 No Content for CUSTOMER")
+    void deletePhoto_customerRole_returns204() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        mockMvc.perform(delete("/api/v1/customers/me/photo")
+                        .header("Authorization", "Bearer cust-token"))
+                .andExpect(status().isNoContent());
+
+        verify(customerService).deleteProfilePhoto("cust-1");
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/customers/me/photo with application/json returns 415 UNSUPPORTED_MEDIA_TYPE")
+    void uploadPhoto_jsonContentType_returns415() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        mockMvc.perform(put("/api/v1/customers/me/photo")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"file\":\"data\"}"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.status").value(415))
+                .andExpect(jsonPath("$.error").value("UNSUPPORTED_MEDIA_TYPE"))
+                .andExpect(jsonPath("$.message").value("Unsupported media type"));
     }
 }

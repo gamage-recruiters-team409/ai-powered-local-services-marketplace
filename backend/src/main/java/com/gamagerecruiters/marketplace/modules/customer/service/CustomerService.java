@@ -2,6 +2,8 @@ package com.gamagerecruiters.marketplace.modules.customer.service;
 
 import java.util.List;
 
+import org.springframework.web.multipart.MultipartFile;
+
 import com.gamagerecruiters.marketplace.modules.customer.dto.ChangePasswordRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressRequest;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerAddressResponse;
@@ -28,4 +30,8 @@ public interface CustomerService {
     CustomerAddressResponse setDefaultAddress(String customerId, String addressId);
 
     void deactivateAccount(String customerId, DeactivateAccountRequest request);
+
+    CustomerProfileResponse uploadProfilePhoto(String customerId, MultipartFile file);
+
+    void deleteProfilePhoto(String customerId);
 }

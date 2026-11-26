@@ -45,6 +45,15 @@ public class Booking {
     /** C-02: provider must respond before the earlier of 12 h after the request or 1 h before the start. */
     private Instant responseDeadline;
 
+    /** When the provider accepted the request (PENDING_PROVIDER → AWAITING_PAYMENT). */
+    private Instant acceptedAt;
+
+    /** Payment must be completed by this time (acceptedAt + payment window). */
+    private Instant paymentDueAt;
+
+    /** Price, commission and duration captured from the listing at creation (immutable). */
+    private BookingPriceSnapshot priceSnapshot;
+
     private BookingStatus status;
     private List<BookingStatusChange> timeline = new ArrayList<>();
 
@@ -204,5 +213,29 @@ public class Booking {
 
     public void setVersion(Long version) {
         this.version = version;
+    }
+
+    public BookingPriceSnapshot getPriceSnapshot() {
+        return priceSnapshot;
+    }
+
+    public void setPriceSnapshot(BookingPriceSnapshot priceSnapshot) {
+        this.priceSnapshot = priceSnapshot;
+    }
+
+    public Instant getAcceptedAt() {
+        return acceptedAt;
+    }
+
+    public void setAcceptedAt(Instant acceptedAt) {
+        this.acceptedAt = acceptedAt;
+    }
+
+    public Instant getPaymentDueAt() {
+        return paymentDueAt;
+    }
+
+    public void setPaymentDueAt(Instant paymentDueAt) {
+        this.paymentDueAt = paymentDueAt;
     }
 }
