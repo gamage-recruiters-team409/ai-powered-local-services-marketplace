@@ -1,0 +1,43 @@
+/* WP02 only. All dialogs use the shared portal-based Modal from the project. */
+.modal { width: min(620px, calc(100% - 28px)); max-height: min(92dvh, 850px); border-radius: 16px; }
+.confirmModal { width: min(540px, calc(100% - 28px)); border-radius: 16px; }
+.form { display: grid; gap: 18px; padding: 2px 0 4px; }
+.form h3 { font-size: 16px; font-weight: 750; margin: 0; color: #0f172a; }
+.form p { font-size: 13px; line-height: 1.5; color: #64748b; margin: 4px 0 0; }
+.fieldGroup { display: grid; gap: 8px; }
+.dropdown { border: 1px solid #d5deea; border-radius: 9px; background: #fff; }
+.dropdown summary { cursor: pointer; padding: 13px 15px; color: #334155; font-size: 14px; font-weight: 550; }
+.dropdown[open] summary { border-bottom: 1px solid #e2e8f0; }
+.optionGrid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0,1fr)); padding: 14px; max-height: 210px; overflow-y: auto; }
+.provinces { max-height: 250px; overflow-y: auto; }
+.provinces section { padding: 0 0 10px; }
+.provinces h4 { font-size: 13px; margin: 14px 14px 0; color: #475569; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip { background: #ecfbf8; border: 1px solid #d3eee9; border-radius: 100px; color: #087d75; font-size: 12px; padding: 6px 11px; cursor: pointer; }
+.helper { margin-top: -8px !important; }
+.info { background: #eff6ff; border: 1px solid #d5e5ff; padding: 12px 14px; border-radius: 9px; color: #1e40af; font-size: 13px; line-height: 1.5; }
+.error { color: #b91c1c !important; font-size: 12px !important; }
+.footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; padding-top: 12px; }
+.currentStatus { display: flex; align-items: center; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid #e2e8f0; font-size: 13px; font-weight: 700; }
+.active, .paused { border-radius: 100px; font-size: 12px; padding: 5px 12px; color: #087044; background: #e4f8eb; }
+.paused { color: #ad5800; background: #fff0bd; }
+.activityOptions { display: grid; gap: 17px; }
+.activityOptions > div { padding: 4px 0 14px; border-bottom: 1px solid #edf0f5; }
+.confirmBody { display: grid; justify-items: center; gap: 18px; text-align: center; padding: 8px 0 4px; }
+.confirmBody p { max-width: 400px; margin: 0; line-height: 1.65; color: #475569; }
+.confirmBody .info { width: 100%; }
+.confirmBody .footer { width: 100%; }
+.warningIcon, .successIcon { width: 70px; height: 70px; border-radius: 50%; display: grid; place-items: center; background: #fff8df; color: #b45309; }
+.successIcon { background: #e6f9f5; color: #087d75; }
+@media(max-width: 600px) { .optionGrid { grid-template-columns: 1fr; } .footer { flex-wrap: wrap; } }
+
+
+/* Shared radios and checkboxes retain their teal selected state while
+   unchecked controls stay white inside portaled WP02 management dialogs. */
+.modal, .confirmModal { color-scheme: light; }
+.modal :global(input.shared-checkbox),
+.modal :global(input.shared-radio),
+.confirmModal :global(input.shared-radio) {
+  color-scheme: light;
+  accent-color: #0f766e;
+}
