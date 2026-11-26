@@ -1,0 +1,272 @@
+/* WP02-specific presentation. Shared Provider Layout and global UI are unchanged. */
+:root {
+  --wp02-primary: var(--prv-color-primary, #087d75);
+  --wp02-border: var(--prv-color-border, #e2e8f0);
+  --wp02-heading: var(--prv-color-heading, #101b30);
+  --wp02-text: var(--prv-color-text, #475569);
+  --wp02-surface: #ffffff;
+}
+
+.dashboard { display: grid; gap: 10px; width: 100%; max-width: 1200px; margin: 0 auto; }
+.card { min-width: 0; padding: 22px 24px; background: var(--wp02-surface); border: 1px solid var(--wp02-border); border-radius: 16px; box-shadow: 0 1px 2px rgb(15 23 42 / 4%); }
+.card h2 { margin: 0 0 18px; font-size: 17px; font-weight: 750; color: var(--wp02-heading); }
+.card h3 { margin: 0 0 5px; font-size: 14px; font-weight: 680; color: var(--wp02-heading); }
+.card p { line-height: 1.55; }
+.mutedLabel { display: block; color: #778194; font-size: 13px; margin-bottom: 11px; }
+.bodyText { margin: 0; color: var(--wp02-text); font-size: 14px; overflow-wrap: anywhere; }
+.secondaryText { color: #667386; font-size: 13px; margin: 6px 0 0; line-height: 1.6; }
+.cardDivider { height: 1px; width: 100%; background: var(--wp02-border); margin: 18px 0; }
+
+.summaryCard { display: grid; grid-template-columns: minmax(250px, 1.25fr) minmax(200px, 0.7fr) auto; gap: 24px; align-items: center; min-height: 125px; }
+.identityArea { display: flex; align-items: center; min-width: 0; gap: 20px; }
+.avatar { display: grid; flex: 0 0 auto; place-items: center; width: 80px; height: 80px; overflow: hidden; border-radius: 50%; background: #cef3ee; color: #04736d; font-size: 25px; font-weight: 750; }
+.avatarLarge { width: 86px; height: 86px; }
+.avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.identityText { min-width: 0; }
+.identityText h2 { margin: 0 0 5px; font-size: 19px; overflow-wrap: anywhere; }
+.identityText p { margin: 2px 0; color: #718093; font-size: 13px; overflow-wrap: anywhere; }
+.identityText .emailLine { font-size: 12px; margin-top: 7px; }
+.verificationSummary { min-height: 75px; padding-left: 28px; border-left: 1px solid #d0d6df; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
+.summaryAction { align-self: end; padding-bottom: 2px; }
+.statusBadge { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 5px 12px; border-radius: 99px; background: #f1f5f9; color: #566273; font-size: 12px; font-weight: 700; line-height: 1.2; width: max-content; }
+.statusPositive { background: #e3f7ec; color: #157746; }
+.statusNeutral { background: #eaf4ff; color: #1c5d94; }
+
+.mainGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.aboutCard, .serviceCard { min-height: 242px; }
+.aboutCard .bodyText { max-width: 600px; }
+.chipList { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 20px; }
+.categoryChip { background: #ecfbf8; color: #006e69; font-size: 12px; border-radius: 100px; padding: 6px 13px; max-width: 100%; overflow-wrap: anywhere; }
+.cardActions { display: flex; justify-content: flex-end; margin-top: 10px; }
+
+.statusGrid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 12px; }
+.sectionHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+.sectionHeading h2 { margin: 0; }
+.sectionHeading button { flex-shrink: 0; }
+.verificationRow { display: grid; grid-template-columns: minmax(120px, 0.55fr) minmax(0, 1.45fr); align-items: center; gap: 24px; }
+.documentSummary { display: flex; align-items: center; gap: 12px; padding-left: 20px; border-left: 1px solid var(--wp02-border); }
+.documentSummary strong { color: var(--wp02-heading); font-size: 13px; }
+.documentSummary p { margin: 3px 0 0; font-size: 12px; color: #7d889a; }
+.iconTile { flex: 0 0 auto; display: grid; place-items: center; width: 39px; height: 39px; border: 1px solid var(--wp02-border); border-radius: 10px; color: #60718b; background: #f8fafc; font-size: 20px; }
+.infoBanner { margin-top: 22px; padding: 10px 13px; border: 1px solid #d7e7ff; background: #eff6ff; border-radius: 8px; font-size: 12px; line-height: 1.5; color: #2563eb; }
+.activityRow { display: flex; gap: 16px; align-items: center; justify-content: space-between; }
+.activityRow .mutedLabel { margin-bottom: 0; }
+.activityCard .cardDivider { margin: 18px 0 10px; }
+.nextStepNote { margin: 12px 0 0; color: #8792a2; font-size: 11px; line-height: 1.5; }
+
+.payoutCard h2 { margin-bottom: 18px; }
+.payoutRow { display: grid; grid-template-columns: minmax(180px, 1.25fr) minmax(160px, 0.6fr) auto; gap: 26px; align-items: center; }
+.payoutDescription { display: flex; align-items: center; gap: 16px; }
+.payoutDescription p { color: var(--wp02-text); font-size: 13px; max-width: 370px; margin: 0; }
+.payoutAccount { border-left: 1px solid #d0d6df; padding-left: 28px; display: flex; align-items: flex-start; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.payoutAccount .mutedLabel { margin-bottom: 3px; }
+.payoutAccount strong { font-size: 15px; color: var(--wp02-heading); letter-spacing: 0.03em; }
+.payoutAccount span:last-child { font-size: 12px; color: #7d889a; }
+.payoutAction { justify-self: end; }
+
+.onboardingCard { padding: 24px; width: 100%; border: 1px solid var(--wp02-border); border-radius: 16px; background: var(--wp02-surface); }
+.steps { display: flex; align-items: center; gap: 16px; margin: 0 0 25px; color: #94a3b8; font-size: 13px; }
+.steps strong { color: var(--wp02-primary); }
+.stepConnector { height: 2px; width: 100px; background: var(--wp02-primary); border-radius: 3px; }
+.profileForm, .modalForm { max-width: 100%; }
+.formFields { display: grid; gap: 21px; }
+.providerType { min-width: 0; margin: 0; padding: 0; border: 0; }
+.providerType legend { color: var(--wp02-heading); font-weight: 650; margin-bottom: 10px; font-size: 14px; }
+.required { color: #dc2626; }
+.radioRow { display: flex; align-items: center; flex-wrap: wrap; gap: 24px; }
+.twoColumn { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.optionSection { border-top: 1px solid var(--wp02-border); padding-top: 20px; }
+.optionSection h3 { margin: 0 0 6px; font-size: 16px; color: var(--wp02-heading); }
+.optionSection > p { color: var(--wp02-text); margin: 0 0 16px; font-size: 13px; line-height: 1.6; }
+.checkboxGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.checkboxGrid > div { min-width: 0; }
+.districtDetails { border: 1px solid var(--wp02-border); border-radius: 10px; padding: 13px 16px; }
+.districtDetails summary { cursor: pointer; font-weight: 650; font-size: 14px; color: var(--wp02-primary); }
+.provinceList { display: grid; gap: 18px; margin-top: 18px; }
+.provinceBlock h4 { margin: 0 0 10px; font-size: 14px; color: var(--wp02-heading); }
+.optionSection .selectedList { margin-top: 12px; color: #04736d; }
+
+.modalBackdrop { position: fixed; z-index: 900; inset: 0; display: flex; justify-content: center; align-items: center; padding: 24px; background: rgb(15 23 42 / 50%); }
+.editDialog { display: flex; flex-direction: column; width: min(100%, 795px); max-height: min(94vh, 960px); overflow: hidden; border-radius: 16px; background: #fff; box-shadow: 0 25px 80px rgb(15 23 42 / 28%); }
+.modalHeader { display: flex; align-items: center; justify-content: space-between; padding: 23px 30px; border-bottom: 1px solid var(--wp02-border); }
+.modalHeader h2 { font-size: 23px; margin: 0; color: var(--wp02-heading); }
+.closeButton { width: 36px; height: 36px; border: 1px solid var(--wp02-border); background: #fff; border-radius: 7px; cursor: pointer; font-size: 25px; line-height: 1; color: #8693a3; }
+.closeButton:focus-visible { outline: 3px solid var(--wp02-primary); outline-offset: 2px; }
+.modalBody { padding: 24px 30px 28px; overflow-y: auto; overscroll-behavior: contain; }
+.modalPhoto h3 { font-size: 15px; color: var(--wp02-heading); margin: 0 0 16px; }
+.photoRow { display: flex; align-items: center; gap: 18px; }
+.avatarWithCamera { position: relative; flex: 0 0 auto; }
+.cameraDot { position: absolute; right: 0; bottom: 0; display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; border: 2px solid #fff; color: #fff; background: var(--wp02-primary); font-size: 13px; }
+.photoControls { min-width: 0; }
+.photoButtons { display: flex; flex-wrap: wrap; gap: 8px; }
+.photoControls p { margin: 6px 0 0; font-size: 12px; color: #94a3b8; }
+.modalForm { margin-top: 28px; }
+.readOnlyEmail { border: 1px solid var(--wp02-border); background: #f8fafc; padding: 12px 15px; border-radius: 8px; margin: 4px 0 18px; }
+.readOnlyEmail span { display: block; color: #667386; font-size: 12px; margin-bottom: 3px; }
+.readOnlyEmail strong { font-size: 13px; font-weight: 550; color: #64748b; overflow-wrap: anywhere; }
+.readOnlyEmail small { display: block; font-size: 11px; color: #94a3b8; margin-top: 4px; }
+.visuallyHidden { position: absolute; overflow: hidden; clip: rect(0, 0, 0, 0); width: 1px; height: 1px; border: 0; padding: 0; white-space: nowrap; }
+
+@media (max-width: 1150px) {
+  .statusGrid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .summaryCard { grid-template-columns: minmax(180px, 1fr) minmax(170px, 0.7fr) auto; }
+  .payoutRow { grid-template-columns: minmax(160px, 1fr) minmax(150px, 0.7fr); }
+  .payoutAction { grid-column: 1 / -1; justify-self: end; }
+}
+@media (max-width: 850px) {
+  .mainGrid, .statusGrid { grid-template-columns: minmax(0, 1fr); }
+  .summaryCard { grid-template-columns: minmax(0, 1fr) auto; }
+  .verificationSummary { grid-column: 1; grid-row: 2; border-left: none; border-top: 1px solid var(--wp02-border); padding: 16px 0 0; min-height: 0; }
+  .summaryAction { grid-row: 1; grid-column: 2; }
+  .checkboxGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 610px) {
+  .dashboard { gap: 10px; }
+  .card, .onboardingCard { padding: 18px; border-radius: 12px; }
+  .summaryCard { display: flex; flex-wrap: wrap; gap: 16px; }
+  .identityArea { flex-basis: 100%; }
+  .summaryAction { margin-left: auto; }
+  .verificationSummary { order: 2; width: 100%; }
+  .twoColumn, .checkboxGrid, .payoutRow { grid-template-columns: minmax(0, 1fr); }
+  .payoutAccount { border-left: 0; border-top: 1px solid var(--wp02-border); padding: 12px 0 0; }
+  .payoutAction { grid-column: auto; }
+  .verificationRow { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .documentSummary { border-left: 0; padding-left: 0; }
+  .sectionHeading { flex-wrap: wrap; }
+  .modalBackdrop { padding: 10px; }
+  .editDialog { max-height: 96vh; }
+  .modalHeader { padding: 17px 20px; }
+  .modalBody { padding: 19px 20px; }
+  .modalHeader h2 { font-size: 20px; }
+}
+
+/* High-fidelity Provider page refinements; scoped to WP02 only. */
+.pageShell { width: 100%; min-width: 0; }
+.breadcrumb { margin: 0 0 7px 2px; font-size: 12px; color: #94a3b8; }
+.breadcrumb span { padding: 0 8px; color: #cbd5e1; }
+.pageShell > section { margin: 0; }
+.dashboard { max-width: 1200px; gap: 10px; }
+.onboardingCard { max-width: 1070px; margin: 0 auto; padding: 34px 46px 24px; }
+.onboardingHeading { margin: 28px 0 22px; }
+.onboardingHeading h2 { font-size: 21px; color: #132034; margin: 0 0 6px; }
+.onboardingHeading p { color: #718093; font-size: 14px; margin: 0; }
+.progressSteps { display: grid; grid-template-columns: 1fr minmax(45px, 1fr) 1fr; align-items: start; width: min(100%, 690px); margin: 0 auto 32px; border-bottom: 1px solid #edf0f5; padding-bottom: 28px; }
+.progressStep { display: flex; align-items: center; flex-direction: column; gap: 7px; color: #94a3b8; font-size: 12px; white-space: nowrap; }
+.stepCurrent { color: #0f172a; font-weight: 600; }
+.stepCircle, .stepCircleInactive { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; color: #fff; background: #087d75; font-size: 15px; font-weight: 700; }
+.stepCircleInactive { background: #fff; border: 2px solid #cbd5e1; color: #94a3b8; }
+.progressLine { height: 3px; background: linear-gradient(to right, #0f766e 75%, #e5e7eb 75%); margin-top: 16px; border-radius: 99px; }
+.profileForm :global(.shared-form__fields), .modalForm :global(.shared-form__fields) { display: block; }
+.profileForm :global(.shared-form__actions) { justify-content: flex-end; border-top: 1px solid #e2e8f0; padding-top: 26px; margin-top: 26px; }
+.profileForm :global(.shared-form__actions) button:first-child { color: #087d75; border-color: #087d75; }
+.formFields { gap: 24px; }
+.providerType legend { font-size: 14px; font-weight: 650; }
+.radioRow { gap: 28px; }
+.twoColumn { gap: 24px; }
+.selectionField { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.fieldLabel { color: #0f172a; font-size: 14px; font-weight: 600; }
+.selectionField small { color: #64748b; font-size: 12px; line-height: 1.5; }
+.selectionDropdown { position: relative; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; min-width: 0; }
+.selectionDropdown[open] { border-color: #0f766e; box-shadow: 0 0 0 2px rgb(15 118 110 / 10%); }
+.selectionDropdown > summary { display: flex; justify-content: space-between; align-items: center; padding: 11px 12px; min-height: 42px; box-sizing: border-box; cursor: pointer; list-style: none; color: #64748b; font-size: 14px; }
+.selectionDropdown > summary::-webkit-details-marker { display: none; }
+.selectionDropdown > summary::after { content: '⌄'; color: #475569; font-size: 19px; }
+.dropdownContent { max-height: 240px; overflow: auto; padding: 14px; border-top: 1px solid #e2e8f0; display: grid; gap: 13px; }
+.provinceBlock { display: grid; gap: 8px; }
+.provinceBlock strong { color: #344054; font-size: 13px; }
+.provinceOptions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.fieldError { color: #b91c1c; font-size: 12px; }
+.draftDisclaimer { margin: 14px 0 0; color: #94a3b8; font-size: 11px; text-align: right; }
+.editDialog { width: min(830px, calc(100vw - 32px)); max-width: 830px; max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; border-radius: 16px; }
+.editContent { min-width: 0; padding-bottom: 2px; }
+.editHeading { margin: 25px 0 16px; }
+.editHeading h3 { color: #0f172a; font-size: 17px; font-weight: 700; }
+.modalPhoto h3 { color: #0f172a; font-size: 14px; }
+.modalForm { margin-top: 18px; }
+.modalForm :global(.shared-form__actions) {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: 28px;
+  padding: 16px 4px 10px;
+  border-top: 1px solid var(--wp02-border);
+  background: #fff;
+}
+.modalForm :global(.shared-form__actions) button:first-child { color: #087d75; border-color: #087d75; }
+.modalForm .formFields { gap: 22px; }
+.readOnlyEmail { background: #f8fafc; }
+@media (max-width: 900px) {
+  .onboardingCard { padding: 26px; }
+  .summaryCard { grid-template-columns: 1fr 0.65fr auto; }
+}
+@media (max-width: 650px) {
+  .onboardingCard { padding: 20px 16px; }
+  .onboardingHeading { margin: 18px 0; }
+  .progressSteps { grid-template-columns: 1fr 35px 1fr; padding-bottom: 18px; }
+  .progressStep { white-space: normal; text-align: center; }
+  .twoColumn, .provinceOptions { grid-template-columns: 1fr; }
+  .profileForm :global(.shared-form__actions) { flex-wrap: wrap; }
+  .editDialog { width: calc(100% - 20px); }
+}
+
+.verificationCard { min-width: 0; }
+
+.statusWarning { background: #fff0bd; color: #9f5800; }
+.statusDanger { background: #fee2e2; color: #b91c1c; }
+
+/* Edit Profile is intentionally mounted only while open. Keep its shared-form
+   action bar reachable without extending the overall page height. */
+@media (max-width: 650px) {
+  .editDialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .modalForm :global(.shared-form__actions) { flex-wrap: wrap; }
+}
+
+
+/* WP02 alignment: apply the SAME centered content width to the breadcrumb,
+   ProviderPage header, and cards. The shared ProviderLayout is untouched. */
+.pageContent {
+  width: 100%;
+  max-width: 1200px;
+  min-width: 0;
+  margin-inline: auto;
+}
+.pageContent .dashboard { max-width: none; }
+
+/* Keep native form controls white when unchecked (portaled dialogs are
+   mounted outside ProviderLayout's color-scheme: light container). */
+.editDialog { color-scheme: light; scrollbar-width: thin; scrollbar-color: #cbd5e1 #ffffff; }
+.editDialog :global(input.shared-radio),
+.editDialog :global(input.shared-checkbox),
+.providerType :global(input.shared-radio),
+.selectionDropdown :global(input.shared-checkbox) {
+  color-scheme: light;
+  accent-color: #0f766e;
+}
+.editDialog::-webkit-scrollbar { width: 8px; }
+.editDialog::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 12px; }
+.editDialog::-webkit-scrollbar-track { background: #ffffff; }
+
+/* Display server-side or form-level failures at the TOP of Edit Profile,
+   rather than only after the last form field. */
+.formAlert {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  margin: 0 0 20px;
+  border: 1px solid #fecaca;
+  border-radius: 9px;
+  background: #fff1f2;
+  color: #991b1b;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.formAlert strong { color: #991b1b; font-size: 14px; }
+.formAlert span { color: #9f1239; }
+
+@media (max-width: 650px) {
+  .pageContent { max-width: 100%; }
+}
