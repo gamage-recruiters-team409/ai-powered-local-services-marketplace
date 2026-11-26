@@ -130,28 +130,22 @@ All endpoints require authentication with the `CUSTOMER` role (`hasRole('CUSTOME
 
 ---
 
-## 5. Listing Module Dependency & Fail-Closed Behavior
+## 5. Listing Module Integration (FavouriteListingLookupAdapter)
 
-The listing module (WP03, Sahan's work) introduces `ListingService.getListingsByIds(Collection<String>)`.
-- **Current State:** The listing module is not yet merged (`modules/listing` only contains `.gitkeep`).
-- **Fail-Closed Behavior:** No adapter is registered for `FavouriteListingLookup`. The service injects `ObjectProvider<FavouriteListingLookup>`. When the lookup is null, any request for `LISTING` favourites returns `503 Service Unavailable` with error code `FAVOURITES_LISTING_UNAVAILABLE`.
-- **Provider Favourites Unaffected:** Provider favourites (`type=PROVIDER`) continue to work normally via `FavouriteProviderLookupAdapter`.
-
-### How to Enable the Listing Adapter Once WP03 is Merged:
-1. Implement `FavouriteListingLookup` in an adapter class:
-   ```java
-   @Component
-   public class FavouriteListingLookupAdapter implements FavouriteListingLookup {
-       private final ListingService listingService;
-       // delegate lookup and lookupBatch to listingService.getListingsByIds(...)
-   }
-   ```
-2. Map listing fields:
-   - `name`: listing title
-   - `subtitle`: provider display name
-   - `category`: service category name
-   - `city`: service city
-   - `imageUrl`: primary service image
-   - `rating`, `reviewCount`, `priceFrom`, `priceUnit`, `currency`: from listing DTO
-   - `inactive`: true if listing status is `PAUSED`, `ARCHIVED`, or if the provider is suspended.
-3. Spring will automatically detect the `@Component` bean and `listingLookupProvider.getIfAvailable()` will return the adapter, enabling listing favourites without touching service logic.
+The listing module integration is handled by `FavouriteListingLookupAdapter` (`com.gamagerecruiters.marketplace.modules.customer.service.FavouriteListingLookupAdapter`):
+- **Implementation:** `@Component` implementing `FavouriteListingLookup` taking `ListingService` via its single constructor.
+- **Batch Resolution:** Calls `ListingService.getListingsByIds(Collection<String>)` in a single query for all requested listing favourites.
+- **Field Mapping:**
+  - `name`: `ListingResponse.title()`
+  - `subtitle`: `null`
+  - `category`: `ListingResponse.categoryName()`
+  - `city`: `ListingResponse.baseCity()` (falls back to `ListingResponse.district()` if `baseCity` is blank)
+  - `imageUrl`: `ListingResponse.coverImageUrl()`
+  - `rating`: `ListingResponse.ratingAvg()` (null if <= 0)
+  - `reviewCount`: `ListingResponse.ratingCount()` (null if <= 0)
+  - `priceFrom`: `ListingResponse.basePrice()`
+  - `priceUnit`: `ListingResponse.pricingModel()`
+  - `currency`: `"LKR"`
+  - `inactive`: `true` if `status != ListingStatus.ACTIVE` (e.g. `PAUSED`) or `!availableForBooking`, else `false`
+- **Missing Listings:** Listings deleted or not readable are silently omitted from the response.
+- **Fail-Closed Resilience:** If `ListingService` throws an unhandled exception, it propagates to the service layer and results in `503 Service Unavailable` with `FAVOURITES_LISTING_UNAVAILABLE`.

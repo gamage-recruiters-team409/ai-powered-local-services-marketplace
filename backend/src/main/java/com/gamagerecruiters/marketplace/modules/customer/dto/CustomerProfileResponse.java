@@ -10,6 +10,18 @@ public record CustomerProfileResponse(
         String phone,
         Role role,
         UserStatus status,
-        boolean emailVerified
+        boolean emailVerified,
+        String profileImageUrl
 ) {
+    public CustomerProfileResponse(
+            String id,
+            String fullName,
+            String email,
+            String phone,
+            Role role,
+            UserStatus status,
+            boolean emailVerified
+    ) {
+        this(id, fullName, email, phone, role, status, emailVerified, null);
+    }
 }

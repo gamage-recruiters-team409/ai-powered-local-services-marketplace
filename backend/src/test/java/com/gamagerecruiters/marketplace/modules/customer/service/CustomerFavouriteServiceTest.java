@@ -40,6 +40,11 @@ import com.gamagerecruiters.marketplace.modules.customer.domain.FavouriteType;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerFavouritePageResponse;
 import com.gamagerecruiters.marketplace.modules.customer.dto.CustomerFavouriteResponse;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerFavouriteRepository;
+import com.gamagerecruiters.marketplace.modules.listing.domain.ExecutionModel;
+import com.gamagerecruiters.marketplace.modules.listing.domain.ListingStatus;
+import com.gamagerecruiters.marketplace.modules.listing.domain.PricingModel;
+import com.gamagerecruiters.marketplace.modules.listing.dto.ListingResponse;
+import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
 
 @ExtendWith(MockitoExtension.class)
 class CustomerFavouriteServiceTest {
@@ -279,5 +284,74 @@ class CustomerFavouriteServiceTest {
         assertEquals(1, response.content().size());
         assertEquals("prov-existing", response.content().get(0).targetId());
         assertEquals(2, response.totalElements());
+    }
+
+    @Test
+    @DisplayName("getFavourites: listing favourites list correctly via FavouriteListingLookupAdapter")
+    void getFavourites_listingFavouritesListCorrectlyViaAdapter() {
+        String customerId = "cust-1";
+        Instant now = Instant.now();
+
+        CustomerFavourite favListing = new CustomerFavourite(customerId, FavouriteType.LISTING, "list-10", now);
+        favListing.setId("f-10");
+
+        Page<CustomerFavourite> page = new PageImpl<>(List.of(favListing), PageRequest.of(0, 6), 1);
+        when(customerFavouriteRepository.findByCustomerIdAndTypeOrderByCreatedAtDesc(eq(customerId), eq(FavouriteType.LISTING), any(Pageable.class)))
+                .thenReturn(page);
+
+        ListingService mockListingService = org.mockito.Mockito.mock(ListingService.class);
+        FavouriteListingLookupAdapter listingAdapter = new FavouriteListingLookupAdapter(mockListingService);
+        when(listingLookupProvider.getIfAvailable()).thenReturn(listingAdapter);
+
+        ListingResponse mockListing = new ListingResponse(
+                "list-10",
+                "prov-1",
+                "cat-1",
+                "Cleaning",
+                null,
+                "Home Cleaning",
+                "Full home cleaning service",
+                PricingModel.FIXED,
+                BigDecimal.valueOf(3500),
+                120,
+                ExecutionModel.ON_SITE,
+                "Colombo District",
+                "Colombo",
+                null,
+                15,
+                List.of(),
+                List.of(),
+                "https://images.local/cleaning.jpg",
+                List.of(),
+                ListingStatus.ACTIVE,
+                true,
+                true,
+                0,
+                List.of(),
+                null,
+                null,
+                4.7,
+                18,
+                1L,
+                now,
+                now
+        );
+        when(mockListingService.getListingsByIds(List.of("list-10"))).thenReturn(List.of(mockListing));
+
+        CustomerFavouritePageResponse response = customerFavouriteService.getFavourites(customerId, FavouriteType.LISTING, 0, 6);
+
+        assertEquals(1, response.content().size());
+        CustomerFavouriteResponse item = response.content().get(0);
+        assertEquals("list-10", item.targetId());
+        assertEquals("Home Cleaning", item.name());
+        assertEquals("Cleaning", item.category());
+        assertEquals("Colombo", item.city());
+        assertEquals("https://images.local/cleaning.jpg", item.imageUrl());
+        assertEquals(4.7, item.rating());
+        assertEquals(18, item.reviewCount());
+        assertEquals(BigDecimal.valueOf(3500), item.priceFrom());
+        assertEquals("FIXED", item.priceUnit());
+        assertEquals("LKR", item.currency());
+        assertFalse(item.inactive());
     }
 }
