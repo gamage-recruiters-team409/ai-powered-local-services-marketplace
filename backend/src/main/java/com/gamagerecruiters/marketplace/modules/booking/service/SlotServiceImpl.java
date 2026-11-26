@@ -44,8 +44,8 @@ public class SlotServiceImpl implements SlotService {
     /** How far ahead customers can look for slots. */
     static final int MAX_DAYS_AHEAD = 365;
 
-    static final int MIN_DURATION_MINUTES = 15;
-    static final int MAX_DURATION_MINUTES = 480;
+    static final int MIN_DURATION_MINUTES = 1;
+    static final int MAX_DURATION_MINUTES = BookingDurationPolicy.MAX_SCHEDULED_MINUTES;
 
     /**
      * Bookings that hold the provider's time: every open (unresolved) booking status from the
@@ -181,11 +181,12 @@ public class SlotServiceImpl implements SlotService {
         } catch (NumberFormatException e) {
             throw badRequest("INVALID_DURATION", "durationMinutes is required and must be a number");
         }
-        if (minutes < MIN_DURATION_MINUTES || minutes > MAX_DURATION_MINUTES || minutes % 15 != 0) {
+        // Any service length from WP03 is accepted and rounded up to the 15-minute grid (70 → 75).
+        if (minutes < MIN_DURATION_MINUTES || !BookingDurationPolicy.isSchedulable(minutes)) {
             throw badRequest("INVALID_DURATION", "durationMinutes must be between " + MIN_DURATION_MINUTES
-                    + " and " + MAX_DURATION_MINUTES + " in steps of 15");
+                    + " and " + MAX_DURATION_MINUTES);
         }
-        return minutes;
+        return BookingDurationPolicy.toScheduledMinutes(minutes);
     }
 
     private ApiException badRequest(String code, String message) {
