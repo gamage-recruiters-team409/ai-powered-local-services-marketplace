@@ -2,7 +2,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom'
+import { AuthContext } from '../../../auth/context/authContextValue'
+import GuestOnly from '../../../auth/guards/GuestOnly'
 import PublicLandingPage from './PublicLandingPage'
 
 const mockGetPublicCategoryTree = vi.fn()
@@ -69,23 +72,53 @@ function ProviderDestination() {
   )
 }
 
-function renderLanding(initialPath = '/') {
-  return render(
+function RegisterDestination() {
+  const loc = useLocation()
+  return (
+    <div data-testid="register-destination" data-search={loc.search}>
+      Register Destination
+    </div>
+  )
+}
+
+function renderLanding(initialPath = '/', authValue = null) {
+  const registerElement = authValue ? (
+    <GuestOnly>
+      <RegisterDestination />
+    </GuestOnly>
+  ) : (
+    <RegisterDestination />
+  )
+
+  const tree = (
     <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
         <Route path="/" element={<PublicLandingPage />} />
         <Route path="/search" element={<SearchDestination />} />
         <Route path="/providers/:providerId" element={<ProviderDestination />} />
         <Route
+          path="/customer/account/profile"
+          element={<div data-testid="customer-profile-destination">Customer Profile</div>}
+        />
+        <Route
+          path="/provider/profile"
+          element={<div data-testid="provider-profile-destination">Provider Profile</div>}
+        />
+        <Route
+          path="/admin"
+          element={<div data-testid="admin-destination">Admin Dashboard</div>}
+        />
+        <Route
           path="/login"
           element={<div data-testid="login-destination">Login Destination</div>}
         />
-        <Route
-          path="/register"
-          element={<div data-testid="register-destination">Register Destination</div>}
-        />
+        <Route path="/register" element={registerElement} />
       </Routes>
     </MemoryRouter>
+  )
+
+  return render(
+    authValue ? <AuthContext.Provider value={authValue}>{tree}</AuthContext.Provider> : tree
   )
 }
 
@@ -599,5 +632,212 @@ describe('PublicLandingPage (100% SRS-Accurate, Live-API Public UI)', () => {
     await user.click(pricingFaqBtn)
     expect(pricingFaqBtn.getAttribute('aria-expanded')).toBe('true')
     expect(within(faqSection).getByText(/default 10%/i)).toBeTruthy()
+  })
+
+  it('shows Customer account menu with real /customer/account/* links, hides Become a Provider, and navigates to Profile when signed in', async () => {
+    const user = userEvent.setup()
+    const logout = vi.fn().mockResolvedValue(undefined)
+
+    renderLanding('/', {
+      isAuthenticated: true,
+      isLoading: false,
+      mustChangePassword: false,
+      user: { name: 'Nimal Perera', email: 'nimal@localserve.lk', role: 'CUSTOMER' },
+      logout,
+    })
+
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('link', { name: 'Log in' })).toBeNull()
+    expect(within(header).queryByRole('link', { name: 'Sign up' })).toBeNull()
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Account menu: Nimal Perera' }))
+    const menu = screen.getByRole('menu', { name: 'Account navigation' })
+    expect(within(menu).getByRole('menuitem', { name: 'Favorites' }).getAttribute('href')).toBe(
+      '/customer/account/favorites'
+    )
+    expect(within(menu).getByRole('menuitem', { name: 'Payments' }).getAttribute('href')).toBe(
+      '/customer/account/payments'
+    )
+    expect(within(menu).getByRole('menuitem', { name: 'Settings' }).getAttribute('href')).toBe(
+      '/customer/account/settings'
+    )
+
+    await user.click(within(menu).getByRole('menuitem', { name: 'Profile' }))
+    expect(await screen.findByTestId('customer-profile-destination')).toBeTruthy()
+  })
+
+  it('hides guest-only Become a Provider in desktop and mobile navbar for signed-in CUSTOMER under real GuestOnly guard (F1)', async () => {
+    const user = userEvent.setup()
+    const customerAuth = {
+      isAuthenticated: true,
+      isLoading: false,
+      mustChangePassword: false,
+      user: { name: 'Nimal Perera', email: 'nimal@localserve.lk', role: 'CUSTOMER' },
+      logout: vi.fn(),
+    }
+
+    // Attempting to visit /register?role=provider as an authenticated CUSTOMER redirects back to / via real GuestOnly
+    renderLanding('/register?role=provider', customerAuth)
+
+    expect(
+      await screen.findByRole('heading', { name: /Hire verified pros with absolute certainty\./i })
+    ).toBeTruthy()
+    expect(screen.queryByTestId('register-destination')).toBeNull()
+
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
+    // Mobile navigation drawer must also omit Become a Provider while preserving Customer links
+    await user.click(within(header).getByRole('button', { name: 'Open navigation menu' }))
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+    expect(within(header).getByRole('link', { name: 'Profile' }).getAttribute('href')).toBe(
+      '/customer/account/profile'
+    )
+  })
+
+  it('preserves Become a Provider navbar link for unauthenticated guests and reaches /register?role=provider through real GuestOnly (F1)', async () => {
+    const user = userEvent.setup()
+
+    renderLanding('/', {
+      isAuthenticated: false,
+      isLoading: false,
+      mustChangePassword: false,
+      user: null,
+      logout: vi.fn(),
+    })
+
+    const header = screen.getByRole('banner')
+    const becomeProviderLink = within(header).getByRole('link', { name: 'Become a Provider' })
+    expect(becomeProviderLink.getAttribute('href')).toBe('/register?role=provider')
+
+    await user.click(becomeProviderLink)
+
+    const registerDest = await screen.findByTestId('register-destination')
+    expect(registerDest.getAttribute('data-search')).toBe('?role=provider')
+  })
+
+  it('shows Provider navigation links and hides Become a Provider when signed in as PROVIDER', async () => {
+    const user = userEvent.setup()
+
+    renderLanding('/', {
+      isAuthenticated: true,
+      mustChangePassword: false,
+      user: { fullName: 'Kamal Silva', email: 'kamal@localserve.lk', role: 'PROVIDER' },
+      logout: vi.fn(),
+    })
+
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
+    await user.click(within(header).getByRole('button', { name: 'Account menu: Kamal Silva' }))
+    const menu = screen.getByRole('menu', { name: 'Account navigation' })
+    expect(
+      within(menu).getByRole('menuitem', { name: 'Verification' }).getAttribute('href')
+    ).toBe('/provider/verification')
+    expect(
+      within(menu).getByRole('menuitem', { name: 'Earnings & Payouts' }).getAttribute('href')
+    ).toBe('/provider/earnings')
+    expect(
+      within(menu).getByRole('menuitem', { name: 'My Disputes' }).getAttribute('href')
+    ).toBe('/provider/disputes')
+
+    await user.click(within(menu).getByRole('menuitem', { name: 'Provider Profile' }))
+    expect(await screen.findByTestId('provider-profile-destination')).toBeTruthy()
+  })
+
+  it.each(['SUPER_ADMIN', 'ADMIN', 'SUPPORT_ADMIN', 'MODERATOR', 'FINANCE_ADMIN'])(
+    'routes backend admin role %s to Admin Dashboard (/admin) and never exposes Customer links',
+    async (adminRole) => {
+      const user = userEvent.setup()
+
+      renderLanding('/', {
+        isAuthenticated: true,
+        mustChangePassword: false,
+        user: { name: 'System Admin', email: 'admin@localserve.lk', role: adminRole },
+        logout: vi.fn(),
+      })
+
+      const header = screen.getByRole('banner')
+      expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
+      await user.click(within(header).getByRole('button', { name: 'Account menu: System Admin' }))
+      const menu = screen.getByRole('menu', { name: 'Account navigation' })
+      expect(within(menu).queryByRole('menuitem', { name: 'Profile' })).toBeNull()
+      await user.click(within(menu).getByRole('menuitem', { name: 'Admin Dashboard' }))
+      expect(await screen.findByTestId('admin-destination')).toBeTruthy()
+    }
+  )
+
+  it('routes mustChangePassword users strictly to /change-password + Log out', async () => {
+    const user = userEvent.setup()
+
+    renderLanding('/', {
+      isAuthenticated: true,
+      mustChangePassword: true,
+      user: { mustChangePassword: true },
+      logout: vi.fn(),
+    })
+
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
+    await user.click(within(header).getByRole('button', { name: 'Account menu: Account' }))
+    const menu = screen.getByRole('menu', { name: 'Account navigation' })
+    expect(
+      within(menu).getByRole('menuitem', { name: 'Change Password' }).getAttribute('href')
+    ).toBe('/change-password')
+    expect(within(menu).queryByRole('menuitem', { name: 'Profile' })).toBeNull()
+  })
+
+  it('logs out from PublicNavbar, restores guest Log in/Sign up actions, and refreshes reviews to guest state', async () => {
+    const user = userEvent.setup()
+    mockGetLiveCustomerReviews
+      .mockResolvedValueOnce({ reviews: [], requiresAuth: false, failed: false })
+      .mockResolvedValueOnce({ reviews: [], requiresAuth: true, failed: false })
+
+    function StatefulAuthLanding() {
+      const [signedIn, setSignedIn] = useState(true)
+      const value = {
+        isAuthenticated: signedIn,
+        mustChangePassword: false,
+        user: signedIn
+          ? { name: 'Nimal Perera', email: 'nimal@localserve.lk', role: 'CUSTOMER' }
+          : null,
+        logout: vi.fn(async () => {
+          setSignedIn(false)
+        }),
+      }
+      return (
+        <AuthContext.Provider value={value}>
+          <MemoryRouter initialEntries={['/']}>
+            <Routes>
+              <Route path="/" element={<PublicLandingPage />} />
+            </Routes>
+          </MemoryRouter>
+        </AuthContext.Provider>
+      )
+    }
+
+    render(<StatefulAuthLanding />)
+
+    expect(
+      await screen.findByRole('heading', { name: /No Customer Reviews Published Yet/i })
+    ).toBeTruthy()
+
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Account menu: Nimal Perera' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Log out' }))
+
+    expect(await screen.findByRole('link', { name: 'Log in' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Sign up' })).toBeTruthy()
+    expect(
+      within(header).getByRole('link', { name: 'Become a Provider' }).getAttribute('href')
+    ).toBe('/register?role=provider')
+    expect(
+      await screen.findByRole('heading', { name: /Sign In to View Verified Customer Reviews/i })
+    ).toBeTruthy()
   })
 })

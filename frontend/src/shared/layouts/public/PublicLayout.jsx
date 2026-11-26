@@ -9,6 +9,10 @@ const DISPLAY_FONT_HREF =
 export function PublicLayout({
   selectedCity,
   onCityChange,
+  user = null,
+  accountMenuItems = [],
+  showBecomeProvider = true,
+  onLogout,
   children,
 }) {
   // Load Bricolage Grotesque strictly from PublicLayout so shared frontend/index.html stays untouched
@@ -25,7 +29,14 @@ export function PublicLayout({
 
   return (
     <div id="top">
-      <PublicNavbar selectedCity={selectedCity} onCityChange={onCityChange} />
+      <PublicNavbar
+        selectedCity={selectedCity}
+        onCityChange={onCityChange}
+        user={user}
+        accountMenuItems={accountMenuItems}
+        showBecomeProvider={showBecomeProvider}
+        onLogout={onLogout}
+      />
       <main>{children}</main>
       <PublicFooter />
     </div>
