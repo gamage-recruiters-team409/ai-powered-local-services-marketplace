@@ -27,6 +27,7 @@ import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
 import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -44,6 +45,8 @@ import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingPriceSnapshot;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
+import com.gamagerecruiters.marketplace.modules.booking.domain.RescheduleRequest;
+import com.gamagerecruiters.marketplace.modules.booking.domain.RescheduleStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingListItem;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingPageResponse;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
@@ -276,5 +279,44 @@ class BookingLifecycleMongoIntegrationTest {
                 () -> facade.markPaymentExpired(b.getId(), PAY_REF)).status()).isEqualTo(BookingStatus.EXPIRED);
         assertThat(expiryJob.run().paymentsExpired()).isZero();
         assertThat(statusOf(b.getId())).isEqualTo(BookingStatus.EXPIRED);
+    }
+
+    // ---------- Reschedule: expiry of unanswered requests (real MongoDB query) ----------
+
+    @Test
+    @DisplayName("Reschedule: only PENDING requests past their deadline are expired by the job; booking keeps its time")
+    void expiresUnansweredRescheduleRequests() {
+        Booking late = save("cust-r", "prov-r", BookingStatus.CONFIRMED, SAME_SLOT);
+        late.getRescheduleRequests().add(rescheduleRequest(RescheduleStatus.PENDING, NOW.minusSeconds(60)));
+        bookingRepository.save(late);
+        Booking stillOpen = save("cust-r", "prov-r", BookingStatus.CONFIRMED, SAME_SLOT.plus(Duration.ofDays(1)));
+        stillOpen.getRescheduleRequests().add(rescheduleRequest(RescheduleStatus.PENDING, NOW.plusSeconds(3600)));
+        bookingRepository.save(stillOpen);
+        Booking answered = save("cust-r", "prov-r", BookingStatus.CONFIRMED, SAME_SLOT.plus(Duration.ofDays(2)));
+        answered.getRescheduleRequests().add(rescheduleRequest(RescheduleStatus.REJECTED, NOW.minusSeconds(60)));
+        bookingRepository.save(answered);
+
+        assertThat(bookingRepository.findWithExpiredRescheduleRequests(NOW, PageRequest.of(0, 100)))
+                .extracting(Booking::getId).containsExactly(late.getId());
+        assertThat(expiryJob.run().reschedulesExpired()).isEqualTo(1);
+
+        Booking stored = bookingRepository.findById(late.getId()).orElseThrow();
+        assertThat(stored.getRescheduleRequests().get(0).getStatus()).isEqualTo(RescheduleStatus.EXPIRED);
+        assertThat(stored.getSlotStart()).isEqualTo(SAME_SLOT);
+        assertThat(bookingRepository.findById(stillOpen.getId()).orElseThrow().pendingReschedule()).isPresent();
+        assertThat(expiryJob.run().reschedulesExpired()).isZero();
+    }
+
+    private static RescheduleRequest rescheduleRequest(RescheduleStatus status, Instant expiresAt) {
+        RescheduleRequest r = new RescheduleRequest();
+        r.setId(UUID.randomUUID().toString());
+        r.setRequestedBy("cust-r");
+        r.setRequestedByRole("CUSTOMER");
+        r.setPreviousSlotStart(SAME_SLOT);
+        r.setProposedSlotStart(SAME_SLOT.plus(Duration.ofDays(3)));
+        r.setStatus(status);
+        r.setRequestedAt(NOW.minus(Duration.ofHours(12)));
+        r.setExpiresAt(expiresAt);
+        return r;
     }
 }

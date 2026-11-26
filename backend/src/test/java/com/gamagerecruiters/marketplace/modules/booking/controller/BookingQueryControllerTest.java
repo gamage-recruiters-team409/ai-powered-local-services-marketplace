@@ -137,7 +137,7 @@ class BookingQueryControllerTest {
         mockUser("cust-token", "cust-1", Role.CUSTOMER);
         when(queryService.getBookingDetails("b-1")).thenReturn(new BookingDetailsResponse("b-1", "BK-1",
                 BookingStatus.CONFIRMED, "CUSTOMER", "lst-1", "AC Repair", "cust-1", "prov-1", null, null, null,
-                null, null, null, 120, true, null, null, null, null, null, null, null, List.of()));
+                null, null, null, 120, true, null, null, null, null, null, null, null, List.of(), null, 2));
 
         mockMvc.perform(get("/api/v1/bookings/b-1").header("Authorization", "Bearer cust-token"))
                 .andExpect(status().isOk())

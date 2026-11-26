@@ -28,6 +28,7 @@ import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingAddress;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingDeclineReason;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
+import com.gamagerecruiters.marketplace.modules.booking.domain.RescheduleRequest;
 import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationReason;
 import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationType;
 import com.gamagerecruiters.marketplace.modules.notification.service.NotificationEvent;
@@ -183,5 +184,41 @@ class BookingNotifierTest {
         notifier.accepted(b);
 
         assertThat(sent(1).get(0).data()).containsOnlyKeys("slotStart", "bookingStatus");
+    }
+
+    private static RescheduleRequest reschedule(String requestedBy) {
+        RescheduleRequest r = new RescheduleRequest();
+        r.setRequestedBy(requestedBy);
+        r.setProposedSlotStart(Instant.parse("2026-12-02T05:00:00Z"));
+        return r;
+    }
+
+    @Test
+    @DisplayName("Reschedule requested by the customer → provider, slotStart is the PROPOSED time")
+    void rescheduleRequested() {
+        notifier.rescheduleRequested(booking(BookingStatus.CONFIRMED), reschedule("cust-1"));
+
+        NotificationEvent event = sent(1).get(0);
+        assertThat(event.type()).isEqualTo(NotificationType.RESCHEDULE_REQUESTED);
+        assertThat(event.recipientUserId()).isEqualTo("prov-1");
+        assertThat(event.data()).containsEntry("slotStart", "2026-12-02T05:00:00Z");
+    }
+
+    @Test
+    @DisplayName("Reschedule approved / rejected / expired → the party who asked")
+    void rescheduleOutcomes() {
+        Booking b = booking(BookingStatus.CONFIRMED);
+        RescheduleRequest byProvider = reschedule("prov-1");
+
+        notifier.rescheduleApproved(b, byProvider);
+        notifier.rescheduleRejected(b, byProvider);
+        notifier.rescheduleExpired(b, byProvider);
+
+        List<NotificationEvent> events = sent(3);
+        assertThat(events).extracting(NotificationEvent::type).containsExactly(
+                NotificationType.RESCHEDULE_APPROVED, NotificationType.RESCHEDULE_REJECTED,
+                NotificationType.RESCHEDULE_EXPIRED);
+        assertThat(events).extracting(NotificationEvent::recipientUserId).containsOnly("prov-1");
+        assertThat(events.get(2).data()).containsEntry("reason", "NO_RESPONSE");
     }
 }

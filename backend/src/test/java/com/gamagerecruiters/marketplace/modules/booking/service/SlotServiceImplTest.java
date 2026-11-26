@@ -266,6 +266,21 @@ class SlotServiceImplTest {
         assertThat(service.isSlotAvailable(PROVIDER, Instant.parse("2026-11-23T06:30:00Z"), 60)).isFalse();
     }
 
+    @Test
+    @DisplayName("Reschedule: the booking being moved does not block its own time; other bookings still do")
+    void excludedBookingDoesNotBlockItself() {
+        givenWeekdaySchedule();
+        givenNotBlocked(MONDAY);
+        Booking self = booking("2026-11-23T06:30:00Z", "2026-11-23T07:30:00Z");
+        self.setId("b-self");
+        givenExistingBookings(List.of(self));
+
+        assertThat(starts(service.getAvailableSlots(PROVIDER, MONDAY, "60"))).doesNotContain("12:00");
+        assertThat(starts(service.getAvailableSlots(PROVIDER, MONDAY, "60", "b-self"))).contains("12:00", "11:30");
+        assertThat(service.isSlotAvailable(PROVIDER, Instant.parse("2026-11-23T06:30:00Z"), 60, "b-self")).isTrue();
+        assertThat(service.isSlotAvailable(PROVIDER, Instant.parse("2026-11-23T06:30:00Z"), 60, "b-other")).isFalse();
+    }
+
     @ParameterizedTest(name = "providerId={0}, date={1}, duration={2} → 400 {3}")
     @CsvSource({
             "'', 2026-11-23, 60, INVALID_PROVIDER",

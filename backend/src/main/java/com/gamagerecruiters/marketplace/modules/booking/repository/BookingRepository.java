@@ -7,6 +7,7 @@ import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.data.mongodb.repository.Query;
 
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
@@ -41,4 +42,8 @@ public interface BookingRepository extends MongoRepository<Booking, String> {
     Page<Booking> findByProviderId(String providerId, Pageable pageable);
 
     Page<Booking> findByProviderIdAndStatusIn(String providerId, Collection<BookingStatus> statuses, Pageable pageable);
+
+    /** Bookings with a PENDING reschedule request whose answer time has passed (oldest first via paging). */
+    @Query("{ 'rescheduleRequests': { '$elemMatch': { 'status': 'PENDING', 'expiresAt': { '$lt': ?0 } } } }")
+    List<Booking> findWithExpiredRescheduleRequests(Instant now, Pageable pageable);
 }

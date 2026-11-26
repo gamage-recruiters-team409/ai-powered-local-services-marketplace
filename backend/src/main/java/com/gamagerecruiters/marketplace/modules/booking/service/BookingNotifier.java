@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.booking.service;
 
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -11,6 +12,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingDeclineReason;
+import com.gamagerecruiters.marketplace.modules.booking.domain.RescheduleRequest;
 import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationReason;
 import com.gamagerecruiters.marketplace.modules.notification.domain.NotificationType;
 import com.gamagerecruiters.marketplace.modules.notification.service.NotificationEvent;
@@ -70,6 +72,33 @@ public class BookingNotifier {
         send(NotificationType.BOOKING_CONFIRMED, booking.getProviderId(), booking, null);
     }
 
+    /** New time proposed → the other party; slotStart is the PROPOSED time. */
+    public void rescheduleRequested(Booking booking, RescheduleRequest request) {
+        send(NotificationType.RESCHEDULE_REQUESTED, otherParty(booking, request), booking, null,
+                request.getProposedSlotStart());
+    }
+
+    /** Approved → the party who asked; slotStart is the new (now current) time. */
+    public void rescheduleApproved(Booking booking, RescheduleRequest request) {
+        send(NotificationType.RESCHEDULE_APPROVED, request.getRequestedBy(), booking, null, booking.getSlotStart());
+    }
+
+    /** Rejected → the party who asked; the booking keeps its time. */
+    public void rescheduleRejected(Booking booking, RescheduleRequest request) {
+        send(NotificationType.RESCHEDULE_REJECTED, request.getRequestedBy(), booking, null, booking.getSlotStart());
+    }
+
+    /** Not answered in time → the party who asked; reason NO_RESPONSE. */
+    public void rescheduleExpired(Booking booking, RescheduleRequest request) {
+        send(NotificationType.RESCHEDULE_EXPIRED, request.getRequestedBy(), booking, NotificationReason.NO_RESPONSE,
+                booking.getSlotStart());
+    }
+
+    private static String otherParty(Booking booking, RescheduleRequest request) {
+        return request.getRequestedBy() != null && request.getRequestedBy().equals(booking.getCustomerId())
+                ? booking.getProviderId() : booking.getCustomerId();
+    }
+
     static NotificationReason toNotificationReason(BookingDeclineReason reason) {
         if (reason == null) {
             return NotificationReason.OTHER;
@@ -82,12 +111,16 @@ public class BookingNotifier {
     }
 
     static Map<String, String> data(Booking booking, NotificationReason reason) {
+        return data(booking, reason, booking.getSlotStart());
+    }
+
+    static Map<String, String> data(Booking booking, NotificationReason reason, Instant slotStart) {
         Map<String, String> data = new LinkedHashMap<>();
         if (booking.getRef() != null) {
             data.put("reference", booking.getRef());
         }
-        if (booking.getSlotStart() != null) {
-            data.put("slotStart", booking.getSlotStart().toString());
+        if (slotStart != null) {
+            data.put("slotStart", slotStart.toString());
         }
         if (booking.getStatus() != null) {
             data.put("bookingStatus", booking.getStatus().name());
@@ -103,10 +136,16 @@ public class BookingNotifier {
     }
 
     private void send(NotificationType type, String recipientUserId, Booking booking, NotificationReason reason) {
+        send(type, recipientUserId, booking, reason, booking.getSlotStart());
+    }
+
+    private void send(NotificationType type, String recipientUserId, Booking booking, NotificationReason reason,
+                      Instant slotStart) {
         if (recipientUserId == null || recipientUserId.isBlank()) {
             return;
         }
-        NotificationEvent event = new NotificationEvent(type, recipientUserId, booking.getId(), data(booking, reason));
+        NotificationEvent event = new NotificationEvent(type, recipientUserId, booking.getId(),
+                data(booking, reason, slotStart));
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override

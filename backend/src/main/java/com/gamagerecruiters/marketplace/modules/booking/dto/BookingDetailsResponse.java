@@ -35,7 +35,9 @@ public record BookingDetailsResponse(
         Instant acceptedAt,
         Instant paymentDueAt,
         Instant createdAt,
-        List<TimelineEntry> timeline
+        List<TimelineEntry> timeline,
+        RescheduleView pendingReschedule,
+        int remainingReschedules
 ) {
 
     /** Price captured at booking creation. Commission is not shown to customers or providers. */

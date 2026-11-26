@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.booking.domain;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Version;
@@ -56,6 +57,9 @@ public class Booking {
 
     private BookingStatus status;
     private List<BookingStatusChange> timeline = new ArrayList<>();
+
+    /** Reschedule history (FR-BOOK-007); at most one PENDING at a time. */
+    private List<RescheduleRequest> rescheduleRequests = new ArrayList<>();
 
     private Instant createdAt;
     private Instant updatedAt;
@@ -237,5 +241,25 @@ public class Booking {
 
     public void setPaymentDueAt(Instant paymentDueAt) {
         this.paymentDueAt = paymentDueAt;
+    }
+
+    public List<RescheduleRequest> getRescheduleRequests() {
+        return rescheduleRequests;
+    }
+
+    public void setRescheduleRequests(List<RescheduleRequest> rescheduleRequests) {
+        this.rescheduleRequests = rescheduleRequests == null ? new ArrayList<>() : rescheduleRequests;
+    }
+
+    /** The open reschedule request, if any. */
+    public Optional<RescheduleRequest> pendingReschedule() {
+        return rescheduleRequests == null ? Optional.empty()
+                : rescheduleRequests.stream().filter(RescheduleRequest::isPending).findFirst();
+    }
+
+    /** How many times this booking has actually been moved. */
+    public long approvedRescheduleCount() {
+        return rescheduleRequests == null ? 0
+                : rescheduleRequests.stream().filter(r -> r.getStatus() == RescheduleStatus.APPROVED).count();
     }
 }
