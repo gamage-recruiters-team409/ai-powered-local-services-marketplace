@@ -1,5 +1,8 @@
 package com.gamagerecruiters.marketplace.modules.payment.controller;
 
+import java.time.Instant;
+
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -14,10 +17,13 @@ import org.springframework.web.bind.annotation.RestController;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
+import com.gamagerecruiters.marketplace.modules.payment.domain.PayoutStatus;
 import com.gamagerecruiters.marketplace.modules.payment.dto.ConfirmPayoutRequest;
 import com.gamagerecruiters.marketplace.modules.payment.dto.FailPayoutRequest;
 import com.gamagerecruiters.marketplace.modules.payment.dto.PayoutPageResponse;
 import com.gamagerecruiters.marketplace.modules.payment.dto.PayoutResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.PayoutSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.payment.service.AdminPayoutQueryService;
 import com.gamagerecruiters.marketplace.modules.payment.service.PayoutService;
 
 import jakarta.validation.Valid;
@@ -27,18 +33,51 @@ import jakarta.validation.Valid;
 public class AdminPayoutController {
 
     private final PayoutService payoutService;
+    private final AdminPayoutQueryService adminPayoutQueryService;
 
-    public AdminPayoutController(PayoutService payoutService) {
+    public AdminPayoutController(
+            PayoutService payoutService,
+            AdminPayoutQueryService adminPayoutQueryService) {
         this.payoutService = payoutService;
+        this.adminPayoutQueryService = adminPayoutQueryService;
     }
 
+    /**
+     * Returns a paginated payout list with optional identifier,
+     * lifecycle status, and creation timestamp filters.
+     *
+     * <p>
+     * Existing clients may continue to provide only page and size.
+     * The lower date boundary is inclusive and the upper boundary
+     * is exclusive.
+     * </p>
+     */
     @GetMapping
     @PreAuthorize("@adminAccessPolicyService.canViewArea(authentication, 'FINANCE_ADMIN')")
     public ResponseEntity<PayoutPageResponse<PayoutResponse>> getPayouts(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size) {
-        var payouts = payoutService.getAdminPayoutHistory(page, size);
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) PayoutStatus status,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to) {
+
+        var payouts = adminPayoutQueryService.getPayouts(
+                page, size, search, status, from, to);
+
         return ResponseEntity.ok(PayoutPageResponse.adminFrom(payouts));
+    }
+
+    /**
+     * Returns global payout counts independently of list filters
+     * and pagination.
+     */
+    @GetMapping("/summary")
+    @PreAuthorize("@adminAccessPolicyService.canViewArea(authentication, 'FINANCE_ADMIN')")
+    public ResponseEntity<PayoutSummaryResponse> getPayoutSummary() {
+        return ResponseEntity.ok(adminPayoutQueryService.getSummary());
     }
 
     @GetMapping("/{payoutId}")

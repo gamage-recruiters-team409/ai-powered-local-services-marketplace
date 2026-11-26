@@ -1,0 +1,697 @@
+/**
+ * WP07 - Finance Admin Payout Queue
+ *
+ * Uses the existing admin design tokens to maintain visual
+ * consistency across the administration workspace.
+ */
+
+/* Main page layout. */
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+  color: var(--adm-text, #1e293b);
+  font-family: var(--adm-font, system-ui, sans-serif);
+}
+
+/* Page heading and refresh controls. */
+.pageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.pageHeader h1 {
+  margin: 0;
+  color: var(--adm-heading, #0f172a);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.pageHeader p {
+  margin: 8px 0 0;
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* Payout queue content panel. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 24px;
+  background: var(--adm-surface, #ffffff);
+  border: 1px solid var(--adm-border, #e2e8f0);
+  border-radius: var(--adm-radius-lg, 12px);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+
+/* Queue heading and server-provided record count. */
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.sectionHeader h2 {
+  margin: 0;
+  color: var(--adm-heading, #0f172a);
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.recordCount {
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Modal content and financial record details. */
+.modalContent {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.detailsList {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1.2fr);
+  align-items: start;
+  gap: 14px 20px;
+  margin: 0;
+}
+
+.detailsList dt {
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.detailsList dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--adm-heading, #0f172a);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Groups lifecycle actions without changing shared button styles. */
+.actionGroup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+/* Explicit confirmation area for financial state transitions. */
+.confirmationPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  background: var(--adm-warning-bg, #fffbeb);
+  border: 1px solid var(--adm-warning-border, #fcd34d);
+  border-radius: var(--adm-radius-md, 10px);
+}
+
+.confirmationPanel h3 {
+  margin: 0;
+  color: var(--adm-warning-text, #92400e);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.confirmationPanel p {
+  margin: 0;
+  color: var(--adm-text, #1e293b);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.confirmationPanel .confirmationAmount {
+  color: var(--adm-heading, #0f172a);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Preserve visible keyboard focus for interactive controls. */
+.container :focus-visible,
+.modalContent :focus-visible {
+  outline: 2px solid var(--adm-focus, #0f766e);
+  outline-offset: 3px;
+}
+
+/* Tablet and mobile layout adjustments. */
+@media (max-width: 768px) {
+  .container {
+    gap: 20px;
+  }
+
+  .panel {
+    padding: 16px;
+  }
+
+  .pageHeader h1 {
+    font-size: 1.375rem;
+  }
+}
+
+/* Stack financial details on narrow mobile screens. */
+@media (max-width: 480px) {
+  .container {
+    gap: 16px;
+  }
+
+  .pageHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .panel,
+  .confirmationPanel {
+    padding: 14px;
+  }
+
+  .detailsList {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .detailsList dd {
+    margin-bottom: 10px;
+  }
+
+  .actionGroup {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .actionGroup > button {
+    width: 100%;
+  }
+}
+
+/* ==================================================
+   Hi-Fi payout queue content alignment
+   ================================================== */
+
+/* Global payout status summary. */
+.summarySection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.summaryCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 20px;
+  background: var(--adm-surface, #ffffff);
+  border: 1px solid var(--adm-border, #e2e8f0);
+  border-radius: var(--adm-radius-lg, 12px);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.03);
+}
+
+.summaryCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.summaryIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.summaryCard[data-tone="pending"] .summaryIcon {
+  color: #b45309;
+  background: #fef3c7;
+}
+
+.summaryCard[data-tone="processing"] .summaryIcon {
+  color: #7c3aed;
+  background: #ede9fe;
+}
+
+.summaryCard[data-tone="paid"] .summaryIcon {
+  color: #15803d;
+  background: #dcfce7;
+}
+
+.summaryCard[data-tone="failed"] .summaryIcon {
+  color: #b91c1c;
+  background: #fee2e2;
+}
+
+.summaryValue {
+  color: var(--adm-heading, #0f172a);
+  font-size: 1.875rem;
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.summaryCard p {
+  margin: 0;
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+/* Server-side payout filter toolbar. */
+.filterPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px;
+  background: var(--adm-surface, #ffffff);
+  border: 1px solid var(--adm-border, #e2e8f0);
+  border-radius: var(--adm-radius-lg, 12px);
+}
+
+.filterGrid {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1.6fr)
+    repeat(3, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+
+.filterGrid > * {
+  min-width: 0;
+}
+
+.searchField {
+  min-width: 0;
+}
+
+.filterField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.filterField label {
+  color: var(--adm-heading, #0f172a);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.filterField select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 10px 12px;
+  color: var(--adm-text, #1e293b);
+  background: var(--adm-surface, #ffffff);
+  border: 1px solid var(--adm-border, #e2e8f0);
+  border-radius: var(--adm-radius-md, 8px);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.filterField select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.filterFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.filterHint {
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.filterActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-left: auto;
+}
+
+/* Payout table content. */
+.reference {
+  color: var(--adm-primary, #0f766e);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.providerIdentifier {
+  color: var(--adm-heading, #0f172a);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.payoutType {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.payoutType strong {
+  color: var(--adm-heading, #0f172a);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.payoutType span {
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.75rem;
+}
+
+.amount {
+  color: var(--adm-heading, #0f172a);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Empty queue and filtered no-results state. */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 260px;
+  padding: 32px 16px;
+  text-align: center;
+}
+
+.emptyIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  color: var(--adm-text-muted, #64748b);
+  background: #f1f5f9;
+  border-radius: 50%;
+}
+
+.emptyState h3 {
+  margin: 0;
+  color: var(--adm-heading, #0f172a);
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.emptyState p {
+  max-width: 420px;
+  margin: 0;
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+/* Responsive summary and filter layouts. */
+@media (max-width: 1200px) {
+  .summaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .filterGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .summaryGrid,
+  .filterGrid {
+    gap: 12px;
+  }
+
+  .summaryCard,
+  .filterPanel {
+    padding: 16px;
+  }
+
+  .summaryValue {
+    font-size: 1.625rem;
+  }
+
+  .filterFooter {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .filterActions {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .summaryGrid,
+  .filterGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .summaryCard,
+  .filterPanel {
+    padding: 14px;
+  }
+
+  .filterActions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .filterActions > button {
+    width: 100%;
+  }
+
+  .emptyState {
+    min-height: 220px;
+    padding: 24px 12px;
+  }
+}
+
+/* Payout queue result range and shared pagination navigation. */
+.paginationFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px 0 0;
+  min-width: 0;
+}
+
+.paginationSummary {
+  color: var(--adm-text-muted, #64748b);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Empty results have no numbered pages to navigate. */
+.emptyPagination :global(.shared-pagination__pages) {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .paginationFooter {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}
+
+/* =========================================================
+   Payout review - Hi-Fi content layout
+   ========================================================= */
+
+.reviewGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+  width: 100%;
+}
+
+.reviewColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.reviewCard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px;
+  background: var(--adm-surface, #ffffff);
+  border: 1px solid var(--adm-border, #e2e8f0);
+  border-radius: 12px;
+}
+
+.reviewCard h2 {
+  margin: 0;
+  color: var(--adm-heading, #0f172a);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.reviewCard .detailsList {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.9fr) minmax(0, 1.6fr);
+  align-items: start;
+  gap: 12px 16px;
+  margin: 0;
+}
+
+.reviewCard .detailsList dt {
+  color: var(--adm-text, #475569);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.reviewCard .detailsList dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--adm-heading, #0f172a);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.reviewCard .detailsList dd.reference {
+  color: #0f766e;
+}
+
+.reviewAmount {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: #f0fdfa;
+  border: 1px solid #ccfbf1;
+  border-radius: 8px;
+}
+
+.reviewAmount span {
+  color: #115e59;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.reviewAmount strong {
+  color: #0f766e;
+  font-size: clamp(20px, 2vw, 26px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.reviewDescription {
+  margin: 0;
+  color: var(--adm-text, #475569);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.reviewCard .actionGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+}
+
+.reviewCard .actionGroup > button {
+  flex: 1 1 130px;
+}
+
+/* Keep financial information readable on smaller screens. */
+@media (max-width: 1050px) {
+  .reviewGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .reviewGrid,
+  .reviewColumn {
+    gap: 12px;
+  }
+
+  .reviewCard {
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .reviewCard .detailsList {
+    grid-template-columns: minmax(90px, 0.8fr) minmax(0, 1.2fr);
+    gap: 10px;
+  }
+
+  .reviewCard .actionGroup {
+    flex-direction: column;
+  }
+
+  .reviewCard .actionGroup > button {
+    flex: none;
+    width: 100%;
+  }
+}
+
+@media (max-width: 360px) {
+  .reviewCard .detailsList {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .reviewCard .detailsList dd {
+    margin-bottom: 8px;
+  }
+}
