@@ -29,12 +29,14 @@ class StripeWebhookTransactionServiceTest {
 
     private MongoTemplate mongoTemplate;
     private PlatformTransactionManager transactionManager;
+    private BookingPaymentConfirmationService bookingConfirmationService;
     private StripeWebhookTransactionService service;
 
     @BeforeEach
     void setUp() {
         mongoTemplate = mock(MongoTemplate.class);
         transactionManager = mock(PlatformTransactionManager.class);
+        bookingConfirmationService = mock(BookingPaymentConfirmationService.class);
 
         TransactionStatus transactionStatus = mock(TransactionStatus.class);
 
@@ -42,7 +44,7 @@ class StripeWebhookTransactionServiceTest {
                 .thenReturn(transactionStatus);
 
         service = new StripeWebhookTransactionService(
-                mongoTemplate, transactionManager);
+                mongoTemplate, transactionManager, bookingConfirmationService, true);
     }
 
     private StripeWebhookEvent receivedEvent() {
@@ -761,4 +763,177 @@ class StripeWebhookTransactionServiceTest {
         verify(transactionManager).rollback(any());
         verify(transactionManager, never()).commit(any());
     }
+
+
+    /**
+     * A verified capture must synchronize its booking before
+     * the transaction is committed.
+     */
+    @Test
+    void verifiedCaptureSynchronizesBookingBeforeCommit() {
+        Payment payment = initiatedPayment();
+
+        mockEventAndPayment(receivedEvent(), payment);
+        mockSuccessfulUpdates();
+
+        assertTrue(service.captureVerifiedPayment(
+                "evt_test_123", "pay_123", "cs_test_123",
+                "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        org.mockito.InOrder order = inOrder(
+                mongoTemplate,
+                bookingConfirmationService,
+                transactionManager);
+
+        order.verify(mongoTemplate).updateFirst(
+                any(Query.class),
+                any(Update.class),
+                eq(Payment.class));
+
+        order.verify(bookingConfirmationService)
+                .confirmVerifiedPayment(same(payment));
+
+        order.verify(mongoTemplate).updateFirst(
+                any(Query.class),
+                any(Update.class),
+                eq(StripeWebhookEvent.class));
+
+        order.verify(transactionManager).commit(any());
+    }
+
+    /**
+     * A booking confirmation failure must prevent webhook
+     * completion and roll back the local capture transaction.
+     */
+    @Test
+    void bookingConfirmationFailureTriggersRollback() {
+        Payment payment = initiatedPayment();
+
+        mockEventAndPayment(receivedEvent(), payment);
+        mockSuccessfulUpdates();
+
+        when(bookingConfirmationService.confirmVerifiedPayment(
+                same(payment)))
+                .thenThrow(new IllegalStateException(
+                        "Booking confirmation failed"));
+
+        assertThrows(IllegalStateException.class,
+                () -> service.captureVerifiedPayment(
+                        "evt_test_123", "pay_123", "cs_test_123",
+                        "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        verify(bookingConfirmationService)
+                .confirmVerifiedPayment(same(payment));
+
+        verify(mongoTemplate, times(1)).updateFirst(
+                any(Query.class),
+                any(Update.class),
+                eq(Payment.class));
+
+        // Only the event claim may occur before the failure.
+        verify(mongoTemplate, times(1)).updateFirst(
+                any(Query.class),
+                any(Update.class),
+                eq(StripeWebhookEvent.class));
+
+        verify(transactionManager).rollback(any());
+        verify(transactionManager, never()).commit(any());
+    }
+
+
+    /**
+     * Disabled booking confirmation must preserve legacy capture behavior.
+     */
+    @Test
+    void disabledBookingConfirmationPreservesVerifiedCapture() {
+        service = new StripeWebhookTransactionService(
+                mongoTemplate, transactionManager,
+                bookingConfirmationService, false);
+
+        mockEventAndPayment(receivedEvent(), initiatedPayment());
+        mockSuccessfulUpdates();
+
+        assertTrue(service.captureVerifiedPayment(
+                "evt_test_123", "pay_123", "cs_test_123",
+                "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        verifyNoInteractions(bookingConfirmationService);
+
+        verify(mongoTemplate).updateFirst(
+                any(Query.class), any(Update.class), eq(Payment.class));
+
+        verify(mongoTemplate, times(2)).updateFirst(
+                any(Query.class), any(Update.class),
+                eq(StripeWebhookEvent.class));
+
+        verify(transactionManager).commit(any());
+        verify(transactionManager, never()).rollback(any());
+    }
+
+    /**
+     * A second verified event must not recapture an existing payment.
+     */
+    @Test
+    void disabledBookingConfirmationDoesNotRecapturePayment() {
+        service = new StripeWebhookTransactionService(
+                mongoTemplate, transactionManager,
+                bookingConfirmationService, false);
+
+        Payment payment = initiatedPayment();
+        payment.setStatus(PaymentStatus.CAPTURED);
+        payment.setGatewayPaymentIntentId("pi_test123");
+
+        mockEventAndPayment(receivedEvent(), payment);
+        mockSuccessfulUpdates();
+
+        assertFalse(service.captureVerifiedPayment(
+                "evt_test_123", "pay_123", "cs_test_123",
+                "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        verifyNoInteractions(bookingConfirmationService);
+
+        verify(mongoTemplate, never()).updateFirst(
+                any(Query.class), any(Update.class), eq(Payment.class));
+
+        verify(mongoTemplate, times(2)).updateFirst(
+                any(Query.class), any(Update.class),
+                eq(StripeWebhookEvent.class));
+
+        verify(transactionManager).commit(any());
+    }
+
+    /**
+     * A processed webhook replay must remain a financial no-op.
+     */
+    @Test
+    void disabledBookingConfirmationPreservesProcessedReplay() {
+        service = new StripeWebhookTransactionService(
+                mongoTemplate, transactionManager,
+                bookingConfirmationService, false);
+
+        StripeWebhookEvent event = mock(StripeWebhookEvent.class);
+
+        when(event.getStatus()).thenReturn(
+                StripeWebhookEvent.ProcessingStatus.PROCESSED);
+        when(event.getPaymentId()).thenReturn("pay_123");
+        when(event.getCheckoutSessionId()).thenReturn("cs_test_123");
+
+        Payment payment = initiatedPayment();
+        payment.setStatus(PaymentStatus.CAPTURED);
+        payment.setGatewayPaymentIntentId("pi_test123");
+
+        mockEventAndPayment(event, payment);
+
+        assertFalse(service.captureVerifiedPayment(
+                "evt_test_123", "pay_123", "cs_test_123",
+                "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        verifyNoInteractions(bookingConfirmationService);
+
+        verify(mongoTemplate, never()).updateFirst(
+                any(Query.class), any(Update.class), any(Class.class));
+
+        verify(transactionManager).commit(any());
+    }
+
 }

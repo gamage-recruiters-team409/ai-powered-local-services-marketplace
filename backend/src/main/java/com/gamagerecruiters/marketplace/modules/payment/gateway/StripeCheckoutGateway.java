@@ -34,6 +34,7 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
     private final StripeGatewayProperties properties;
     private final StripeSessionCreator sessionCreator;
     private final StripeSessionLister sessionLister;
+    private final StripeSessionRetriever sessionRetriever;
 
     private static final int MAX_RECOVERY_PAGES = 20;
     private static final long RECOVERY_PAGE_SIZE = 100L;
@@ -58,9 +59,23 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
             StripeSessionCreator sessionCreator,
             StripeSessionLister sessionLister) {
 
+        this(properties, sessionCreator, sessionLister,
+                (secretKey, sessionId) ->
+                        new StripeClient(secretKey)
+                                .checkout().sessions().retrieve(sessionId));
+    }
+
+    // Injectable retrieval boundary for isolated tests.
+    StripeCheckoutGateway(
+            StripeGatewayProperties properties,
+            StripeSessionCreator sessionCreator,
+            StripeSessionLister sessionLister,
+            StripeSessionRetriever sessionRetriever) {
+
         this.properties = Objects.requireNonNull(properties);
         this.sessionCreator = Objects.requireNonNull(sessionCreator);
         this.sessionLister = Objects.requireNonNull(sessionLister);
+        this.sessionRetriever = Objects.requireNonNull(sessionRetriever);
     }
 
     @FunctionalInterface
@@ -166,6 +181,14 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
                     exception);
         }
     }
+
+    @FunctionalInterface
+    interface StripeSessionRetriever {
+        Session retrieve(
+                String secretKey,
+                String sessionId) throws StripeException;
+    }
+
 
     @FunctionalInterface
     interface StripeSessionLister {
@@ -319,6 +342,101 @@ public final class StripeCheckoutGateway implements PaymentCheckoutGateway {
         } catch (StripeException exception) {
             throw new IllegalStateException(
                     "Unable to reconcile Stripe checkout session.",
+                    exception);
+        }
+    }
+
+    /**
+     * Retrieves an existing Stripe Checkout Session using its persisted
+     * gateway reference.
+     *
+     * <p>The returned session must belong to the expected internal
+     * payment and match its trusted financial values. This operation
+     * never creates a replacement session or confirms payment capture.</p>
+     */
+    @Override
+    public RecoveredCheckoutSession retrieveCheckoutSession(
+            String sessionId,
+            String paymentId,
+            BigDecimal amount,
+            String currency) {
+
+        if (!properties.isEnabled()) {
+            throw new IllegalStateException(
+                    "Stripe checkout retrieval is disabled.");
+        }
+
+        requireText(sessionId, "Checkout Session ID");
+        requireText(paymentId, "Payment ID");
+        requireText(currency, "Currency");
+
+        if (!sessionId.startsWith("cs_")) {
+            throw new IllegalArgumentException(
+                    "Invalid Checkout Session reference.");
+        }
+
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException(
+                    "Invalid checkout retrieval amount.");
+        }
+
+        String normalizedCurrency =
+                currency.trim().toUpperCase(Locale.ROOT);
+
+        if (!Set.of("USD", "EUR", "GBP", "LKR")
+                .contains(normalizedCurrency)) {
+
+            throw new IllegalArgumentException(
+                    "Unsupported checkout retrieval currency.");
+        }
+
+        final long expectedMinorUnits;
+
+        try {
+            expectedMinorUnits =
+                    amount.movePointRight(2).longValueExact();
+
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException(
+                    "Invalid checkout retrieval amount.", exception);
+        }
+
+        if (expectedMinorUnits <= 0) {
+            throw new IllegalArgumentException(
+                    "Invalid checkout retrieval minor units.");
+        }
+
+        try {
+            Session session = sessionRetriever.retrieve(
+                    properties.getSecretKey(), sessionId);
+
+            if (session == null
+                    || !sessionId.equals(session.getId())
+                    || !paymentId.equals(
+                            session.getClientReferenceId())) {
+
+                throw new IllegalStateException(
+                        "Retrieved Stripe checkout identity mismatch.");
+            }
+
+            // Reuse existing financial and session-state validation.
+            // Direct retrieval does not require a reservation search window.
+            validateRecoveredSession(
+                    session,
+                    expectedMinorUnits,
+                    normalizedCurrency,
+                    0L);
+
+            return new RecoveredCheckoutSession(
+                    session.getId(),
+                    "open".equals(session.getStatus())
+                            ? session.getUrl() : null,
+                    session.getStatus(),
+                    session.getPaymentStatus());
+
+        } catch (StripeException exception) {
+            throw new IllegalStateException(
+                    "Unable to retrieve Stripe checkout session.",
                     exception);
         }
     }

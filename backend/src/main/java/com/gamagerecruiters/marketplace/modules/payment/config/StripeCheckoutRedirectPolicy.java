@@ -53,6 +53,31 @@ public final class StripeCheckoutRedirectPolicy {
     }
 
     /**
+     * Returns the approved server-side Checkout destinations.
+     *
+     * <p>Missing configuration is rejected before payment creation
+     * or external gateway submission.</p>
+     *
+     * @return validated server-configured redirect URLs
+     */
+    public CheckoutRedirects getConfiguredRedirects() {
+        validate(trustedSuccessUrl, trustedCancelUrl);
+
+        return new CheckoutRedirects(
+                trustedSuccessUrl,
+                trustedCancelUrl);
+    }
+
+    /**
+     * Immutable server-approved Checkout redirect destinations.
+     */
+    public record CheckoutRedirects(
+            String successUrl,
+            String cancelUrl) {
+    }
+
+
+    /**
      * Validates trusted configuration without accepting arbitrary
      * external URLs or ambiguous URI representations.
      */

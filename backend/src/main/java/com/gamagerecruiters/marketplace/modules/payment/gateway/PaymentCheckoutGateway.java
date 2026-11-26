@@ -59,6 +59,33 @@ public interface PaymentCheckoutGateway {
     }
 
     /**
+     * Retrieves an already attached Checkout Session without creating
+     * another external payment request.
+     *
+     * Implementations must verify the session identifier, internal
+     * payment identity, amount, currency and supported session state.
+     *
+     * Retrieval must never confirm payment capture, replace a session
+     * or release an existing checkout reservation.
+     *
+     * @param sessionId persisted gateway session identifier
+     * @param paymentId persisted internal payment identifier
+     * @param amount trusted payment amount
+     * @param currency trusted payment currency
+     * @return verified existing Checkout Session
+     */
+    default RecoveredCheckoutSession retrieveCheckoutSession(
+            String sessionId,
+            String paymentId,
+            BigDecimal amount,
+            String currency) {
+
+        throw new UnsupportedOperationException(
+                "Checkout session retrieval is not supported");
+    }
+
+
+    /**
      * Verified session discovered through read-only gateway recovery.
      *
      * The checkout URL may be absent for a completed session.
