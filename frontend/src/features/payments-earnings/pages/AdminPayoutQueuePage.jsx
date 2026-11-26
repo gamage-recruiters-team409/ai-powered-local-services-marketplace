@@ -308,6 +308,17 @@ export default function AdminPayoutQueuePage() {
         );
 
         if (active) {
+          // A status transition may remove the final row from a filtered page.
+          // Return to the last valid page without changing the applied filters.
+          const lastValidPage = Math.max(0, result.totalPages - 1);
+
+          if (page > lastValidPage) {
+            // Keep loading until the corrected page has been retrieved.
+            active = false;
+            setPage(lastValidPage);
+            return;
+          }
+
           setHistory(result);
         }
       } catch (error) {

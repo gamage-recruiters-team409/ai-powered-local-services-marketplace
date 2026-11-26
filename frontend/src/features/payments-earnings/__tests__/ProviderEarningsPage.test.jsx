@@ -22,6 +22,10 @@ import {
 import {
   loadPendingPayoutRequest,
   savePendingPayoutRequest,
+  clearPendingPayoutRequest,
+  withPayoutSubmissionLock,
+  loadPayoutSubmissionRevision,
+  advancePayoutSubmissionRevision,
 } from "../utils/payoutRequestStorage";
 
 import { useAuth } from "../../auth/hooks/useAuth";
@@ -146,9 +150,49 @@ function createApiError(message, status, code) {
   });
 }
 
+/**
+ * Simulates provider-specific exclusive Web Locks in jsdom.
+ * Competing operations receive no lock and are never queued.
+ */
+function installWebLocksMock() {
+  const activeLocks = new Set();
+
+  const request = vi.fn(async (name, options, callback) => {
+    expect(options).toEqual({
+      mode: "exclusive",
+      ifAvailable: true,
+    });
+
+    if (activeLocks.has(name)) {
+      return callback(null);
+    }
+
+    activeLocks.add(name);
+
+    try {
+      return await callback({
+        name,
+        mode: "exclusive",
+      });
+    } finally {
+      activeLocks.delete(name);
+    }
+  });
+
+  vi.stubGlobal("navigator", Object.create(window.navigator, {
+    locks: {
+      configurable: true,
+      value: { request },
+    },
+  }));
+
+  return request;
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   window.localStorage.clear();
+  installWebLocksMock();
 
   useAuth.mockReturnValue({
     user: {
@@ -170,6 +214,7 @@ afterEach(() => {
   cleanup();
   window.localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("ProviderEarningsPage", () => {
@@ -635,6 +680,541 @@ describe("Provider payout recovery safety", () => {
   });
 });
 
+
+/**
+ * F2 - Missing provider profile recovery regression coverage.
+ * Only definitive initial rejections may release the stored request identity.
+ */
+describe("Provider payout missing profile recovery", () => {
+  it("clears recovery after an initial missing provider profile rejection", async () => {
+    requestProviderPayout.mockRejectedValueOnce(
+      createApiError(
+        "Provider profile not found",
+        404,
+        "PROVIDER_PROFILE_NOT_FOUND",
+      ),
+    );
+
+    renderPage();
+    await waitForPage();
+    submitAmount("7500");
+
+    expect(
+      await screen.findByText(
+        "Complete or restore your provider profile before requesting a payout.",
+      ),
+    ).toBeTruthy();
+
+    expect(requestProviderPayout).toHaveBeenCalledTimes(1);
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+    expect(getAmountInput().disabled).toBe(false);
+
+    expect(
+      screen.queryByRole("button", {
+        name: /^retry payout request$/i,
+      }),
+    ).toBeNull();
+  });
+
+  it("preserves the original request when an uncertain retry encounters a missing profile", async () => {
+    const storedPayload = {
+      requestKey: "uncertain-missing-profile-001",
+      amount: 7500,
+    };
+
+    savePendingPayoutRequest(PROVIDER_ID, storedPayload);
+
+    requestProviderPayout.mockRejectedValueOnce(
+      createApiError(
+        "Provider profile not found",
+        404,
+        "PROVIDER_PROFILE_NOT_FOUND",
+      ),
+    );
+
+    renderPage();
+    await waitForPage();
+    confirmRequest();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /^retry payout request$/i,
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Complete or restore your provider profile before retrying the original payout request.",
+      ),
+    ).toBeTruthy();
+
+    expect(requestProviderPayout).toHaveBeenCalledTimes(1);
+    expect(requestProviderPayout).toHaveBeenCalledWith(storedPayload);
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toEqual(storedPayload);
+    expect(getAmountInput().disabled).toBe(true);
+    expect(getAmountInput().value).toBe("7500");
+  });
+
+  it("preserves recovery for an unrelated initial HTTP 404 response", async () => {
+    requestProviderPayout.mockRejectedValueOnce(
+      createApiError(
+        "Resource not found.",
+        404,
+        "RESOURCE_NOT_FOUND",
+      ),
+    );
+
+    renderPage();
+    await waitForPage();
+    submitAmount("7500");
+
+    expect(
+      await screen.findByText("Resource not found."),
+    ).toBeTruthy();
+
+    expect(requestProviderPayout).toHaveBeenCalledTimes(1);
+
+    const originalPayload = requestProviderPayout.mock.calls[0][0];
+
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toEqual(originalPayload);
+    expect(getAmountInput().disabled).toBe(true);
+
+    expect(
+      screen.getByRole("button", {
+        name: /^retry payout request$/i,
+      }),
+    ).toBeTruthy();
+  });
+
+  it("allows a new payout after a definitive missing profile rejection is corrected", async () => {
+    requestProviderPayout
+      .mockRejectedValueOnce(
+        createApiError(
+          "Provider profile not found",
+          404,
+          "PROVIDER_PROFILE_NOT_FOUND",
+        ),
+      )
+      .mockImplementationOnce(async (payload) => ({
+        ...PAYOUT,
+        requestKey: payload.requestKey,
+        amount: payload.amount,
+      }));
+
+    renderPage();
+    await waitForPage();
+    submitAmount("7500");
+
+    await screen.findByText(
+      "Complete or restore your provider profile before requesting a payout.",
+    );
+
+    const rejectedPayload = requestProviderPayout.mock.calls[0][0];
+
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+
+    // A corrected initial rejection may start a new financial request.
+    submitAmount("8000");
+
+    expect(
+      await screen.findByText(
+        "Payout request received. Current status: PENDING.",
+        { exact: true },
+      ),
+    ).toBeTruthy();
+
+    expect(requestProviderPayout).toHaveBeenCalledTimes(2);
+
+    const newPayload = requestProviderPayout.mock.calls[1][0];
+
+    expect(newPayload.amount).toBe(8000);
+    expect(newPayload.requestKey).not.toBe(rejectedPayload.requestKey);
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+  });
+});
+
+/**
+ * F1 - Cross-tab payout coordination regression coverage.
+ * Financial submissions must never bypass the provider-specific lock.
+ */
+describe("Provider payout cross-tab coordination", () => {
+  it("blocks a competing submission while another tab holds the provider lock", async () => {
+    renderPage();
+    await waitForPage();
+
+    let releaseFirstTab;
+
+    const firstTabResponse = new Promise((resolve) => {
+      releaseFirstTab = resolve;
+    });
+
+    const firstPayload = {
+      requestKey: "first-tab-request-001",
+      amount: 7500,
+    };
+
+    requestProviderPayout.mockImplementationOnce(
+      () => firstTabResponse,
+    );
+
+    const firstTab = withPayoutSubmissionLock(
+      PROVIDER_ID,
+      async () => {
+        advancePayoutSubmissionRevision(PROVIDER_ID);
+        savePendingPayoutRequest(PROVIDER_ID, firstPayload);
+
+        await requestProviderPayout(firstPayload);
+
+        clearPendingPayoutRequest(
+          PROVIDER_ID,
+          firstPayload.requestKey,
+        );
+      },
+    );
+
+    try {
+      await waitFor(() => {
+        expect(requestProviderPayout).toHaveBeenCalledTimes(1);
+      });
+
+      submitAmount("7500");
+
+      expect(
+        await screen.findByText(
+          /A payout submission is active in another tab/i,
+        ),
+      ).toBeTruthy();
+
+      expect(requestProviderPayout).toHaveBeenCalledTimes(1);
+      expect(requestProviderPayout).toHaveBeenCalledWith(firstPayload);
+      expect(loadPendingPayoutRequest(PROVIDER_ID)).toEqual(firstPayload);
+    } finally {
+      releaseFirstTab(PAYOUT);
+      await firstTab;
+    }
+
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+  });
+
+  it("rejects a stale confirmation after another tab completes its payout", async () => {
+    renderPage();
+    await waitForPage();
+
+    fireEvent.change(getAmountInput(), {
+      target: { value: "7500" },
+    });
+
+    confirmRequest();
+
+    const firstPayload = {
+      requestKey: "completed-other-tab-001",
+      amount: 7500,
+    };
+
+    await withPayoutSubmissionLock(PROVIDER_ID, async () => {
+      advancePayoutSubmissionRevision(PROVIDER_ID);
+      savePendingPayoutRequest(PROVIDER_ID, firstPayload);
+
+      await requestProviderPayout(firstPayload);
+
+      clearPendingPayoutRequest(
+        PROVIDER_ID,
+        firstPayload.requestKey,
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /^submit payout request$/i,
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        /Payout activity changed in another tab/i,
+      ),
+    ).toBeTruthy();
+
+    expect(requestProviderPayout).toHaveBeenCalledTimes(1);
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+
+    expect(
+      screen.getByRole("checkbox", {
+        name: /I confirm that the payout amount is correct/i,
+      }).checked,
+    ).toBe(false);
+
+    // A newly confirmed independent request remains permitted.
+    await waitFor(() => {
+      expect(getAmountInput().disabled).toBe(false);
+    });
+
+    submitAmount("8000");
+
+    await screen.findByText(
+      "Payout request received. Current status: PENDING.",
+      { exact: true },
+    );
+
+    expect(requestProviderPayout).toHaveBeenCalledTimes(2);
+
+    const newPayload = requestProviderPayout.mock.calls[1][0];
+
+    expect(newPayload.amount).toBe(8000);
+    expect(newPayload.requestKey).not.toBe(firstPayload.requestKey);
+  });
+
+  it("does not recreate a recovery record already resolved by another tab", async () => {
+    const storedPayload = {
+      requestKey: "resolved-recovery-001",
+      amount: 7500,
+    };
+
+    savePendingPayoutRequest(PROVIDER_ID, storedPayload);
+
+    renderPage();
+    await waitForPage();
+    confirmRequest();
+
+    await withPayoutSubmissionLock(PROVIDER_ID, async () => {
+      advancePayoutSubmissionRevision(PROVIDER_ID);
+
+      clearPendingPayoutRequest(
+        PROVIDER_ID,
+        storedPayload.requestKey,
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /^retry payout request$/i,
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        /The original payout request is no longer pending locally/i,
+      ),
+    ).toBeTruthy();
+
+    expect(requestProviderPayout).not.toHaveBeenCalled();
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+    expect(getAmountInput().value).toBe("");
+  });
+
+  it("recovers the exact original request after a network failure and page reload", async () => {
+    requestProviderPayout.mockRejectedValueOnce(
+      createApiError("Network outcome uncertain.", 0, "NETWORK_ERROR"),
+    );
+
+    const firstPage = renderPage();
+
+    await waitForPage();
+    submitAmount("7500");
+
+    await screen.findByText("Network outcome uncertain.");
+
+    const originalPayload = requestProviderPayout.mock.calls[0][0];
+
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toEqual(originalPayload);
+
+    firstPage.unmount();
+
+    renderPage();
+    await waitForPage();
+    confirmRequest();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /^retry payout request$/i,
+      }),
+    );
+
+    await screen.findByText(
+      "Payout request received. Current status: PENDING.",
+      { exact: true },
+    );
+
+    expect(requestProviderPayout).toHaveBeenCalledTimes(2);
+    expect(requestProviderPayout.mock.calls[1][0]).toEqual(originalPayload);
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+  });
+
+  it("fails closed when the browser does not support Web Locks", async () => {
+    vi.stubGlobal("navigator", Object.create(window.navigator, {
+      locks: {
+        configurable: true,
+        value: undefined,
+      },
+    }));
+
+    renderPage();
+    await waitForPage();
+    submitAmount("7500");
+
+    expect(
+      (await screen.findAllByText(
+        /Secure payout submission is unavailable in this browser/i,
+      ))[0],
+    ).toBeTruthy();
+
+    expect(requestProviderPayout).not.toHaveBeenCalled();
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+    expect(loadPayoutSubmissionRevision(PROVIDER_ID)).toBeNull();
+  });
+
+  it("preserves recovery when the browser lock request fails", async () => {
+    const storedPayload = {
+      requestKey: "lock-failure-recovery-001",
+      amount: 7500,
+    };
+
+    savePendingPayoutRequest(PROVIDER_ID, storedPayload);
+
+    globalThis.navigator.locks.request.mockRejectedValueOnce(
+      new Error("Browser lock service unavailable."),
+    );
+
+    renderPage();
+    await waitForPage();
+    confirmRequest();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /^retry payout request$/i,
+      }),
+    );
+
+    expect(
+      (await screen.findAllByText(
+        /Browser lock service unavailable/i,
+      ))[0],
+    ).toBeTruthy();
+
+    expect(requestProviderPayout).not.toHaveBeenCalled();
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toEqual(storedPayload);
+  });
+
+  it("keeps submission locks independent between provider accounts", async () => {
+    let releaseFirstProvider;
+
+    const firstProviderOperation = new Promise((resolve) => {
+      releaseFirstProvider = resolve;
+    });
+
+    const firstProvider = withPayoutSubmissionLock(
+      PROVIDER_ID,
+      () => firstProviderOperation,
+    );
+
+    const otherOperation = vi.fn(async () => {});
+
+    try {
+      expect(
+        await withPayoutSubmissionLock(
+          "provider-test-002",
+          otherOperation,
+        ),
+      ).toBe(true);
+
+      expect(otherOperation).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFirstProvider();
+      await firstProvider;
+    }
+  });
+
+  it("releases the provider lock when the protected operation fails", async () => {
+    await expect(
+      withPayoutSubmissionLock(PROVIDER_ID, async () => {
+        throw new Error("Protected operation failed.");
+      }),
+    ).rejects.toThrow("Protected operation failed.");
+
+    const nextOperation = vi.fn(async () => {});
+
+    expect(
+      await withPayoutSubmissionLock(PROVIDER_ID, nextOperation),
+    ).toBe(true);
+
+    expect(nextOperation).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Protects unresolved payout identity when browser recovery data disappears.
+ */
+describe("Provider payout unexpected recovery record loss", () => {
+  it.each([
+    ["unchanged submission revision", false],
+    ["missing submission revision", true],
+  ])("fails closed with %s", async (_scenario, removeRevision) => {
+    const storedPayload = {
+      requestKey: "unexpected-record-loss-001",
+      amount: 7500,
+    };
+
+    const originalRevision =
+      advancePayoutSubmissionRevision(PROVIDER_ID);
+
+    savePendingPayoutRequest(PROVIDER_ID, storedPayload);
+
+    renderPage();
+    await waitForPage();
+    confirmRequest();
+
+    // Simulate unexpected browser storage loss without resolving the payout.
+    if (removeRevision) {
+      window.localStorage.clear();
+
+      expect(
+        loadPayoutSubmissionRevision(PROVIDER_ID),
+      ).toBeNull();
+    } else {
+      clearPendingPayoutRequest(
+        PROVIDER_ID,
+        storedPayload.requestKey,
+      );
+
+      expect(
+        loadPayoutSubmissionRevision(PROVIDER_ID),
+      ).toBe(originalRevision);
+    }
+
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /^retry payout request$/i,
+      }),
+    );
+
+    expect(
+      (await screen.findAllByText(
+        /The original payout recovery record is missing/i,
+      ))[0],
+    ).toBeTruthy();
+
+    // No new financial request may be created after recovery data loss.
+    expect(requestProviderPayout).not.toHaveBeenCalled();
+    expect(loadPendingPayoutRequest(PROVIDER_ID)).toBeNull();
+
+    expect(getAmountInput().value).toBe("7500");
+    expect(getAmountInput().disabled).toBe(true);
+
+    expect(
+      screen.getByRole("button", {
+        name: /^retry payout request$/i,
+      }).disabled,
+    ).toBe(true);
+
+    expect(
+      screen.getByRole("checkbox", {
+        name: /I confirm that the payout amount is correct/i,
+      }).checked,
+    ).toBe(false);
+  });
+});
 
 describe("Provider payout confirmation dialog", () => {
   it("requires confirmation before submitting a payout", async () => {

@@ -24,6 +24,9 @@ import {
   loadPendingPayoutRequest,
   savePendingPayoutRequest,
   clearPendingPayoutRequest,
+  withPayoutSubmissionLock,
+  loadPayoutSubmissionRevision,
+  advancePayoutSubmissionRevision,
 } from "../utils/payoutRequestStorage";
 
 import styles from "./ProviderEarningsPage.module.css";
@@ -199,6 +202,9 @@ function ProviderEarningsContent({ providerId }) {
   // Prevent concurrent submissions before React updates the button state.
   const submissionLockRef = useRef(false);
 
+  // Detect confirmations prepared before another tab submitted a payout.
+  const submissionRevisionRef = useRef(null);
+
   // Ignore outdated detail responses after closing or switching records.
   const detailsVersionRef = useRef(0);
 
@@ -211,6 +217,17 @@ function ProviderEarningsContent({ providerId }) {
 
   /** Opens the payout dialog without discarding recovery information. */
   function openRequest() {
+    if (submissionLockRef.current) return;
+
+    try {
+      submissionRevisionRef.current =
+        loadPayoutSubmissionRevision(providerId);
+    } catch (error) {
+      setStorageError(
+        error.message || "Unable to verify payout coordination data.",
+      );
+    }
+
     setRequestConfirmed(false);
     setRequestOpen(true);
   }
@@ -315,14 +332,87 @@ function ProviderEarningsContent({ providerId }) {
       return;
     }
 
+    submissionLockRef.current = true;
+    setSubmitting(true);
+
+    try {
+      const acquired = await withPayoutSubmissionLock(
+        providerId,
+        submitUnderLock,
+      );
+
+      if (!acquired) {
+        setRequestConfirmed(false);
+        setSubmitError(
+          "A payout submission is active in another tab. Review your payout history before trying again.",
+        );
+        refreshData();
+      }
+    } catch (error) {
+      setRequestConfirmed(false);
+      setStorageError(
+        error.message || "Unable to coordinate payout submission safely.",
+      );
+    } finally {
+      submissionLockRef.current = false;
+      setSubmitting(false);
+    }
+  }
+
+  /**
+   * Executes the complete payout lifecycle under the provider's Web Lock.
+   * Recovery lookup, persistence, API submission and cleanup are serialized.
+   */
+  async function submitUnderLock() {
     let payload;
     let wasRecovery;
 
     try {
-      // Re-read storage before submission to detect unresolved requests.
+      // Re-read storage only after acquiring the exclusive provider lock.
       const stored = loadPendingPayoutRequest(providerId);
 
-      if (!pendingRequestRef.current && stored) {
+      const currentRevision =
+        loadPayoutSubmissionRevision(providerId);
+
+      const previousPayload = pendingRequestRef.current;
+
+      // A missing recovery record is not sufficient evidence of resolution.
+      if (previousPayload && !stored) {
+        if (
+          currentRevision === null ||
+          submissionRevisionRef.current === currentRevision
+        ) {
+          // Preserve the original in-memory identity and fail closed.
+          setRetryRequired(true);
+          setRequestConfirmed(false);
+          setSuccessMessage("");
+          setStorageError(
+            "The original payout recovery record is missing. Review your payout history and contact support before requesting another payout.",
+          );
+          return;
+        }
+
+        // A changed revision indicates intervening coordinated activity.
+        pendingRequestRef.current = null;
+        submissionRevisionRef.current = currentRevision;
+        setRetryRequired(false);
+        setAmount("");
+        setRequestConfirmed(false);
+        setSuccessMessage("");
+        setSubmitError(
+          "The original payout request is no longer pending locally. Review your payout history before starting another request.",
+        );
+        refreshData();
+        return;
+      }
+
+      if (
+        stored &&
+        (!previousPayload ||
+          previousPayload.requestKey !== stored.requestKey ||
+          previousPayload.amount !== stored.amount)
+      ) {
+        submissionRevisionRef.current = currentRevision;
         // Require explicit confirmation before retrying a request
         // discovered after the current page was opened.
         pendingRequestRef.current = stored;
@@ -337,7 +427,18 @@ function ProviderEarningsContent({ providerId }) {
         return;
       }
 
-      payload = pendingRequestRef.current ?? stored;
+      if (submissionRevisionRef.current !== currentRevision) {
+        submissionRevisionRef.current = currentRevision;
+        setRequestConfirmed(false);
+        setSuccessMessage("");
+        setSubmitError(
+          "Payout activity changed in another tab. Review your updated earnings and confirm the request again.",
+        );
+        refreshData();
+        return;
+      }
+
+      payload = stored;
       wasRecovery = Boolean(payload);
 
       if (!payload) {
@@ -364,6 +465,10 @@ function ProviderEarningsContent({ providerId }) {
         };
       }
 
+      // Invalidate other tabs' previously prepared confirmations.
+      submissionRevisionRef.current =
+        advancePayoutSubmissionRevision(providerId);
+
       // Fail closed if recovery information cannot be persisted.
       savePendingPayoutRequest(providerId, payload);
 
@@ -376,9 +481,6 @@ function ProviderEarningsContent({ providerId }) {
       return;
     }
 
-    submissionLockRef.current = true;
-
-    setSubmitting(true);
     setAmountError("");
     setSubmitError("");
     setSuccessMessage("");
@@ -442,9 +544,16 @@ function ProviderEarningsContent({ providerId }) {
 
       // Authentication or validation rejection is only definitive
       // when no earlier uncertain submission exists.
+      // Missing provider profiles are rejected before any financial mutation.
+      // A previously uncertain request must still retain its original key.
+      const missingProfileRejected =
+        status === 404 &&
+        error.code === "PROVIDER_PROFILE_NOT_FOUND";
+
       const initialClientRejection =
         !wasRecovery &&
-        [400, 401, 403, 422].includes(status);
+        ([400, 401, 403, 422].includes(status) ||
+          missingProfileRejected);
 
       if (!wasRecovery && (eligibilityRejected || initialClientRejection)) {
         clearResolvedRequest();
@@ -454,13 +563,14 @@ function ProviderEarningsContent({ providerId }) {
       }
 
       setSubmitError(
-        error.message || "Unable to confirm the payout request.",
+        missingProfileRejected
+          ? wasRecovery
+            ? "Complete or restore your provider profile before retrying the original payout request."
+            : "Complete or restore your provider profile before requesting a payout."
+          : error.message || "Unable to confirm the payout request.",
       );
 
       refreshData();
-    } finally {
-      submissionLockRef.current = false;
-      setSubmitting(false);
     }
   }
 

@@ -210,3 +210,101 @@ export function clearPendingPayoutRequest(
 
   return true;
 }
+
+/**
+ * Coordinates financial submissions across browser tabs for one provider.
+ *
+ * The exclusive lock must cover recovery lookup, request persistence,
+ * API submission and recovery cleanup.
+ *
+ * A competing submission is rejected immediately instead of being queued,
+ * because queued submissions could create unintended independent payouts.
+ *
+ * Unsupported browsers fail closed without executing the financial action.
+ *
+ * @param {string} providerId Authenticated provider's user ID.
+ * @param {Function} operation Protected asynchronous submission operation.
+ * @returns {Promise<boolean>} Whether the operation acquired the lock.
+ */
+export async function withPayoutSubmissionLock(providerId, operation) {
+  const lockName = `${getStorageKey(providerId)}:submission-lock`;
+
+  if (typeof operation !== 'function') {
+    throw new Error('A payout submission operation is required.');
+  }
+
+  const locks = globalThis.navigator?.locks;
+
+  if (!locks || typeof locks.request !== 'function') {
+    throw new Error(
+      'Secure payout submission is unavailable in this browser. ' +
+        'Use a supported browser before requesting a payout.',
+    );
+  }
+
+  return locks.request(
+    lockName,
+    {
+      mode: 'exclusive',
+      ifAvailable: true,
+    },
+    async (lock) => {
+      if (!lock) {
+        return false;
+      }
+
+      await operation();
+      return true;
+    },
+  );
+}
+
+/**
+ * Reads the account-scoped submission revision.
+ *
+ * A revision change invalidates confirmations prepared before another
+ * tab started a financial submission, even after its lock is released.
+ *
+ * @param {string} providerId Authenticated provider's user ID.
+ * @returns {string|null} Current submission revision.
+ */
+export function loadPayoutSubmissionRevision(providerId) {
+  const key = `${getStorageKey(providerId)}:revision`;
+  const revision = getStorage().getItem(key);
+
+  if (
+    revision !== null &&
+    (revision.trim().length === 0 || revision.length > 128)
+  ) {
+    throw new Error('Stored payout coordination data is invalid.');
+  }
+
+  return revision;
+}
+
+/**
+ * Advances the submission revision before sending a financial request.
+ *
+ * This function must execute inside the provider's exclusive Web Lock.
+ * The revision remains stored after successful recovery cleanup so that
+ * previously prepared confirmations cannot silently create new payouts.
+ *
+ * @param {string} providerId Authenticated provider's user ID.
+ * @returns {string} Newly persisted submission revision.
+ */
+export function advancePayoutSubmissionRevision(providerId) {
+  if (!globalThis.crypto?.randomUUID) {
+    throw new Error('A secure submission revision could not be generated.');
+  }
+
+  const key = `${getStorageKey(providerId)}:revision`;
+  const revision = globalThis.crypto.randomUUID();
+
+  getStorage().setItem(key, revision);
+
+  if (loadPayoutSubmissionRevision(providerId) !== revision) {
+    throw new Error('Unable to verify payout coordination data.');
+  }
+
+  return revision;
+}

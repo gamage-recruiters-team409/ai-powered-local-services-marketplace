@@ -1403,6 +1403,240 @@ describe("Admin payout pagination and refresh", () => {
   });
 });
 
+/**
+ * F3 - Filtered payout queue pagination recovery.
+ * Page correction must preserve all applied query filters.
+ */
+describe("Admin payout filtered page recovery", () => {
+  const expectedFilters = {
+    search: "provider-test-001",
+    status: "PENDING",
+    from: new Date("2026-11-01T00:00:00").toISOString(),
+    to: new Date("2026-12-01T00:00:00").toISOString(),
+  };
+
+  function createPage(page, totalElements) {
+    const count = Math.max(
+      0,
+      Math.min(10, totalElements - page * 10),
+    );
+
+    return {
+      content: Array.from({ length: count }, (_, index) => ({
+        ...PENDING_PAYOUT,
+        id: page === 1 && index === 0
+          ? PAYOUT_ID
+          : `filtered-payout-${page}-${index}`,
+      })),
+      page,
+      size: 10,
+      totalElements,
+      totalPages: Math.ceil(totalElements / 10),
+    };
+  }
+
+  async function applyFiltersAndOpenSecondPage(totalElements) {
+    getAdminPayoutHistory.mockImplementation(
+      async (page) => createPage(page, totalElements),
+    );
+
+    renderPage();
+
+    await screen.findByText(
+      `Showing 1\u201310 of ${totalElements} results`,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search payouts"), {
+      target: { value: "provider-test-001" },
+    });
+
+    fireEvent.change(
+      screen.getByRole("combobox", { name: /^status$/i }),
+      { target: { value: "PENDING" } },
+    );
+
+    fireEvent.change(screen.getByLabelText("From date"), {
+      target: { value: "2026-11-01" },
+    });
+
+    fireEvent.change(screen.getByLabelText("To date"), {
+      target: { value: "2026-11-30" },
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /^apply filters$/i }),
+    );
+
+    await waitFor(() => {
+      expect(getAdminPayoutHistory).toHaveBeenLastCalledWith(
+        0,
+        10,
+        expectedFilters,
+      );
+
+      expect(
+        screen.getByRole("button", {
+          name: "Go to next page",
+        }).disabled,
+      ).toBe(false);
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Go to next page",
+      }),
+    );
+
+    await screen.findByText(
+      `Showing 11\u2013${totalElements} of ${totalElements} results`,
+    );
+
+    expect(getAdminPayoutHistory).toHaveBeenLastCalledWith(
+      1,
+      10,
+      expectedFilters,
+    );
+  }
+
+  it("returns to the last valid filtered page after processing its final payout", async () => {
+    await applyFiltersAndOpenSecondPage(11);
+
+    getAdminPayoutDetails.mockResolvedValue(PENDING_PAYOUT);
+
+    markPayoutProcessing.mockImplementation(async () => {
+      getAdminPayoutHistory.mockImplementation(
+        async (page) => createPage(page, 10),
+      );
+
+      return PROCESSING_PAYOUT;
+    });
+
+    const dialog = await openDetails();
+
+    beginAction(dialog, "Start Processing");
+    confirmAction(dialog, "Start Processing");
+
+    await within(dialog).findByText("PROCESSING", {
+      exact: true,
+    });
+
+    await waitFor(() => {
+      expect(markPayoutProcessing).toHaveBeenCalledTimes(1);
+      expect(markPayoutProcessing).toHaveBeenCalledWith(PAYOUT_ID);
+
+      expect(getAdminPayoutHistory).toHaveBeenLastCalledWith(
+        0,
+        10,
+        expectedFilters,
+      );
+
+      expect(getAdminPayoutHistory).toHaveBeenCalledTimes(5);
+    });
+
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: /^back to payout queue$/i,
+      }),
+    );
+
+    expect(
+      await screen.findByText("Showing 1\u201310 of 10 results"),
+    ).toBeTruthy();
+
+    expect(screen.getByLabelText("Search payouts").value)
+      .toBe("provider-test-001");
+
+    expect(
+      screen.getByRole("combobox", { name: /^status$/i }).value,
+    ).toBe("PENDING");
+
+    expect(screen.getByLabelText("From date").value)
+      .toBe("2026-11-01");
+
+    expect(screen.getByLabelText("To date").value)
+      .toBe("2026-11-30");
+
+    expect(
+      screen.getByRole("button", {
+        name: "Go to previous page",
+      }).disabled,
+    ).toBe(true);
+
+    expect(
+      screen.getByRole("button", {
+        name: "Go to next page",
+      }).disabled,
+    ).toBe(true);
+
+    expect(markPayoutPaid).not.toHaveBeenCalled();
+    expect(markPayoutFailed).not.toHaveBeenCalled();
+  });
+
+  it("returns to page zero when refreshed filters have no matching results", async () => {
+    await applyFiltersAndOpenSecondPage(11);
+
+    getAdminPayoutHistory.mockImplementation(
+      async (page) => createPage(page, 0),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /^refresh$/i }),
+    );
+
+    expect(
+      await screen.findByText("0 matching results"),
+    ).toBeTruthy();
+
+    expect(getAdminPayoutHistory).toHaveBeenLastCalledWith(
+      0,
+      10,
+      expectedFilters,
+    );
+
+    expect(getAdminPayoutHistory).toHaveBeenCalledTimes(5);
+
+    expect(
+      screen.getByRole("button", {
+        name: "Go to previous page",
+      }).disabled,
+    ).toBe(true);
+
+    expect(
+      screen.getByRole("button", {
+        name: "Go to next page",
+      }).disabled,
+    ).toBe(true);
+
+    expectNoMutations();
+  });
+
+  it("preserves the current page when refreshed results still fit that page", async () => {
+    await applyFiltersAndOpenSecondPage(15);
+
+    getAdminPayoutHistory.mockImplementation(
+      async (page) => createPage(page, 14),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /^refresh$/i }),
+    );
+
+    expect(
+      await screen.findByText("Showing 11\u201314 of 14 results"),
+    ).toBeTruthy();
+
+    expect(getAdminPayoutHistory).toHaveBeenLastCalledWith(
+      1,
+      10,
+      expectedFilters,
+    );
+
+    expect(getAdminPayoutHistory).toHaveBeenCalledTimes(4);
+
+    expectNoMutations();
+  });
+});
+
 describe("Admin payout confirmation safety", () => {
   function getProcessingConfirmation() {
     return screen.getByRole("dialog", {
