@@ -79,6 +79,29 @@ class PaymentIndexMongoIntegrationTest {
                                 assertNotNull(gatewayIndex);
                                 assertNotNull(customerHistoryIndex);
 
+                                // Verify the Stripe PaymentIntent index.
+                                Document paymentIntentIndex = findIndex(
+                                                indexes,
+                                                "gatewayPaymentIntentId_1");
+
+                                assertNotNull(paymentIntentIndex);
+
+                                assertEquals(
+                                                new Document("gatewayPaymentIntentId", 1),
+                                                paymentIntentIndex.get("key", Document.class));
+
+                                assertEquals(
+                                                Boolean.TRUE,
+                                                paymentIntentIndex.get("unique"));
+
+                                assertEquals(
+                                                new Document(
+                                                                "gatewayPaymentIntentId",
+                                                                new Document("$type", "string")),
+                                                paymentIntentIndex.get(
+                                                                "partialFilterExpression",
+                                                                Document.class));
+
                                 // Booking IDs are non-unique because retries are allowed.
                                 assertEquals(
                                                 new Document("bookingId", 1),
@@ -123,14 +146,16 @@ class PaymentIndexMongoIntegrationTest {
                                                 .append("customerId", "customer-1")
                                                 .append("createdAt", Instant.parse(
                                                                 "2026-11-16T10:00:00Z"))
-                                                .append("gatewayRef", "gateway-1"));
+                                                .append("gatewayRef", "gateway-1")
+                                                .append("gatewayPaymentIntentId", "pi_test001"));
 
                                 payments.insertOne(new Document("_id", "payment-2")
                                                 .append("bookingId", "booking-1")
                                                 .append("customerId", "customer-1")
                                                 .append("createdAt", Instant.parse(
                                                                 "2026-11-16T11:00:00Z"))
-                                                .append("gatewayRef", "gateway-2"));
+                                                .append("gatewayRef", "gateway-2")
+                                                .append("gatewayPaymentIntentId", "pi_test002"));
 
                                 // Missing gatewayRef must be allowed more than once.
                                 payments.insertOne(new Document("_id", "payment-3")
@@ -156,6 +181,27 @@ class PaymentIndexMongoIntegrationTest {
 
                                 assertEquals(11000, duplicate.getCode());
 
+                                // Duplicate PaymentIntent references must be rejected
+                                // even when the gateway reference is different.
+                                MongoWriteException duplicatePaymentIntent = assertThrows(
+                                                MongoWriteException.class,
+                                                () -> payments.insertOne(
+                                                                new Document("_id", "payment-6")
+                                                                                .append("bookingId", "booking-5")
+                                                                                .append("customerId", "customer-3")
+                                                                                .append("gatewayRef", "gateway-6")
+                                                                                .append("gatewayPaymentIntentId", "pi_test001")));
+
+                                assertEquals(11000, duplicatePaymentIntent.getCode());
+
+                                // Multiple payments without a PaymentIntent remain valid.
+                                assertEquals(
+                                                2L,
+                                                payments.countDocuments(
+                                                                new Document(
+                                                                                "gatewayPaymentIntentId",
+                                                                                new Document("$exists", false))));
+
                                 // Multiple payments for one customer remain valid.
                                 assertEquals(
                                                 3,
@@ -166,7 +212,7 @@ class PaymentIndexMongoIntegrationTest {
 
                                 // Repeated initialization must not create extra indexes.
                                 assertEquals(
-                                                4,
+                                                5,
                                                 payments.listIndexes()
                                                                 .into(new ArrayList<>())
                                                                 .size());
