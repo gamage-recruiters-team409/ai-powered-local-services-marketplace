@@ -64,7 +64,7 @@ function resolveAccountNavigation(user, mustChangePassword) {
         { id: 'payments', label: 'Payments', to: '/customer/account/payments' },
         { id: 'settings', label: 'Settings', to: '/customer/account/settings' },
       ],
-      showBecomeProvider: true,
+      showBecomeProvider: false,
     }
   }
   return { items: [], showBecomeProvider: false }

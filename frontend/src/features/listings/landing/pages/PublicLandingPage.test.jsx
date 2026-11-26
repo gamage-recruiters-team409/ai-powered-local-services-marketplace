@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import { AuthContext } from '../../../auth/context/authContextValue'
+import GuestOnly from '../../../auth/guards/GuestOnly'
 import PublicLandingPage from './PublicLandingPage'
 
 const mockGetPublicCategoryTree = vi.fn()
@@ -71,7 +72,24 @@ function ProviderDestination() {
   )
 }
 
+function RegisterDestination() {
+  const loc = useLocation()
+  return (
+    <div data-testid="register-destination" data-search={loc.search}>
+      Register Destination
+    </div>
+  )
+}
+
 function renderLanding(initialPath = '/', authValue = null) {
+  const registerElement = authValue ? (
+    <GuestOnly>
+      <RegisterDestination />
+    </GuestOnly>
+  ) : (
+    <RegisterDestination />
+  )
+
   const tree = (
     <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
@@ -94,10 +112,7 @@ function renderLanding(initialPath = '/', authValue = null) {
           path="/login"
           element={<div data-testid="login-destination">Login Destination</div>}
         />
-        <Route
-          path="/register"
-          element={<div data-testid="register-destination">Register Destination</div>}
-        />
+        <Route path="/register" element={registerElement} />
       </Routes>
     </MemoryRouter>
   )
@@ -619,12 +634,13 @@ describe('PublicLandingPage (100% SRS-Accurate, Live-API Public UI)', () => {
     expect(within(faqSection).getByText(/default 10%/i)).toBeTruthy()
   })
 
-  it('shows Customer account menu with real /customer/account/* links and navigates to Profile when signed in', async () => {
+  it('shows Customer account menu with real /customer/account/* links, hides Become a Provider, and navigates to Profile when signed in', async () => {
     const user = userEvent.setup()
     const logout = vi.fn().mockResolvedValue(undefined)
 
     renderLanding('/', {
       isAuthenticated: true,
+      isLoading: false,
       mustChangePassword: false,
       user: { name: 'Nimal Perera', email: 'nimal@localserve.lk', role: 'CUSTOMER' },
       logout,
@@ -633,7 +649,7 @@ describe('PublicLandingPage (100% SRS-Accurate, Live-API Public UI)', () => {
     const header = screen.getByRole('banner')
     expect(within(header).queryByRole('link', { name: 'Log in' })).toBeNull()
     expect(within(header).queryByRole('link', { name: 'Sign up' })).toBeNull()
-    expect(within(header).getByRole('link', { name: 'Become a Provider' })).toBeTruthy()
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Account menu: Nimal Perera' }))
     const menu = screen.getByRole('menu', { name: 'Account navigation' })
@@ -649,6 +665,56 @@ describe('PublicLandingPage (100% SRS-Accurate, Live-API Public UI)', () => {
 
     await user.click(within(menu).getByRole('menuitem', { name: 'Profile' }))
     expect(await screen.findByTestId('customer-profile-destination')).toBeTruthy()
+  })
+
+  it('hides guest-only Become a Provider in desktop and mobile navbar for signed-in CUSTOMER under real GuestOnly guard (F1)', async () => {
+    const user = userEvent.setup()
+    const customerAuth = {
+      isAuthenticated: true,
+      isLoading: false,
+      mustChangePassword: false,
+      user: { name: 'Nimal Perera', email: 'nimal@localserve.lk', role: 'CUSTOMER' },
+      logout: vi.fn(),
+    }
+
+    // Attempting to visit /register?role=provider as an authenticated CUSTOMER redirects back to / via real GuestOnly
+    renderLanding('/register?role=provider', customerAuth)
+
+    expect(
+      await screen.findByRole('heading', { name: /Hire verified pros with absolute certainty\./i })
+    ).toBeTruthy()
+    expect(screen.queryByTestId('register-destination')).toBeNull()
+
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
+    // Mobile navigation drawer must also omit Become a Provider while preserving Customer links
+    await user.click(within(header).getByRole('button', { name: 'Open navigation menu' }))
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+    expect(within(header).getByRole('link', { name: 'Profile' }).getAttribute('href')).toBe(
+      '/customer/account/profile'
+    )
+  })
+
+  it('preserves Become a Provider navbar link for unauthenticated guests and reaches /register?role=provider through real GuestOnly (F1)', async () => {
+    const user = userEvent.setup()
+
+    renderLanding('/', {
+      isAuthenticated: false,
+      isLoading: false,
+      mustChangePassword: false,
+      user: null,
+      logout: vi.fn(),
+    })
+
+    const header = screen.getByRole('banner')
+    const becomeProviderLink = within(header).getByRole('link', { name: 'Become a Provider' })
+    expect(becomeProviderLink.getAttribute('href')).toBe('/register?role=provider')
+
+    await user.click(becomeProviderLink)
+
+    const registerDest = await screen.findByTestId('register-destination')
+    expect(registerDest.getAttribute('data-search')).toBe('?role=provider')
   })
 
   it('shows Provider navigation links and hides Become a Provider when signed in as PROVIDER', async () => {
@@ -759,11 +825,17 @@ describe('PublicLandingPage (100% SRS-Accurate, Live-API Public UI)', () => {
       await screen.findByRole('heading', { name: /No Customer Reviews Published Yet/i })
     ).toBeTruthy()
 
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
     await user.click(screen.getByRole('button', { name: 'Account menu: Nimal Perera' }))
     await user.click(screen.getByRole('menuitem', { name: 'Log out' }))
 
     expect(await screen.findByRole('link', { name: 'Log in' })).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Sign up' })).toBeTruthy()
+    expect(
+      within(header).getByRole('link', { name: 'Become a Provider' }).getAttribute('href')
+    ).toBe('/register?role=provider')
     expect(
       await screen.findByRole('heading', { name: /Sign In to View Verified Customer Reviews/i })
     ).toBeTruthy()

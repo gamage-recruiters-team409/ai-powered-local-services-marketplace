@@ -37,13 +37,13 @@ describe('PublicNavbar (guest & auth-aware navigation)', () => {
         { id: 'profile', label: 'Profile', to: '/customer/account/profile' },
         { id: 'favorites', label: 'Favorites', to: '/customer/account/favorites' },
       ],
-      showBecomeProvider: true,
+      showBecomeProvider: false,
       onLogout,
     })
 
     expect(screen.queryByRole('link', { name: 'Log in' })).toBeNull()
     expect(screen.queryByRole('link', { name: 'Sign up' })).toBeNull()
-    expect(screen.getByRole('link', { name: 'Become a Provider' })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: 'Become a Provider' })).toBeNull()
 
     const accountBtn = screen.getByRole('button', { name: 'Account menu: Nimal Perera' })
     expect(accountBtn.getAttribute('aria-expanded')).toBe('false')
