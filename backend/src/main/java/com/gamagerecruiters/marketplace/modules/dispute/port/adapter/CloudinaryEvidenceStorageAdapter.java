@@ -2,6 +2,8 @@ package com.gamagerecruiters.marketplace.modules.dispute.port.adapter;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -37,6 +39,11 @@ public class CloudinaryEvidenceStorageAdapter implements EvidenceStoragePort {
     static final String DELIVERY_TYPE = "authenticated";
     static final String RESOURCE_TYPE = "image";
     static final String FOLDER_PREFIX = "disputes/";
+
+    /** Cloudinary Admin API page size for inventory listing (the API caps a single page at 500). */
+    static final int PAGE_SIZE = 500;
+    /** Upper bound on pages followed per {@link #listAssets} call, so inventory scans never make unbounded API calls. */
+    static final int MAX_PAGES = 100;
 
     private static final Logger log = LoggerFactory.getLogger(CloudinaryEvidenceStorageAdapter.class);
 
@@ -105,24 +112,46 @@ public class CloudinaryEvidenceStorageAdapter implements EvidenceStoragePort {
 
     @Override
     public List<StorageAsset> listAssets(String folderPrefix) {
+        List<StorageAsset> assets = new ArrayList<>();
+        String cursor = null;
+        int pages = 0;
         try {
-            Map<?, ?> result = cloudinary.api().resources(ObjectUtils.asMap(
-                    "type", DELIVERY_TYPE,
-                    "prefix", folderPrefix,
-                    "max_results", 500));
-            Object resources = result.get("resources");
-            if (resources instanceof List<?> list) {
-                return list.stream()
-                        .filter(Map.class::isInstance)
-                        .map(m -> (Map<?, ?>) m)
-                        .filter(m -> m.get("public_id") != null)
-                        .map(m -> new StorageAsset(m.get("public_id").toString(), parseCreatedAt(m.get("created_at"))))
-                        .toList();
+            do {
+                Map<String, Object> options = new HashMap<>();
+                options.put("type", DELIVERY_TYPE);
+                options.put("prefix", folderPrefix);
+                options.put("max_results", PAGE_SIZE);
+                if (cursor != null) {
+                    options.put("next_cursor", cursor);
+                }
+                Map<?, ?> result = cloudinary.api().resources(options);
+                collectAssets(result.get("resources"), assets);
+                Object next = result.get("next_cursor");
+                cursor = (next == null || next.toString().isBlank()) ? null : next.toString();
+                pages++;
+            } while (cursor != null && pages < MAX_PAGES);
+            if (cursor != null) {
+                // Bound reached: the remaining pages are examined on the next scheduled run, which restarts the scan.
+                log.warn("event=DISPUTE_EVIDENCE_LIST_TRUNCATED prefix={} pages={} examined={}",
+                        folderPrefix, pages, assets.size());
             }
-            return List.of();
         } catch (Exception e) {
-            log.warn("event=DISPUTE_EVIDENCE_LIST_FAILED prefix={} cause={}", folderPrefix, e.getClass().getSimpleName());
-            return List.of();
+            // A mid-scan page failure returns the pages gathered so far; deletion safety is still enforced downstream,
+            // and the next scheduled run re-scans from the first page, so nothing is lost.
+            log.warn("event=DISPUTE_EVIDENCE_LIST_FAILED prefix={} examined={} cause={}",
+                    folderPrefix, assets.size(), e.getClass().getSimpleName());
+        }
+        return List.copyOf(assets);
+    }
+
+    private static void collectAssets(Object resources, List<StorageAsset> out) {
+        if (resources instanceof List<?> list) {
+            list.stream()
+                    .filter(Map.class::isInstance)
+                    .map(m -> (Map<?, ?>) m)
+                    .filter(m -> m.get("public_id") != null)
+                    .map(m -> new StorageAsset(m.get("public_id").toString(), parseCreatedAt(m.get("created_at"))))
+                    .forEach(out::add);
         }
     }
 

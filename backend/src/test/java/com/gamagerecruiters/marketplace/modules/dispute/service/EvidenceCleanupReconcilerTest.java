@@ -245,4 +245,29 @@ class EvidenceCleanupReconcilerTest {
         verify(cleanupStore, never()).isReferenced(anyString());
         verify(storage, never()).delete(anyString());
     }
+
+    @Test
+    @DisplayName("inventory reconciliation deletes an orphan found beyond the first page while preserving committed evidence")
+    void inventoryReconciliationHandlesOrphanBeyondFirstPage() {
+        // The adapter paginates internally, so the reconciler receives the full aggregated inventory. Simulate a large
+        // listing (more than one Cloudinary page) whose only orphan sits past the first 500 committed assets.
+        java.util.List<EvidenceStoragePort.StorageAsset> inventory = new java.util.ArrayList<>();
+        for (int i = 0; i < 500; i++) {
+            String committed = "disputes/d1/committed-" + i;
+            inventory.add(aged(committed));
+            when(cleanupStore.isReferenced(committed)).thenReturn(true);
+        }
+        String orphan = "disputes/d1/page2-orphan";
+        inventory.add(aged(orphan));
+        when(cleanupStore.isReferenced(orphan)).thenReturn(false);
+        when(cleanupStore.hasActiveTask(orphan)).thenReturn(false);
+        when(storage.listAssets("disputes/")).thenReturn(inventory);
+
+        EvidenceCleanupReconciler.Result result = reconciler.reconcile();
+
+        assertThat(result.deleted()).isEqualTo(1);
+        verify(storage).delete(orphan);
+        verify(storage, never()).delete("disputes/d1/committed-0");
+        verify(storage, never()).delete("disputes/d1/committed-499");
+    }
 }
