@@ -42,13 +42,15 @@ class OpsCaseActionServiceTest {
     @Mock
     private OpsCaseActionStore store;
     @Mock
+    private OpsCaseEligibilityService eligibility;
+    @Mock
     private AdminUserAccountService adminUserAccountService;
 
     private OpsCaseActionService service;
 
     @BeforeEach
     void setUp() {
-        service = new OpsCaseActionService(store, adminUserAccountService,
+        service = new OpsCaseActionService(store, eligibility, adminUserAccountService,
                 Clock.fixed(NOW, ZoneOffset.UTC));
         lenient().when(store.insert(any())).thenAnswer(inv -> inv.getArgument(0));
     }
@@ -134,6 +136,42 @@ class OpsCaseActionServiceTest {
         assertThat(result.action()).isEqualTo(OpsActionType.CONTACT_PROVIDER);
         assertThat(result.caseStatus()).isEqualTo(OpsCaseStatus.CONTACTED);
         assertThat(result.recordedAt()).isEqualTo(NOW);
+    }
+
+    @Test
+    @DisplayName("F2: an ineligible/unknown case is rejected before any suspend or record")
+    void ineligibleCaseRejectedBeforeMutation() {
+        org.mockito.Mockito.doThrow(new ApiException(HttpStatus.NOT_FOUND, "OPS_REPEAT_CASE_NOT_FOUND", "not a case"))
+                .when(eligibility).assertEligible(OpsCaseType.REPEAT_CANCELLATION, USER);
+
+        ApiException ex = catchThrowableOfType(() -> service.record(OpsCaseType.REPEAT_CANCELLATION, USER, "SUSPEND",
+                NOTE, ADMIN_ID, Role.ADMIN), ApiException.class);
+
+        assertThat(ex.getErrorCode()).isEqualTo("OPS_REPEAT_CASE_NOT_FOUND");
+        verifyNoInteractions(adminUserAccountService);
+        verify(store, never()).insert(any());
+    }
+
+    @Test
+    @DisplayName("F2: when the source is unavailable the action fails closed before any mutation")
+    void sourceUnavailableFailsClosed() {
+        org.mockito.Mockito.doThrow(new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "OPS_SOURCE_UNAVAILABLE", "down"))
+                .when(eligibility).assertEligible(OpsCaseType.OVERDUE_BOOKING, "b1");
+
+        ApiException ex = catchThrowableOfType(() -> service.record(OpsCaseType.OVERDUE_BOOKING, "b1",
+                "CONTACT_PROVIDER", NOTE, ADMIN_ID, Role.SUPPORT_ADMIN), ApiException.class);
+
+        assertThat(ex.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        verify(store, never()).insert(any());
+    }
+
+    @Test
+    @DisplayName("F2: eligibility is checked for an eligible case, then the action is recorded")
+    void eligibleCaseIsVerifiedThenRecorded() {
+        service.record(OpsCaseType.OVERDUE_BOOKING, "b1", "CONTACT_PROVIDER", NOTE, ADMIN_ID, Role.SUPPORT_ADMIN);
+
+        verify(eligibility).assertEligible(OpsCaseType.OVERDUE_BOOKING, "b1");
+        verify(store).insert(any());
     }
 
     @Test

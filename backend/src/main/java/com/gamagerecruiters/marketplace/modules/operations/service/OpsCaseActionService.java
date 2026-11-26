@@ -32,16 +32,20 @@ public class OpsCaseActionService {
     private static final Logger log = LoggerFactory.getLogger(OpsCaseActionService.class);
 
     private final OpsCaseActionStore store;
+    private final OpsCaseEligibilityService eligibility;
     private final AdminUserAccountService adminUserAccountService;
     private final Clock clock;
 
     @Autowired
-    public OpsCaseActionService(OpsCaseActionStore store, AdminUserAccountService adminUserAccountService) {
-        this(store, adminUserAccountService, Clock.systemUTC());
+    public OpsCaseActionService(OpsCaseActionStore store, OpsCaseEligibilityService eligibility,
+                                AdminUserAccountService adminUserAccountService) {
+        this(store, eligibility, adminUserAccountService, Clock.systemUTC());
     }
 
-    OpsCaseActionService(OpsCaseActionStore store, AdminUserAccountService adminUserAccountService, Clock clock) {
+    OpsCaseActionService(OpsCaseActionStore store, OpsCaseEligibilityService eligibility,
+                         AdminUserAccountService adminUserAccountService, Clock clock) {
         this.store = store;
+        this.eligibility = eligibility;
         this.adminUserAccountService = adminUserAccountService;
         this.clock = clock;
     }
@@ -67,6 +71,10 @@ public class OpsCaseActionService {
             throw new ApiException(HttpStatus.FORBIDDEN, "OPS_SUPPORT_CANNOT_PERFORM_ACTION",
                     "Only the ADMIN area may perform " + action);
         }
+
+        // Verify the subject is a real, eligible case against the authoritative source before any mutation (fail
+        // closed when the source is unavailable). Guards SUSPEND against accounts that are not repeat-cancellation cases.
+        eligibility.assertEligible(caseType, subjectId);
 
         boolean suspensionApplied = false;
         if (action == OpsActionType.SUSPEND) {
