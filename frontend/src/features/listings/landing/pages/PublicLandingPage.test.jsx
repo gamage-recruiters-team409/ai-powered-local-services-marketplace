@@ -2,7 +2,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom'
+import { AuthContext } from '../../../auth/context/authContextValue'
 import PublicLandingPage from './PublicLandingPage'
 
 const mockGetPublicCategoryTree = vi.fn()
@@ -69,13 +71,25 @@ function ProviderDestination() {
   )
 }
 
-function renderLanding(initialPath = '/') {
-  return render(
+function renderLanding(initialPath = '/', authValue = null) {
+  const tree = (
     <MemoryRouter initialEntries={[initialPath]}>
       <Routes>
         <Route path="/" element={<PublicLandingPage />} />
         <Route path="/search" element={<SearchDestination />} />
         <Route path="/providers/:providerId" element={<ProviderDestination />} />
+        <Route
+          path="/customer/account/profile"
+          element={<div data-testid="customer-profile-destination">Customer Profile</div>}
+        />
+        <Route
+          path="/provider/profile"
+          element={<div data-testid="provider-profile-destination">Provider Profile</div>}
+        />
+        <Route
+          path="/admin"
+          element={<div data-testid="admin-destination">Admin Dashboard</div>}
+        />
         <Route
           path="/login"
           element={<div data-testid="login-destination">Login Destination</div>}
@@ -86,6 +100,10 @@ function renderLanding(initialPath = '/') {
         />
       </Routes>
     </MemoryRouter>
+  )
+
+  return render(
+    authValue ? <AuthContext.Provider value={authValue}>{tree}</AuthContext.Provider> : tree
   )
 }
 
@@ -599,5 +617,124 @@ describe('PublicLandingPage (100% SRS-Accurate, Live-API Public UI)', () => {
     await user.click(pricingFaqBtn)
     expect(pricingFaqBtn.getAttribute('aria-expanded')).toBe('true')
     expect(within(faqSection).getByText(/default 10%/i)).toBeTruthy()
+  })
+
+  it('shows Customer account menu with real /customer/account/* links and navigates to Profile when signed in', async () => {
+    const user = userEvent.setup()
+    const logout = vi.fn().mockResolvedValue(undefined)
+
+    renderLanding('/', {
+      isAuthenticated: true,
+      mustChangePassword: false,
+      user: { name: 'Nimal Perera', email: 'nimal@localserve.lk', role: 'CUSTOMER' },
+      logout,
+    })
+
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('link', { name: 'Log in' })).toBeNull()
+    expect(within(header).queryByRole('link', { name: 'Sign up' })).toBeNull()
+    expect(within(header).getByRole('link', { name: 'Become a Provider' })).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: 'Account menu: Nimal Perera' }))
+    const menu = screen.getByRole('menu', { name: 'Account navigation' })
+    expect(within(menu).getByRole('menuitem', { name: 'Favorites' }).getAttribute('href')).toBe(
+      '/customer/account/favorites'
+    )
+    expect(within(menu).getByRole('menuitem', { name: 'Payments' }).getAttribute('href')).toBe(
+      '/customer/account/payments'
+    )
+    expect(within(menu).getByRole('menuitem', { name: 'Settings' }).getAttribute('href')).toBe(
+      '/customer/account/settings'
+    )
+
+    await user.click(within(menu).getByRole('menuitem', { name: 'Profile' }))
+    expect(await screen.findByTestId('customer-profile-destination')).toBeTruthy()
+  })
+
+  it('shows Provider navigation links and hides Become a Provider when signed in as PROVIDER', async () => {
+    const user = userEvent.setup()
+
+    renderLanding('/', {
+      isAuthenticated: true,
+      mustChangePassword: false,
+      user: { fullName: 'Kamal Silva', email: 'kamal@localserve.lk', role: 'PROVIDER' },
+      logout: vi.fn(),
+    })
+
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
+    await user.click(within(header).getByRole('button', { name: 'Account menu: Kamal Silva' }))
+    const menu = screen.getByRole('menu', { name: 'Account navigation' })
+    expect(
+      within(menu).getByRole('menuitem', { name: 'Verification' }).getAttribute('href')
+    ).toBe('/provider/verification')
+
+    await user.click(within(menu).getByRole('menuitem', { name: 'Provider Profile' }))
+    expect(await screen.findByTestId('provider-profile-destination')).toBeTruthy()
+  })
+
+  it('shows Admin Dashboard link and hides Become a Provider when signed in as ADMIN', async () => {
+    const user = userEvent.setup()
+
+    renderLanding('/', {
+      isAuthenticated: true,
+      mustChangePassword: false,
+      user: { name: 'System Admin', email: 'admin@localserve.lk', role: 'ADMIN' },
+      logout: vi.fn(),
+    })
+
+    const header = screen.getByRole('banner')
+    expect(within(header).queryByRole('link', { name: 'Become a Provider' })).toBeNull()
+
+    await user.click(within(header).getByRole('button', { name: 'Account menu: System Admin' }))
+    const menu = screen.getByRole('menu', { name: 'Account navigation' })
+    await user.click(within(menu).getByRole('menuitem', { name: 'Admin Dashboard' }))
+    expect(await screen.findByTestId('admin-destination')).toBeTruthy()
+  })
+
+  it('logs out from PublicNavbar, restores guest Log in/Sign up actions, and refreshes reviews to guest state', async () => {
+    const user = userEvent.setup()
+    mockGetLiveCustomerReviews
+      .mockResolvedValueOnce({ reviews: [], requiresAuth: false, failed: false })
+      .mockResolvedValueOnce({ reviews: [], requiresAuth: true, failed: false })
+
+    function StatefulAuthLanding() {
+      const [signedIn, setSignedIn] = useState(true)
+      const value = {
+        isAuthenticated: signedIn,
+        mustChangePassword: false,
+        user: signedIn
+          ? { name: 'Nimal Perera', email: 'nimal@localserve.lk', role: 'CUSTOMER' }
+          : null,
+        logout: vi.fn(async () => {
+          setSignedIn(false)
+        }),
+      }
+      return (
+        <AuthContext.Provider value={value}>
+          <MemoryRouter initialEntries={['/']}>
+            <Routes>
+              <Route path="/" element={<PublicLandingPage />} />
+            </Routes>
+          </MemoryRouter>
+        </AuthContext.Provider>
+      )
+    }
+
+    render(<StatefulAuthLanding />)
+
+    expect(
+      await screen.findByRole('heading', { name: /No Customer Reviews Published Yet/i })
+    ).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: 'Account menu: Nimal Perera' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Log out' }))
+
+    expect(await screen.findByRole('link', { name: 'Log in' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Sign up' })).toBeTruthy()
+    expect(
+      await screen.findByRole('heading', { name: /Sign In to View Verified Customer Reviews/i })
+    ).toBeTruthy()
   })
 })

@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useMemo, useState } from 'react'
 import { PublicLayout } from '../../../../shared/layouts/public'
+import { AuthContext } from '../../../auth/context/authContextValue'
+import { ADMIN_ROLES, ROLES } from '../../../auth/constants/roles'
 import {
   getFeaturedPublicServices,
   getLiveCustomerReviews,
@@ -17,7 +19,52 @@ import { VerifiedReviewsMarquee } from '../components/VerifiedReviewsMarquee'
 import { LandingFaqSection } from '../components/LandingFaqSection'
 import styles from '../styles/publicLanding.module.css'
 
+function resolveAccountNavigation(user, mustChangePassword) {
+  if (!user) {
+    return { items: [], showBecomeProvider: true }
+  }
+  if (mustChangePassword || user.mustChangePassword) {
+    return {
+      items: [{ id: 'change-password', label: 'Change Password', to: '/change-password' }],
+      showBecomeProvider: false,
+    }
+  }
+  if (user.role && ADMIN_ROLES.includes(user.role)) {
+    return {
+      items: [{ id: 'admin-dashboard', label: 'Admin Dashboard', to: '/admin' }],
+      showBecomeProvider: false,
+    }
+  }
+  if (user.role === ROLES.PROVIDER) {
+    return {
+      items: [
+        { id: 'provider-profile', label: 'Provider Profile', to: '/provider/profile' },
+        { id: 'provider-verification', label: 'Verification', to: '/provider/verification' },
+      ],
+      showBecomeProvider: false,
+    }
+  }
+  return {
+    items: [
+      { id: 'profile', label: 'Profile', to: '/customer/account/profile' },
+      { id: 'addresses', label: 'Saved Addresses', to: '/customer/account/addresses' },
+      { id: 'favorites', label: 'Favorites', to: '/customer/account/favorites' },
+      { id: 'payments', label: 'Payments', to: '/customer/account/payments' },
+      { id: 'settings', label: 'Settings', to: '/customer/account/settings' },
+    ],
+    showBecomeProvider: true,
+  }
+}
+
 export default function PublicLandingPage() {
+  const auth = useContext(AuthContext)
+  const isAuthenticated = Boolean(auth?.isAuthenticated && auth?.user)
+  const signedInUser = isAuthenticated ? auth.user : null
+  const { items: accountMenuItems, showBecomeProvider } = useMemo(
+    () => resolveAccountNavigation(signedInUser, Boolean(auth?.mustChangePassword)),
+    [auth?.mustChangePassword, signedInUser]
+  )
+
   const [selectedCity, setSelectedCity] = useState('Colombo')
 
   const [categoriesRetryNonce, setCategoriesRetryNonce] = useState(0)
@@ -48,7 +95,7 @@ export default function PublicLandingPage() {
 
   const categoriesKey = `cat-${categoriesRetryNonce}`
   const servicesKey = `svc-${selectedCity}-${servicesRetryNonce}`
-  const reviewsKey = `rev-${servicesState.resolvedKey || 'init'}-${reviewsRetryNonce}`
+  const reviewsKey = `rev-${servicesState.resolvedKey || 'init'}-${isAuthenticated ? 'auth' : 'guest'}-${reviewsRetryNonce}`
 
   // 1. Live active public category tree (GET /api/v1/categories)
   useEffect(() => {
@@ -201,7 +248,14 @@ export default function PublicLandingPage() {
   const districtCount = liveDistricts.length > 0 ? liveDistricts.length : 25
 
   return (
-    <PublicLayout selectedCity={selectedCity} onCityChange={setSelectedCity}>
+    <PublicLayout
+      selectedCity={selectedCity}
+      onCityChange={setSelectedCity}
+      user={signedInUser}
+      accountMenuItems={accountMenuItems}
+      showBecomeProvider={showBecomeProvider}
+      onLogout={auth?.logout}
+    >
       <div className={styles.landingRoot}>
         <HeroScrollCanvas
           selectedCity={selectedCity}
