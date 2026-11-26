@@ -27,6 +27,9 @@ import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.payment.dto.ConfirmPayoutRequest;
 import com.gamagerecruiters.marketplace.modules.payment.dto.FailPayoutRequest;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payout;
+import com.gamagerecruiters.marketplace.modules.payment.domain.PayoutStatus;
+import com.gamagerecruiters.marketplace.modules.payment.dto.PayoutSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.payment.service.AdminPayoutQueryService;
 import com.gamagerecruiters.marketplace.modules.payment.service.PayoutService;
 
 class AdminPayoutControllerTest {
@@ -34,13 +37,16 @@ class AdminPayoutControllerTest {
     private static final String ADMIN_ID = "finance-admin-1";
 
     private PayoutService payoutService;
+    private AdminPayoutQueryService adminPayoutQueryService;
     private AdminPayoutController controller;
 
     @BeforeEach
     void setUp() {
         SecurityContextHolder.clearContext();
         payoutService = mock(PayoutService.class);
-        controller = new AdminPayoutController(payoutService);
+        adminPayoutQueryService = mock(AdminPayoutQueryService.class);
+        controller = new AdminPayoutController(
+                payoutService, adminPayoutQueryService);
     }
 
     @AfterEach
@@ -54,12 +60,66 @@ class AdminPayoutControllerTest {
                 List.of(payout("payout-1", "provider-profile-1")),
                 PageRequest.of(0, 10),
                 1);
-        when(payoutService.getAdminPayoutHistory(0, 10)).thenReturn(page);
+        when(adminPayoutQueryService.getPayouts(
+                0, 10, null, null, null, null)).thenReturn(page);
 
-        var response = controller.getPayouts(0, 10);
+        var response = controller.getPayouts(
+                0, 10, null, null, null, null);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(1, response.getBody().content().size());
+    }
+
+    /**
+     * Verifies that all optional filters reach the read-only query service.
+     */
+    @Test
+    void getPayoutsDelegatesAllFilters() {
+        Instant from = Instant.parse("2026-11-01T00:00:00Z");
+        Instant to = Instant.parse("2026-12-01T00:00:00Z");
+
+        var page = new PageImpl<>(
+                List.of(payout("payout-1", "provider-profile-1")),
+                PageRequest.of(0, 10),
+                1);
+
+        when(adminPayoutQueryService.getPayouts(
+                0, 10, "provider-profile-1",
+                PayoutStatus.PENDING, from, to))
+                .thenReturn(page);
+
+        var response = controller.getPayouts(
+                0, 10, "provider-profile-1",
+                PayoutStatus.PENDING, from, to);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(1L, response.getBody().totalElements());
+        assertEquals("payout-1", response.getBody().content().get(0).id());
+
+        verify(adminPayoutQueryService).getPayouts(
+                0, 10, "provider-profile-1",
+                PayoutStatus.PENDING, from, to);
+
+        verifyNoInteractions(payoutService);
+    }
+
+    /**
+     * Verifies that the summary endpoint returns global status counts.
+     */
+    @Test
+    void getPayoutSummaryReturnsGlobalCounts() {
+        var summary = new PayoutSummaryResponse(6L, 12L, 148L, 3L);
+
+        when(adminPayoutQueryService.getSummary())
+                .thenReturn(summary);
+
+        var response = controller.getPayoutSummary();
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(summary, response.getBody());
+
+        verify(adminPayoutQueryService).getSummary();
+        verifyNoInteractions(payoutService);
     }
 
     @Test
