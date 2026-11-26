@@ -1,6 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.availability.service;
 
 import java.time.LocalDate;
+import java.util.List;
 
 import org.springframework.stereotype.Service;
 
@@ -37,5 +38,10 @@ public class AvailabilityFacadeImpl implements AvailabilityFacade {
     @Override
     public BlockedDateResponse createBlockedDate(String providerId, CreateBlockedDateRequest request) {
         return availabilityService.createBlockedDate(providerId, request);
+    }
+
+    @Override
+    public List<BlockedDateResponse> getBlockedDates(String providerId, LocalDate from, LocalDate to) {
+        return availabilityService.getBlockedDates(providerId, from.toString(), to.toString());
     }
 }

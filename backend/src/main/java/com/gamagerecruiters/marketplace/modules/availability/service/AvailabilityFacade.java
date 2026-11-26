@@ -1,6 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.availability.service;
 
 import java.time.LocalDate;
+import java.util.List;
 
 import com.gamagerecruiters.marketplace.modules.availability.dto.BlockedDateResponse;
 import com.gamagerecruiters.marketplace.modules.availability.dto.CreateBlockedDateRequest;
@@ -26,4 +27,7 @@ public interface AvailabilityFacade {
      * (used by the booking module's "block a date with bookings" flow after it has handled the bookings).
      */
     BlockedDateResponse createBlockedDate(String providerId, CreateBlockedDateRequest request);
+
+    /** The provider's blocked dates from {@code from} to {@code to} inclusive (booking calendar view). */
+    List<BlockedDateResponse> getBlockedDates(String providerId, LocalDate from, LocalDate to);
 }

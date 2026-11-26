@@ -40,6 +40,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.testcontainers.containers.MongoDBContainer;
 
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
+import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.availability.domain.BlockReason;
@@ -366,5 +367,31 @@ class BookingLifecycleMongoIntegrationTest {
         assertThat(availabilityFacade.isDateBlocked(provider, day)).isTrue();
         assertThat(statusOf(confirmed.getId())).isEqualTo(BookingStatus.CONFIRMED);
         assertThat(statusOf(pending.getId())).isEqualTo(BookingStatus.DECLINED);
+    }
+
+    // ---------- Calendar subscription link (real MongoDB) ----------
+
+    @Autowired
+    private BookingCalendarService calendarService;
+
+    @Test
+    @DisplayName("Calendar link: the feed shows the user's bookings; after reset the old link returns 404")
+    void calendarSubscriptionFeed() {
+        String provider = "prov-cal-" + UUID.randomUUID();
+        Booking confirmed = save("cust-c", provider, BookingStatus.CONFIRMED, Instant.now().plus(Duration.ofDays(3)));
+        loginAs(provider, Role.PROVIDER);
+
+        String firstUrl = calendarService.createOrResetSubscription().url();
+        String firstToken = firstUrl.substring(firstUrl.lastIndexOf('/') + 1).replace(".ics", "");
+        SecurityContextHolder.clearContext();
+
+        assertThat(calendarService.feed(firstToken)).contains("UID:" + confirmed.getId() + "@localserve");
+
+        loginAs(provider, Role.PROVIDER);
+        String secondUrl = calendarService.createOrResetSubscription().url();
+        SecurityContextHolder.clearContext();
+        assertThatThrownBy(() -> calendarService.feed(firstToken)).isInstanceOf(ResourceNotFoundException.class);
+        assertThat(calendarService.feed(secondUrl.substring(secondUrl.lastIndexOf('/') + 1).replace(".ics", "")))
+                .contains("BEGIN:VCALENDAR");
     }
 }

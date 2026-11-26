@@ -46,4 +46,12 @@ public interface BookingRepository extends MongoRepository<Booking, String> {
     /** Bookings with a PENDING reschedule request whose answer time has passed (oldest first via paging). */
     @Query("{ 'rescheduleRequests': { '$elemMatch': { 'status': 'PENDING', 'expiresAt': { '$lt': ?0 } } } }")
     List<Booking> findWithExpiredRescheduleRequests(Instant now, Pageable pageable);
+
+    /** Calendar export / feed: a provider's bookings ending after {@code after}, earliest first (max 500). */
+    List<Booking> findTop500ByProviderIdAndStatusInAndSlotEndGreaterThanOrderBySlotStartAsc(
+            String providerId, Collection<BookingStatus> statuses, Instant after);
+
+    /** Calendar export / feed: a customer's bookings ending after {@code after}, earliest first (max 500). */
+    List<Booking> findTop500ByCustomerIdAndStatusInAndSlotEndGreaterThanOrderBySlotStartAsc(
+            String customerId, Collection<BookingStatus> statuses, Instant after);
 }
