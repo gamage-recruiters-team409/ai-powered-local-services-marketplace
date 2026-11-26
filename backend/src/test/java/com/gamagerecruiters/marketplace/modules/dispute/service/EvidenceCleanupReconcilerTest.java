@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.dispute.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -41,8 +43,15 @@ class EvidenceCleanupReconcilerTest {
     private static final Duration BACKOFF = Duration.ofMinutes(5);
     private static final int MAX_ATTEMPTS = 3;
     private static final Duration INVENTORY_MIN_AGE = Duration.ofMinutes(30);
+    private static final int INVENTORY_MAX_PAGES = 100;
     /** Older than NOW minus the inventory grace period, so inventory reconciliation is allowed to act on it. */
     private static final Instant AGED = NOW.minus(Duration.ofHours(1));
+
+    /** Stub a single fully-traversed inventory page (null checkpoint) for any cursor/budget. */
+    private void inventory(EvidenceStoragePort.StorageAsset... assets) {
+        when(storage.listAssets(eq("disputes/"), any(), anyInt()))
+                .thenReturn(new EvidenceStoragePort.StoragePage(java.util.List.of(assets), null));
+    }
 
     @Mock
     private EvidenceCleanupStore cleanupStore;
@@ -54,7 +63,7 @@ class EvidenceCleanupReconcilerTest {
     @BeforeEach
     void setUp() {
         reconciler = new EvidenceCleanupReconciler(cleanupStore, storage, Clock.fixed(NOW, ZoneOffset.UTC),
-                true, LEASE, BACKOFF, MAX_ATTEMPTS, 10, INVENTORY_MIN_AGE);
+                true, LEASE, BACKOFF, MAX_ATTEMPTS, 10, INVENTORY_MIN_AGE, INVENTORY_MAX_PAGES);
     }
 
     private static EvidenceCleanupTask task(String id, String publicId, int attempts) {
@@ -139,7 +148,7 @@ class EvidenceCleanupReconcilerTest {
     @DisplayName("a run processes at most batch-size tasks")
     void respectsBatchSize() {
         reconciler = new EvidenceCleanupReconciler(cleanupStore, storage, Clock.fixed(NOW, ZoneOffset.UTC),
-                true, LEASE, BACKOFF, MAX_ATTEMPTS, 2, INVENTORY_MIN_AGE);
+                true, LEASE, BACKOFF, MAX_ATTEMPTS, 2, INVENTORY_MIN_AGE, INVENTORY_MAX_PAGES);
         when(cleanupStore.claimDue(any(), any())).thenReturn(Optional.of(task("t1", "disputes/d1/asset-1", 0)));
         when(cleanupStore.isReferenced(anyString())).thenReturn(true);
         when(cleanupStore.resolve(eq("t1"), anyString())).thenReturn(true);
@@ -153,7 +162,7 @@ class EvidenceCleanupReconcilerTest {
     @DisplayName("scheduled run does nothing when switched off")
     void disabledDoesNothing() {
         reconciler = new EvidenceCleanupReconciler(cleanupStore, storage, Clock.fixed(NOW, ZoneOffset.UTC),
-                false, LEASE, BACKOFF, MAX_ATTEMPTS, 10, INVENTORY_MIN_AGE);
+                false, LEASE, BACKOFF, MAX_ATTEMPTS, 10, INVENTORY_MIN_AGE, INVENTORY_MAX_PAGES);
 
         reconciler.scheduledRun();
 
@@ -165,14 +174,19 @@ class EvidenceCleanupReconcilerTest {
     void invalidSettingsRejected() {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         assertThatThrownBy(() -> new EvidenceCleanupReconciler(cleanupStore, storage, clock, true,
-                Duration.ZERO, BACKOFF, MAX_ATTEMPTS, 10, INVENTORY_MIN_AGE))
+                Duration.ZERO, BACKOFF, MAX_ATTEMPTS, 10, INVENTORY_MIN_AGE, INVENTORY_MAX_PAGES))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new EvidenceCleanupReconciler(cleanupStore, storage, clock, true,
-                LEASE, BACKOFF, 0, 10, INVENTORY_MIN_AGE)).isInstanceOf(IllegalArgumentException.class);
+                LEASE, BACKOFF, 0, 10, INVENTORY_MIN_AGE, INVENTORY_MAX_PAGES))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new EvidenceCleanupReconciler(cleanupStore, storage, clock, true,
-                LEASE, BACKOFF, MAX_ATTEMPTS, 0, INVENTORY_MIN_AGE)).isInstanceOf(IllegalArgumentException.class);
+                LEASE, BACKOFF, MAX_ATTEMPTS, 0, INVENTORY_MIN_AGE, INVENTORY_MAX_PAGES))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new EvidenceCleanupReconciler(cleanupStore, storage, clock, true,
-                LEASE, BACKOFF, MAX_ATTEMPTS, 10, Duration.ofMinutes(-1)))
+                LEASE, BACKOFF, MAX_ATTEMPTS, 10, Duration.ofMinutes(-1), INVENTORY_MAX_PAGES))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new EvidenceCleanupReconciler(cleanupStore, storage, clock, true,
+                LEASE, BACKOFF, MAX_ATTEMPTS, 10, INVENTORY_MIN_AGE, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -184,7 +198,7 @@ class EvidenceCleanupReconcilerTest {
     @Test
     @DisplayName("inventory reconciliation deletes untracked orphan not referenced in MongoDB")
     void inventoryReconciliationDeletesUntrackedOrphan() {
-        when(storage.listAssets("disputes/")).thenReturn(java.util.List.of(aged("disputes/d1/orphan-1")));
+        inventory(aged("disputes/d1/orphan-1"));
         when(cleanupStore.isReferenced("disputes/d1/orphan-1")).thenReturn(false);
         when(cleanupStore.hasActiveTask("disputes/d1/orphan-1")).thenReturn(false);
 
@@ -197,7 +211,7 @@ class EvidenceCleanupReconcilerTest {
     @Test
     @DisplayName("inventory reconciliation preserves committed evidence and does not delete it")
     void inventoryReconciliationPreservesCommittedEvidence() {
-        when(storage.listAssets("disputes/")).thenReturn(java.util.List.of(aged("disputes/d1/committed-1")));
+        inventory(aged("disputes/d1/committed-1"));
         when(cleanupStore.isReferenced("disputes/d1/committed-1")).thenReturn(true);
 
         EvidenceCleanupReconciler.Result result = reconciler.reconcile();
@@ -209,7 +223,7 @@ class EvidenceCleanupReconcilerTest {
     @Test
     @DisplayName("inventory reconciliation does not delete when MongoDB check fails (outcome unknown)")
     void inventoryReconciliationDoesNotDeleteWhenDatabaseCheckFails() {
-        when(storage.listAssets("disputes/")).thenReturn(java.util.List.of(aged("disputes/d1/asset-1")));
+        inventory(aged("disputes/d1/asset-1"));
         when(cleanupStore.isReferenced("disputes/d1/asset-1")).thenThrow(new RuntimeException("DB unavailable"));
 
         EvidenceCleanupReconciler.Result result = reconciler.reconcile();
@@ -223,8 +237,7 @@ class EvidenceCleanupReconcilerTest {
     void inventoryReconciliationSkipsAssetWithinGracePeriod() {
         // Asset created moments ago: its matching evidence write may still be committing, so it must be left alone.
         Instant justUploaded = NOW.minus(Duration.ofMinutes(1));
-        when(storage.listAssets("disputes/")).thenReturn(java.util.List.of(
-                new EvidenceStoragePort.StorageAsset("disputes/d1/in-flight", justUploaded)));
+        inventory(new EvidenceStoragePort.StorageAsset("disputes/d1/in-flight", justUploaded));
 
         EvidenceCleanupReconciler.Result result = reconciler.reconcile();
 
@@ -236,8 +249,7 @@ class EvidenceCleanupReconcilerTest {
     @Test
     @DisplayName("inventory reconciliation skips an asset whose creation time storage did not report")
     void inventoryReconciliationSkipsAssetWithUnknownAge() {
-        when(storage.listAssets("disputes/")).thenReturn(java.util.List.of(
-                new EvidenceStoragePort.StorageAsset("disputes/d1/unknown-age", null)));
+        inventory(new EvidenceStoragePort.StorageAsset("disputes/d1/unknown-age", null));
 
         EvidenceCleanupReconciler.Result result = reconciler.reconcile();
 
@@ -261,7 +273,8 @@ class EvidenceCleanupReconcilerTest {
         inventory.add(aged(orphan));
         when(cleanupStore.isReferenced(orphan)).thenReturn(false);
         when(cleanupStore.hasActiveTask(orphan)).thenReturn(false);
-        when(storage.listAssets("disputes/")).thenReturn(inventory);
+        when(storage.listAssets(eq("disputes/"), any(), anyInt()))
+                .thenReturn(new EvidenceStoragePort.StoragePage(inventory, null));
 
         EvidenceCleanupReconciler.Result result = reconciler.reconcile();
 
@@ -269,5 +282,43 @@ class EvidenceCleanupReconcilerTest {
         verify(storage).delete(orphan);
         verify(storage, never()).delete("disputes/d1/committed-0");
         verify(storage, never()).delete("disputes/d1/committed-499");
+    }
+
+    @Test
+    @DisplayName("inventory scan resumes from the saved checkpoint across runs and reaches an orphan on a later page")
+    void inventoryScanResumesAcrossRunsToReachLaterPageOrphan() {
+        // Page budget of 2 pages per run. The adapter returns a bounded slice plus the cursor to resume from; the
+        // reconciler must pass that cursor back next run instead of restarting, so an orphan on the 3rd page is reached.
+        EvidenceStoragePort.StorageAsset committedA = aged("disputes/d1/committed-a");
+        EvidenceStoragePort.StorageAsset committedB = aged("disputes/d1/committed-b");
+        EvidenceStoragePort.StorageAsset orphan = aged("disputes/d1/page3-orphan");
+        when(cleanupStore.isReferenced("disputes/d1/committed-a")).thenReturn(true);
+        when(cleanupStore.isReferenced("disputes/d1/committed-b")).thenReturn(true);
+        when(cleanupStore.isReferenced("disputes/d1/page3-orphan")).thenReturn(false);
+        when(cleanupStore.hasActiveTask("disputes/d1/page3-orphan")).thenReturn(false);
+
+        // Run 1 (cursor null) → first slice ends at "ckpt-1"; Run 2 (cursor "ckpt-1") → final slice (orphan), null.
+        when(storage.listAssets(eq("disputes/"), any(), anyInt())).thenAnswer(inv -> {
+            String cursor = inv.getArgument(1);
+            if (cursor == null) {
+                return new EvidenceStoragePort.StoragePage(java.util.List.of(committedA, committedB), "ckpt-1");
+            }
+            return new EvidenceStoragePort.StoragePage(java.util.List.of(orphan), null);
+        });
+
+        // Run 1: only committed assets seen so far, nothing deleted, checkpoint advanced.
+        EvidenceCleanupReconciler.Result run1 = reconciler.reconcile();
+        assertThat(run1.deleted()).isZero();
+        verify(storage, never()).delete(anyString());
+
+        // Run 2: resumes from "ckpt-1" and reaches the orphan on the later page.
+        EvidenceCleanupReconciler.Result run2 = reconciler.reconcile();
+        assertThat(run2.deleted()).isEqualTo(1);
+        verify(storage).delete("disputes/d1/page3-orphan");
+
+        // The second run passed the saved checkpoint, not null (no restart from page one).
+        ArgumentCaptor<String> cursorCaptor = ArgumentCaptor.forClass(String.class);
+        verify(storage, times(2)).listAssets(eq("disputes/"), cursorCaptor.capture(), anyInt());
+        assertThat(cursorCaptor.getAllValues()).containsExactly(null, "ckpt-1");
     }
 }

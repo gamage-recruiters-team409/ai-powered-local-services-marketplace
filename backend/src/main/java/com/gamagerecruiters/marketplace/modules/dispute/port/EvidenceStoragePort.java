@@ -30,6 +30,15 @@ public interface EvidenceStoragePort {
     }
 
     /**
+     * One bounded slice of an inventory traversal (finding F6-C): the assets gathered this call, plus the checkpoint
+     * to resume from on the next call. {@code nextCursor} is null when the traversal has reached the end (the caller
+     * should restart from the beginning next time); when non-null the caller must pass it back to continue where this
+     * slice stopped — whether it stopped because the per-call page budget was reached or because a page request failed.
+     */
+    record StoragePage(List<StorageAsset> assets, String nextCursor) {
+    }
+
+    /**
      * False when storage is not configured (missing credentials): uploads and URLs
      * then answer 503.
      */
@@ -55,8 +64,10 @@ public interface EvidenceStoragePort {
     void delete(String publicId);
 
     /**
-     * Lists the assets (storage reference plus creation time) currently in evidence storage under the given folder
-     * prefix, used for storage inventory reconciliation across process restarts (finding F6-C).
+     * Lists evidence assets under {@code folderPrefix} for inventory reconciliation (finding F6-C), resuming from
+     * {@code startCursor} (null to start at the beginning) and following at most {@code maxPages} pages so a single
+     * call never makes unbounded API requests. The returned {@link StoragePage#nextCursor()} is the checkpoint to pass
+     * back on the next call, or null once the whole collection has been traversed.
      */
-    List<StorageAsset> listAssets(String folderPrefix);
+    StoragePage listAssets(String folderPrefix, String startCursor, int maxPages);
 }

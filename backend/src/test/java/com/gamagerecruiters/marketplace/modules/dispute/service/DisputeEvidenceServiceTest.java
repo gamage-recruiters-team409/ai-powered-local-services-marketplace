@@ -120,12 +120,13 @@ class DisputeEvidenceServiceTest {
         }
 
         @Override
-        public List<StorageAsset> listAssets(String folderPrefix) {
-            return stored.stream()
+        public StoragePage listAssets(String folderPrefix, String startCursor, int maxPages) {
+            List<StorageAsset> assets = stored.stream()
                     .filter(id -> id.startsWith(folderPrefix))
                     .filter(id -> !deleted.contains(id))
                     .map(id -> new StorageAsset(id, Instant.EPOCH))
                     .toList();
+            return new StoragePage(assets, null);
         }
     }
 

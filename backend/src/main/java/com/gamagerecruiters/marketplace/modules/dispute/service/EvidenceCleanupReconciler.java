@@ -55,6 +55,14 @@ public class EvidenceCleanupReconciler {
     private final int maxAttempts;
     private final int batchSize;
     private final Duration inventoryMinAge;
+    private final int inventoryMaxPages;
+
+    /**
+     * Resumable inventory checkpoint: the Cloudinary cursor the next run continues from, so a bounded per-run page
+     * budget still eventually covers the whole collection instead of repeatedly re-scanning the first pages. null means
+     * "start from the beginning" — the state after a completed traversal and the safe default after a restart.
+     */
+    private volatile String inventoryCursor;
 
     @Autowired
     public EvidenceCleanupReconciler(
@@ -65,18 +73,20 @@ public class EvidenceCleanupReconciler {
             @Value("${app.dispute.evidence-cleanup.retry-backoff:PT5M}") Duration retryBackoff,
             @Value("${app.dispute.evidence-cleanup.max-attempts:10}") int maxAttempts,
             @Value("${app.dispute.evidence-cleanup.batch-size:50}") int batchSize,
-            @Value("${app.dispute.evidence-cleanup.inventory-min-age:PT30M}") Duration inventoryMinAge) {
+            @Value("${app.dispute.evidence-cleanup.inventory-min-age:PT30M}") Duration inventoryMinAge,
+            @Value("${app.dispute.evidence-cleanup.inventory-max-pages:100}") int inventoryMaxPages) {
         this(cleanupStore, storage, Clock.systemUTC(), enabled, lease, retryBackoff, maxAttempts, batchSize,
-                inventoryMinAge);
+                inventoryMinAge, inventoryMaxPages);
     }
 
     EvidenceCleanupReconciler(EvidenceCleanupStore cleanupStore, EvidenceStoragePort storage, Clock clock,
             boolean enabled, Duration lease, Duration retryBackoff, int maxAttempts, int batchSize,
-            Duration inventoryMinAge) {
+            Duration inventoryMinAge, int inventoryMaxPages) {
         if (lease.isNegative() || lease.isZero() || retryBackoff.isNegative() || maxAttempts < 1 || batchSize < 1
-                || inventoryMinAge.isNegative()) {
+                || inventoryMinAge.isNegative() || inventoryMaxPages < 1) {
             throw new IllegalArgumentException("Invalid app.dispute.evidence-cleanup settings: need lease > 0, "
-                    + "retry-backoff >= 0, max-attempts >= 1, batch-size >= 1 and inventory-min-age >= 0");
+                    + "retry-backoff >= 0, max-attempts >= 1, batch-size >= 1, inventory-min-age >= 0 and "
+                    + "inventory-max-pages >= 1");
         }
         this.cleanupStore = cleanupStore;
         this.storage = storage;
@@ -87,6 +97,7 @@ public class EvidenceCleanupReconciler {
         this.maxAttempts = maxAttempts;
         this.batchSize = batchSize;
         this.inventoryMinAge = inventoryMinAge;
+        this.inventoryMaxPages = inventoryMaxPages;
     }
 
     /** Runs only when scheduling is enabled (DisputeSchedulingConfig) and the reconciler is not switched off. */
@@ -139,9 +150,14 @@ public class EvidenceCleanupReconciler {
     }
 
     /**
-     * Storage-inventory reconciliation (finding F6-C): directly inspects storage inventory under {@code disputes/}
-     * to discover and recover any untracked assets whose cleanup-task insertion failed across application restarts
-     * or process-state loss. Never deletes an asset if its reference outcome cannot be confirmed (e.g. MongoDB outage).
+     * Storage-inventory reconciliation (finding F6-C): inspects storage inventory under {@code disputes/} to discover
+     * and recover any untracked assets whose cleanup-task insertion failed across application restarts or process-state
+     * loss. Never deletes an asset if its reference outcome cannot be confirmed (e.g. MongoDB outage).
+     *
+     * <p>Each run examines a bounded slice of at most {@code inventory-max-pages} Cloudinary pages and advances a
+     * resumable {@link #inventoryCursor} checkpoint, so a large collection is covered across successive runs rather
+     * than re-scanning the first pages forever; the checkpoint resets once a full traversal completes and after an
+     * expired/invalid cursor, so the scan can never get permanently stuck.</p>
      *
      * <p>A freshly uploaded asset is deliberately left alone until it is older than {@code inventory-min-age}: in the
      * brief window between a successful Cloudinary upload and the matching evidence write committing, the asset reads
@@ -149,14 +165,18 @@ public class EvidenceCleanupReconciler {
      * (and any asset whose creation time storage did not report) keeps the reference-safety rule intact.</p>
      */
     public Result reconcileInventory() {
-        List<EvidenceStoragePort.StorageAsset> storageAssets;
+        EvidenceStoragePort.StoragePage page;
         try {
-            storageAssets = storage.listAssets("disputes/");
+            page = storage.listAssets("disputes/", inventoryCursor, inventoryMaxPages);
         } catch (RuntimeException e) {
             log.warn("event=DISPUTE_EVIDENCE_INVENTORY_LIST_FAILED cause={}", e.getClass().getSimpleName());
             return new Result(0, 0, 0, 0, 0);
         }
 
+        // Advance (or reset) the checkpoint so the next run resumes where this slice stopped.
+        inventoryCursor = page == null ? null : page.nextCursor();
+
+        List<EvidenceStoragePort.StorageAsset> storageAssets = page == null ? null : page.assets();
         if (storageAssets == null || storageAssets.isEmpty()) {
             return new Result(0, 0, 0, 0, 0);
         }

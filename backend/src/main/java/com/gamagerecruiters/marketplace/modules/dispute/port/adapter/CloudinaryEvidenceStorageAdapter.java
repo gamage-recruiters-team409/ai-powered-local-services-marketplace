@@ -42,8 +42,6 @@ public class CloudinaryEvidenceStorageAdapter implements EvidenceStoragePort {
 
     /** Cloudinary Admin API page size for inventory listing (the API caps a single page at 500). */
     static final int PAGE_SIZE = 500;
-    /** Upper bound on pages followed per {@link #listAssets} call, so inventory scans never make unbounded API calls. */
-    static final int MAX_PAGES = 100;
 
     private static final Logger log = LoggerFactory.getLogger(CloudinaryEvidenceStorageAdapter.class);
 
@@ -111,10 +109,13 @@ public class CloudinaryEvidenceStorageAdapter implements EvidenceStoragePort {
     }
 
     @Override
-    public List<StorageAsset> listAssets(String folderPrefix) {
+    public StoragePage listAssets(String folderPrefix, String startCursor, int maxPages) {
+        int pageBudget = Math.max(1, maxPages);
         List<StorageAsset> assets = new ArrayList<>();
-        String cursor = null;
+        String cursor = startCursor;
+        String resumeCursor = startCursor;
         int pages = 0;
+        boolean anyPageSucceeded = false;
         try {
             do {
                 Map<String, Object> options = new HashMap<>();
@@ -126,22 +127,25 @@ public class CloudinaryEvidenceStorageAdapter implements EvidenceStoragePort {
                 }
                 Map<?, ?> result = cloudinary.api().resources(options);
                 collectAssets(result.get("resources"), assets);
+                anyPageSucceeded = true;
                 Object next = result.get("next_cursor");
                 cursor = (next == null || next.toString().isBlank()) ? null : next.toString();
+                resumeCursor = cursor;
                 pages++;
-            } while (cursor != null && pages < MAX_PAGES);
-            if (cursor != null) {
-                // Bound reached: the remaining pages are examined on the next scheduled run, which restarts the scan.
-                log.warn("event=DISPUTE_EVIDENCE_LIST_TRUNCATED prefix={} pages={} examined={}",
-                        folderPrefix, pages, assets.size());
-            }
+            } while (cursor != null && pages < pageBudget);
+            // cursor == null => whole collection traversed (restart next run); non-null => resume here next run.
+            return new StoragePage(List.copyOf(assets), cursor);
         } catch (Exception e) {
-            // A mid-scan page failure returns the pages gathered so far; deletion safety is still enforced downstream,
-            // and the next scheduled run re-scans from the first page, so nothing is lost.
             log.warn("event=DISPUTE_EVIDENCE_LIST_FAILED prefix={} examined={} cause={}",
                     folderPrefix, assets.size(), e.getClass().getSimpleName());
+            if (!anyPageSucceeded && startCursor != null) {
+                // The resume cursor itself failed (likely expired/invalid): restart from the beginning next run so the
+                // scan can never get permanently stuck on a bad checkpoint.
+                return new StoragePage(List.copyOf(assets), null);
+            }
+            // Resume from the last good checkpoint next run; deletion safety is still enforced downstream.
+            return new StoragePage(List.copyOf(assets), resumeCursor);
         }
-        return List.copyOf(assets);
     }
 
     private static void collectAssets(Object resources, List<StorageAsset> out) {

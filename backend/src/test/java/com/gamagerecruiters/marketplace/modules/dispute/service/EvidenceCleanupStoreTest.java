@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.dispute.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -158,7 +159,7 @@ class EvidenceCleanupStoreTest {
         EvidenceStoragePort storage = mock(EvidenceStoragePort.class);
         EvidenceCleanupReconciler reconciler = new EvidenceCleanupReconciler(
                 store, storage, java.time.Clock.fixed(NOW, java.time.ZoneOffset.UTC),
-                true, Duration.ofMinutes(2), Duration.ofMinutes(5), 3, 10, Duration.ofMinutes(30));
+                true, Duration.ofMinutes(2), Duration.ofMinutes(5), 3, 10, Duration.ofMinutes(30), 100);
 
         // Database is restored:
         // 1. drainFallback will upsert into MongoDB
@@ -214,12 +215,12 @@ class EvidenceCleanupStoreTest {
 
         // Storage still holds the asset in Cloudinary (created well before the grace period cutoff)
         EvidenceStoragePort storage = mock(EvidenceStoragePort.class);
-        when(storage.listAssets("disputes/")).thenReturn(List.of(
-                new EvidenceStoragePort.StorageAsset(PUBLIC_ID, NOW.minus(Duration.ofHours(1)))));
+        when(storage.listAssets(eq("disputes/"), any(), anyInt())).thenReturn(new EvidenceStoragePort.StoragePage(
+                List.of(new EvidenceStoragePort.StorageAsset(PUBLIC_ID, NOW.minus(Duration.ofHours(1)))), null));
 
         EvidenceCleanupReconciler freshReconciler = new EvidenceCleanupReconciler(
                 freshStore, storage, java.time.Clock.fixed(NOW, java.time.ZoneOffset.UTC),
-                true, Duration.ofMinutes(2), Duration.ofMinutes(5), 3, 10, Duration.ofMinutes(30));
+                true, Duration.ofMinutes(2), Duration.ofMinutes(5), 3, 10, Duration.ofMinutes(30), 100);
 
         // 4. Case A: Asset is an unreferenced orphan (original write did not commit).
         // Database availability is restored:
@@ -236,7 +237,8 @@ class EvidenceCleanupStoreTest {
         verify(storage).delete(PUBLIC_ID);
 
         // Repeated reconciliation is idempotent:
-        when(storage.listAssets("disputes/")).thenReturn(List.of());
+        when(storage.listAssets(eq("disputes/"), any(), anyInt()))
+                .thenReturn(new EvidenceStoragePort.StoragePage(List.of(), null));
         EvidenceCleanupReconciler.Result repeat = freshReconciler.reconcile();
         assertThat(repeat.deleted()).isZero();
         verify(storage, times(1)).delete(anyString()); // Never deleted again
@@ -248,8 +250,8 @@ class EvidenceCleanupStoreTest {
         // Fresh store instance with empty queue (after restart)
         EvidenceCleanupStore freshStore = new EvidenceCleanupStore(mongoTemplate);
         EvidenceStoragePort storage = mock(EvidenceStoragePort.class);
-        when(storage.listAssets("disputes/")).thenReturn(List.of(
-                new EvidenceStoragePort.StorageAsset(PUBLIC_ID, NOW.minus(Duration.ofHours(1)))));
+        when(storage.listAssets(eq("disputes/"), any(), anyInt())).thenReturn(new EvidenceStoragePort.StoragePage(
+                List.of(new EvidenceStoragePort.StorageAsset(PUBLIC_ID, NOW.minus(Duration.ofHours(1)))), null));
 
         // Asset IS referenced in committed evidence in MongoDB
         when(mongoTemplate.exists(any(Query.class), eq(com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute.class)))
@@ -257,7 +259,7 @@ class EvidenceCleanupStoreTest {
 
         EvidenceCleanupReconciler freshReconciler = new EvidenceCleanupReconciler(
                 freshStore, storage, java.time.Clock.fixed(NOW, java.time.ZoneOffset.UTC),
-                true, Duration.ofMinutes(2), Duration.ofMinutes(5), 3, 10, Duration.ofMinutes(30));
+                true, Duration.ofMinutes(2), Duration.ofMinutes(5), 3, 10, Duration.ofMinutes(30), 100);
 
         EvidenceCleanupReconciler.Result result = freshReconciler.reconcile();
 
