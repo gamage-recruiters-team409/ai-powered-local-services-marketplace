@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.data.mongodb.repository.Query;
@@ -47,6 +48,16 @@ public interface RefundOperationRepository
      * Retrieves refund operations associated with a payment.
      */
     List<RefundOperation> findByPaymentId(String paymentId);
+
+    /**
+     * Retrieves a bounded page of refund operations for a payment.
+     *
+     * <p>The caller must verify customer ownership before lookup
+     * and supply deterministic sorting and a bounded page size.</p>
+     */
+    Page<RefundOperation> findByPaymentId(
+            String paymentId,
+            Pageable pageable);
 
     /**
      * Finds a refund operation using its gateway-generated

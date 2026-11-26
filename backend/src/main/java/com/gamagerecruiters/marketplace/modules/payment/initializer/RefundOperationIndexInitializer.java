@@ -43,6 +43,9 @@ public class RefundOperationIndexInitializer {
 
     static final String PAYMENT_ID_INDEX = "paymentId_1";
 
+    static final String PAYMENT_HISTORY_INDEX =
+            "paymentId_1_createdAt_-1__id_-1";
+
     static final String DISPUTE_ID_INDEX = "disputeId_1";
 
     static final String RECONCILIATION_INDEX = "status_1_updatedAt_1__id_1";
@@ -88,6 +91,15 @@ public class RefundOperationIndexInitializer {
         ensureIndex(
                 PAYMENT_ID_INDEX,
                 new Document("paymentId", 1),
+                false,
+                null);
+
+        // Support deterministic, paginated customer refund history.
+        ensureIndex(
+                PAYMENT_HISTORY_INDEX,
+                new Document("paymentId", 1)
+                        .append("createdAt", -1)
+                        .append("_id", -1),
                 false,
                 null);
 

@@ -17,6 +17,9 @@ import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentPageResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentReceiptResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.CustomerRefundPageResponse;
+import com.gamagerecruiters.marketplace.modules.payment.service.CustomerRefundRetrievalService;
 import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentResponse;
 import com.gamagerecruiters.marketplace.modules.payment.service.PaymentRetrievalService;
 
@@ -46,15 +49,19 @@ import com.gamagerecruiters.marketplace.modules.payment.service.PaymentRetrieval
 public class PaymentController {
 
     private final PaymentRetrievalService paymentRetrievalService;
+    private final CustomerRefundRetrievalService customerRefundRetrievalService;
 
     /**
      * Creates the payment controller.
      *
      * @param paymentRetrievalService authorized payment retrieval service
+     * @param customerRefundRetrievalService authorized refund history service
      */
     public PaymentController(
-            PaymentRetrievalService paymentRetrievalService) {
+            PaymentRetrievalService paymentRetrievalService,
+            CustomerRefundRetrievalService customerRefundRetrievalService) {
         this.paymentRetrievalService = paymentRetrievalService;
+        this.customerRefundRetrievalService = customerRefundRetrievalService;
     }
 
     /**
@@ -121,6 +128,29 @@ public class PaymentController {
     }
 
     /**
+     * Retrieves an issued receipt belonging to the authenticated customer.
+     *
+     * <p>Payment ownership and verified receipt eligibility are
+     * enforced by the payment retrieval service.</p>
+     *
+     * @param paymentId associated payment identifier
+     * @return verified customer-facing receipt
+     */
+    @GetMapping("/{paymentId}/receipt")
+    public ResponseEntity<PaymentReceiptResponse> getPaymentReceipt(
+            @PathVariable String paymentId) {
+
+        String customerId = requireAuthenticatedCustomerId();
+
+        PaymentReceiptResponse receipt = paymentRetrievalService
+                .getReceiptForCustomer(paymentId, customerId);
+
+        return ResponseEntity.ok()
+                .cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(receipt);
+    }
+
+    /**
      * Retrieves payment attempts for a booking owned by the customer.
      *
      * <p>
@@ -169,5 +199,28 @@ public class PaymentController {
         }
 
         return customerId.trim();
+    }
+
+    /**
+     * Retrieves paginated refund history for a customer-owned payment.
+     *
+     * <p>Returns customer-visible refund information without exposing
+     * gateway references or internal financial processing details.</p>
+     */
+    @GetMapping("/{paymentId}/refunds")
+    public ResponseEntity<CustomerRefundPageResponse> getPaymentRefunds(
+            @PathVariable String paymentId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+
+        String customerId = requireAuthenticatedCustomerId();
+
+        CustomerRefundPageResponse refunds =
+                customerRefundRetrievalService.getRefundsForCustomer(
+                        paymentId, customerId, page, size);
+
+        return ResponseEntity.ok()
+                .cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(refunds);
     }
 }

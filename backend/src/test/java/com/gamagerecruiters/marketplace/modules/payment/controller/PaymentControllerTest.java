@@ -34,6 +34,7 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentResponse;
 import com.gamagerecruiters.marketplace.modules.payment.service.PaymentRetrievalService;
+import com.gamagerecruiters.marketplace.modules.payment.service.CustomerRefundRetrievalService;
 
 /**
  * Unit tests for the customer-facing payment retrieval controller.
@@ -55,6 +56,7 @@ class PaymentControllerTest {
     private static final String BOOKING_ID = "booking-456";
 
     private PaymentRetrievalService retrievalService;
+    private CustomerRefundRetrievalService refundRetrievalService;
     private PaymentController controller;
 
     @BeforeEach
@@ -62,7 +64,9 @@ class PaymentControllerTest {
         SecurityContextHolder.clearContext();
 
         retrievalService = mock(PaymentRetrievalService.class);
-        controller = new PaymentController(retrievalService);
+        refundRetrievalService = mock(CustomerRefundRetrievalService.class);
+        controller = new PaymentController(
+                retrievalService, refundRetrievalService);
     }
 
     @AfterEach

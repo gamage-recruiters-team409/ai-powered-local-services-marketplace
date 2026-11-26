@@ -4,6 +4,8 @@ package com.gamagerecruiters.marketplace.modules.payment.repository;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEntry;
@@ -94,4 +96,18 @@ public interface EarningsLedgerRepository
          */
         List<EarningsLedgerEntry> findByPaymentIdOrderByCreatedAtDesc(
                         String paymentId);
+
+        /**
+         * Retrieves paginated financial events for an authenticated provider
+         * within a single currency.
+         *
+         * @param providerId the trusted provider identifier
+         * @param currency the ledger currency
+         * @param pageable the bounded pagination and sorting configuration
+         * @return a page of provider-owned financial events
+         */
+        Page<EarningsLedgerEntry> findByProviderIdAndCurrency(
+                        String providerId,
+                        String currency,
+                        Pageable pageable);
 }

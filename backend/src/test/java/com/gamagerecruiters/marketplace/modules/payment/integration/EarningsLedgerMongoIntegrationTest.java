@@ -45,6 +45,8 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEnt
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEventType;
 import com.gamagerecruiters.marketplace.modules.payment.domain.ProviderEarningsState;
 import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
+import com.gamagerecruiters.marketplace.modules.payment.initializer.EarningsLedgerIndexInitializer;
+import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarningsTransactionService;
 import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
 import com.gamagerecruiters.marketplace.modules.payment.service.EarningsLedgerService;
 import com.gamagerecruiters.marketplace.modules.payment.service.EarningsLedgerTransactionService;
@@ -688,5 +690,244 @@ class EarningsLedgerMongoIntegrationTest {
                 Instant.parse("2026-11-16T10:00:00Z"));
 
         return entry;
+    }
+
+    /**
+     * Seeds isolated history fixtures, including legacy ledger entries.
+     * Direct insertion is restricted to the temporary test database.
+     */
+    private void seedHistoryEntry(
+            EarningsLedgerRepository repository,
+            String id,
+            String providerId,
+            String currency,
+            Long sequenceNumber) {
+
+        EarningsLedgerEntry entry =
+                event("history-event-" + id, providerId, "1500.00");
+
+        entry.setId(id);
+        entry.setCurrency(currency);
+        entry.setSequenceNumber(sequenceNumber);
+
+        repository.insert(entry);
+    }
+
+    @Test
+    void transactionHistoryIsolatesProviderAndCurrency() {
+
+        withLedger((service, repository, template) -> {
+
+            seedHistoryEntry(repository,
+                    "own-1", "provider-a", "LKR", 1L);
+
+            seedHistoryEntry(repository,
+                    "own-2", "provider-a", "LKR", 2L);
+
+            seedHistoryEntry(repository,
+                    "foreign-1", "provider-b", "LKR", 1L);
+
+            seedHistoryEntry(repository,
+                    "usd-1", "provider-a", "USD", 1L);
+
+            var historyService =
+                    new ProviderEarningsTransactionService(repository);
+
+            var response =
+                    historyService.getTransactions("provider-a", 0, 10);
+
+            assertEquals(2L, response.totalElements());
+
+            assertEquals(
+                    List.of("own-2", "own-1"),
+                    response.content().stream()
+                            .map(item -> item.transactionId())
+                            .toList());
+
+            assertTrue(response.content().stream()
+                    .allMatch(item -> "LKR".equals(item.currency())));
+
+            assertEquals(4L, repository.count());
+        });
+    }
+
+    @Test
+    void transactionHistoryOrdersSequencedAndLegacyEntries() {
+
+        withLedger((service, repository, template) -> {
+
+            seedHistoryEntry(repository,
+                    "sequence-1", "provider-a", "LKR", 1L);
+
+            seedHistoryEntry(repository,
+                    "legacy-a", "provider-a", "LKR", null);
+
+            seedHistoryEntry(repository,
+                    "sequence-3", "provider-a", "LKR", 3L);
+
+            seedHistoryEntry(repository,
+                    "legacy-b", "provider-a", "LKR", null);
+
+            seedHistoryEntry(repository,
+                    "sequence-2", "provider-a", "LKR", 2L);
+
+            var historyService =
+                    new ProviderEarningsTransactionService(repository);
+
+            var response =
+                    historyService.getTransactions("provider-a", 0, 10);
+
+            assertEquals(
+                    List.of(
+                            "sequence-3",
+                            "sequence-2",
+                            "sequence-1",
+                            "legacy-b",
+                            "legacy-a"),
+                    response.content().stream()
+                            .map(item -> item.transactionId())
+                            .toList());
+
+            assertNull(response.content().get(3).sequenceNumber());
+            assertNull(response.content().get(4).sequenceNumber());
+        });
+    }
+
+    @Test
+    void transactionHistoryPaginatesWithoutDuplicateEntries() {
+
+        withLedger((service, repository, template) -> {
+
+            for (long sequence = 1; sequence <= 5; sequence++) {
+
+                seedHistoryEntry(repository,
+                        "transaction-" + sequence,
+                        "provider-a",
+                        "LKR",
+                        sequence);
+            }
+
+            var historyService =
+                    new ProviderEarningsTransactionService(repository);
+
+            var first = historyService.getTransactions(
+                    "provider-a", 0, 2);
+
+            var second = historyService.getTransactions(
+                    "provider-a", 1, 2);
+
+            var third = historyService.getTransactions(
+                    "provider-a", 2, 2);
+
+            assertEquals(5L, first.totalElements());
+            assertEquals(5L, second.totalElements());
+            assertEquals(5L, third.totalElements());
+
+            assertEquals(3, first.totalPages());
+            assertEquals(3, second.totalPages());
+            assertEquals(3, third.totalPages());
+
+            assertEquals(
+                    List.of("transaction-5", "transaction-4"),
+                    first.content().stream()
+                            .map(item -> item.transactionId())
+                            .toList());
+
+            assertEquals(
+                    List.of("transaction-3", "transaction-2"),
+                    second.content().stream()
+                            .map(item -> item.transactionId())
+                            .toList());
+
+            assertEquals(
+                    List.of("transaction-1"),
+                    third.content().stream()
+                            .map(item -> item.transactionId())
+                            .toList());
+
+            assertEquals(5L, repository.count());
+        });
+    }
+
+    @Test
+    void transactionHistoryReturnsEmptyPageForUnrelatedProvider() {
+
+        withLedger((service, repository, template) -> {
+
+            seedHistoryEntry(repository,
+                    "foreign-1", "provider-b", "LKR", 1L);
+
+            var historyService =
+                    new ProviderEarningsTransactionService(repository);
+
+            var response =
+                    historyService.getTransactions("provider-a", 0, 10);
+
+            assertTrue(response.content().isEmpty());
+            assertEquals(0, response.page());
+            assertEquals(10, response.size());
+            assertEquals(0L, response.totalElements());
+            assertEquals(0, response.totalPages());
+        });
+    }
+
+    @Test
+    void createsProviderHistoryIndexWithoutRemovingFinancialIndexes() {
+
+        withLedger((service, repository, template) -> {
+
+            var initializer =
+                    new EarningsLedgerIndexInitializer(template);
+
+            initializer.initializeIndexes();
+            initializer.initializeIndexes();
+
+            var indexes = template.getCollection("earnings_ledger")
+                    .listIndexes()
+                    .into(new java.util.ArrayList<Document>());
+
+            String historyIndexName =
+                    "providerId_1_currency_1_sequenceNumber_-1__id_-1";
+
+            var matching = indexes.stream()
+                    .filter(index -> historyIndexName.equals(
+                            index.getString("name")))
+                    .toList();
+
+            assertEquals(1, matching.size());
+
+            Document historyIndex = matching.get(0);
+            Document key = historyIndex.get("key", Document.class);
+
+            assertEquals(
+                    List.of(
+                            "providerId",
+                            "currency",
+                            "sequenceNumber",
+                            "_id"),
+                    new java.util.ArrayList<>(key.keySet()));
+
+            assertEquals(
+                    new Document("providerId", 1)
+                            .append("currency", 1)
+                            .append("sequenceNumber", -1)
+                            .append("_id", -1),
+                    key);
+
+            assertFalse(Boolean.TRUE.equals(historyIndex.get("unique")));
+            assertFalse(Boolean.TRUE.equals(historyIndex.get("sparse")));
+            assertFalse(historyIndex.containsKey("partialFilterExpression"));
+            assertFalse(historyIndex.containsKey("expireAfterSeconds"));
+
+            assertTrue(indexes.stream().anyMatch(index ->
+                    "eventKey_1".equals(index.getString("name"))
+                            && Boolean.TRUE.equals(index.get("unique"))));
+
+            assertTrue(indexes.stream().anyMatch(index ->
+                    "providerId_1_currency_1_sequenceNumber_1"
+                            .equals(index.getString("name"))
+                            && Boolean.TRUE.equals(index.get("unique"))
+                            && index.containsKey("partialFilterExpression")));
+        });
     }
 }

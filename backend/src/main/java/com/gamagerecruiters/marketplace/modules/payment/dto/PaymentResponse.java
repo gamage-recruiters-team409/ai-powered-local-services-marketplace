@@ -65,7 +65,31 @@ public record PaymentResponse(
                 payment.getCreatedAt(),
                 payment.getReceiptReference(),
                 payment.getRefundReference(),
-                payment.getRefundStatus(),
+                mapCustomerRefundStatus(payment.getRefundStatus()),
                 payment.getPaidAt());
+    }
+
+    /**
+     * Maps internal refund states to the customer-facing API contract.
+     *
+     * <p>Preserves null, existing customer-facing values, and unknown
+     * values for backward compatibility. This mapping does not modify
+     * persisted refund state or financial execution logic.</p>
+     *
+     * @param refundStatus persisted refund status
+     * @return customer-facing refund status
+     */
+    private static String mapCustomerRefundStatus(String refundStatus) {
+
+        if (refundStatus == null) {
+            return null;
+        }
+
+        return switch (refundStatus) {
+            case "PENDING" -> "PROCESSING";
+            case "SUCCEEDED" -> "COMPLETED";
+            case "REQUIRES_RECONCILIATION" -> "UNDER_REVIEW";
+            default -> refundStatus;
+        };
     }
 }

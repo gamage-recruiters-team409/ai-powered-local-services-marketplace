@@ -6,13 +6,16 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.payment.dto.EarningsSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.EarningsTransactionPageResponse;
 import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarningsSummaryService;
+import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarningsTransactionService;
 
 /**
  * Read-only REST endpoints for authenticated provider earnings.
@@ -24,7 +27,7 @@ import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarnings
  * </p>
  *
  * <p>
- * These endpoints expose calculated earnings summaries only.
+ * These endpoints expose earnings summaries and transaction history.
  * They do not authorize payouts or modify ledger records.
  * </p>
  */
@@ -36,15 +39,19 @@ public class ProviderEarningsController {
     private static final String SUPPORTED_CURRENCY = "LKR";
 
     private final ProviderEarningsSummaryService summaryService;
+    private final ProviderEarningsTransactionService transactionService;
 
     /**
      * Creates the provider earnings controller.
      *
      * @param summaryService read-only earnings summary service
+     * @param transactionService read-only earnings transaction service
      */
     public ProviderEarningsController(
-            ProviderEarningsSummaryService summaryService) {
+            ProviderEarningsSummaryService summaryService,
+            ProviderEarningsTransactionService transactionService) {
         this.summaryService = summaryService;
+        this.transactionService = transactionService;
     }
 
     /**
@@ -82,5 +89,27 @@ public class ProviderEarningsController {
         }
 
         return providerId.trim();
+    }
+
+    /**
+     * Retrieves the authenticated provider's paginated earnings history.
+     *
+     * @param page zero-based page number
+     * @param size requested page size
+     * @return provider-owned earnings transactions
+     */
+    @GetMapping("/transactions")
+    public ResponseEntity<EarningsTransactionPageResponse> getMyTransactions(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+
+        String providerId = requireAuthenticatedProviderId();
+
+        EarningsTransactionPageResponse response =
+                transactionService.getTransactions(providerId, page, size);
+
+        return ResponseEntity.ok()
+                .cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(response);
     }
 }

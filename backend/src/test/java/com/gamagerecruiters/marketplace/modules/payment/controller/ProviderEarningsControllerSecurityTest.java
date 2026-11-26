@@ -10,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -21,6 +23,9 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import org.springframework.http.HttpStatus;
+
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.GlobalExceptionHandler;
 import com.gamagerecruiters.marketplace.config.SecurityConfig;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
@@ -31,8 +36,12 @@ import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationE
 import com.gamagerecruiters.marketplace.modules.auth.security.JwtAuthenticationFilter;
 import com.gamagerecruiters.marketplace.modules.auth.service.TokenService;
 import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService;
+import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEventType;
 import com.gamagerecruiters.marketplace.modules.payment.dto.EarningsSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.EarningsTransactionResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.EarningsTransactionPageResponse;
 import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarningsSummaryService;
+import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarningsTransactionService;
 
 /**
  * Spring MVC security tests for provider earnings retrieval.
@@ -60,6 +69,8 @@ class ProviderEarningsControllerSecurityTest {
 
     private static final String EARNINGS_URL = "/api/v1/provider/earnings/me";
 
+    private static final String TRANSACTIONS_URL = "/api/v1/provider/earnings/transactions";
+
     private static final String PROVIDER_ID = "user-provider";
 
     @Autowired
@@ -67,6 +78,9 @@ class ProviderEarningsControllerSecurityTest {
 
     @MockitoBean
     private ProviderEarningsSummaryService summaryService;
+
+    @MockitoBean
+    private ProviderEarningsTransactionService transactionService;
 
     @MockitoBean
     private TokenService tokenService;
@@ -232,5 +246,168 @@ class ProviderEarningsControllerSecurityTest {
         when(userInternalService.getById(userId)).thenReturn(user);
 
         return token;
+    }
+
+    @Test
+    void transactionsEndpointReturns401WithoutToken() throws Exception {
+
+        mockMvc.perform(get(TRANSACTIONS_URL))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(transactionService);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {
+            "CUSTOMER",
+            "ADMIN",
+            "FINANCE_ADMIN"
+    })
+    void transactionsEndpointReturns403ForNonProvider(Role role)
+            throws Exception {
+
+        String token = authenticateAs(role);
+
+        mockMvc.perform(get(TRANSACTIONS_URL)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+
+        verifyNoInteractions(transactionService);
+    }
+
+    @Test
+    void transactionsEndpointReturnsProviderOwnedHistory()
+            throws Exception {
+
+        String token = authenticateAs(Role.PROVIDER);
+
+        EarningsTransactionResponse transaction =
+                new EarningsTransactionResponse(
+                        "transaction-123",
+                        "payment-123",
+                        "booking-123",
+                        EarningsLedgerEventType.EARNING_PENDING,
+                        new BigDecimal("4500.00"),
+                        "LKR",
+                        5L,
+                        Instant.parse("2026-11-26T10:00:00Z"));
+
+        when(transactionService.getTransactions(PROVIDER_ID, 0, 10))
+                .thenReturn(new EarningsTransactionPageResponse(
+                        List.of(transaction), 0, 10, 1, 1));
+
+        mockMvc.perform(get(TRANSACTIONS_URL)
+                        .param("providerId", "another-provider")
+                        .param("currency", "USD")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result
+                        .MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.content[0].transactionId")
+                        .value("transaction-123"))
+                .andExpect(jsonPath("$.content[0].paymentId")
+                        .value("payment-123"))
+                .andExpect(jsonPath("$.content[0].bookingId")
+                        .value("booking-123"))
+                .andExpect(jsonPath("$.content[0].eventType")
+                        .value("EARNING_PENDING"))
+                .andExpect(jsonPath("$.content[0].amount").value(4500.00))
+                .andExpect(jsonPath("$.content[0].currency").value("LKR"))
+                .andExpect(jsonPath("$.content[0].sequenceNumber").value(5))
+                .andExpect(jsonPath("$.content[0].createdAt")
+                        .value("2026-11-26T10:00:00Z"))
+                .andExpect(jsonPath("$.content[0].eventKey").doesNotExist())
+                .andExpect(jsonPath("$.content[0].providerId").doesNotExist())
+                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(10))
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.totalPages").value(1));
+
+        verify(transactionService).getTransactions(PROVIDER_ID, 0, 10);
+        verifyNoInteractions(summaryService);
+    }
+
+    @Test
+    void transactionsEndpointSupportsCustomPagination()
+            throws Exception {
+
+        String token = authenticateAs(Role.PROVIDER);
+
+        when(transactionService.getTransactions(PROVIDER_ID, 2, 5))
+                .thenReturn(new EarningsTransactionPageResponse(
+                        List.of(), 2, 5, 0, 0));
+
+        mockMvc.perform(get(TRANSACTIONS_URL)
+                        .param("page", "2")
+                        .param("size", "5")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.page").value(2))
+                .andExpect(jsonPath("$.size").value(5))
+                .andExpect(jsonPath("$.totalElements").value(0))
+                .andExpect(jsonPath("$.totalPages").value(0));
+
+        verify(transactionService).getTransactions(PROVIDER_ID, 2, 5);
+    }
+
+    @Test
+    void transactionsEndpointReturns400ForNegativePage()
+            throws Exception {
+
+        String token = authenticateAs(Role.PROVIDER);
+
+        when(transactionService.getTransactions(PROVIDER_ID, -1, 10))
+                .thenThrow(new ApiException(
+                        HttpStatus.BAD_REQUEST,
+                        "INVALID_PAGINATION",
+                        "Invalid pagination"));
+
+        mockMvc.perform(get(TRANSACTIONS_URL)
+                        .param("page", "-1")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("INVALID_PAGINATION"));
+    }
+
+    @Test
+    void transactionsEndpointReturns400ForExcessivePageSize()
+            throws Exception {
+
+        String token = authenticateAs(Role.PROVIDER);
+
+        when(transactionService.getTransactions(PROVIDER_ID, 0, 101))
+                .thenThrow(new ApiException(
+                        HttpStatus.BAD_REQUEST,
+                        "INVALID_PAGINATION",
+                        "Invalid pagination"));
+
+        mockMvc.perform(get(TRANSACTIONS_URL)
+                        .param("size", "101")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("INVALID_PAGINATION"));
+    }
+
+    @Test
+    void transactionsEndpointReturns500ForInconsistentLedgerData()
+            throws Exception {
+
+        String token = authenticateAs(Role.PROVIDER);
+
+        when(transactionService.getTransactions(PROVIDER_ID, 0, 10))
+                .thenThrow(new ApiException(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "EARNINGS_DATA_INCONSISTENT",
+                        "Earnings transaction history is temporarily unavailable"));
+
+        mockMvc.perform(get(TRANSACTIONS_URL)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error")
+                        .value("EARNINGS_DATA_INCONSISTENT"));
     }
 }

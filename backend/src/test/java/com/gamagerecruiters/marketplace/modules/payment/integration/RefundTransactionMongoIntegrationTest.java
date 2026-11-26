@@ -2676,4 +2676,437 @@ class RefundTransactionMongoIntegrationTest {
             DisputePayoutHoldTransactionService holdService,
             BookingFacade bookingFacade) {
     }
+
+    /**
+     * Persists a refund operation with a controlled creation timestamp
+     * for deterministic history retrieval tests.
+     */
+    private RefundOperation seedHistoryRefund(
+            TestContext context,
+            String paymentId,
+            String key,
+            Instant createdAt) {
+
+        RefundOperation operation = new RefundOperation(
+                key,
+                paymentId,
+                BOOKING_ID,
+                null,
+                money("100.00"),
+                CURRENCY);
+
+        operation = context.refundRepository().save(operation);
+
+        context.template().updateFirst(
+                org.springframework.data.mongodb.core.query.Query.query(
+                        org.springframework.data.mongodb.core.query.Criteria
+                                .where("_id").is(operation.getId())),
+                new org.springframework.data.mongodb.core.query.Update()
+                        .set("createdAt", createdAt),
+                RefundOperation.class);
+
+        return operation;
+    }
+
+    /**
+     * Uses the same deterministic ordering as the customer refund API.
+     */
+    private org.springframework.data.domain.PageRequest refundHistoryPage(
+            int page, int size) {
+
+        return org.springframework.data.domain.PageRequest.of(
+                page,
+                size,
+                org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Order.desc("createdAt"),
+                        org.springframework.data.domain.Sort.Order.desc("id")));
+    }
+
+    @Test
+    void refundHistoryIsolatesPayments() {
+        withDatabase(context -> {
+            Instant createdAt = Instant.parse("2026-11-26T10:00:00Z");
+
+            RefundOperation expected = seedHistoryRefund(
+                    context, PAYMENT_ID, "history-own", createdAt);
+
+            seedHistoryRefund(
+                    context, "another-payment", "history-other", createdAt);
+
+            var result = context.refundRepository().findByPaymentId(
+                    PAYMENT_ID, refundHistoryPage(0, 10));
+
+            assertEquals(1L, result.getTotalElements());
+            assertEquals(expected.getId(), result.getContent().get(0).getId());
+            assertEquals(PAYMENT_ID, result.getContent().get(0).getPaymentId());
+        });
+    }
+
+    @Test
+    void refundHistoryUsesDeterministicNewestFirstSorting() {
+        withDatabase(context -> {
+            Instant createdAt = Instant.parse("2026-11-26T10:00:00Z");
+
+            RefundOperation older = seedHistoryRefund(
+                    context, PAYMENT_ID, "history-older", createdAt);
+
+            RefundOperation first = seedHistoryRefund(
+                    context, PAYMENT_ID, "history-first", createdAt.plusSeconds(60));
+
+            RefundOperation second = seedHistoryRefund(
+                    context, PAYMENT_ID, "history-second", createdAt.plusSeconds(60));
+
+            var expectedIds = java.util.stream.Stream
+                    .of(first.getId(), second.getId())
+                    .sorted(java.util.Comparator.reverseOrder())
+                    .collect(java.util.stream.Collectors.toList());
+
+            expectedIds.add(older.getId());
+
+            var result = context.refundRepository().findByPaymentId(
+                    PAYMENT_ID, refundHistoryPage(0, 10));
+
+            assertEquals(expectedIds, result.getContent().stream()
+                    .map(RefundOperation::getId).toList());
+        });
+    }
+
+    @Test
+    void refundHistoryReturnsCorrectPaginationMetadata() {
+        withDatabase(context -> {
+            Instant createdAt = Instant.parse("2026-11-26T10:00:00Z");
+
+            for (int i = 0; i < 5; i++) {
+                seedHistoryRefund(
+                        context, PAYMENT_ID, "history-page-" + i,
+                        createdAt.plusSeconds(i));
+            }
+
+            var first = context.refundRepository().findByPaymentId(
+                    PAYMENT_ID, refundHistoryPage(0, 2));
+
+            var second = context.refundRepository().findByPaymentId(
+                    PAYMENT_ID, refundHistoryPage(1, 2));
+
+            var last = context.refundRepository().findByPaymentId(
+                    PAYMENT_ID, refundHistoryPage(2, 2));
+
+            assertEquals(5L, first.getTotalElements());
+            assertEquals(3, first.getTotalPages());
+            assertEquals(2, first.getNumberOfElements());
+            assertEquals(2, second.getNumberOfElements());
+            assertEquals(1, last.getNumberOfElements());
+
+            var ids = java.util.stream.Stream.of(first, second, last)
+                    .flatMap(page -> page.getContent().stream())
+                    .map(RefundOperation::getId)
+                    .toList();
+
+            assertEquals(5, ids.size());
+            assertEquals(5L, ids.stream().distinct().count());
+        });
+    }
+
+    @Test
+    void refundHistoryReturnsEmptyPageForUnknownPayment() {
+        withDatabase(context -> {
+            seedHistoryRefund(
+                    context, PAYMENT_ID, "history-existing",
+                    Instant.parse("2026-11-26T10:00:00Z"));
+
+            var result = context.refundRepository().findByPaymentId(
+                    "unknown-payment", refundHistoryPage(0, 10));
+
+            assertTrue(result.isEmpty());
+            assertEquals(0L, result.getTotalElements());
+            assertEquals(0, result.getTotalPages());
+        });
+    }
+
+    /**
+     * Verifies the production refund index initializer against real MongoDB.
+     * Repeated initialization must preserve the existing compatible indexes.
+     */
+    @Test
+    void createsRefundHistoryCompoundIndex() {
+        withDatabase(context -> {
+
+            // Remove only the test fixture index before production initialization.
+            context.template()
+                    .getCollection("payment_refund_operations")
+                    .dropIndex("idempotencyKey_1");
+
+            var initializer =
+                    new com.gamagerecruiters.marketplace.modules.payment
+                            .initializer.RefundOperationIndexInitializer(
+                                    context.template());
+
+            initializer.initializeIndexes();
+            initializer.initializeIndexes();
+
+            var indexes = context.template()
+                    .getCollection("payment_refund_operations")
+                    .listIndexes()
+                    .into(new java.util.ArrayList<org.bson.Document>());
+
+            var historyIndexes = indexes.stream()
+                    .filter(index -> "paymentId_1_createdAt_-1__id_-1"
+                            .equals(index.getString("name")))
+                    .toList();
+
+            assertEquals(1, historyIndexes.size());
+
+            org.bson.Document index = historyIndexes.get(0);
+
+            org.bson.Document key =
+                    index.get("key", org.bson.Document.class);
+
+            assertEquals(
+                    new org.bson.Document("paymentId", 1)
+                            .append("createdAt", -1)
+                            .append("_id", -1),
+                    key);
+
+            assertEquals(
+                    java.util.List.of("paymentId", "createdAt", "_id"),
+                    new java.util.ArrayList<>(key.keySet()));
+
+            assertFalse(Boolean.TRUE.equals(index.getBoolean("unique")));
+            assertFalse(Boolean.TRUE.equals(index.getBoolean("sparse")));
+            assertFalse(index.containsKey("partialFilterExpression"));
+            assertFalse(index.containsKey("expireAfterSeconds"));
+
+            // Confirm the existing business idempotency constraint remains active.
+            var idempotencyIndex = indexes.stream()
+                    .filter(item -> "idempotencyKey_1"
+                            .equals(item.getString("name")))
+                    .findFirst()
+                    .orElseThrow();
+
+            assertEquals(Boolean.TRUE, idempotencyIndex.getBoolean("unique"));
+        });
+    }
+
+    /**
+     * Creates an initiated payment and an authenticated webhook event
+     * in the isolated MongoDB integration database.
+     */
+    private StripeWebhookTransactionService prepareReceiptCapture(
+            TestContext context) {
+
+        context.template().createCollection(StripeWebhookEvent.class);
+
+        Payment payment = new Payment();
+        payment.setId("pay_receipt_001");
+        payment.setBookingId(BOOKING_ID);
+        payment.setGatewayRef("cs_receipt_001");
+        payment.setAmount(money("100.00"));
+        payment.setCurrency("USD");
+        payment.setStatus(PaymentStatus.INITIATED);
+
+        context.template().insert(payment);
+
+        context.template().insert(new StripeWebhookEvent(
+                "evt_receipt_001", "checkout.session.completed"));
+
+        return new StripeWebhookTransactionService(
+                context.template(),
+                new org.springframework.data.mongodb.MongoTransactionManager(
+                        context.template().getMongoDatabaseFactory()));
+    }
+
+    /**
+     * Verifies that receipt metadata is persisted with verified capture
+     * and the associated webhook processing state.
+     */
+    @Test
+    void verifiedCapturePersistsReceiptMetadata() {
+        withDatabase(context -> {
+            var service = prepareReceiptCapture(context);
+
+            assertTrue(service.captureVerifiedPayment(
+                    "evt_receipt_001",
+                    "pay_receipt_001",
+                    "cs_receipt_001",
+                    "pi_receipt001",
+                    money("100.00"),
+                    "USD"));
+
+            Payment persisted = context.template().findById(
+                    "pay_receipt_001", Payment.class);
+
+            assertNotNull(persisted);
+            assertEquals(PaymentStatus.CAPTURED, persisted.getStatus());
+            assertEquals("RCT-pay_receipt_001",
+                    persisted.getReceiptReference());
+            assertNotNull(persisted.getPaidAt());
+            assertEquals("pi_receipt001",
+                    persisted.getGatewayPaymentIntentId());
+
+            StripeWebhookEvent event = context.template().findById(
+                    "evt_receipt_001", StripeWebhookEvent.class);
+
+            assertNotNull(event);
+            assertEquals(
+                    StripeWebhookEvent.ProcessingStatus.PROCESSED,
+                    event.getStatus());
+            assertEquals("pay_receipt_001", event.getPaymentId());
+            assertEquals("cs_receipt_001", event.getCheckoutSessionId());
+        });
+    }
+
+    /**
+     * Verifies that repeated capture notifications cannot overwrite
+     * an already issued receipt or its original capture timestamp.
+     */
+    @Test
+    void repeatedCapturePreservesPersistedReceiptMetadata() {
+        withDatabase(context -> {
+            var service = prepareReceiptCapture(context);
+
+            assertTrue(service.captureVerifiedPayment(
+                    "evt_receipt_001",
+                    "pay_receipt_001",
+                    "cs_receipt_001",
+                    "pi_receipt001",
+                    money("100.00"),
+                    "USD"));
+
+            Payment original = context.template().findById(
+                    "pay_receipt_001", Payment.class);
+
+            assertNotNull(original);
+            assertNotNull(original.getReceiptReference());
+            assertNotNull(original.getPaidAt());
+
+            // Replay the original event.
+            assertFalse(service.captureVerifiedPayment(
+                    "evt_receipt_001",
+                    "pay_receipt_001",
+                    "cs_receipt_001",
+                    "pi_receipt001",
+                    money("100.00"),
+                    "USD"));
+
+            // Process a different event for the same captured payment.
+            context.template().insert(new StripeWebhookEvent(
+                    "evt_receipt_002", "checkout.session.completed"));
+
+            assertFalse(service.captureVerifiedPayment(
+                    "evt_receipt_002",
+                    "pay_receipt_001",
+                    "cs_receipt_001",
+                    "pi_receipt001",
+                    money("100.00"),
+                    "USD"));
+
+            Payment persisted = context.template().findById(
+                    "pay_receipt_001", Payment.class);
+
+            assertNotNull(persisted);
+            assertEquals(PaymentStatus.CAPTURED, persisted.getStatus());
+            assertEquals(original.getReceiptReference(),
+                    persisted.getReceiptReference());
+            assertEquals(original.getPaidAt(), persisted.getPaidAt());
+
+            StripeWebhookEvent secondEvent = context.template().findById(
+                    "evt_receipt_002", StripeWebhookEvent.class);
+
+            assertNotNull(secondEvent);
+            assertEquals(
+                    StripeWebhookEvent.ProcessingStatus.PROCESSED,
+                    secondEvent.getStatus());
+        });
+    }
+
+    /**
+     * Verifies that webhook completion failure rolls back the payment
+     * capture, receipt metadata and webhook claim in real MongoDB.
+     */
+    @Test
+    void webhookCompletionFailureRollsBackReceiptCapture() {
+        withDatabase(context -> {
+            prepareReceiptCapture(context);
+
+            var template = spy(context.template());
+
+            var paymentUpdated =
+                    new java.util.concurrent.atomic.AtomicBoolean(false);
+
+            doAnswer(invocation -> {
+                var result =
+                        (com.mongodb.client.result.UpdateResult)
+                                invocation.callRealMethod();
+
+                paymentUpdated.set(result.getModifiedCount() == 1);
+
+                return result;
+            }).when(template).updateFirst(
+                    any(org.springframework.data.mongodb.core.query.Query.class),
+                    any(org.springframework.data.mongodb.core.query.UpdateDefinition.class),
+                    eq(Payment.class));
+
+            // Allow the real event claim, but fail the completion update.
+            doAnswer(invocation -> {
+                org.springframework.data.mongodb.core.query.UpdateDefinition update =
+                        invocation.getArgument(1);
+
+                org.bson.Document setFields = update.getUpdateObject()
+                        .get("$set", org.bson.Document.class);
+
+                if (setFields != null && setFields.containsKey("processedAt")) {
+
+                    assertTrue(paymentUpdated.get());
+
+                    return com.mongodb.client.result.UpdateResult
+                            .acknowledged(0, 0L, null);
+                }
+
+                return invocation.callRealMethod();
+            }).when(template).updateFirst(
+                    any(org.springframework.data.mongodb.core.query.Query.class),
+                    any(org.springframework.data.mongodb.core.query.UpdateDefinition.class),
+                    eq(StripeWebhookEvent.class));
+
+            var service = new StripeWebhookTransactionService(
+                    template,
+                    new org.springframework.data.mongodb.MongoTransactionManager(
+                            context.template().getMongoDatabaseFactory()));
+
+            IllegalStateException failure = assertThrows(
+                    IllegalStateException.class,
+                    () -> service.captureVerifiedPayment(
+                            "evt_receipt_001",
+                            "pay_receipt_001",
+                            "cs_receipt_001",
+                            "pi_receipt001",
+                            money("100.00"),
+                            "USD"));
+
+            assertEquals("Webhook completion update failed",
+                    failure.getMessage());
+
+            assertTrue(paymentUpdated.get());
+
+            Payment persisted = context.template().findById(
+                    "pay_receipt_001", Payment.class);
+
+            assertNotNull(persisted);
+            assertEquals(PaymentStatus.INITIATED, persisted.getStatus());
+            assertNull(persisted.getReceiptReference());
+            assertNull(persisted.getPaidAt());
+            assertNull(persisted.getGatewayPaymentIntentId());
+
+            StripeWebhookEvent event = context.template().findById(
+                    "evt_receipt_001", StripeWebhookEvent.class);
+
+            assertNotNull(event);
+            assertEquals(
+                    StripeWebhookEvent.ProcessingStatus.RECEIVED,
+                    event.getStatus());
+            assertNull(event.getProcessedAt());
+            assertNull(event.getPaymentId());
+            assertNull(event.getCheckoutSessionId());
+        });
+    }
 }
