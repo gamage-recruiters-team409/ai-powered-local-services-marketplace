@@ -6,12 +6,14 @@ import Input from "../../../shared/components/forms/Input";
 import DataTable from "../../../shared/components/forms/DataTable";
 import Pagination from "../../../shared/components/forms/Pagination";
 import Modal from "../../../shared/components/forms/Modal";
+import Checkbox from "../../../shared/components/forms/Checkbox";
 import Alert from "../../../shared/components/feedback/Alert";
 import PageLoader from "../../../shared/components/feedback/PageLoader";
 
 import { useAreaAccess } from "../../disputes-admin/access/useAdminAccess";
 
 import {
+  getAdminPayoutSummary,
   getAdminPayoutHistory,
   getAdminPayoutDetails,
   markPayoutProcessing,
@@ -32,6 +34,66 @@ import styles from "./AdminPayoutQueuePage.module.css";
  */
 
 const PAGE_SIZE = 10;
+
+const EMPTY_FILTERS = Object.freeze({
+  search: "",
+  status: "",
+  fromDate: "",
+  toDate: "",
+});
+
+const SUMMARY_CARDS = [
+  {
+    key: "pending",
+    label: "Pending Review",
+    description: "Manual requests to review",
+    tone: "pending",
+  },
+  {
+    key: "processing",
+    label: "Processing",
+    description: "Payouts in progress",
+    tone: "processing",
+  },
+  {
+    key: "paid",
+    label: "Paid",
+    description: "Completed payouts",
+    tone: "paid",
+  },
+  {
+    key: "failed",
+    label: "Failed",
+    description: "Payouts requiring follow-up",
+    tone: "failed",
+  },
+];
+
+/**
+ * Converts a local calendar date into an ISO timestamp.
+ * The selected end date includes the entire calendar day.
+ */
+function toDateBoundary(value, exclusiveEnd = false) {
+  if (!value) return undefined;
+
+  const date = new Date(`${value}T00:00:00`);
+
+  if (exclusiveEnd) {
+    date.setDate(date.getDate() + 1);
+  }
+
+  return date.toISOString();
+}
+
+/** Builds the supported backend filter parameters. */
+function buildQueryFilters(filters) {
+  return {
+    search: filters.search.trim(),
+    status: filters.status,
+    from: toDateBoundary(filters.fromDate),
+    to: toDateBoundary(filters.toDate, true),
+  };
+}
 
 const STATUS_VARIANTS = {
   PENDING: "warning",
@@ -62,6 +124,51 @@ const ACTION_CONFIG = {
     fieldLabel: "Failure reason",
   },
 };
+
+/** Displays a decorative icon for each payout lifecycle category. */
+function SummaryIcon({ tone }) {
+  return (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {tone === "pending" && (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v5l3 2" />
+        </>
+      )}
+
+      {tone === "processing" && (
+        <>
+          <path d="M20 7v5h-5M4 17v-5h5" />
+          <path d="M5 9a8 8 0 0 1 13-4l2 3M19 15a8 8 0 0 1-13 4l-2-3" />
+        </>
+      )}
+
+      {tone === "paid" && (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="m8 12 3 3 5-6" />
+        </>
+      )}
+
+      {tone === "failed" && (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="m9 9 6 6m0-6-6 6" />
+        </>
+      )}
+    </svg>
+  );
+}
 
 /** Formats server-provided financial amounts. */
 function formatMoney(amount, currency = "LKR") {
@@ -117,6 +224,14 @@ function isActionAllowed(status, action) {
 export default function AdminPayoutQueuePage() {
   const { canEdit } = useAreaAccess();
 
+  const [summary, setSummary] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryError, setSummaryError] = useState("");
+
+  const [draftFilters, setDraftFilters] = useState(EMPTY_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState(EMPTY_FILTERS);
+  const [filterError, setFilterError] = useState("");
+
   const [history, setHistory] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -131,6 +246,7 @@ export default function AdminPayoutQueuePage() {
 
   const [action, setAction] = useState(null);
   const [actionValue, setActionValue] = useState("");
+  const [actionConfirmed, setActionConfirmed] = useState(false);
   const [actionError, setActionError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -141,6 +257,41 @@ export default function AdminPayoutQueuePage() {
   const operationLockRef = useRef(false);
   const detailsVersionRef = useRef(0);
 
+  /** Loads global counts independently of pagination and filters. */
+  useEffect(() => {
+    let active = true;
+
+    async function loadSummary() {
+      setSummaryLoading(true);
+      setSummaryError("");
+
+      try {
+        const result = await getAdminPayoutSummary();
+
+        if (active) {
+          setSummary(result);
+        }
+      } catch (error) {
+        if (active) {
+          setSummary(null);
+          setSummaryError(
+            error.message || "Unable to load payout summary.",
+          );
+        }
+      } finally {
+        if (active) {
+          setSummaryLoading(false);
+        }
+      }
+    }
+
+    loadSummary();
+
+    return () => {
+      active = false;
+    };
+  }, [refreshVersion]);
+
   /** Loads the current server-side payout queue page. */
   useEffect(() => {
     let active = true;
@@ -150,7 +301,11 @@ export default function AdminPayoutQueuePage() {
       setLoadError("");
 
       try {
-        const result = await getAdminPayoutHistory(page, PAGE_SIZE);
+        const result = await getAdminPayoutHistory(
+          page,
+          PAGE_SIZE,
+          buildQueryFilters(appliedFilters),
+        );
 
         if (active) {
           setHistory(result);
@@ -172,7 +327,50 @@ export default function AdminPayoutQueuePage() {
     return () => {
       active = false;
     };
-  }, [page, refreshVersion]);
+  }, [page, refreshVersion, appliedFilters]);
+
+  /** Updates draft filters without requesting data on every keystroke. */
+  function updateFilter(field, value) {
+    setDraftFilters((previous) => ({
+      ...previous,
+      [field]: value,
+    }));
+    setFilterError("");
+  }
+
+  /** Validates and applies filters from the first result page. */
+  function applyFilters(event) {
+    event.preventDefault();
+
+    if (draftFilters.search.trim().length > 128) {
+      setFilterError("Search must not exceed 128 characters.");
+      return;
+    }
+
+    if (
+      draftFilters.fromDate &&
+      draftFilters.toDate &&
+      draftFilters.fromDate > draftFilters.toDate
+    ) {
+      setFilterError("The start date must not be after the end date.");
+      return;
+    }
+
+    setFilterError("");
+    setPage(0);
+    setAppliedFilters({
+      ...draftFilters,
+      search: draftFilters.search.trim(),
+    });
+  }
+
+  /** Clears active filters and returns to the first result page. */
+  function resetFilters() {
+    setDraftFilters(EMPTY_FILTERS);
+    setAppliedFilters(EMPTY_FILTERS);
+    setFilterError("");
+    setPage(0);
+  }
 
   function refreshQueue() {
     setRefreshVersion((previous) => previous + 1);
@@ -239,6 +437,7 @@ export default function AdminPayoutQueuePage() {
     }
 
     setAction(nextAction);
+    setActionConfirmed(false);
     setActionValue("");
     setActionError("");
     setOperationError("");
@@ -248,6 +447,7 @@ export default function AdminPayoutQueuePage() {
   function cancelAction() {
     if (operationLockRef.current) return;
 
+    setActionConfirmed(false);
     setAction(null);
     setActionValue("");
     setActionError("");
@@ -270,6 +470,12 @@ export default function AdminPayoutQueuePage() {
       operationLockRef.current ||
       !isActionAllowed(details.status, action)
     ) {
+      return;
+    }
+
+    // Explicit acknowledgement is mandatory before starting processing.
+    if (action === "process" && !actionConfirmed) {
+      setActionError("Confirm the payout review before starting processing.");
       return;
     }
 
@@ -323,6 +529,7 @@ export default function AdminPayoutQueuePage() {
       );
 
       setAction(null);
+      setActionConfirmed(false);
       setActionValue("");
       refreshQueue();
     } catch (error) {
@@ -333,6 +540,7 @@ export default function AdminPayoutQueuePage() {
       );
 
       // Disable further actions until the authoritative state is known.
+      setActionConfirmed(false);
       setAction(null);
       setActionValue("");
       setDetails(null);
@@ -361,127 +569,84 @@ export default function AdminPayoutQueuePage() {
   const columns = [
     {
       key: "id",
-      header: "Payout ID",
+      header: "Payout Reference",
+      render: (value) => (
+        <span className={styles.reference}>{value}</span>
+      ),
     },
     {
       key: "providerId",
-      header: "Provider ID",
+      header: "Provider",
+      render: (value) => (
+        <span className={styles.providerIdentifier}>{value}</span>
+      ),
+    },
+    {
+      key: "payoutType",
+      header: "Payout Type",
+      render: () => (
+        <div className={styles.payoutType}>
+          <strong>Manual</strong>
+          <span>By provider</span>
+        </div>
+      ),
     },
     {
       key: "amount",
       header: "Amount",
-      render: (value, row) => formatMoney(value, row.currency),
+      render: (value, row) => (
+        <span className={styles.amount}>
+          {formatMoney(value, row.currency)}
+        </span>
+      ),
+    },
+    {
+      key: "createdAt",
+      header: "Submitted Date",
+      render: (value) => formatDate(value),
     },
     {
       key: "status",
       header: "Status",
-      render: (value) => <PayoutStatusBadge status={value} />,
-    },
-    {
-      key: "createdAt",
-      header: "Requested At",
-      render: (value) => formatDate(value),
+      render: (value) => (
+        <Badge variant={STATUS_VARIANTS[value] ?? "neutral"}>
+          {value === "PENDING" ? "UNDER REVIEW" : value ?? "UNKNOWN"}
+        </Badge>
+      ),
     },
   ];
 
   const actionConfig = action ? ACTION_CONFIG[action] : null;
 
-  return (
-    <div className={styles.container}>
-      <header className={styles.pageHeader}>
-        <div>
-          <h1>Payout Queue</h1>
-
-          <p>
-            Monitor provider payout requests and manage manual bank transfer
-            operations.
-          </p>
-        </div>
-
-        <Button onClick={refreshQueue} disabled={loading || submitting}>
-          Refresh
-        </Button>
-      </header>
-
-      {!canEdit && (
-        <Alert variant="info" title="View-only access">
-          You can inspect payout records. Financial operations require Finance
-          Admin edit permission.
-        </Alert>
-      )}
-
-      <Alert variant="info" title="Manual bank transfers">
-        Starting payout processing does not initiate an automatic bank transfer.
-        Confirm payment only after the external transfer has been completed.
-      </Alert>
-
-      {successMessage && (
-        <Alert
-          variant="success"
-          title="Payout updated"
-          onClose={() => setSuccessMessage("")}
-        >
-          {successMessage}
-        </Alert>
-      )}
-
-      {operationError && !detailsOpen && (
-        <Alert variant="error" title="Payout operation issue">
-          {operationError}
-        </Alert>
-      )}
-
-      <section className={styles.panel}>
-        <div className={styles.sectionHeader}>
-          <h2>Provider Payout Requests</h2>
-
-          <span className={styles.recordCount}>
-            Total records: {history?.totalElements ?? 0}
-          </span>
-        </div>
-
-        <DataTable
-          columns={columns}
-          data={history?.content ?? []}
-          getRowId={(row) => row.id}
-          loading={loading}
-          error={loadError || undefined}
-          emptyMessage="No provider payout requests found."
-          actions={(row) => (
-            <Button
-              size="small"
-              disabled={submitting}
-              onClick={() => openDetails(row.id)}
-            >
-              View Details
-            </Button>
-          )}
-          pagination={
-            (history?.totalPages ?? 0) > 1 ? (
-              <Pagination
-                currentPage={page + 1}
-                totalPages={history.totalPages}
-                onPageChange={(nextPage) => setPage(nextPage - 1)}
-                disabled={loading || submitting}
-              />
-            ) : null
-          }
-        />
-      </section>
-
-      <Modal
-        isOpen={detailsOpen}
-        onClose={closeDetails}
-        title="Provider Payout Details"
-        description="Review the current payout record and available operations."
-        closeOnBackdrop={!submitting}
-        showCloseButton={!submitting}
-        footer={
-          <Button onClick={closeDetails} disabled={submitting}>
-            Close
-          </Button>
-        }
+  // Preserve queue filters and pagination while reviewing a payout.
+  if (detailsOpen) {
+    return (
+      <div
+        className={styles.container}
+        role="region"
+        aria-label="Provider Payout Details"
       >
+        <header className={styles.pageHeader}>
+          <div>
+            <h1>Review Payout Request</h1>
+            <p>Finance / Payout Queue / Payout Review</p>
+          </div>
+
+          <Button
+            variant="secondary"
+            onClick={closeDetails}
+            disabled={submitting}
+          >
+            Back to Payout Queue
+          </Button>
+        </header>
+
+        {!canEdit && (
+          <Alert variant="info" title="View-only access">
+            Financial operations require Finance Admin edit permission.
+          </Alert>
+        )}
+
         <div className={styles.modalContent}>
           {detailsLoading && <PageLoader label="Loading payout details..." />}
 
@@ -501,42 +666,114 @@ export default function AdminPayoutQueuePage() {
 
           {details && (
             <>
-              <dl className={styles.detailsList}>
-                <dt>Payout ID</dt>
-                <dd>{details.id}</dd>
+              {/* Review layout uses only authoritative payout API data. */}
+              <div className={styles.reviewGrid}>
+                <div className={styles.reviewColumn}>
+                  <section className={styles.reviewCard}>
+                    <h2>Payout Request Summary</h2>
 
-                <dt>Provider ID</dt>
-                <dd>{details.providerId}</dd>
+                    <dl className={styles.detailsList}>
+                      <dt>Payout ID</dt>
+                      <dd className={styles.reference}>{details.id}</dd>
 
-                <dt>Request Key</dt>
-                <dd>{details.requestKey}</dd>
+                      <dt>Payout Type</dt>
+                      <dd>Manual</dd>
 
-                <dt>Amount</dt>
-                <dd>{formatMoney(details.amount, details.currency)}</dd>
+                      <dt>Amount</dt>
+                      <dd>{formatMoney(details.amount, details.currency)}</dd>
 
-                <dt>Status</dt>
-                <dd>
-                  <PayoutStatusBadge status={details.status} />
-                </dd>
+                      <dt>Requested At</dt>
+                      <dd>{formatDate(details.createdAt)}</dd>
 
-                <dt>Requested At</dt>
-                <dd>{formatDate(details.createdAt)}</dd>
+                      <dt>Status</dt>
+                      <dd>
+                        <PayoutStatusBadge status={details.status} />
+                      </dd>
 
-                <dt>Last Updated</dt>
-                <dd>{formatDate(details.updatedAt)}</dd>
+                      <dt>Request Key</dt>
+                      <dd>{details.requestKey}</dd>
+                    </dl>
+                  </section>
 
-                <dt>Paid At</dt>
-                <dd>{formatDate(details.paidAt)}</dd>
+                  <section className={styles.reviewCard}>
+                    <h2>Provider Information</h2>
 
-                <dt>Processed By</dt>
-                <dd>{details.processedBy || "\u2014"}</dd>
+                    <dl className={styles.detailsList}>
+                      <dt>Provider ID</dt>
+                      <dd>{details.providerId}</dd>
+                    </dl>
 
-                <dt>Transfer Reference</dt>
-                <dd>{details.transferReference || "\u2014"}</dd>
+                    <Alert variant="info">
+                      Bank account details are not available through the
+                      current payout API. Verify the transfer destination
+                      through the authorized financial process before
+                      transferring funds.
+                    </Alert>
+                  </section>
 
-                <dt>Failure Reason</dt>
-                <dd>{details.failureReason || "\u2014"}</dd>
-              </dl>
+                  <section className={styles.reviewCard}>
+                    <h2>Processing Information</h2>
+
+                    <dl className={styles.detailsList}>
+                      <dt>Last Updated</dt>
+                      <dd>{formatDate(details.updatedAt)}</dd>
+
+                      <dt>Paid At</dt>
+                      <dd>{formatDate(details.paidAt)}</dd>
+
+                      <dt>Processed By</dt>
+                      <dd>{details.processedBy || "\u2014"}</dd>
+
+                      <dt>Transfer Reference</dt>
+                      <dd>{details.transferReference || "\u2014"}</dd>
+
+                      <dt>Failure Reason</dt>
+                      <dd>{details.failureReason || "\u2014"}</dd>
+                    </dl>
+                  </section>
+
+                  <Alert variant="info" title="Workflow information">
+                    Starting processing does not transfer funds.
+                    Record payment only after the external bank transfer
+                    has completed. Final payout states cannot be processed
+                    again.
+                  </Alert>
+                </div>
+
+                <div className={styles.reviewColumn}>
+                  <section className={styles.reviewCard}>
+                    <h2>Payout Amount</h2>
+
+                    <div className={styles.reviewAmount}>
+                      <span>Requested payout amount</span>
+                      <strong>
+                        {formatMoney(details.amount, details.currency)}
+                      </strong>
+                    </div>
+
+                    <Alert variant="info">
+                      Financial eligibility and payout state transitions
+                      are enforced by the backend. This record does not
+                      provide a live eligible balance breakdown.
+                    </Alert>
+                  </section>
+
+                  <section className={styles.reviewCard}>
+                    <h2>Review Decision</h2>
+
+                    <p className={styles.reviewDescription}>
+                      {details.status === "PENDING"
+                        ? "Review the payout before starting manual processing."
+                        : details.status === "PROCESSING"
+                          ? "Record the outcome of the external bank transfer."
+                          : "This payout has reached a final status."}
+                    </p>
+
+                    {!canEdit && (
+                      <Alert variant="info">
+                        You have read-only access to this payout.
+                      </Alert>
+                    )}
 
               {/* Only authorized editors receive mutation controls. */}
               {canEdit && !action && (
@@ -577,51 +814,384 @@ export default function AdminPayoutQueuePage() {
                 </div>
               )}
 
+                  </section>
+                </div>
+              </div>
+
               {/* Explicit confirmation prevents accidental transitions. */}
               {canEdit && actionConfig && (
-                <form
-                  className={styles.confirmationPanel}
-                  onSubmit={handleActionSubmit}
-                  noValidate
+                <Modal
+                  isOpen={true}
+                  onClose={cancelAction}
+                  title={actionConfig.title}
+                  description={actionConfig.description}
+                  closeOnBackdrop={false}
+                  showCloseButton={!submitting}
                 >
-                  <h3>{actionConfig.title}</h3>
+                  <form
+                    className={styles.confirmationPanel}
+                    onSubmit={handleActionSubmit}
+                    noValidate
+                  >
+                    <div className={styles.reviewAmount}>
+                      <span>Payout amount</span>
+                      <strong>
+                        {formatMoney(details.amount, details.currency)}
+                      </strong>
+                    </div>
 
-                  <p>{actionConfig.description}</p>
+                    {action === "process" && (
+                      <>
+                        <Alert variant="info">
+                          Starting processing does not initiate a bank
+                          transfer. Verify the payout record and transfer
+                          destination before proceeding.
+                        </Alert>
 
-                  <p className={styles.confirmationAmount}>
-                    Payout amount:{" "}
-                    {formatMoney(details.amount, details.currency)}
-                  </p>
+                        <Checkbox
+                          label="I confirm that I have reviewed this payout request."
+                          checked={actionConfirmed}
+                          onChange={(event) => {
+                            setActionConfirmed(event.target.checked);
+                            setActionError("");
+                          }}
+                          error={actionError || undefined}
+                          disabled={submitting}
+                          required
+                        />
+                      </>
+                    )}
 
-                  {actionConfig.fieldLabel && (
-                    <Input
-                      label={actionConfig.fieldLabel}
-                      value={actionValue}
-                      onChange={(event) => {
-                        setActionValue(event.target.value);
-                        setActionError("");
-                      }}
-                      error={actionError || undefined}
-                      disabled={submitting}
-                      required
-                    />
-                  )}
+                    {actionConfig.fieldLabel && (
+                      <Input
+                        label={actionConfig.fieldLabel}
+                        value={actionValue}
+                        onChange={(event) => {
+                          setActionValue(event.target.value);
+                          setActionError("");
+                        }}
+                        error={actionError || undefined}
+                        disabled={submitting}
+                        required
+                      />
+                    )}
 
-                  <div className={styles.actionGroup}>
-                    <Button onClick={cancelAction} disabled={submitting}>
-                      Cancel
-                    </Button>
+                    <div className={styles.actionGroup}>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={cancelAction}
+                        disabled={submitting}
+                      >
+                        Cancel
+                      </Button>
 
-                    <Button type="submit" loading={submitting}>
-                      {actionConfig.confirmLabel}
-                    </Button>
-                  </div>
-                </form>
+                      <Button
+                        type="submit"
+                        loading={submitting}
+                        disabled={
+                          submitting ||
+                          (action === "process" && !actionConfirmed)
+                        }
+                      >
+                        {actionConfig.confirmLabel}
+                      </Button>
+                    </div>
+                  </form>
+                </Modal>
               )}
             </>
           )}
         </div>
-      </Modal>
+
+      </div>
+    );
+  }
+
+
+  return (
+    <div className={styles.container}>
+      <header className={styles.pageHeader}>
+        <div>
+          <h1>Payout Queue</h1>
+
+          <p>
+            Manual payout requests require Finance Admin review and
+            external bank transfer processing.
+          </p>
+        </div>
+
+        <Button onClick={refreshQueue} disabled={loading || submitting}>
+          Refresh
+        </Button>
+      </header>
+
+      {!canEdit && (
+        <Alert variant="info" title="View-only access">
+          You can inspect payout records. Financial operations require Finance
+          Admin edit permission.
+        </Alert>
+      )}
+
+      <section
+        className={styles.summarySection}
+        aria-label="Payout summary"
+        aria-busy={summaryLoading}
+      >
+        {summaryError && (
+          <Alert variant="error" title="Summary unavailable">
+            {summaryError}
+          </Alert>
+        )}
+
+        <div className={styles.summaryGrid}>
+          {SUMMARY_CARDS.map((card) => (
+            <article
+              key={card.key}
+              className={styles.summaryCard}
+              data-tone={card.tone}
+              aria-label={card.label}
+            >
+              <div className={styles.summaryCardHeader}>
+                <span>{card.label}</span>
+
+                <span className={styles.summaryIcon}>
+                  <SummaryIcon tone={card.tone} />
+                </span>
+              </div>
+
+              <strong className={styles.summaryValue}>
+                {summaryLoading
+                  ? "..."
+                  : summary?.[card.key] ?? "\u2014"}
+              </strong>
+
+              <p>{card.description}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      {successMessage && (
+        <Alert
+          variant="success"
+          title="Payout updated"
+          onClose={() => setSuccessMessage("")}
+        >
+          {successMessage}
+        </Alert>
+      )}
+
+      {operationError && !detailsOpen && (
+        <Alert variant="error" title="Payout operation issue">
+          {operationError}
+        </Alert>
+      )}
+
+      <form
+        className={styles.filterPanel}
+        onSubmit={applyFilters}
+        aria-label="Payout filters"
+        noValidate
+      >
+        <div className={styles.filterGrid}>
+          <div className={styles.searchField}>
+            <Input
+              label="Search payouts"
+              placeholder="Payout reference or provider ID"
+              value={draftFilters.search}
+              onChange={(event) =>
+                updateFilter("search", event.target.value)
+              }
+              maxLength={128}
+              disabled={submitting}
+            />
+          </div>
+
+          <Input
+            label="From date"
+            type="date"
+            value={draftFilters.fromDate}
+            onChange={(event) =>
+              updateFilter("fromDate", event.target.value)
+            }
+            disabled={submitting}
+          />
+
+          <Input
+            label="To date"
+            type="date"
+            value={draftFilters.toDate}
+            onChange={(event) =>
+              updateFilter("toDate", event.target.value)
+            }
+            disabled={submitting}
+          />
+
+          <div className={styles.filterField}>
+            <label htmlFor="wp07-payout-status">Status</label>
+
+            <select
+              id="wp07-payout-status"
+              value={draftFilters.status}
+              onChange={(event) =>
+                updateFilter("status", event.target.value)
+              }
+              disabled={submitting}
+            >
+              <option value="">All statuses</option>
+              <option value="PENDING">Under Review</option>
+              <option value="PROCESSING">Processing</option>
+              <option value="PAID">Paid</option>
+              <option value="FAILED">Failed</option>
+            </select>
+          </div>
+        </div>
+
+        <div className={styles.filterFooter}>
+          <span className={styles.filterHint}>
+            Search by exact payout reference or provider ID.
+            Dates use your local timezone.
+          </span>
+
+          <div className={styles.filterActions}>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={resetFilters}
+              disabled={submitting}
+            >
+              Reset Filters
+            </Button>
+
+            <Button
+              type="submit"
+              disabled={submitting}
+            >
+              Apply Filters
+            </Button>
+          </div>
+        </div>
+
+        {filterError && (
+          <Alert variant="error">{filterError}</Alert>
+        )}
+      </form>
+
+      <section className={styles.panel}>
+        <div className={styles.sectionHeader}>
+          <h2>Provider Payout Requests</h2>
+
+          <span className={styles.recordCount}>
+            Total records: {loading ? "..." : history?.totalElements ?? "\u2014"}
+          </span>
+        </div>
+
+        <DataTable
+          columns={columns}
+          data={history?.content ?? []}
+          getRowId={(row) => row.id}
+          loading={loading}
+          error={loadError || undefined}
+          emptyMessage="No Payout Requests Found"
+          emptyContent={
+            <div className={styles.emptyState}>
+              <span className={styles.emptyIcon} aria-hidden="true">
+                <svg
+                  width="36"
+                  height="36"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5" />
+                  <path d="M14 2v6h6l-6-6M8 12h4M8 16h2" />
+                  <circle cx="17" cy="16" r="4" />
+                  <path d="m20 19 3 3" />
+                </svg>
+              </span>
+
+              <h3>No Payout Requests Found</h3>
+
+              <p>
+                No payout requests match your current search or filter criteria.
+              </p>
+
+              <Button
+                variant="secondary"
+                onClick={resetFilters}
+                disabled={submitting}
+              >
+                Clear Filters
+              </Button>
+            </div>
+          }
+          actions={(row) => (
+            <Button
+              size="small"
+              variant={
+                canEdit && row.status === "PENDING"
+                  ? "primary"
+                  : "secondary"
+              }
+              disabled={submitting}
+              onClick={() => openDetails(row.id)}
+            >
+              {canEdit && row.status === "PENDING"
+                ? "Review Payout"
+                : "View Details"}
+            </Button>
+          )}
+        />
+
+        {/* Keep pagination visible for empty and single-page results. */}
+        <footer className={styles.paginationFooter}>
+          <span
+            className={styles.paginationSummary}
+            aria-live="polite"
+          >
+            {loading
+              ? "Loading results..."
+              : loadError || !history
+                ? "Results unavailable"
+                : history.totalElements === 0
+                  ? "0 matching results"
+                  : history.content.length === 0
+                    ? `0 results on this page of ${history.totalElements}`
+                    : `Showing ${history.page * history.size + 1}\u2013${history.page * history.size + history.content.length} of ${history.totalElements} results`}
+          </span>
+
+          <Pagination
+            currentPage={page + 1}
+            totalPages={history?.totalPages ?? 0}
+            onPageChange={(nextPage) => setPage(nextPage - 1)}
+            disabled={
+              loading ||
+              submitting ||
+              Boolean(loadError) ||
+              !history ||
+              history.totalElements === 0
+            }
+            className={
+              history?.totalElements === 0
+                ? styles.emptyPagination
+                : ""
+            }
+          />
+        </footer>
+      </section>
+
+      <Alert variant="info" title="Payout processing information">
+        Payout status reflects platform processing. Bank settlement times
+        may vary. Starting payout processing does not initiate an automatic
+        bank transfer. Confirm payment only after the external transfer
+        has been completed.
+      </Alert>
+
+
     </div>
   );
 }

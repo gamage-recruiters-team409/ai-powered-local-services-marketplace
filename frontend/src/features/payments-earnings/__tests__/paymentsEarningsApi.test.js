@@ -7,6 +7,7 @@ import {
   requestProviderPayout,
   getProviderPayoutHistory,
   getProviderPayoutDetails,
+  getAdminPayoutSummary,
   getAdminPayoutHistory,
   getAdminPayoutDetails,
   markPayoutProcessing,
@@ -113,6 +114,114 @@ describe('paymentsEarningsApi', () => {
   // --------------------------------------------------
   // Finance admin payout operations
   // --------------------------------------------------
+
+  it('retrieves global admin payout status counts', async () => {
+    const summary = {
+      pending: 6,
+      processing: 12,
+      paid: 148,
+      failed: 3,
+    };
+
+    apiClient.get.mockResolvedValueOnce({ data: summary });
+
+    const result = await getAdminPayoutSummary();
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      '/admin/payouts/summary',
+    );
+    expect(result).toEqual(summary);
+  });
+
+  it('preserves zero counts returned by the summary API', async () => {
+    const summary = {
+      pending: 0,
+      processing: 0,
+      paid: 0,
+      failed: 0,
+    };
+
+    apiClient.get.mockResolvedValueOnce({ data: summary });
+
+    expect(await getAdminPayoutSummary()).toEqual(summary);
+  });
+
+  it('sends all supported admin payout filters', async () => {
+    const filters = {
+      search: '  provider-001  ',
+      status: 'PENDING',
+      from: '2026-11-01T00:00:00Z',
+      to: '2026-12-01T00:00:00Z',
+    };
+
+    const response = {
+      content: [],
+      page: 1,
+      size: 10,
+      totalElements: 0,
+      totalPages: 0,
+    };
+
+    apiClient.get.mockResolvedValueOnce({ data: response });
+
+    const result = await getAdminPayoutHistory(1, 10, filters);
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      '/admin/payouts',
+      {
+        params: {
+          page: 1,
+          size: 10,
+          search: 'provider-001',
+          status: 'PENDING',
+          from: filters.from,
+          to: filters.to,
+        },
+      },
+    );
+
+    expect(result).toEqual(response);
+  });
+
+  it('omits empty admin payout filters', async () => {
+    apiClient.get.mockResolvedValueOnce({ data: {} });
+
+    await getAdminPayoutHistory(0, 10, {
+      search: '   ',
+      status: '',
+      from: null,
+      to: undefined,
+    });
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      '/admin/payouts',
+      { params: { page: 0, size: 10 } },
+    );
+  });
+
+  it('supports an independent upper date boundary', async () => {
+    const to = '2026-12-01T00:00:00Z';
+
+    apiClient.get.mockResolvedValueOnce({ data: {} });
+
+    await getAdminPayoutHistory(0, 10, { to });
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      '/admin/payouts',
+      { params: { page: 0, size: 10, to } },
+    );
+  });
+
+  it('propagates admin payout summary access errors', async () => {
+    const error = Object.assign(
+      new Error('Access denied'),
+      { status: 403 },
+    );
+
+    apiClient.get.mockRejectedValueOnce(error);
+
+    await expect(getAdminPayoutSummary()).rejects.toBe(error);
+  });
 
   it('retrieves paginated admin payout history', async () => {
     const mockData = {

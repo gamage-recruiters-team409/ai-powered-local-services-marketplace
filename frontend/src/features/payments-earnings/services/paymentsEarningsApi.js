@@ -52,11 +52,53 @@ export async function getProviderPayoutDetails(payoutId) {
 }
 
 /**
- * Retrieves the paginated payout history for authorized admin users.
+ * Retrieves global payout counts independently of list filters
+ * and pagination.
  */
-export async function getAdminPayoutHistory(page = 0, size = 10) {
+export async function getAdminPayoutSummary() {
+  const { data } = await apiClient.get(
+    `${ADMIN_PAYOUTS_PATH}/summary`,
+  );
+
+  return data;
+}
+
+/**
+ * Retrieves paginated payout history for authorized admin users.
+ *
+ * Optional filters are applied by the backend across all payouts.
+ * Search matches a payout ID or provider ID.
+ * Date boundaries use an inclusive from and exclusive to timestamp.
+ *
+ * Existing callers may continue supplying only page and size.
+ */
+export async function getAdminPayoutHistory(
+  page = 0,
+  size = 10,
+  filters = {},
+) {
+  const params = { page, size };
+
+  const search = filters.search?.trim();
+
+  if (search) {
+    params.search = search;
+  }
+
+  if (filters.status) {
+    params.status = filters.status;
+  }
+
+  if (filters.from) {
+    params.from = filters.from;
+  }
+
+  if (filters.to) {
+    params.to = filters.to;
+  }
+
   const { data } = await apiClient.get(ADMIN_PAYOUTS_PATH, {
-    params: { page, size },
+    params,
   });
 
   return data;
