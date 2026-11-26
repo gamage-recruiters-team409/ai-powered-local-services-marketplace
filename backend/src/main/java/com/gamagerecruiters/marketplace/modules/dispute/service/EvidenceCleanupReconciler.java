@@ -103,6 +103,7 @@ public class EvidenceCleanupReconciler {
 
     /** One pass over at most {@code batch-size} claimable due tasks. */
     public Result reconcile() {
+        cleanupStore.drainFallback();
         int kept = 0;
         int deleted = 0;
         int retried = 0;

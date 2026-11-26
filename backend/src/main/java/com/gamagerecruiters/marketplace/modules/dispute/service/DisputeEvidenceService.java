@@ -97,8 +97,10 @@ public class DisputeEvidenceService {
     }
 
     /**
-     * Whether an uncertain MongoDB write actually committed. {@code UNKNOWN} means the verification read itself
-     * failed — it is never treated as "not persisted", because deleting on an unconfirmed read could destroy
+     * Whether an uncertain MongoDB write actually committed. {@code UNKNOWN} means
+     * the verification read itself
+     * failed — it is never treated as "not persisted", because deleting on an
+     * unconfirmed read could destroy
      * successfully submitted evidence.
      */
     private enum Persistence {
@@ -146,8 +148,10 @@ public class DisputeEvidenceService {
         try {
             recorded = record(dispute.getId(), side, evidence);
         } catch (RuntimeException e) {
-            // Uncertain write: the update may or may not have been committed. Re-read to check before deleting —
-            // a successfully recorded file must NOT be removed, and a failed verification is NOT proof of a missing
+            // Uncertain write: the update may or may not have been committed. Re-read to
+            // check before deleting —
+            // a successfully recorded file must NOT be removed, and a failed verification
+            // is NOT proof of a missing
             // write (deleting then would destroy evidence that actually persisted).
             switch (verifyPersisted(disputeId, evidence.getId(), stored.publicId())) {
                 case CONFIRMED_PERSISTED -> {
@@ -156,8 +160,10 @@ public class DisputeEvidenceService {
                     return DisputeMapper.toView(evidence);
                 }
                 case UNKNOWN -> {
-                    // Database outcome unresolved: keep the asset and queue a durable reconciliation task. The
-                    // reconciler keeps it if the write committed, or deletes the orphan once MongoDB is reachable.
+                    // Database outcome unresolved: keep the asset and queue a durable
+                    // reconciliation task. The
+                    // reconciler keeps it if the write committed, or deletes the orphan once
+                    // MongoDB is reachable.
                     enqueueCleanup(disputeId, evidence.getId(), stored.publicId(),
                             EvidenceCleanupTask.Reason.UNCERTAIN_WRITE);
                     log.error("event=DISPUTE_EVIDENCE_RECORD_UNCERTAIN disputeId={} evidenceId={} publicId={} cause={}",
@@ -240,22 +246,28 @@ public class DisputeEvidenceService {
     }
 
     /**
-     * Re-reads the dispute after an uncertain MongoDB write (exception thrown but the write may have gone through) to
-     * decide whether the evidence record was actually committed. Returns one of three outcomes:
+     * Re-reads the dispute after an uncertain MongoDB write (exception thrown but
+     * the write may have gone through) to
+     * decide whether the evidence record was actually committed. Returns one of
+     * three outcomes:
      * <ul>
-     *   <li>{@code CONFIRMED_PERSISTED} — the re-read found the record: keep the asset;</li>
-     *   <li>{@code CONFIRMED_NOT_PERSISTED} — the re-read succeeded and the record is absent: the asset is an orphan;</li>
-     *   <li>{@code UNKNOWN} — the re-read itself failed, so the outcome cannot be determined. This is never treated as
-     *       "not persisted": deleting on an unconfirmed read could permanently destroy evidence that did commit.</li>
+     * <li>{@code CONFIRMED_PERSISTED} — the re-read found the record: keep the
+     * asset;</li>
+     * <li>{@code CONFIRMED_NOT_PERSISTED} — the re-read succeeded and the record is
+     * absent: the asset is an orphan;</li>
+     * <li>{@code UNKNOWN} — the re-read itself failed, so the outcome cannot be
+     * determined. This is never treated as
+     * "not persisted": deleting on an unconfirmed read could permanently destroy
+     * evidence that did commit.</li>
      * </ul>
      */
     private Persistence verifyPersisted(String disputeId, String evidenceId, String publicId) {
         try {
             Dispute latest = mongoTemplate.findById(disputeId, Dispute.class);
             boolean present = latest != null && latest.getEvidenceFiles() != null
-                    && latest.getEvidenceFiles().stream().anyMatch(e ->
-                            (evidenceId != null && evidenceId.equals(e.getId()))
-                            || (publicId != null && publicId.equals(e.getPublicId())));
+                    && latest.getEvidenceFiles().stream()
+                            .anyMatch(e -> (evidenceId != null && evidenceId.equals(e.getId()))
+                                    || (publicId != null && publicId.equals(e.getPublicId())));
             return present ? Persistence.CONFIRMED_PERSISTED : Persistence.CONFIRMED_NOT_PERSISTED;
         } catch (RuntimeException e) {
             log.warn("event=DISPUTE_EVIDENCE_REREAD_FAILED disputeId={} evidenceId={} publicId={} cause={}",
@@ -265,8 +277,10 @@ public class DisputeEvidenceService {
     }
 
     /**
-     * Best-effort deletion of an orphaned storage asset. When deletion fails, a durable cleanup task is queued (and a
-     * warning logged) so the orphan is revisited and removed by {@link EvidenceCleanupReconciler}, never left behind
+     * Best-effort deletion of an orphaned storage asset. When deletion fails, a
+     * durable cleanup task is queued (and a
+     * warning logged) so the orphan is revisited and removed by
+     * {@link EvidenceCleanupReconciler}, never left behind
      * on the strength of a log line alone.
      */
     private void safeDelete(String publicId, String disputeId, String evidenceId) {
@@ -280,16 +294,22 @@ public class DisputeEvidenceService {
     }
 
     /**
-     * Records a durable reconciliation task for a storage asset whose outcome is unresolved. Never propagates a
-     * failure: the upload path's own error handling must still run, and a lost task only means the asset is not
-     * auto-reconciled (it is still logged above).
+     * Records a durable reconciliation task for a storage asset whose outcome is
+     * unresolved. If MongoDB task
+     * insertion fails (e.g. database connection interrupted), the task is retained
+     * in the store's durable fallback
+     * buffer ({@link EvidenceCleanupStore#enqueueFallback}) so the asset remains
+     * discoverable and is reconciled once
+     * database availability is restored (dispute finding F6-C).
      */
-    private void enqueueCleanup(String disputeId, String evidenceId, String publicId, EvidenceCleanupTask.Reason reason) {
+    private void enqueueCleanup(String disputeId, String evidenceId, String publicId,
+            EvidenceCleanupTask.Reason reason) {
         try {
             cleanupStore.enqueue(disputeId, evidenceId, publicId, reason, clock.instant());
         } catch (RuntimeException e) {
             log.error("event=DISPUTE_EVIDENCE_CLEANUP_ENQUEUE_FAILED disputeId={} evidenceId={} publicId={} reason={} "
                     + "cause={}", disputeId, evidenceId, publicId, reason, e.getClass().getSimpleName());
+            cleanupStore.enqueueFallback(disputeId, evidenceId, publicId, reason, clock.instant());
         }
     }
 

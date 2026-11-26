@@ -460,4 +460,36 @@ class DisputeEvidenceServiceTest {
         verify(cleanupStore).enqueue(eq(ID), any(), eq(storage.stored.get(0)),
                 eq(EvidenceCleanupTask.Reason.UNCERTAIN_WRITE), eq(NOW));
     }
+
+    @Test
+    @DisplayName("F6-C: Cloudinary upload succeeds, record update throws, verification read throws, AND cleanup-task "
+            + "enqueue throws → asset preserved, fallback buffer retains task for discovery after DB restored")
+    void uncertainWriteWithEnqueueFailurePreservesAssetAndRetainsFallback() {
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(Dispute.class)))
+                .thenThrow(new RuntimeException("connection reset"));
+
+        java.util.concurrent.atomic.AtomicBoolean firstCall = new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(mongoTemplate.findById(ID, Dispute.class)).thenAnswer(invocation -> {
+            if (firstCall.compareAndSet(true, false)) {
+                return dispute(DisputeStatus.AWAITING_RESPONSE); // initial findVisible
+            }
+            throw new RuntimeException("database unavailable"); // verification re-read fails → UNKNOWN
+        });
+
+        // Cleanup task insertion also throws (e.g. MongoDB outage prevents writing the recovery task)
+        org.mockito.Mockito.doThrow(new RuntimeException("MongoDB unavailable"))
+                .when(cleanupStore).enqueue(any(), any(), any(), any(), any());
+
+        Throwable thrown = catchThrowable(() -> service.upload(CUSTOMER, ID, file("a.png", PNG)));
+
+        // 1. Confirm that the asset is preserved while the outcome is unknown (not deleted)
+        assertApiError(thrown, HttpStatus.SERVICE_UNAVAILABLE, "EVIDENCE_UPLOAD_FAILED");
+        assertThat(storage.stored).hasSize(1);
+        assertThat(storage.deleted).as("asset must be preserved while outcome is unknown").isEmpty();
+
+        // 2. Confirm that enqueue failure was logged and task was routed to durable fallback
+        assertThat(logs.list).anyMatch(e -> e.getFormattedMessage().contains("DISPUTE_EVIDENCE_CLEANUP_ENQUEUE_FAILED"));
+        verify(cleanupStore).enqueueFallback(eq(ID), any(), eq(storage.stored.get(0)),
+                eq(EvidenceCleanupTask.Reason.UNCERTAIN_WRITE), eq(NOW));
+    }
 }
