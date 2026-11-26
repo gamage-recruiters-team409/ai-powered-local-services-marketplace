@@ -45,6 +45,7 @@ describe('AuthContext', () => {
       name: 'Kasun',
       email: 'kasun@example.lk',
       role: 'CUSTOMER',
+      profileImageUrl: 'https://cdn.example.com/kasun.jpg',
     });
 
     const { result } = renderHook(() => useAuth(), {
@@ -59,8 +60,55 @@ describe('AuthContext', () => {
 
     expect(result.current.isAuthenticated).toBe(true);
     expect(result.current.user?.name).toBe('Kasun');
+    expect(result.current.user?.profileImageUrl).toBe('https://cdn.example.com/kasun.jpg');
     expect(tokenStore.getAccessToken()).toBe('new-acc');
     expect(tokenStore.getRefreshToken()).toBe('new-ref');
+  });
+
+  it('restores session falling back to refresh user when getCurrentUser fails', async () => {
+    tokenStore.setRefreshToken('saved-refresh-token');
+    refreshSession.mockResolvedValueOnce({
+      accessToken: 'new-acc',
+      refreshToken: 'new-ref',
+      user: { id: 'u1', name: 'Kasun-Fallback', role: 'CUSTOMER' },
+      mustChangePassword: false,
+    });
+    authApi.getCurrentUser.mockRejectedValueOnce(new Error('Network error on me'));
+
+    const { result } = renderHook(() => useAuth(), {
+      wrapper: AuthProvider,
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.user?.name).toBe('Kasun-Fallback');
+    expect(result.current.user?.profileImageUrl).toBeUndefined();
+  });
+
+  it('restores session with mustChangePassword true leaving mustChangePassword branch unchanged', async () => {
+    tokenStore.setRefreshToken('saved-refresh-token');
+    refreshSession.mockResolvedValueOnce({
+      accessToken: 'new-acc',
+      refreshToken: 'new-ref',
+      user: { id: 'u1', name: 'MustChangeUser', role: 'CUSTOMER' },
+      mustChangePassword: true,
+    });
+
+    const { result } = renderHook(() => useAuth(), {
+      wrapper: AuthProvider,
+    });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.isAuthenticated).toBe(true);
+    expect(result.current.mustChangePassword).toBe(true);
+    expect(result.current.user?.mustChangePassword).toBe(true);
+    expect(authApi.getCurrentUser).not.toHaveBeenCalled();
   });
 
   it('preserves newer rotated token when a concurrent/competing call fails with 401', async () => {
@@ -79,6 +127,11 @@ describe('AuthContext', () => {
         user: { id: 'u1', name: 'Kasun', role: 'CUSTOMER' },
         mustChangePassword: false,
       };
+    });
+    authApi.getCurrentUser.mockResolvedValueOnce({
+      id: 'u1',
+      name: 'Kasun',
+      role: 'CUSTOMER',
     });
 
     const { result } = renderHook(() => useAuth(), {

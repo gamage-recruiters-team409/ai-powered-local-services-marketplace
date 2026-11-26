@@ -211,10 +211,10 @@ CLOUDINARY_API_SECRET=your_api_secret
 
 ---
 
-## 6. Pending Items & Cross-Team Dependencies
+## 6. Implementation Status & Cross-Team Dependencies
 
 1. **Recent Bookings Section:**
-   - Pending WP02 customer booking list endpoint (`GET /api/v1/bookings/me`). Once WP02 provides this API, the Recent Bookings widget can be connected without altering payments or profile functionality.
+   - Implemented on the customer Profile page using `GET /api/v1/bookings/customer?page=0&size=5` (size 5, newest slot first, CUSTOMER role only). Loads independently with its own loading, error, and empty states. Note: per-row links and "View all" links to `/customer/bookings` (`CUSTOMER_BOOKINGS_PATH`) are omitted until the My Bookings page route is delivered.
 2. **Direct Receipt and Refund Links:**
    - `View receipt` and `View refund details` buttons remain disabled with tooltip `"Not available yet"`, pending WP07 endpoints for downloadable receipts and refund itemization.
 
@@ -236,3 +236,36 @@ CLOUDINARY_API_SECRET=your_api_secret
    - Verify Date column displays formatted `paidAt` date or `'—'`.
    - Verify Receipt column displays `receiptReference` or `'—'`.
    - Verify Refund column displays correct refund status badges and refund references.
+
+---
+
+## 8. Operational Follow-up: PROFILE_IMAGE_ORPHAN_UNRECOVERABLE
+
+When an image is uploaded to Cloudinary but the request subsequently encounters a scheduling failure (in `cleanupService.schedule`) and the direct Cloudinary deletion fallback also fails (i.e., `profileImageStorage.delete` returns `false` or throws), an ERROR log is emitted:
+
+```text
+event=PROFILE_IMAGE_ORPHAN_UNRECOVERABLE ownerUserId=<ownerUserId> publicId=<publicId> context=<context> reason=<reason>
+```
+
+- **Fields:**
+  - `ownerUserId`: ID of the customer owning the operation.
+  - `publicId`: Cloudinary public ID of the uploaded orphaned asset.
+  - `context`: Rollback stage where failure occurred:
+    * `REPLACE_SCHEDULE_FAILED`: scheduling cleanup of the old photo failed during replace, and direct delete of the new photo failed.
+    * `CONFLICT_ROLLBACK_SCHEDULE_FAILED`: conditional update matched 0 documents, rollback task scheduling failed, and direct delete failed.
+    * `UNCERTAIN_WRITE_UNAPPLIED_SCHEDULE_FAILED`: DB write threw, verification read confirmed write was unapplied (`current != new`), rollback scheduling failed, and direct delete failed.
+  - `reason`: `DELETE_RETURNED_FALSE` (Cloudinary deletion returned false) or an exception class name (e.g. `RuntimeException` if direct delete threw; exception messages, tokens, and signed links are never logged).
+
+- **Automated Reconciler:** These orphan events are **not** automatically reconciled because no durable cleanup task could be scheduled in MongoDB and direct deletion failed.
+
+- **Monitoring Recommendation:**
+  - Configure monitoring and alerting (e.g. in log aggregation systems) to trigger high-priority alerts on any log event matching `event=PROFILE_IMAGE_ORPHAN_UNRECOVERABLE`.
+
+- **Manual Recovery Procedure:**
+  1. **Check Reference in Database:** Query the `users` collection to confirm whether any user record references the logged `publicId`:
+     ```javascript
+     db.users.find({ profileImagePublicId: "<publicId>" })
+     ```
+  2. **If Unreferenced:** Delete the orphaned asset manually via the Cloudinary Management Console under folder `localserve/customer-profile/<ownerUserId>` or via the Cloudinary Admin API using `<publicId>`.
+  3. **If Still Referenced:** If a user document references this `publicId` (e.g. from a concurrent update), do **not** delete it; leave it active.
+  4. **Optional Retry Insertion:** Alternatively, insert a document into the `profile_image_cleanup` collection with `publicId`, `ownerUserId`, `status: "PENDING"`, and `reason: "UPLOAD_ROLLBACK"` to allow the background cleanup job (`ProfileImageCleanupJob`) to safely reconcile and verify references on its next run.

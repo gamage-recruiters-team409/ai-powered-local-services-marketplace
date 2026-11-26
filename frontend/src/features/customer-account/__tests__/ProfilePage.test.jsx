@@ -7,6 +7,14 @@ import * as customerAccountApi from '../services/customerAccountApi';
 
 vi.mock('../services/customerAccountApi');
 
+const mockRefreshUser = vi.fn().mockResolvedValue({ id: 'cust-1' });
+vi.mock('../../auth/hooks/useAuth', () => ({
+  useAuth: () => ({
+    refreshUser: mockRefreshUser,
+    user: { id: 'cust-1' },
+  }),
+}));
+
 const mockToast = {
   success: vi.fn(),
   error: vi.fn(),
@@ -43,6 +51,14 @@ describe('ProfilePage', () => {
       emailVerified: true,
       status: 'ACTIVE',
       profileImageUrl: null,
+    });
+
+    customerAccountApi.getRecentBookings.mockResolvedValue({
+      content: [],
+      page: 0,
+      size: 5,
+      totalElements: 0,
+      totalPages: 0,
     });
   });
 
@@ -115,6 +131,7 @@ describe('ProfilePage', () => {
     expect(screen.getByText(/invalid sri lankan phone number format/i)).toBeTruthy();
 
     expect(customerAccountApi.updateProfile).not.toHaveBeenCalled();
+    expect(mockRefreshUser).not.toHaveBeenCalled();
   });
 
   it('saves updated profile successfully, updates input from server response, and shows success toast', async () => {
@@ -149,6 +166,7 @@ describe('ProfilePage', () => {
         fullName: 'Nimal P. Updated',
         phone: '0779999999',
       });
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
       expect(mockToast.success).toHaveBeenCalledWith('Profile updated successfully');
     });
 
@@ -328,6 +346,7 @@ describe('ProfilePage', () => {
 
     await waitFor(() => {
       expect(customerAccountApi.uploadProfilePhoto).toHaveBeenCalledWith(validFile);
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
       expect(mockToast.success).toHaveBeenCalledWith('Profile photo updated successfully');
     });
 
@@ -358,6 +377,7 @@ describe('ProfilePage', () => {
       expect(screen.getByText('Network error uploading photo')).toBeTruthy();
     });
 
+    expect(mockRefreshUser).not.toHaveBeenCalled();
     expect(screen.getByText('NP')).toBeTruthy();
     expect(window.URL.revokeObjectURL).toHaveBeenCalled();
   });
@@ -389,10 +409,62 @@ describe('ProfilePage', () => {
 
     await waitFor(() => {
       expect(customerAccountApi.removeProfilePhoto).toHaveBeenCalled();
+      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
       expect(mockToast.success).toHaveBeenCalledWith('Profile photo removed');
     });
 
     expect(screen.getByText('NP')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /remove photo/i })).toBeNull();
+  });
+
+  it('handles photo removal failure without calling refreshUser', async () => {
+    customerAccountApi.getProfile.mockResolvedValueOnce({
+      id: 'cust-1',
+      fullName: 'Nimal Perera',
+      email: 'nimal@email.com',
+      phone: '+94 77 123 4567',
+      emailVerified: true,
+      status: 'ACTIVE',
+      profileImageUrl: 'https://res.cloudinary.com/test/current.jpg',
+    });
+    customerAccountApi.removeProfilePhoto.mockRejectedValueOnce(new Error('Failed to delete photo'));
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByAltText('Profile photo')).toBeTruthy();
+    });
+
+    const removeBtn = screen.getByRole('button', { name: /remove photo/i });
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to delete photo')).toBeTruthy();
+    });
+
+    expect(mockRefreshUser).not.toHaveBeenCalled();
+  });
+
+  it('recent bookings failure does not hide the profile form or break profile editing', async () => {
+    customerAccountApi.getRecentBookings.mockRejectedValueOnce(new Error('Bookings unavailable'));
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Nimal Perera')).toBeTruthy();
+      expect(screen.getByText('Recent bookings are unavailable right now.')).toBeTruthy();
+    });
+
+    // Profile form is intact and visible
+    expect(screen.getByRole('heading', { name: /personal details/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeTruthy();
   });
 });

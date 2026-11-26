@@ -1,5 +1,6 @@
 export { CustomerLayout } from './CustomerLayout'
 export { CustomerPage } from './CustomerPage'
+export { CustomerAvatar } from './CustomerAvatar'
 export { CustomerAccountMenu } from './CustomerAccountMenu'
 export { CustomerCountBadge } from './CustomerCountBadge'
 export { CustomerHeaderIconLink } from './CustomerHeaderIconLink'

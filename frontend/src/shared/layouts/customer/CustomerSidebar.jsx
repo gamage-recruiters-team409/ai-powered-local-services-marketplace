@@ -1,9 +1,10 @@
 import { NavLink } from 'react-router-dom'
 
 import styles from './CustomerLayout.module.css'
+import { CustomerAvatar } from './CustomerAvatar'
 import { CustomerIcon } from './CustomerIcon'
 import { CustomerNavItemBadge } from './CustomerNavItemBadge'
-import { cx, getInitials, splitFooterItems } from './customerLayoutUtils'
+import { cx, splitFooterItems } from './customerLayoutUtils'
 
 function SidebarLink({ item }) {
   return (
@@ -43,9 +44,11 @@ export function CustomerSidebar({
     <aside id={id} className={styles.sidebar} aria-label="Account sidebar">
       <div className={styles.sidebarInner}>
         <div className={styles.sidebarIdentity}>
-          <span className={styles.sidebarAvatar} aria-hidden="true">
-            {getInitials(name)}
-          </span>
+          <CustomerAvatar
+            name={name}
+            src={user?.avatarUrl}
+            className={styles.sidebarAvatar}
+          />
 
           <span className={styles.identityText}>
             <strong>{name}</strong>

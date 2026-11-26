@@ -36,6 +36,24 @@ The user interface implements the 15 high-fidelity visual designs matching the L
   - `logout`: Ensures immediate session termination across all open windows.
   - `token-updated`: Synchronizes rotated tokens across active tabs.
 
+### 2.4 Current User & Session Restore (`GET /api/v1/users/me`)
+- **Current User Endpoint:** `GET /api/v1/users/me` returns the authenticated user's profile (`CurrentUserResponse`):
+  ```json
+  {
+    "id": "u-123",
+    "name": "Kamal Perera",
+    "email": "kamal@example.lk",
+    "phone": "+94771234567",
+    "role": "CUSTOMER",
+    "status": "ACTIVE",
+    "emailVerified": true,
+    "createdAt": "2026-01-01T00:00:00Z",
+    "profileImageUrl": "https://res.cloudinary.com/demo/image/upload/photo.jpg"
+  }
+  ```
+  * `profileImageUrl`: Nullable HTTPS image URL (or `null` when no photo is set). `profileImagePublicId` is strictly internal and is never returned.
+- **Session Restore:** On application startup, after `refreshSession()` successfully obtains rotated tokens, `AuthContext.jsx` restores the complete user profile by calling `authApi.getCurrentUser()` (`GET /api/v1/users/me`) inside an inner try/catch block. This ensures fields not present in `UserSummaryResponse` (such as `profileImageUrl`) persist across page reloads. If `/users/me` fails, it falls back to `refreshData.user`.
+
 ---
 
 ## 3. Routes & Guards

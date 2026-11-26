@@ -41,7 +41,17 @@ export function AuthProvider({ children }) {
           return;
         }
 
-        const userData = refreshData.user || (await authApi.getCurrentUser());
+        let userData;
+        try {
+          userData = await authApi.getCurrentUser();
+        } catch (userErr) {
+          if (refreshData.user) {
+            userData = refreshData.user;
+          } else {
+            throw userErr;
+          }
+        }
+
         if (!cancelled) {
           setUser(userData);
           setStatus(AUTH_STATUS.AUTHENTICATED);

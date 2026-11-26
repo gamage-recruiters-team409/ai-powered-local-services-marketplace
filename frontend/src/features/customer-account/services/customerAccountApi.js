@@ -61,3 +61,10 @@ export async function uploadProfilePhoto(file) {
 export async function removeProfilePhoto() {
   await apiClient.delete('/customers/me/photo');
 }
+
+export async function getRecentBookings({ size = 5 } = {}) {
+  const response = await apiClient.get('/bookings/customer', {
+    params: { page: 0, size },
+  });
+  return response.data;
+}

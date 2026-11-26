@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.auth.controller;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -84,7 +85,8 @@ class UserControllerTest {
                 Role.CUSTOMER,
                 UserStatus.ACTIVE,
                 true,
-                Instant.parse("2026-11-09T10:00:00Z")
+                Instant.parse("2026-11-09T10:00:00Z"),
+                "https://cdn.example.com/avatar.jpg"
         );
 
         when(authService.getCurrentUser("u-123")).thenReturn(profile);
@@ -97,6 +99,48 @@ class UserControllerTest {
                 .andExpect(jsonPath("$.email").value("jane@marketplace.local"))
                 .andExpect(jsonPath("$.role").value("CUSTOMER"))
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
-                .andExpect(jsonPath("$.emailVerified").value(true));
+                .andExpect(jsonPath("$.emailVerified").value(true))
+                .andExpect(jsonPath("$.profileImageUrl").value("https://cdn.example.com/avatar.jpg"));
+    }
+
+    @Test
+    @DisplayName("GET /api/v1/users/me should return current user profile with null profileImageUrl when image not set")
+    void shouldReturnProfileWhenAuthenticatedWithoutProfileImage() throws Exception {
+        when(tokenService.validateToken("valid-token-no-img")).thenReturn(true);
+        when(tokenService.getUserIdFromToken("valid-token-no-img")).thenReturn("u-456");
+        when(tokenService.getEmailFromToken("valid-token-no-img")).thenReturn("bob@marketplace.local");
+        when(tokenService.getRoleFromToken("valid-token-no-img")).thenReturn(Role.CUSTOMER);
+
+        User activeUser = new User();
+        activeUser.setId("u-456");
+        activeUser.setEmail("bob@marketplace.local");
+        activeUser.setRole(Role.CUSTOMER);
+        activeUser.setStatus(UserStatus.ACTIVE);
+        when(userInternalService.getById("u-456")).thenReturn(activeUser);
+
+        CurrentUserResponse profile = new CurrentUserResponse(
+                "u-456",
+                "Bob Smith",
+                "bob@marketplace.local",
+                null,
+                Role.CUSTOMER,
+                UserStatus.ACTIVE,
+                true,
+                Instant.parse("2026-11-09T10:00:00Z"),
+                null
+        );
+
+        when(authService.getCurrentUser("u-456")).thenReturn(profile);
+
+        mockMvc.perform(get("/api/v1/users/me")
+                        .header("Authorization", "Bearer valid-token-no-img"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("u-456"))
+                .andExpect(jsonPath("$.name").value("Bob Smith"))
+                .andExpect(jsonPath("$.email").value("bob@marketplace.local"))
+                .andExpect(jsonPath("$.role").value("CUSTOMER"))
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.emailVerified").value(true))
+                .andExpect(jsonPath("$.profileImageUrl").value(nullValue()));
     }
 }

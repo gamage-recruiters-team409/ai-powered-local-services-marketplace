@@ -124,6 +124,46 @@ describe('customerRoutes for a signed-in customer', () => {
 
     expect(auth.current.logout).toHaveBeenCalledTimes(1)
   })
+
+  it('passes avatarUrl to CustomerLayout and updates header when mocked user changes', () => {
+    auth.current = {
+      ...signedIn(),
+      user: {
+        id: 'u-1',
+        name: 'Initial Name',
+        email: 'initial@example.com',
+        role: 'CUSTOMER',
+        profileImageUrl: 'https://cdn.example.com/initial.jpg',
+      },
+    }
+
+    renderAt('/customer/account')
+    const button = screen.getByRole('button', { name: /Account menu for Initial Name/i })
+    expect(within(button).getByText('Initial N.')).toBeTruthy()
+    const img = button.querySelector('img')
+    expect(img).toBeTruthy()
+    expect(img.getAttribute('src')).toBe('https://cdn.example.com/initial.jpg')
+
+    cleanup()
+
+    auth.current = {
+      ...signedIn(),
+      user: {
+        id: 'u-1',
+        name: 'Updated Name',
+        email: 'updated@example.com',
+        role: 'CUSTOMER',
+        profileImageUrl: 'https://cdn.example.com/updated.jpg',
+      },
+    }
+
+    renderAt('/customer/account')
+    const updatedButton = screen.getByRole('button', { name: /Account menu for Updated Name/i })
+    expect(within(updatedButton).getByText('Updated N.')).toBeTruthy()
+    const updatedImg = updatedButton.querySelector('img')
+    expect(updatedImg).toBeTruthy()
+    expect(updatedImg.getAttribute('src')).toBe('https://cdn.example.com/updated.jpg')
+  })
 })
 
 describe('customerRoutes structure', () => {
