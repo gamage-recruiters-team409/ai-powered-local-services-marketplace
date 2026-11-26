@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
 import { Button, Modal, Select, Textarea } from '../../../shared/components/forms'
-import { NOTE_MAX, NOTE_MIN } from '../config/operationsConfig'
+import { NOTE_MIN, noteMaxForAction } from '../config/operationsConfig'
 import { parseApiError } from '../utils/errors'
 import styles from '../operations.module.css'
 
@@ -32,8 +32,9 @@ export function ActionModal({
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
 
+  const maxNote = noteMaxForAction(action)
   const trimmed = note.trim()
-  const noteInvalid = trimmed.length < NOTE_MIN || trimmed.length > NOTE_MAX
+  const noteInvalid = trimmed.length < NOTE_MIN || trimmed.length > maxNote
   const guidance = noteForAction ? noteForAction(action) : null
 
   const handleSave = async () => {
@@ -43,7 +44,7 @@ export function ActionModal({
       return
     }
     if (noteInvalid) {
-      setError(`A note of ${NOTE_MIN}–${NOTE_MAX} characters is required.`)
+      setError(`A note of ${NOTE_MIN}–${maxNote} characters is required.`)
       return
     }
     setSubmitting(true)
@@ -107,14 +108,14 @@ export function ActionModal({
           label="Administrative note"
           rows={4}
           value={note}
-          maxLength={NOTE_MAX}
+          maxLength={maxNote}
           placeholder="Enter action taken, communication notes, or next steps…"
           onChange={(event) => setNote(event.target.value)}
           disabled={submitting}
           required
         />
         <p className={styles.noteCounter}>
-          {trimmed.length}/{NOTE_MAX}
+          {trimmed.length}/{maxNote}
         </p>
       </div>
     </Modal>

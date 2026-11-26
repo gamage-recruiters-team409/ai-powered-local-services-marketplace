@@ -62,7 +62,7 @@ public class OpsCaseActionService {
                 .orElseThrow(() -> new ApiException(HttpStatus.FORBIDDEN, "OPS_FORBIDDEN",
                         "This admin area may not perform operations actions"));
         OpsActionType action = parseAction(actionName);
-        String cleanNote = validateNote(note);
+        String cleanNote = validateNote(note, action);
 
         if (!action.appliesTo(caseType)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "OPS_ACTION_NOT_ALLOWED_FOR_CASE",
@@ -131,11 +131,12 @@ public class OpsCaseActionService {
         }
     }
 
-    private static String validateNote(String note) {
+    private static String validateNote(String note, OpsActionType action) {
         String trimmed = note == null ? "" : note.strip();
-        if (trimmed.length() < OperationsRules.NOTE_MIN || trimmed.length() > OperationsRules.NOTE_MAX) {
+        int max = action == OpsActionType.SUSPEND ? 500 : OperationsRules.NOTE_MAX;
+        if (trimmed.length() < OperationsRules.NOTE_MIN || trimmed.length() > max) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "OPS_INVALID_NOTE",
-                    "Note must be " + OperationsRules.NOTE_MIN + "–" + OperationsRules.NOTE_MAX + " characters");
+                    "Note must be " + OperationsRules.NOTE_MIN + "–" + max + " characters");
         }
         return trimmed;
     }

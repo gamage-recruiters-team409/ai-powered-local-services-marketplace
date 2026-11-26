@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import OverdueBookingsPage from './OverdueBookingsPage'
 import { exportOverdueCsv, getOverdueBookings, recordOverdueAction } from '../services/operationsService'
-import { overdueSection, renderOpsPage, unavailable } from '../testing/renderOps'
+import { opsPage, overdueRow, overdueSection, renderOpsPage, section, unavailable } from '../testing/renderOps'
 
 vi.mock('../services/operationsService', () => ({
   getOverdueBookings: vi.fn(),
@@ -89,5 +89,24 @@ describe('Overdue bookings page', () => {
     renderOpsPage(OverdueBookingsPage)
     fireEvent.click(await screen.findByRole('button', { name: 'Export' }))
     await waitFor(() => expect(exportOverdueCsv).toHaveBeenCalled())
+  })
+
+  it('F6: filtering the table does not change distribution percentages or produce values above 100%', async () => {
+    // 50 bookings in 1-day bucket out of 100 total overdue bookings, but table returns only 5 filtered rows
+    getOverdueBookings.mockResolvedValue(
+      section({
+        rows: opsPage([overdueRow()], 5), // filtered totalElements = 5
+        summary: { overdueNow: 100, over24h: 50, resolvedToday: 0 },
+        distribution: { oneDay: 50, twoDays: 20, threeDays: 15, fourPlusDays: 15 },
+      }),
+    )
+
+    renderOpsPage(OverdueBookingsPage)
+
+    // The percentage should be 50 / 100 * 100 = 50%, NOT 50 / 5 * 100 = 1000%
+    expect(await screen.findByText('(50%)')).toBeTruthy()
+    expect(screen.queryByText(/1000%/)).toBeNull()
+    expect(screen.getByText('(20%)')).toBeTruthy()
+    expect(screen.getAllByText('(15%)').length).toBe(2)
   })
 })

@@ -1,7 +1,13 @@
 export const PAGE_SIZE = 20
 export const NOTE_MIN = 10
 export const NOTE_MAX = 1000
+export const SUSPEND_NOTE_MAX = 500
 export const SEARCH_MAX = 120
+
+/** Returns the maximum allowed note length for the chosen action (500 for SUSPEND, 1000 for record-only). */
+export function noteMaxForAction(action) {
+  return action === 'SUSPEND' ? SUSPEND_NOTE_MAX : NOTE_MAX
+}
 
 /** Human labels for every backend action. */
 export const ACTION_LABEL = Object.freeze({

@@ -197,8 +197,15 @@ export default function OverdueBookingsPage() {
                 summary="Overdue bookings by number of days overdue"
                 rows={DIST.map((d) => {
                   const count = data?.distribution?.[d.key] ?? 0
-                  const pct = total > 0 ? Math.round((count / total) * 1000) / 10 : 0
-                  return { label: d.label, value: count, max: total, pct, tone: d.tone }
+                  const distTotal =
+                    summary?.overdueNow != null && summary.overdueNow > 0
+                      ? summary.overdueNow
+                      : (data?.distribution?.oneDay ?? 0) +
+                        (data?.distribution?.twoDays ?? 0) +
+                        (data?.distribution?.threeDays ?? 0) +
+                        (data?.distribution?.fourPlusDays ?? 0)
+                  const pct = distTotal > 0 ? Math.round((count / distTotal) * 1000) / 10 : 0
+                  return { label: d.label, value: count, max: distTotal, pct, tone: d.tone }
                 })}
               />
             )}

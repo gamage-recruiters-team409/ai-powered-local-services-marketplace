@@ -135,6 +135,25 @@ class OpsCaseActionServiceTest {
     }
 
     @Test
+    @DisplayName("F5: SUSPEND enforces max 500 characters, while record-only actions permit 501–1000 characters")
+    void suspendEnforces500CharNoteLimit() {
+        String note501 = "x".repeat(501);
+
+        // SUSPEND rejects 501 characters before calling Admin Users suspend flow
+        ApiException suspendEx = catchThrowableOfType(() -> service.record(OpsCaseType.REPEAT_CANCELLATION, USER,
+                "SUSPEND", note501, ADMIN_ID, Role.ADMIN), ApiException.class);
+        assertThat(suspendEx.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(suspendEx.getErrorCode()).isEqualTo("OPS_INVALID_NOTE");
+        assertThat(suspendEx.getMessage()).contains("500");
+        verifyNoInteractions(adminUserAccountService);
+
+        // Record-only action allows 501 characters
+        OpsActionResult result = service.record(OpsCaseType.REPEAT_CANCELLATION, USER, "RECOMMEND_SUSPENSION",
+                note501, ADMIN_ID, Role.SUPPORT_ADMIN);
+        assertThat(result.action()).isEqualTo(OpsActionType.RECOMMEND_SUSPENSION);
+    }
+
+    @Test
     @DisplayName("A support action maps to its resulting status and area")
     void supportActionRecorded() {
         OpsActionResult result = service.record(OpsCaseType.OVERDUE_BOOKING, "b1", "contact_provider", NOTE,
