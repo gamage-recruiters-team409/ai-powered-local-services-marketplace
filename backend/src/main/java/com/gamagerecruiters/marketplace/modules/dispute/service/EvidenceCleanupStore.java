@@ -247,4 +247,23 @@ public class EvidenceCleanupStore {
                 .inc(VERSION, 1);
         return mongoTemplate.updateFirst(query, update, EvidenceCleanupTask.class).getModifiedCount() == 1;
     }
+
+    /**
+     * True if a cleanup task already exists for this publicId in MongoDB or in the fallback queue.
+     */
+    public boolean hasActiveTask(String publicId) {
+        if (publicId == null) {
+            return false;
+        }
+        if (fallbackQueue.containsKey(publicId)) {
+            return true;
+        }
+        try {
+            return mongoTemplate.exists(Query.query(Criteria.where(PUBLIC_ID).is(publicId)), EvidenceCleanupTask.class);
+        } catch (RuntimeException e) {
+            log.warn("event=DISPUTE_EVIDENCE_ACTIVE_TASK_CHECK_FAILED publicId={} cause={}",
+                    publicId, e.getClass().getSimpleName());
+            return true; // Assume active on error to prevent unsafe deletion
+        }
+    }
 }

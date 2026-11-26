@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 
 import com.cloudinary.Cloudinary;
 import com.cloudinary.Uploader;
+import com.gamagerecruiters.marketplace.modules.dispute.port.EvidenceStoragePort;
 
 /** No network: availability comes from the config, and a signed download URL is built locally. */
 class CloudinaryEvidenceStorageAdapterTest {
@@ -70,5 +71,41 @@ class CloudinaryEvidenceStorageAdapterTest {
         assertThat(thrown).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("disputes/d-1/img")
                 .hasCauseInstanceOf(IOException.class);
+    }
+
+    @Test
+    @DisplayName("listAssets maps publicId and created_at from cloudinary api")
+    void listAssetsSuccess() throws Exception {
+        Cloudinary cloudinary = mock(Cloudinary.class);
+        com.cloudinary.Api api = mock(com.cloudinary.Api.class);
+        com.cloudinary.api.ApiResponse response = mock(com.cloudinary.api.ApiResponse.class);
+        when(cloudinary.api()).thenReturn(api);
+        when(api.resources(any())).thenReturn(response);
+        when(response.get("resources")).thenReturn(java.util.List.of(
+                Map.of("public_id", "disputes/d-1/img1", "created_at", "2026-11-26T10:00:00Z")));
+
+        CloudinaryEvidenceStorageAdapter adapter = new CloudinaryEvidenceStorageAdapter(cloudinary);
+        java.util.List<EvidenceStoragePort.StorageAsset> assets = adapter.listAssets("disputes/");
+
+        assertThat(assets).containsExactly(
+                new EvidenceStoragePort.StorageAsset("disputes/d-1/img1", Instant.parse("2026-11-26T10:00:00Z")));
+    }
+
+    @Test
+    @DisplayName("listAssets yields null createdAt when cloudinary omits or malforms created_at")
+    void listAssetsMissingOrBadCreatedAt() throws Exception {
+        Cloudinary cloudinary = mock(Cloudinary.class);
+        com.cloudinary.Api api = mock(com.cloudinary.Api.class);
+        com.cloudinary.api.ApiResponse response = mock(com.cloudinary.api.ApiResponse.class);
+        when(cloudinary.api()).thenReturn(api);
+        when(api.resources(any())).thenReturn(response);
+        when(response.get("resources")).thenReturn(java.util.List.of(
+                Map.of("public_id", "disputes/d-1/no-date"),
+                Map.of("public_id", "disputes/d-1/bad-date", "created_at", "not-a-timestamp")));
+
+        CloudinaryEvidenceStorageAdapter adapter = new CloudinaryEvidenceStorageAdapter(cloudinary);
+        java.util.List<EvidenceStoragePort.StorageAsset> assets = adapter.listAssets("disputes/");
+
+        assertThat(assets).extracting(EvidenceStoragePort.StorageAsset::createdAt).containsOnlyNulls();
     }
 }

@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.dispute.port.adapter;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -99,6 +100,44 @@ public class CloudinaryEvidenceStorageAdapter implements EvidenceStoragePort {
             log.warn("event=DISPUTE_EVIDENCE_DELETE_FAILED publicId={} cause={}", publicId,
                     e.getClass().getSimpleName());
             throw new IllegalStateException("Evidence deletion failed for " + publicId, e);
+        }
+    }
+
+    @Override
+    public List<StorageAsset> listAssets(String folderPrefix) {
+        try {
+            Map<?, ?> result = cloudinary.api().resources(ObjectUtils.asMap(
+                    "type", DELIVERY_TYPE,
+                    "prefix", folderPrefix,
+                    "max_results", 500));
+            Object resources = result.get("resources");
+            if (resources instanceof List<?> list) {
+                return list.stream()
+                        .filter(Map.class::isInstance)
+                        .map(m -> (Map<?, ?>) m)
+                        .filter(m -> m.get("public_id") != null)
+                        .map(m -> new StorageAsset(m.get("public_id").toString(), parseCreatedAt(m.get("created_at"))))
+                        .toList();
+            }
+            return List.of();
+        } catch (Exception e) {
+            log.warn("event=DISPUTE_EVIDENCE_LIST_FAILED prefix={} cause={}", folderPrefix, e.getClass().getSimpleName());
+            return List.of();
+        }
+    }
+
+    /**
+     * Cloudinary reports {@code created_at} as an ISO-8601 instant (e.g. {@code 2026-11-26T10:00:00Z}). A missing or
+     * unparseable value yields null so the reconciler treats the asset's age as unknown and leaves it untouched.
+     */
+    private static Instant parseCreatedAt(Object createdAt) {
+        if (createdAt == null) {
+            return null;
+        }
+        try {
+            return Instant.parse(createdAt.toString());
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 

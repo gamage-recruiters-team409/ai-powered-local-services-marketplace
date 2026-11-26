@@ -118,6 +118,15 @@ class DisputeEvidenceServiceTest {
             }
             deleted.add(publicId);
         }
+
+        @Override
+        public List<StorageAsset> listAssets(String folderPrefix) {
+            return stored.stream()
+                    .filter(id -> id.startsWith(folderPrefix))
+                    .filter(id -> !deleted.contains(id))
+                    .map(id -> new StorageAsset(id, Instant.EPOCH))
+                    .toList();
+        }
     }
 
     @BeforeEach

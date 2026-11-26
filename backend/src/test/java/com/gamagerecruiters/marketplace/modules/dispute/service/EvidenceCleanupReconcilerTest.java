@@ -40,6 +40,9 @@ class EvidenceCleanupReconcilerTest {
     private static final Duration LEASE = Duration.ofMinutes(2);
     private static final Duration BACKOFF = Duration.ofMinutes(5);
     private static final int MAX_ATTEMPTS = 3;
+    private static final Duration INVENTORY_MIN_AGE = Duration.ofMinutes(30);
+    /** Older than NOW minus the inventory grace period, so inventory reconciliation is allowed to act on it. */
+    private static final Instant AGED = NOW.minus(Duration.ofHours(1));
 
     @Mock
     private EvidenceCleanupStore cleanupStore;
@@ -51,7 +54,7 @@ class EvidenceCleanupReconcilerTest {
     @BeforeEach
     void setUp() {
         reconciler = new EvidenceCleanupReconciler(cleanupStore, storage, Clock.fixed(NOW, ZoneOffset.UTC),
-                true, LEASE, BACKOFF, MAX_ATTEMPTS, 10);
+                true, LEASE, BACKOFF, MAX_ATTEMPTS, 10, INVENTORY_MIN_AGE);
     }
 
     private static EvidenceCleanupTask task(String id, String publicId, int attempts) {
@@ -136,7 +139,7 @@ class EvidenceCleanupReconcilerTest {
     @DisplayName("a run processes at most batch-size tasks")
     void respectsBatchSize() {
         reconciler = new EvidenceCleanupReconciler(cleanupStore, storage, Clock.fixed(NOW, ZoneOffset.UTC),
-                true, LEASE, BACKOFF, MAX_ATTEMPTS, 2);
+                true, LEASE, BACKOFF, MAX_ATTEMPTS, 2, INVENTORY_MIN_AGE);
         when(cleanupStore.claimDue(any(), any())).thenReturn(Optional.of(task("t1", "disputes/d1/asset-1", 0)));
         when(cleanupStore.isReferenced(anyString())).thenReturn(true);
         when(cleanupStore.resolve(eq("t1"), anyString())).thenReturn(true);
@@ -150,7 +153,7 @@ class EvidenceCleanupReconcilerTest {
     @DisplayName("scheduled run does nothing when switched off")
     void disabledDoesNothing() {
         reconciler = new EvidenceCleanupReconciler(cleanupStore, storage, Clock.fixed(NOW, ZoneOffset.UTC),
-                false, LEASE, BACKOFF, MAX_ATTEMPTS, 10);
+                false, LEASE, BACKOFF, MAX_ATTEMPTS, 10, INVENTORY_MIN_AGE);
 
         reconciler.scheduledRun();
 
@@ -162,10 +165,84 @@ class EvidenceCleanupReconcilerTest {
     void invalidSettingsRejected() {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         assertThatThrownBy(() -> new EvidenceCleanupReconciler(cleanupStore, storage, clock, true,
-                Duration.ZERO, BACKOFF, MAX_ATTEMPTS, 10)).isInstanceOf(IllegalArgumentException.class);
+                Duration.ZERO, BACKOFF, MAX_ATTEMPTS, 10, INVENTORY_MIN_AGE))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new EvidenceCleanupReconciler(cleanupStore, storage, clock, true,
-                LEASE, BACKOFF, 0, 10)).isInstanceOf(IllegalArgumentException.class);
+                LEASE, BACKOFF, 0, 10, INVENTORY_MIN_AGE)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new EvidenceCleanupReconciler(cleanupStore, storage, clock, true,
-                LEASE, BACKOFF, MAX_ATTEMPTS, 0)).isInstanceOf(IllegalArgumentException.class);
+                LEASE, BACKOFF, MAX_ATTEMPTS, 0, INVENTORY_MIN_AGE)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new EvidenceCleanupReconciler(cleanupStore, storage, clock, true,
+                LEASE, BACKOFF, MAX_ATTEMPTS, 10, Duration.ofMinutes(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** An inventory asset old enough to be past the grace period. */
+    private static EvidenceStoragePort.StorageAsset aged(String publicId) {
+        return new EvidenceStoragePort.StorageAsset(publicId, AGED);
+    }
+
+    @Test
+    @DisplayName("inventory reconciliation deletes untracked orphan not referenced in MongoDB")
+    void inventoryReconciliationDeletesUntrackedOrphan() {
+        when(storage.listAssets("disputes/")).thenReturn(java.util.List.of(aged("disputes/d1/orphan-1")));
+        when(cleanupStore.isReferenced("disputes/d1/orphan-1")).thenReturn(false);
+        when(cleanupStore.hasActiveTask("disputes/d1/orphan-1")).thenReturn(false);
+
+        EvidenceCleanupReconciler.Result result = reconciler.reconcile();
+
+        assertThat(result.deleted()).isEqualTo(1);
+        verify(storage).delete("disputes/d1/orphan-1");
+    }
+
+    @Test
+    @DisplayName("inventory reconciliation preserves committed evidence and does not delete it")
+    void inventoryReconciliationPreservesCommittedEvidence() {
+        when(storage.listAssets("disputes/")).thenReturn(java.util.List.of(aged("disputes/d1/committed-1")));
+        when(cleanupStore.isReferenced("disputes/d1/committed-1")).thenReturn(true);
+
+        EvidenceCleanupReconciler.Result result = reconciler.reconcile();
+
+        assertThat(result.deleted()).isZero();
+        verify(storage, never()).delete(anyString());
+    }
+
+    @Test
+    @DisplayName("inventory reconciliation does not delete when MongoDB check fails (outcome unknown)")
+    void inventoryReconciliationDoesNotDeleteWhenDatabaseCheckFails() {
+        when(storage.listAssets("disputes/")).thenReturn(java.util.List.of(aged("disputes/d1/asset-1")));
+        when(cleanupStore.isReferenced("disputes/d1/asset-1")).thenThrow(new RuntimeException("DB unavailable"));
+
+        EvidenceCleanupReconciler.Result result = reconciler.reconcile();
+
+        assertThat(result.deleted()).isZero();
+        verify(storage, never()).delete(anyString());
+    }
+
+    @Test
+    @DisplayName("inventory reconciliation skips a freshly uploaded asset still within the grace period")
+    void inventoryReconciliationSkipsAssetWithinGracePeriod() {
+        // Asset created moments ago: its matching evidence write may still be committing, so it must be left alone.
+        Instant justUploaded = NOW.minus(Duration.ofMinutes(1));
+        when(storage.listAssets("disputes/")).thenReturn(java.util.List.of(
+                new EvidenceStoragePort.StorageAsset("disputes/d1/in-flight", justUploaded)));
+
+        EvidenceCleanupReconciler.Result result = reconciler.reconcile();
+
+        assertThat(result.deleted()).isZero();
+        verify(cleanupStore, never()).isReferenced(anyString());
+        verify(storage, never()).delete(anyString());
+    }
+
+    @Test
+    @DisplayName("inventory reconciliation skips an asset whose creation time storage did not report")
+    void inventoryReconciliationSkipsAssetWithUnknownAge() {
+        when(storage.listAssets("disputes/")).thenReturn(java.util.List.of(
+                new EvidenceStoragePort.StorageAsset("disputes/d1/unknown-age", null)));
+
+        EvidenceCleanupReconciler.Result result = reconciler.reconcile();
+
+        assertThat(result.deleted()).isZero();
+        verify(cleanupStore, never()).isReferenced(anyString());
+        verify(storage, never()).delete(anyString());
     }
 }

@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.dispute.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -157,7 +158,7 @@ class EvidenceCleanupStoreTest {
         EvidenceStoragePort storage = mock(EvidenceStoragePort.class);
         EvidenceCleanupReconciler reconciler = new EvidenceCleanupReconciler(
                 store, storage, java.time.Clock.fixed(NOW, java.time.ZoneOffset.UTC),
-                true, Duration.ofMinutes(2), Duration.ofMinutes(5), 3, 10);
+                true, Duration.ofMinutes(2), Duration.ofMinutes(5), 3, 10, Duration.ofMinutes(30));
 
         // Database is restored:
         // 1. drainFallback will upsert into MongoDB
@@ -193,5 +194,74 @@ class EvidenceCleanupStoreTest {
         assertThat(repeatResult.deleted()).isZero();
         assertThat(repeatResult.kept()).isZero();
         verify(storage, times(1)).delete(any()); // never called again
+    }
+
+    @Test
+    @DisplayName("F6-C: recovery survives application restart when in-memory queue is lost; discovered via storage inventory")
+    void recoverySurvivesApplicationRestartViaStorageInventory() {
+        // 1. Simulate upload failure where enqueue into MongoDB also threw,
+        // and the original store instance's in-memory queue was populated.
+        store.enqueueFallback(DISPUTE_ID, EVIDENCE_ID, PUBLIC_ID, EvidenceCleanupTask.Reason.UNCERTAIN_WRITE, NOW);
+        assertThat(store.getFallbackCount()).isEqualTo(1);
+
+        // 2. The original application/store instance is completely discarded (simulating process restart)
+        store = null;
+
+        // 3. A brand-new store instance starts with no access to the original in-memory queue
+        MongoTemplate freshMongo = mock(MongoTemplate.class);
+        EvidenceCleanupStore freshStore = new EvidenceCleanupStore(freshMongo);
+        assertThat(freshStore.getFallbackCount()).isZero(); // Fresh JVM/instance: empty queue!
+
+        // Storage still holds the asset in Cloudinary (created well before the grace period cutoff)
+        EvidenceStoragePort storage = mock(EvidenceStoragePort.class);
+        when(storage.listAssets("disputes/")).thenReturn(List.of(
+                new EvidenceStoragePort.StorageAsset(PUBLIC_ID, NOW.minus(Duration.ofHours(1)))));
+
+        EvidenceCleanupReconciler freshReconciler = new EvidenceCleanupReconciler(
+                freshStore, storage, java.time.Clock.fixed(NOW, java.time.ZoneOffset.UTC),
+                true, Duration.ofMinutes(2), Duration.ofMinutes(5), 3, 10, Duration.ofMinutes(30));
+
+        // 4. Case A: Asset is an unreferenced orphan (original write did not commit).
+        // Database availability is restored:
+        when(freshMongo.findAndModify(any(), any(), any(), eq(EvidenceCleanupTask.class))).thenReturn(null);
+        when(freshMongo.exists(any(Query.class), eq(com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute.class)))
+                .thenReturn(false); // Unreferenced!
+        when(freshMongo.exists(any(Query.class), eq(EvidenceCleanupTask.class)))
+                .thenReturn(false); // No task was persisted!
+
+        // Reconcile: discovers orphan via storage inventory and removes it
+        EvidenceCleanupReconciler.Result result = freshReconciler.reconcile();
+
+        assertThat(result.deleted()).isEqualTo(1);
+        verify(storage).delete(PUBLIC_ID);
+
+        // Repeated reconciliation is idempotent:
+        when(storage.listAssets("disputes/")).thenReturn(List.of());
+        EvidenceCleanupReconciler.Result repeat = freshReconciler.reconcile();
+        assertThat(repeat.deleted()).isZero();
+        verify(storage, times(1)).delete(anyString()); // Never deleted again
+    }
+
+    @Test
+    @DisplayName("F6-C: storage inventory reconciliation preserves committed evidence and does NOT delete it")
+    void storageInventoryPreservesCommittedEvidence() {
+        // Fresh store instance with empty queue (after restart)
+        EvidenceCleanupStore freshStore = new EvidenceCleanupStore(mongoTemplate);
+        EvidenceStoragePort storage = mock(EvidenceStoragePort.class);
+        when(storage.listAssets("disputes/")).thenReturn(List.of(
+                new EvidenceStoragePort.StorageAsset(PUBLIC_ID, NOW.minus(Duration.ofHours(1)))));
+
+        // Asset IS referenced in committed evidence in MongoDB
+        when(mongoTemplate.exists(any(Query.class), eq(com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute.class)))
+                .thenReturn(true);
+
+        EvidenceCleanupReconciler freshReconciler = new EvidenceCleanupReconciler(
+                freshStore, storage, java.time.Clock.fixed(NOW, java.time.ZoneOffset.UTC),
+                true, Duration.ofMinutes(2), Duration.ofMinutes(5), 3, 10, Duration.ofMinutes(30));
+
+        EvidenceCleanupReconciler.Result result = freshReconciler.reconcile();
+
+        assertThat(result.deleted()).isZero();
+        verify(storage, never()).delete(anyString()); // Committed evidence is NEVER deleted
     }
 }
