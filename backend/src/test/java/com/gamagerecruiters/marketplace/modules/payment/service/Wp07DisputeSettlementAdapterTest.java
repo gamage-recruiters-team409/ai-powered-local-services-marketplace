@@ -18,6 +18,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.port.SettlementOutcome;
 import com.gamagerecruiters.marketplace.modules.payment.domain.DisputePayoutHold;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import com.gamagerecruiters.marketplace.modules.payment.repository.DisputePayoutHoldRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.RefundOperationRepository;
 
 @ExtendWith(MockitoExtension.class)
 class Wp07DisputeSettlementAdapterTest {
@@ -37,12 +38,31 @@ class Wp07DisputeSettlementAdapterTest {
     @Mock
     private DisputePayoutHoldTransactionService holdTransactionService;
 
+    @Mock
+    private RefundOperationRepository refundRepository;
+
+    @Mock
+    private RefundTransactionService refundTransactionService;
+
+    @Mock
+    private RefundExecutionService refundExecutionService;
+
+    @Mock
+    private RefundReconciliationService refundReconciliationService;
+
     private Wp07DisputeSettlementAdapter adapter;
 
     @BeforeEach
     void setUp() {
         adapter = new Wp07DisputeSettlementAdapter(
-                snapshotService, holdRepository, holdTransactionService);
+                snapshotService,
+                holdRepository,
+                holdTransactionService,
+                new DisputeSettlementCalculator(),
+                refundRepository,
+                refundTransactionService,
+                refundExecutionService,
+                refundReconciliationService);
     }
 
     @Test
@@ -102,7 +122,7 @@ class Wp07DisputeSettlementAdapterTest {
     }
 
     @Test
-    void refundDecision_rejectsWithoutFinancialWrites() {
+    void unsupportedPenalty_rejectsWithoutFinancialWrites() {
         assertThrows(SettlementRejectedException.class,
                 () -> adapter.settle(
                         instruction(ResolutionAction.REFUND_FULL, 100, 30)));
@@ -136,6 +156,101 @@ class Wp07DisputeSettlementAdapterTest {
         assertThrows(IllegalStateException.class,
                 () -> adapter.settle(
                         instruction(ResolutionAction.RELEASE_TO_PROVIDER, 0, 0)));
+    }
+
+    /**
+     * Unsupported penalties must not initiate any refund operation.
+     */
+    @Test
+    void partialRefundWithPenalty_rejectsBeforeFinancialOperations() {
+
+        assertThrows(SettlementRejectedException.class,
+                () -> adapter.settle(
+                        instruction(ResolutionAction.REFUND_PARTIAL, 50, 30)));
+
+        verifyNoInteractions(
+                snapshotService,
+                holdRepository,
+                holdTransactionService,
+                refundRepository,
+                refundTransactionService,
+                refundExecutionService,
+                refundReconciliationService);
+    }
+
+    /**
+     * Full refunds must use exactly 100 percent.
+     */
+    @Test
+    void invalidFullRefundPercentage_rejectsBeforeReservation() {
+
+        when(snapshotService.getSnapshot(BOOKING_ID))
+                .thenReturn(snapshot());
+
+        assertThrows(SettlementRejectedException.class,
+                () -> adapter.settle(
+                        instruction(ResolutionAction.REFUND_FULL, 50, 0)));
+
+        verifyNoInteractions(
+                holdRepository,
+                holdTransactionService,
+                refundRepository,
+                refundTransactionService,
+                refundExecutionService,
+                refundReconciliationService);
+    }
+
+    /**
+     * Partial refunds must not use the full refund percentage.
+     */
+    @Test
+    void invalidPartialRefundPercentage_rejectsBeforeReservation() {
+
+        when(snapshotService.getSnapshot(BOOKING_ID))
+                .thenReturn(snapshot());
+
+        assertThrows(SettlementRejectedException.class,
+                () -> adapter.settle(
+                        instruction(ResolutionAction.REFUND_PARTIAL, 100, 0)));
+
+        verifyNoInteractions(
+                holdRepository,
+                holdTransactionService,
+                refundRepository,
+                refundTransactionService,
+                refundExecutionService,
+                refundReconciliationService);
+    }
+
+    /**
+     * Refunds must not consume an already released hold.
+     */
+    @Test
+    void releasedHold_rejectsRefundWithoutFinancialWrites() {
+
+        when(snapshotService.getSnapshot(BOOKING_ID))
+                .thenReturn(snapshot());
+
+        DisputePayoutHold released = createHold();
+        released.markApplied();
+        released.markReleased();
+
+        when(holdRepository.findByDisputeId(DISPUTE_ID))
+                .thenReturn(Optional.of(released));
+
+        when(refundRepository.findByIdempotencyKey(
+                "dispute-" + DISPUTE_ID))
+                .thenReturn(Optional.empty());
+
+        assertThrows(SettlementRejectedException.class,
+                () -> adapter.settle(
+                        instruction(ResolutionAction.REFUND_FULL, 100, 0)));
+
+        verifyNoInteractions(
+                holdTransactionService,
+                refundTransactionService,
+                refundExecutionService,
+                refundReconciliationService);
     }
 
     private void arrangeValidRelease() {

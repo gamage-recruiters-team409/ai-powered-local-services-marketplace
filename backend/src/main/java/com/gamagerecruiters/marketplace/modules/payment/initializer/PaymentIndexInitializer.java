@@ -49,6 +49,7 @@ public class PaymentIndexInitializer {
     static final String PAYMENTS_COLLECTION = "payments";
     static final String BOOKING_ID_INDEX = "bookingId_1";
     static final String GATEWAY_REF_INDEX = "gatewayRef_1";
+    static final String GATEWAY_PAYMENT_INTENT_INDEX = "gatewayPaymentIntentId_1";
 
     static final String CUSTOMER_HISTORY_INDEX = "customerId_1_createdAt_-1__id_-1";
 
@@ -70,6 +71,14 @@ public class PaymentIndexInitializer {
         // Preserve previously approved payment foundation indexes.
         ensureIndex("bookingId", BOOKING_ID_INDEX, false, false);
         ensureIndex("gatewayRef", GATEWAY_REF_INDEX, true, true);
+
+        // Prevent duplicate verified PaymentIntent references while
+        // allowing legacy and uninitialized payment records.
+        ensureIndex(
+                "gatewayPaymentIntentId",
+                GATEWAY_PAYMENT_INTENT_INDEX,
+                true,
+                true);
 
         // Support paginated customer payment history without booking-ID scans.
         ensureCustomerHistoryIndex();
