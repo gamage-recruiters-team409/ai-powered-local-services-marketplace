@@ -24,6 +24,17 @@ afterEach(() => {
 
 describe('ProfilePage', () => {
   beforeEach(() => {
+    if (!window.URL.createObjectURL) {
+      window.URL.createObjectURL = vi.fn(() => 'blob:http://localhost/test-blob');
+    } else {
+      vi.spyOn(window.URL, 'createObjectURL').mockReturnValue('blob:http://localhost/test-blob');
+    }
+    if (!window.URL.revokeObjectURL) {
+      window.URL.revokeObjectURL = vi.fn();
+    } else {
+      vi.spyOn(window.URL, 'revokeObjectURL').mockImplementation(() => {});
+    }
+
     customerAccountApi.getProfile.mockResolvedValue({
       id: 'cust-1',
       fullName: 'Nimal Perera',
@@ -31,6 +42,7 @@ describe('ProfilePage', () => {
       phone: '+94 77 123 4567',
       emailVerified: true,
       status: 'ACTIVE',
+      profileImageUrl: null,
     });
   });
 
@@ -210,5 +222,177 @@ describe('ProfilePage', () => {
     fireEvent.click(cancelBtn);
 
     expect(screen.getByDisplayValue('Nimal Perera')).toBeTruthy();
+  });
+
+  it('shows initials when user has no profile photo and hides Remove photo button', async () => {
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('NP')).toBeTruthy();
+    });
+
+    expect(screen.queryByRole('button', { name: /remove photo/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /change photo/i })).toBeTruthy();
+  });
+
+  it('shows profile image and Remove photo button when user has profile photo', async () => {
+    customerAccountApi.getProfile.mockResolvedValueOnce({
+      id: 'cust-1',
+      fullName: 'Nimal Perera',
+      email: 'nimal@email.com',
+      phone: '+94 77 123 4567',
+      emailVerified: true,
+      status: 'ACTIVE',
+      profileImageUrl: 'https://res.cloudinary.com/test/photo.jpg',
+    });
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      const img = screen.getByAltText('Profile photo');
+      expect(img.getAttribute('src')).toBe('https://res.cloudinary.com/test/photo.jpg');
+    });
+
+    expect(screen.getByRole('button', { name: /remove photo/i })).toBeTruthy();
+  });
+
+  it('rejects unsupported file type on client without calling upload API', async () => {
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('NP')).toBeTruthy();
+    });
+
+    const fileInput = screen.getByTestId('file-input-photo');
+    const invalidFile = new File(['fake content'], 'document.pdf', { type: 'application/pdf' });
+
+    fireEvent.change(fileInput, { target: { files: [invalidFile] } });
+
+    expect(screen.getByText(/please select a jpeg or png image/i)).toBeTruthy();
+    expect(customerAccountApi.uploadProfilePhoto).not.toHaveBeenCalled();
+  });
+
+  it('rejects file larger than 5 MB on client without calling upload API', async () => {
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('NP')).toBeTruthy();
+    });
+
+    const fileInput = screen.getByTestId('file-input-photo');
+    // Create oversized file (> 5 MB)
+    const largeFile = new File([new ArrayBuffer(5 * 1024 * 1024 + 10)], 'huge.jpg', { type: 'image/jpeg' });
+
+    fireEvent.change(fileInput, { target: { files: [largeFile] } });
+
+    expect(screen.getByText(/image size must not exceed 5 mb/i)).toBeTruthy();
+    expect(customerAccountApi.uploadProfilePhoto).not.toHaveBeenCalled();
+  });
+
+  it('uploads valid photo successfully: updates image, shows success toast, and revokes preview', async () => {
+    customerAccountApi.uploadProfilePhoto.mockResolvedValueOnce({
+      id: 'cust-1',
+      profileImageUrl: 'https://res.cloudinary.com/test/new-photo.jpg',
+    });
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('NP')).toBeTruthy();
+    });
+
+    const fileInput = screen.getByTestId('file-input-photo');
+    const validFile = new File(['image-bits'], 'avatar.png', { type: 'image/png' });
+
+    fireEvent.change(fileInput, { target: { files: [validFile] } });
+
+    await waitFor(() => {
+      expect(customerAccountApi.uploadProfilePhoto).toHaveBeenCalledWith(validFile);
+      expect(mockToast.success).toHaveBeenCalledWith('Profile photo updated successfully');
+    });
+
+    const img = screen.getByAltText('Profile photo');
+    expect(img.getAttribute('src')).toBe('https://res.cloudinary.com/test/new-photo.jpg');
+    expect(window.URL.revokeObjectURL).toHaveBeenCalled();
+  });
+
+  it('handles photo upload failure: displays error message and does not update photo', async () => {
+    customerAccountApi.uploadProfilePhoto.mockRejectedValueOnce(new Error('Network error uploading photo'));
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('NP')).toBeTruthy();
+    });
+
+    const fileInput = screen.getByTestId('file-input-photo');
+    const validFile = new File(['image-bits'], 'avatar.jpg', { type: 'image/jpeg' });
+
+    fireEvent.change(fileInput, { target: { files: [validFile] } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Network error uploading photo')).toBeTruthy();
+    });
+
+    expect(screen.getByText('NP')).toBeTruthy();
+    expect(window.URL.revokeObjectURL).toHaveBeenCalled();
+  });
+
+  it('removes profile photo: calls API, unsets photo, and shows success toast', async () => {
+    customerAccountApi.getProfile.mockResolvedValueOnce({
+      id: 'cust-1',
+      fullName: 'Nimal Perera',
+      email: 'nimal@email.com',
+      phone: '+94 77 123 4567',
+      emailVerified: true,
+      status: 'ACTIVE',
+      profileImageUrl: 'https://res.cloudinary.com/test/current.jpg',
+    });
+    customerAccountApi.removeProfilePhoto.mockResolvedValueOnce({});
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByAltText('Profile photo')).toBeTruthy();
+    });
+
+    const removeBtn = screen.getByRole('button', { name: /remove photo/i });
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(customerAccountApi.removeProfilePhoto).toHaveBeenCalled();
+      expect(mockToast.success).toHaveBeenCalledWith('Profile photo removed');
+    });
+
+    expect(screen.getByText('NP')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /remove photo/i })).toBeNull();
   });
 });

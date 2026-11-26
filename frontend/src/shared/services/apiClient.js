@@ -154,9 +154,20 @@ export function normalizeError(error) {
   return normalized;
 }
 
-// Request interceptor: attach Bearer token
+// Request interceptor: attach Bearer token and handle FormData Content-Type
 apiClient.interceptors.request.use(
   (config) => {
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+      if (config.headers) {
+        if (typeof config.headers.delete === 'function') {
+          config.headers.delete('Content-Type');
+          config.headers.delete('content-type');
+        } else {
+          delete config.headers['Content-Type'];
+          delete config.headers['content-type'];
+        }
+      }
+    }
     if (!config._skipAuth && !isPublicAuthEndpoint(config.url)) {
       const token = tokenStore.getAccessToken();
       if (token && !config.headers.Authorization) {

@@ -25,6 +25,8 @@ public class User {
     private Instant createdAt;
     private boolean mustChangePassword = false;
     private Instant lastActiveAt;
+    private String profileImageUrl;
+    private String profileImagePublicId;
 
     public User() {
     }
@@ -155,5 +157,21 @@ public class User {
 
     public void setLastActiveAt(Instant lastActiveAt) {
         this.lastActiveAt = lastActiveAt;
+    }
+
+    public String getProfileImageUrl() {
+        return profileImageUrl;
+    }
+
+    public void setProfileImageUrl(String profileImageUrl) {
+        this.profileImageUrl = profileImageUrl;
+    }
+
+    public String getProfileImagePublicId() {
+        return profileImagePublicId;
+    }
+
+    public void setProfileImagePublicId(String profileImagePublicId) {
+        this.profileImagePublicId = profileImagePublicId;
     }
 }

@@ -17,6 +17,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.HttpStatus;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
@@ -42,6 +43,15 @@ class CustomerDeactivationTest {
     @Mock
     private OpenBookingsChecker openBookingsChecker;
 
+    @Mock
+    private CustomerProfileImageStorage profileImageStorage;
+
+    @Mock
+    private ProfileImageCleanupService cleanupService;
+
+    @Mock
+    private MongoTemplate mongoTemplate;
+
     private CustomerServiceImpl customerService;
 
     @BeforeEach
@@ -51,6 +61,9 @@ class CustomerDeactivationTest {
                 customerAddressRepository,
                 districtCatalog,
                 openBookingsCheckerProvider,
+                profileImageStorage,
+                cleanupService,
+                mongoTemplate,
                 10
         );
     }

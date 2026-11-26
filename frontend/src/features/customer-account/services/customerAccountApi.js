@@ -46,3 +46,18 @@ export async function changePassword(data) {
 export async function deactivateAccount(data) {
   await apiClient.post('/customers/me/deactivate', data);
 }
+
+export async function uploadProfilePhoto(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await apiClient.put('/customers/me/photo', formData, {
+    headers: {
+      'Content-Type': undefined,
+    },
+  });
+  return response.data;
+}
+
+export async function removeProfilePhoto() {
+  await apiClient.delete('/customers/me/photo');
+}
