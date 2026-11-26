@@ -450,12 +450,7 @@ public class CustomerServiceImpl implements CustomerService {
             } catch (Exception ex) {
                 log.warn("Failed to schedule cleanup task for old profile photo: userId={}, error={}",
                         customerId, ex.getClass().getSimpleName());
-                try {
-                    profileImageStorage.delete(stored.publicId());
-                } catch (Exception deleteEx) {
-                    log.error("Failed to delete orphaned profile photo after scheduling failure: ownerUserId={}, publicId={}, error={}",
-                            customerId, stored.publicId(), deleteEx.getClass().getSimpleName());
-                }
+                deleteUploadedImageDirectly(customerId, stored.publicId(), "REPLACE_SCHEDULE_FAILED");
                 throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PROFILE_PHOTO_UPDATE_FAILED",
                         "Failed to save profile photo. Please try again.");
             }
@@ -499,12 +494,7 @@ public class CustomerServiceImpl implements CustomerService {
                             customerId, schedEx.getClass().getSimpleName());
                 }
                 if (!rollbackScheduled) {
-                    try {
-                        profileImageStorage.delete(stored.publicId());
-                    } catch (Exception directDeleteEx) {
-                        log.error("Failed direct delete of conflicted image after scheduling failure: ownerUserId={}, publicId={}, error={}",
-                                customerId, stored.publicId(), directDeleteEx.getClass().getSimpleName());
-                    }
+                    deleteUploadedImageDirectly(customerId, stored.publicId(), "CONFLICT_ROLLBACK_SCHEDULE_FAILED");
                 }
 
                 User reloaded = userInternalService.getById(customerId);
@@ -572,12 +562,7 @@ public class CustomerServiceImpl implements CustomerService {
                             customerId, schedEx.getClass().getSimpleName());
                 }
                 if (!scheduled) {
-                    try {
-                        profileImageStorage.delete(stored.publicId());
-                    } catch (Exception directDeleteEx) {
-                        log.error("Failed direct delete of unreferenced image after rollback scheduling failure: ownerUserId={}, publicId={}, error={}",
-                                customerId, stored.publicId(), directDeleteEx.getClass().getSimpleName());
-                    }
+                    deleteUploadedImageDirectly(customerId, stored.publicId(), "UNCERTAIN_WRITE_UNAPPLIED_SCHEDULE_FAILED");
                 }
                 throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PROFILE_PHOTO_UPDATE_FAILED",
                         "Failed to save profile photo. Please try again.");
@@ -654,6 +639,21 @@ public class CustomerServiceImpl implements CustomerService {
                     customerId, ex.getClass().getSimpleName());
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "PROFILE_PHOTO_DELETE_FAILED",
                     "Failed to delete profile photo. Please try again.");
+        }
+    }
+
+    private boolean deleteUploadedImageDirectly(String ownerUserId, String publicId, String context) {
+        try {
+            boolean deleted = profileImageStorage.delete(publicId);
+            if (!deleted) {
+                log.error("event=PROFILE_IMAGE_ORPHAN_UNRECOVERABLE ownerUserId={} publicId={} context={} reason={}",
+                        ownerUserId, publicId, context, "DELETE_RETURNED_FALSE");
+            }
+            return deleted;
+        } catch (Exception ex) {
+            log.error("event=PROFILE_IMAGE_ORPHAN_UNRECOVERABLE ownerUserId={} publicId={} context={} reason={}",
+                    ownerUserId, publicId, context, ex.getClass().getSimpleName());
+            return false;
         }
     }
 
