@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,20 +22,28 @@ import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingAddOnSnapshot;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingAddress;
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingPriceSnapshot;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingAddressRequest;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingResponse;
 import com.gamagerecruiters.marketplace.modules.booking.dto.CreateBookingRequest;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
+import com.gamagerecruiters.marketplace.modules.listing.dto.PriceSnapshotResponse;
+import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
+import com.gamagerecruiters.marketplace.modules.verification.service.ProviderVerificationFacade;
 import com.mongodb.MongoException;
 
 /**
  * Creates customer booking requests.
  *
- * <p>Gated: creation stays disabled ({@code booking.creation.enabled=false}, 503) until provider
- * approval (WP02) and listing eligibility, duration and price snapshots (WP03) can be enforced.
+ * <p>Before anything is saved: the listing must exist and be bookable (WP03
+ * {@code getListingPriceSnapshot}: ACTIVE, not hidden, active category), it must belong to the requested
+ * provider, and the provider must be APPROVED (WP02 {@code isApprovedProvider}). Duration and the
+ * immutable price/commission snapshot come from the listing, never from the request body.
+ * {@code booking.creation.enabled} (default true) remains as a kill switch (503 when false).
  *
  * <p>When enabled, the provider's guard document is created if missing, then each request runs in one MongoDB transaction: claim the provider guard →
  * re-check the slot (same rules as the available-slots API) → insert the PENDING_PROVIDER
@@ -64,6 +73,8 @@ public class BookingRequestServiceImpl implements BookingRequestService {
             .withZone(SlotServiceImpl.BUSINESS_ZONE);
 
     private final BookingRepository bookingRepository;
+    private final ListingService listingService;
+    private final ProviderVerificationFacade providerVerification;
     private final SlotService slotService;
     private final ProviderBookingGuard providerBookingGuard;
     private final BookingReferenceGenerator referenceGenerator;
@@ -73,21 +84,26 @@ public class BookingRequestServiceImpl implements BookingRequestService {
     private final long retryDelayMillis;
 
     @Autowired
-    public BookingRequestServiceImpl(BookingRepository bookingRepository, SlotService slotService,
+    public BookingRequestServiceImpl(BookingRepository bookingRepository, ListingService listingService,
+                                     ProviderVerificationFacade providerVerification, SlotService slotService,
                                      ProviderBookingGuard providerBookingGuard,
                                      BookingReferenceGenerator referenceGenerator,
                                      ObjectProvider<MongoTransactionManager> transactionManager,
-                                     @Value("${booking.creation.enabled:false}") boolean creationEnabled) {
-        this(bookingRepository, slotService, providerBookingGuard, referenceGenerator,
+                                     @Value("${booking.creation.enabled:true}") boolean creationEnabled) {
+        this(bookingRepository, listingService, providerVerification, slotService, providerBookingGuard,
+                referenceGenerator,
                 transactionTemplate(transactionManager.getIfAvailable()), creationEnabled, Clock.systemUTC(),
                 DEFAULT_RETRY_DELAY_MILLIS);
     }
 
-    BookingRequestServiceImpl(BookingRepository bookingRepository, SlotService slotService,
+    BookingRequestServiceImpl(BookingRepository bookingRepository, ListingService listingService,
+                              ProviderVerificationFacade providerVerification, SlotService slotService,
                               ProviderBookingGuard providerBookingGuard, BookingReferenceGenerator referenceGenerator,
                               TransactionOperations transactions, boolean creationEnabled, Clock clock,
                               long retryDelayMillis) {
         this.bookingRepository = bookingRepository;
+        this.listingService = listingService;
+        this.providerVerification = providerVerification;
         this.slotService = slotService;
         this.providerBookingGuard = providerBookingGuard;
         this.referenceGenerator = referenceGenerator;
@@ -108,7 +124,7 @@ public class BookingRequestServiceImpl implements BookingRequestService {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required");
         }
         if (!creationEnabled || transactions == null) {
-            // Fail closed until provider/listing eligibility and price snapshots can be enforced.
+            // Kill switch, and fail closed when MongoDB transactions are not available.
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "BOOKING_CREATION_UNAVAILABLE",
                     "Booking requests are not available yet. Please try again later.");
         }
@@ -117,25 +133,50 @@ public class BookingRequestServiceImpl implements BookingRequestService {
                     "You cannot book your own service");
         }
 
-        Booking saved = createInTransactionWithRetry(customerId, request);
+        // WP03: 404 when missing, 409 LISTING_NOT_BOOKABLE when not ACTIVE / hidden / inactive category.
+        PriceSnapshotResponse listing = listingService.getListingPriceSnapshot(request.listingId(),
+                request.addOnIds());
+        if (listing.providerId() == null || !listing.providerId().equals(request.providerId())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "LISTING_PROVIDER_MISMATCH",
+                    "This service does not belong to the selected provider");
+        }
+        // WP02 / BR-002: only APPROVED providers can receive bookings.
+        if (!providerVerification.isApprovedProvider(listing.providerId())) {
+            throw new ResourceConflictException("PROVIDER_NOT_BOOKABLE",
+                    "This provider is not accepting bookings right now");
+        }
+        if (listing.totalDurationMin() <= 0 || listing.totalPrice() == null) {
+            throw new ResourceConflictException("LISTING_NOT_BOOKABLE",
+                    "This service cannot be booked right now");
+        }
+        // Same duration rule as GET /available-slots: rounded up to 15 minutes, max one working day.
+        if (!BookingDurationPolicy.isSchedulable(listing.totalDurationMin())) {
+            throw new ResourceConflictException("DURATION_NOT_SCHEDULABLE",
+                    "This service with the selected add-ons takes longer than "
+                            + BookingDurationPolicy.MAX_SCHEDULED_MINUTES / 60
+                            + " hours and cannot be booked as one visit");
+        }
+
+        Booking saved = createInTransactionWithRetry(customerId, request, listing);
 
         log.info("Booking request created: ref={}, provider={}, slotStart={}", saved.getRef(),
                 saved.getProviderId(), saved.getSlotStart());
         return toResponse(saved);
     }
 
-    private Booking createInTransactionWithRetry(String customerId, CreateBookingRequest request) {
+    private Booking createInTransactionWithRetry(String customerId, CreateBookingRequest request,
+                                                 PriceSnapshotResponse listing) {
         int referenceCollisions = 0;
         providerBookingGuard.ensureExists(request.providerId(), Instant.now(clock));
         for (int attempt = 1; attempt <= MAX_TRANSACTION_ATTEMPTS; attempt++) {
             Instant now = Instant.now(clock);
-            Booking booking = newBooking(customerId, request, now);
+            Booking booking = newBooking(customerId, request, listing, now);
             booking.setRef(referenceGenerator.next(now));
             try {
                 return transactions.execute(status -> {
                     providerBookingGuard.claim(request.providerId(), now);
                     if (!slotService.isSlotAvailable(request.providerId(), request.slotStart(),
-                            request.durationMinutes())) {
+                            BookingDurationPolicy.toScheduledMinutes(listing.totalDurationMin()))) {
                         throw slotUnavailable();
                     }
                     return bookingRepository.insert(booking);
@@ -184,9 +225,12 @@ public class BookingRequestServiceImpl implements BookingRequestService {
         }
     }
 
-    private Booking newBooking(String customerId, CreateBookingRequest request, Instant now) {
+    private Booking newBooking(String customerId, CreateBookingRequest request, PriceSnapshotResponse listing,
+                               Instant now) {
+        // Calendar time on the 15-minute grid; the real service minutes stay in the price snapshot.
+        int duration = BookingDurationPolicy.toScheduledMinutes(listing.totalDurationMin());
         Instant start = request.slotStart();
-        Instant end = start.plus(Duration.ofMinutes(request.durationMinutes()));
+        Instant end = start.plus(Duration.ofMinutes(duration));
 
         Booking booking = new Booking();
         booking.setCustomerId(customerId);
@@ -194,7 +238,8 @@ public class BookingRequestServiceImpl implements BookingRequestService {
         booking.setListingId(request.listingId());
         booking.setSlotStart(start);
         booking.setSlotEnd(end);
-        booking.setDurationMinutes(request.durationMinutes());
+        booking.setDurationMinutes(duration);
+        booking.setPriceSnapshot(toPriceSnapshot(listing, now));
         booking.setAddress(toAddress(request.address()));
         booking.setNotes(clean(request.notes()));
         booking.setStatus(BookingStatus.PENDING_PROVIDER);
@@ -204,6 +249,24 @@ public class BookingRequestServiceImpl implements BookingRequestService {
         booking.getTimeline().add(new BookingStatusChange(null, BookingStatus.PENDING_PROVIDER, now, customerId,
                 "Booking requested"));
         return booking;
+    }
+
+    static BookingPriceSnapshot toPriceSnapshot(PriceSnapshotResponse listing, Instant now) {
+        List<BookingAddOnSnapshot> addOns = listing.selectedAddOns().stream()
+                .map(a -> new BookingAddOnSnapshot(a.addOnId(), a.title(), a.extraPrice(),
+                        a.extraDurationMin() == null ? 0 : a.extraDurationMin()))
+                .toList();
+        return new BookingPriceSnapshot(
+                listing.title(),
+                listing.categoryId(),
+                listing.pricingModel() == null ? null : listing.pricingModel().name(),
+                listing.basePrice(),
+                addOns,
+                listing.totalPrice(),
+                BookingPriceSnapshot.PLATFORM_CURRENCY,
+                listing.commissionRate(),
+                listing.totalDurationMin(),
+                listing.capturedAt() == null ? now : listing.capturedAt());
     }
 
     /** C-02: the earlier of 12 hours after the request or 1 hour before the start. */
@@ -247,6 +310,9 @@ public class BookingRequestServiceImpl implements BookingRequestService {
                 address,
                 booking.getNotes(),
                 booking.getResponseDeadline(),
-                booking.getCreatedAt());
+                booking.getCreatedAt(),
+                booking.getPriceSnapshot() == null ? null : booking.getPriceSnapshot().serviceTitle(),
+                booking.getPriceSnapshot() == null ? null : booking.getPriceSnapshot().totalPrice(),
+                booking.getPriceSnapshot() == null ? null : booking.getPriceSnapshot().currency());
     }
 }

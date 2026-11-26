@@ -46,6 +46,8 @@ import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentReposi
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutAllocationRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.RefundOperationRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.StripeWebhookEventRepository;
 import com.gamagerecruiters.marketplace.modules.payment.service.DisputePayoutHoldAdapter;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
@@ -125,6 +127,14 @@ class ApplicationContextRealStartupTest {
 
         @MockitoBean
         private ProviderEarningsStateRepository providerEarningsStateRepository;
+
+        // Isolates refund operation persistence in the startup test.
+        @MockitoBean
+        private RefundOperationRepository refundOperationRepository;
+
+        // Isolates Stripe webhook persistence in the startup test.
+        @MockitoBean
+        private StripeWebhookEventRepository stripeWebhookEventRepository;
 
         @MockitoBean
         private PayoutRepository payoutRepository;

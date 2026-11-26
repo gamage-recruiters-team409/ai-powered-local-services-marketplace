@@ -20,8 +20,9 @@ import org.springframework.web.context.request.RequestContextHolder;
  * BookingFacade accepts SYSTEM only when that authentication is present with the expected purpose –
  * never merely because no HTTP request or user is bound to the thread.</p>
  *
- * <p>{@link #run} refuses to start inside an HTTP request or when a user is already authenticated,
- * so a request path cannot raise itself to SYSTEM. Every trusted call is logged with its purpose.</p>
+ * <p>{@link #run} refuses to start when a user is already authenticated, and inside an HTTP request
+ * unless the purpose is a signed payment webhook (PAYMENT_PROCESSING), so a user's request path cannot
+ * raise itself to SYSTEM. Every trusted call is logged with its purpose.</p>
  *
  * <pre>{@code
  * // WP09 settlement job
@@ -35,8 +36,24 @@ public final class TrustedBookingSystemCall {
 
     /** The internal operations allowed to change bookings as SYSTEM. */
     public enum Purpose {
-        /** WP09 dispute settlement job applying a final dispute decision. */
-        DISPUTE_SETTLEMENT
+        /** WP09 dispute settlement job applying a final dispute decision. Never inside an HTTP request. */
+        DISPUTE_SETTLEMENT(false),
+        /**
+         * WP07 payment processing: payment confirmed / expired. Also allowed inside an unauthenticated HTTP
+         * request because payment provider webhooks arrive as HTTP calls; WP07 must verify the webhook
+         * signature before starting the call. Never for a logged-in user.
+         */
+        PAYMENT_PROCESSING(true);
+
+        private final boolean allowedInWebhookRequest;
+
+        Purpose(boolean allowedInWebhookRequest) {
+            this.allowedInWebhookRequest = allowedInWebhookRequest;
+        }
+
+        public boolean isAllowedInWebhookRequest() {
+            return allowedInWebhookRequest;
+        }
     }
 
     private TrustedBookingSystemCall() {
@@ -46,13 +63,14 @@ public final class TrustedBookingSystemCall {
      * Runs {@code action} as a trusted internal SYSTEM call for {@code purpose}, then restores the
      * previous (empty) security context, also when the action throws.
      *
-     * @throws IllegalStateException inside an HTTP request or when a user is already authenticated
+     * @throws IllegalStateException when a user is already authenticated, or inside an HTTP request for a
+     *                               purpose that does not allow webhooks
      */
     public static <T> T run(Purpose purpose, Supplier<T> action) {
         Objects.requireNonNull(purpose, "purpose");
         Objects.requireNonNull(action, "action");
 
-        if (RequestContextHolder.getRequestAttributes() != null) {
+        if (RequestContextHolder.getRequestAttributes() != null && !purpose.isAllowedInWebhookRequest()) {
             throw new IllegalStateException("Trusted system calls cannot run inside an HTTP request");
         }
         SecurityContext previous = SecurityContextHolder.getContext();

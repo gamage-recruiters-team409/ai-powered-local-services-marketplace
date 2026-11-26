@@ -34,6 +34,7 @@ class EarningsLifecycleServiceTest {
     private BookingFacade bookingFacade;
     private CompletionLookup completionLookup;
     private EarningsLedgerService earningsLedgerService;
+    private EarningsRecognitionTransactionService recognitionTransactionService;
     private EarningsLifecycleService service;
 
     @BeforeEach
@@ -45,12 +46,14 @@ class EarningsLifecycleServiceTest {
                         .thenReturn(Optional.of(
                                         java.time.Instant.parse("2026-11-18T10:00:00Z")));
         earningsLedgerService = mock(EarningsLedgerService.class);
+        recognitionTransactionService = mock(EarningsRecognitionTransactionService.class);
 
         service = new EarningsLifecycleService(
                 paymentPersistenceService,
                 bookingFacade,
                 completionLookup,
-                earningsLedgerService);
+                earningsLedgerService,
+                recognitionTransactionService);
     }
 
     @Test
@@ -64,9 +67,8 @@ class EarningsLifecycleServiceTest {
         when(bookingFacade.getBookingParticipants("booking-001"))
                 .thenReturn(participants);
 
-        when(earningsLedgerService.appendEvent(
-                any(EarningsLedgerEntry.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(recognitionTransactionService.recognizeAtomically(any(Payment.class), any(EarningsLedgerEntry.class)))
+                .thenAnswer(invocation -> invocation.getArgument(1));
 
         EarningsLedgerEntry result = service.recordPendingEarnings("payment-001");
 
@@ -82,8 +84,7 @@ class EarningsLifecycleServiceTest {
         assertNotNull(result.getCreatedAt());
         assertNotNull(result.getEventKey());
 
-        verify(earningsLedgerService)
-                .appendEvent(any(EarningsLedgerEntry.class));
+        verify(recognitionTransactionService).recognizeAtomically(eq(payment), any(EarningsLedgerEntry.class));
     }
 
     @Test
@@ -113,7 +114,7 @@ class EarningsLifecycleServiceTest {
         assertEquals("Pending earnings require a COMPLETED booking",
                 exception.getMessage());
 
-        verifyNoInteractions(earningsLedgerService);
+        verifyNoInteractions(earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -137,7 +138,7 @@ class EarningsLifecycleServiceTest {
         assertEquals("Pending earnings require verified service completion",
                 exception.getMessage());
 
-        verifyNoInteractions(earningsLedgerService);
+        verifyNoInteractions(earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -167,7 +168,7 @@ class EarningsLifecycleServiceTest {
         assertEquals("Pending earnings require a COMPLETED booking",
                 exception.getMessage());
 
-        verifyNoInteractions(earningsLedgerService);
+        verifyNoInteractions(earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -182,7 +183,7 @@ class EarningsLifecycleServiceTest {
                 IllegalStateException.class,
                 () -> service.recordPendingEarnings("payment-001"));
 
-        verifyNoInteractions(bookingFacade, earningsLedgerService);
+        verifyNoInteractions(bookingFacade, earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -194,7 +195,7 @@ class EarningsLifecycleServiceTest {
                 IllegalStateException.class,
                 () -> service.recordPendingEarnings("missing-payment"));
 
-        verifyNoInteractions(bookingFacade, earningsLedgerService);
+        verifyNoInteractions(bookingFacade, earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -210,7 +211,7 @@ class EarningsLifecycleServiceTest {
                 IllegalStateException.class,
                 () -> service.recordPendingEarnings("payment-001"));
 
-        verifyNoInteractions(bookingFacade, earningsLedgerService);
+        verifyNoInteractions(bookingFacade, earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -225,7 +226,7 @@ class EarningsLifecycleServiceTest {
                 IllegalStateException.class,
                 () -> service.recordPendingEarnings("payment-001"));
 
-        verifyNoInteractions(bookingFacade, earningsLedgerService);
+        verifyNoInteractions(bookingFacade, earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -252,7 +253,7 @@ class EarningsLifecycleServiceTest {
                 IllegalStateException.class,
                 () -> service.recordPendingEarnings("payment-001"));
 
-        verifyNoInteractions(earningsLedgerService);
+        verifyNoInteractions(earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -271,7 +272,7 @@ class EarningsLifecycleServiceTest {
                 () -> service.recordPendingEarnings("payment-001"));
 
         // Invalid ownership must not produce a financial ledger event.
-        verifyNoInteractions(earningsLedgerService);
+        verifyNoInteractions(earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -299,7 +300,7 @@ class EarningsLifecycleServiceTest {
                 () -> service.recordPendingEarnings("payment-001"));
 
         // Mismatched booking data must not create earnings.
-        verifyNoInteractions(earningsLedgerService);
+        verifyNoInteractions(earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -318,7 +319,7 @@ class EarningsLifecycleServiceTest {
                 () -> service.recordPendingEarnings("payment-001"));
 
         // A payment without a verified customer must not create earnings.
-        verifyNoInteractions(earningsLedgerService);
+        verifyNoInteractions(earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -334,7 +335,7 @@ class EarningsLifecycleServiceTest {
                 () -> service.recordPendingEarnings("payment-001"));
 
         // Invalid financial precision must be rejected before booking lookup.
-        verifyNoInteractions(bookingFacade, earningsLedgerService);
+        verifyNoInteractions(bookingFacade, earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -350,7 +351,7 @@ class EarningsLifecycleServiceTest {
                 () -> service.recordPendingEarnings("payment-001"));
 
         // A negative commission snapshot must never generate earnings.
-        verifyNoInteractions(bookingFacade, earningsLedgerService);
+        verifyNoInteractions(bookingFacade, earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -366,7 +367,7 @@ class EarningsLifecycleServiceTest {
                 () -> service.recordPendingEarnings("payment-001"));
 
         // A zero-value payment must never generate provider earnings.
-        verifyNoInteractions(bookingFacade, earningsLedgerService);
+        verifyNoInteractions(bookingFacade, earningsLedgerService, recognitionTransactionService);
     }
 
     @Test
@@ -380,8 +381,7 @@ class EarningsLifecycleServiceTest {
                 .thenReturn(validParticipants());
 
         // Simulate a failure while recording the pending earnings event.
-        when(earningsLedgerService.appendEvent(
-                any(EarningsLedgerEntry.class)))
+        when(recognitionTransactionService.recognizeAtomically(any(Payment.class), any(EarningsLedgerEntry.class)))
                 .thenThrow(new IllegalStateException(
                         "Ledger persistence failed"));
 
@@ -391,8 +391,7 @@ class EarningsLifecycleServiceTest {
 
         assertEquals("Ledger persistence failed", exception.getMessage());
 
-        verify(earningsLedgerService)
-                .appendEvent(any(EarningsLedgerEntry.class));
+        verify(recognitionTransactionService).recognizeAtomically(eq(payment), any(EarningsLedgerEntry.class));
     }
 
     @Test
@@ -405,9 +404,8 @@ class EarningsLifecycleServiceTest {
         when(bookingFacade.getBookingParticipants("booking-001"))
                 .thenReturn(validParticipants());
 
-        when(earningsLedgerService.appendEvent(
-                any(EarningsLedgerEntry.class)))
-                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(recognitionTransactionService.recognizeAtomically(any(Payment.class), any(EarningsLedgerEntry.class)))
+                .thenAnswer(invocation -> invocation.getArgument(1));
 
         EarningsLedgerEntry first = service.recordPendingEarnings("payment-001");
 
@@ -417,8 +415,7 @@ class EarningsLifecycleServiceTest {
         assertEquals(first.getAmount(), second.getAmount());
 
         // Ledger persistence enforces actual duplicate-event protection.
-        verify(earningsLedgerService, times(2))
-                .appendEvent(any(EarningsLedgerEntry.class));
+        verify(recognitionTransactionService, times(2)).recognizeAtomically(eq(payment), any(EarningsLedgerEntry.class));
     }
 
     @Test
@@ -451,6 +448,7 @@ class EarningsLifecycleServiceTest {
         assertSame(committed, result);
         verify(earningsLedgerService).findMatchingCommittedEvent(any(EarningsLedgerEntry.class));
         verify(earningsLedgerService, never()).appendEvent(any(EarningsLedgerEntry.class));
+        verifyNoInteractions(recognitionTransactionService);
     }
 
     @Test
@@ -477,6 +475,7 @@ class EarningsLifecycleServiceTest {
                 exception.getMessage());
 
         verify(earningsLedgerService, never()).appendEvent(any(EarningsLedgerEntry.class));
+        verifyNoInteractions(recognitionTransactionService);
     }
 
     @Test
@@ -505,6 +504,7 @@ class EarningsLifecycleServiceTest {
                 exception.getMessage());
 
         verify(earningsLedgerService, never()).appendEvent(any(EarningsLedgerEntry.class));
+        verifyNoInteractions(recognitionTransactionService);
     }
 
     @Test
@@ -530,7 +530,7 @@ class EarningsLifecycleServiceTest {
                 "Pending earnings require verified service completion",
                 exception.getMessage());
 
-        verifyNoInteractions(earningsLedgerService);
+        verifyNoInteractions(earningsLedgerService, recognitionTransactionService);
     }
 
     /**

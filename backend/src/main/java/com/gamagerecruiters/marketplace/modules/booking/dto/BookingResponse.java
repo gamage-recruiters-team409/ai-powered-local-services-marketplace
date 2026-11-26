@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.booking.dto;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
@@ -7,6 +8,7 @@ import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 /**
  * Booking as shown to its customer (full address). Times are UTC; {@code localDate},
  * {@code localStart} and {@code localEnd} are Asia/Colombo for display.
+ * {@code serviceTitle}, {@code totalPrice} and {@code currency} come from the price snapshot.
  */
 public record BookingResponse(
         String id,
@@ -24,6 +26,9 @@ public record BookingResponse(
         BookingAddressRequest address,
         String notes,
         Instant responseDeadline,
-        Instant createdAt
+        Instant createdAt,
+        String serviceTitle,
+        BigDecimal totalPrice,
+        String currency
 ) {
 }

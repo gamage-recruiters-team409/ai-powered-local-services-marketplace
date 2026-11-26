@@ -18,8 +18,12 @@ import org.bson.Document;
 import org.bson.types.Decimal128;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
+import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
 import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.utility.DockerImageName;
 import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.repository.support.MongoRepositoryFactory;
@@ -35,6 +39,7 @@ import com.gamagerecruiters.marketplace.modules.completion.service.CompletionLoo
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import com.gamagerecruiters.marketplace.modules.payment.service.EarningsLifecycleService;
+import com.gamagerecruiters.marketplace.modules.payment.service.EarningsRecognitionTransactionService;
 import com.gamagerecruiters.marketplace.modules.payment.service.PaymentPersistenceService;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEntry;
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEventType;
@@ -53,7 +58,7 @@ import com.mongodb.client.model.Indexes;
  * Real MongoDB integration tests for earnings ledger persistence.
  *
  * <p>
- * Tests use an isolated local MongoDB replica set and a unique
+ * Tests use a managed MongoDB Testcontainers replica set and a unique
  * temporary database per test. Shared application databases are
  * never modified.
  * </p>
@@ -64,21 +69,23 @@ import com.mongodb.client.model.Indexes;
  * and concurrency protection required by PR #28.
  * </p>
  */
+@Tag("integration")
+@DisabledIfSystemProperty(named = "SKIP_DOCKER_TESTS", matches = "true")
+@DisabledIfEnvironmentVariable(named = "SKIP_DOCKER_TESTS", matches = "true")
 class EarningsLedgerMongoIntegrationTest {
 
+    // Managed replica set for real MongoDB transaction verification.
     private static final MongoDBContainer MONGO =
-            new MongoDBContainer("mongo:7.0");
+            new MongoDBContainer(DockerImageName.parse("mongo:7.0"));
 
     @BeforeAll
-    static void startMongoContainer() {
+    static void startMongo() {
         MONGO.start();
     }
 
     @AfterAll
-    static void stopMongoContainer() {
-        if (MONGO.isRunning()) {
-            MONGO.stop();
-        }
+    static void stopMongo() {
+        MONGO.stop();
     }
 
     @Test
@@ -394,6 +401,10 @@ class EarningsLedgerMongoIntegrationTest {
             payment.setCommissionAmount(new BigDecimal("150.00"));
             payment.setCurrency("LKR");
             payment.setStatus(PaymentStatus.CAPTURED);
+            payment.setRefundedAmount(new BigDecimal("0.00"));
+
+            // Persist the payment in the isolated test database.
+            template.insert(payment);
 
             PaymentPersistenceService paymentService =
                     mock(PaymentPersistenceService.class);
@@ -425,7 +436,11 @@ class EarningsLedgerMongoIntegrationTest {
                             paymentService,
                             bookingFacade,
                             completionLookup,
-                            ledgerService);
+                            ledgerService,
+                            createRecognitionService(
+                                    template,
+                                    ledgerService,
+                                    ledgerRepository));
 
             EarningsLedgerEntry first =
                     lifecycleService.recordPendingEarnings("payment-001");
@@ -483,6 +498,10 @@ class EarningsLedgerMongoIntegrationTest {
             payment.setCommissionAmount(new BigDecimal("150.00"));
             payment.setCurrency("LKR");
             payment.setStatus(PaymentStatus.CAPTURED);
+            payment.setRefundedAmount(new BigDecimal("0.00"));
+
+            // Persist the payment in the isolated test database.
+            template.insert(payment);
 
             PaymentPersistenceService paymentService =
                     mock(PaymentPersistenceService.class);
@@ -514,7 +533,11 @@ class EarningsLedgerMongoIntegrationTest {
                             paymentService,
                             bookingFacade,
                             completionLookup,
-                            ledgerService);
+                            ledgerService,
+                            createRecognitionService(
+                                    template,
+                                    ledgerService,
+                                    ledgerRepository));
 
             EarningsLedgerEntry first =
                     lifecycleService.recordPendingEarnings("payment-001");
@@ -560,6 +583,7 @@ class EarningsLedgerMongoIntegrationTest {
                 // Create collections before starting transactions.
                 template.createCollection("earnings_ledger");
                 template.createCollection("provider_earnings_state");
+                template.createCollection("payments");
 
                 // Reproduce the production event-key uniqueness rule.
                 template.getCollection("earnings_ledger")
@@ -596,6 +620,40 @@ class EarningsLedgerMongoIntegrationTest {
                 database.drop();
             }
         }
+    }
+
+    /**
+     * Creates the real recognition service using the isolated
+     * MongoDB database and its transaction infrastructure.
+     */
+    private EarningsRecognitionTransactionService createRecognitionService(
+            MongoTemplate template,
+            EarningsLedgerService ledgerService,
+            EarningsLedgerRepository ledgerRepository) {
+
+        MongoRepositoryFactory factory =
+                new MongoRepositoryFactory(template);
+
+        ProviderEarningsStateRepository stateRepository =
+                factory.getRepository(
+                        ProviderEarningsStateRepository.class);
+
+        MongoTransactionManager transactionManager =
+                new MongoTransactionManager(
+                        template.getMongoDatabaseFactory());
+
+        EarningsLedgerTransactionService ledgerTransactionService =
+                new EarningsLedgerTransactionService(
+                        ledgerRepository,
+                        stateRepository,
+                        template,
+                        transactionManager);
+
+        return new EarningsRecognitionTransactionService(
+                template,
+                ledgerService,
+                ledgerTransactionService,
+                transactionManager);
     }
 
     @FunctionalInterface
