@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
 import org.junit.jupiter.api.condition.DisabledIfSystemProperty;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -110,8 +111,9 @@ class BookingLifecycleMongoIntegrationTest {
         mongoTemplate.remove(new Query(), Booking.class);
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         policy = new BookingPaymentPolicy(15, 15);
-        facade = new BookingFacadeImpl(bookingRepository, policy, clock);
-        expiryJob = new BookingExpiryJob(bookingRepository, policy, clock, true);
+        BookingNotifier notifier = Mockito.mock(BookingNotifier.class);
+        facade = new BookingFacadeImpl(bookingRepository, policy, notifier, clock);
+        expiryJob = new BookingExpiryJob(bookingRepository, policy, notifier, clock, true);
     }
 
     @AfterEach

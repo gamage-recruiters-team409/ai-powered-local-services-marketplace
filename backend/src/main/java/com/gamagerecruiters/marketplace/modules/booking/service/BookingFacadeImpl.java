@@ -72,15 +72,19 @@ public class BookingFacadeImpl implements BookingFacade {
 
     private final BookingRepository bookingRepository;
     private final BookingPaymentPolicy paymentPolicy;
+    private final BookingNotifier notifier;
     private final Clock clock;
 
     @Autowired
-    public BookingFacadeImpl(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy) {
-        this(bookingRepository, paymentPolicy, Clock.systemUTC());
+    public BookingFacadeImpl(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy,
+                             BookingNotifier notifier) {
+        this(bookingRepository, paymentPolicy, notifier, Clock.systemUTC());
     }
 
-    BookingFacadeImpl(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy, Clock clock) {
+    BookingFacadeImpl(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy,
+                      BookingNotifier notifier, Clock clock) {
         this.bookingRepository = bookingRepository;
+        this.notifier = notifier;
         this.paymentPolicy = paymentPolicy;
         this.clock = clock;
     }
@@ -238,7 +242,9 @@ public class BookingFacadeImpl implements BookingFacade {
         booking.changeStatus(BookingStatus.CONFIRMED, BookingStatusChange.SYSTEM, "Payment confirmed",
                 Instant.now(clock));
         booking.getTimeline().get(booking.getTimeline().size() - 1).setReference(paymentReference);
-        return save(booking);
+        BookingParticipants result = save(booking);
+        notifier.confirmed(booking);
+        return result;
     }
 
     @Override
@@ -261,7 +267,9 @@ public class BookingFacadeImpl implements BookingFacade {
 
         booking.changeStatus(BookingStatus.EXPIRED, BookingStatusChange.SYSTEM, "Payment not completed", now);
         booking.getTimeline().get(booking.getTimeline().size() - 1).setReference(paymentReference);
-        return save(booking);
+        BookingParticipants result = save(booking);
+        notifier.paymentExpired(booking);
+        return result;
     }
 
     /** Payment changes only from WP07 inside a PAYMENT_PROCESSING trusted call; reference must be valid. */

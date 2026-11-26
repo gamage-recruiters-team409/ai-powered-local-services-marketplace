@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.booking.service;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,15 +42,18 @@ public class BookingExpiryJob {
     private final BookingPaymentPolicy paymentPolicy;
     private final Clock clock;
     private final boolean enabled;
+    private final BookingNotifier notifier;
 
     @Autowired
     public BookingExpiryJob(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy,
+                            BookingNotifier notifier,
                             @Value("${booking.expiry.enabled:true}") boolean enabled) {
-        this(bookingRepository, paymentPolicy, Clock.systemUTC(), enabled);
+        this(bookingRepository, paymentPolicy, notifier, Clock.systemUTC(), enabled);
     }
 
-    BookingExpiryJob(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy, Clock clock,
-                     boolean enabled) {
+    BookingExpiryJob(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy,
+                     BookingNotifier notifier, Clock clock, boolean enabled) {
+        this.notifier = notifier;
         this.bookingRepository = bookingRepository;
         this.paymentPolicy = paymentPolicy;
         this.clock = clock;
@@ -79,25 +83,26 @@ public class BookingExpiryJob {
         List<Booking> unanswered = bookingRepository
                 .findTop100ByStatusAndResponseDeadlineBeforeOrderByResponseDeadlineAsc(
                         BookingStatus.PENDING_PROVIDER, now);
-        int requests = expireAll(unanswered, "Provider did not respond in time", now);
+        int requests = expireAll(unanswered, "Provider did not respond in time", now, notifier::requestExpired);
 
         List<Booking> unpaid = bookingRepository
                 .findTop100ByStatusAndPaymentDueAtBeforeOrderByPaymentDueAtAsc(
                         // paymentDueAt < now - grace: the same rule as BookingPaymentPolicy.isPaymentTimedOut,
                         // which markPaymentExpired (WP07) also uses.
                         BookingStatus.AWAITING_PAYMENT, paymentPolicy.expireDueBefore(now));
-        int payments = expireAll(unpaid, "Payment not completed in time", now);
+        int payments = expireAll(unpaid, "Payment not completed in time", now, notifier::paymentExpired);
 
         return new Result(requests, payments);
     }
 
-    private int expireAll(List<Booking> bookings, String reason, Instant now) {
+    private int expireAll(List<Booking> bookings, String reason, Instant now, Consumer<Booking> onExpired) {
         int expired = 0;
         for (Booking booking : bookings) {
             try {
                 booking.changeStatus(BookingStatus.EXPIRED, BookingStatusChange.SYSTEM, reason, now);
-                bookingRepository.save(booking);
+                Booking saved = bookingRepository.save(booking);
                 expired++;
+                onExpired.accept(saved == null ? booking : saved);
             } catch (OptimisticLockingFailureException | ResourceConflictException e) {
                 log.info("event=BOOKING_EXPIRY_SKIPPED bookingId={} cause={}", booking.getId(),
                         e.getClass().getSimpleName());

@@ -32,8 +32,11 @@ class BookingExpiryJobTest {
     @Mock
     private BookingRepository bookingRepository;
 
+    @Mock
+    private BookingNotifier notifier;
+
     private BookingExpiryJob job(boolean enabled) {
-        return new BookingExpiryJob(bookingRepository, new BookingPaymentPolicy(15, 15),
+        return new BookingExpiryJob(bookingRepository, new BookingPaymentPolicy(15, 15), notifier,
                 Clock.fixed(NOW, ZoneOffset.UTC), enabled);
     }
 
@@ -64,6 +67,8 @@ class BookingExpiryJobTest {
         assertThat(request.getTimeline().get(0).getChangedBy()).isEqualTo(BookingStatusChange.SYSTEM);
         assertThat(request.getTimeline().get(0).getReason()).isEqualTo("Provider did not respond in time");
         assertThat(unpaid.getTimeline().get(0).getReason()).isEqualTo("Payment not completed in time");
+        verify(notifier).requestExpired(request);
+        verify(notifier).paymentExpired(unpaid);
     }
 
     @Test
