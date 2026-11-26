@@ -3,6 +3,7 @@ import { createBrowserRouter } from 'react-router-dom'
 import { disputeRoutes } from '../features/disputes/routes/disputeRoutes'
 import { adminRoutes } from '../features/disputes-admin/routes/adminRoutes'
 import { authRoutes } from '../features/auth'
+import PublicLandingPage from '../features/listings/landing/pages/PublicLandingPage'
 import { providerRoutes } from '../features/provider-onboarding/routes/providerRoutes'
 import { paymentsEarningsRoutes } from '../features/payments-earnings/routes/paymentsEarningsRoutes'
 import ProviderProfilePage from '../features/search-discovery/pages/ProviderProfilePage'
@@ -15,6 +16,8 @@ import { NotFoundPage } from './NotFoundPage'
  * Keep the catch-all '*' route last.
  */
 export const router = createBrowserRouter([
+  // WP03 – Public / Guest Common UI & Landing Page
+  { path: '/', element: <PublicLandingPage /> },
   adminRoutes,
   authRoutes,
   providerRoutes,

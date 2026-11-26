@@ -19,6 +19,20 @@ vi.mock(
   },
 );
 
+vi.mock(
+  '../features/listings/landing/services/publicCatalogService',
+  () => ({
+    getPublicCategoryTree: vi.fn().mockResolvedValue([]),
+    getPublicDistrictLocations: vi.fn().mockResolvedValue([]),
+    getFeaturedPublicServices: vi.fn().mockResolvedValue({ results: [], totalCount: 0 }),
+    getLiveCustomerReviews: vi.fn().mockResolvedValue({
+      reviews: [],
+      requiresAuth: true,
+      failed: false,
+    }),
+  }),
+);
+
 import { router } from './router.jsx';
 
 function collectPaths(routes, acc = []) {
@@ -44,8 +58,8 @@ describe('shared application router definitions', () => {
     expect(paths).toContain('/admin');
   });
 
-  it('does not hijack the root path for search', () => {
-    expect(paths).not.toContain('/');
+  it('mounts the LocalServe public landing page at /', () => {
+    expect(paths).toContain('/');
   });
 
   it('keeps a shared catch-all fallback', () => {
@@ -77,11 +91,21 @@ describe('application entry point uses the shared router', () => {
     expect(await screen.findByText('Home cleaning in Austin')).toBeTruthy();
   });
 
-  it('uses the shared catch-all at / instead of redirecting to /search', async () => {
+  it('renders the LocalServe public landing page at /', async () => {
     await renderAppAt('/');
 
-    expect(await screen.findByText('Page not found')).toBeTruthy();
+    expect(
+      await screen.findByRole('heading', {
+        name: /Hire verified pros with absolute certainty\./i,
+      }),
+    ).toBeTruthy();
     expect(window.location.pathname).toBe('/');
+  });
+
+  it('uses the shared catch-all on unknown paths', async () => {
+    await renderAppAt('/does-not-exist');
+
+    expect(await screen.findByText('Page not found')).toBeTruthy();
   });
 
   it('keeps /admin behind the admin authorization guard', async () => {
