@@ -4,7 +4,7 @@ import java.time.Instant;
 
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 
-/** Short booking row for admin monitoring (WP09). No address or notes. */
+/** Short booking row for admin monitoring (WP09). No address or notes. {@code categoryId} is from the price snapshot. */
 public record BookingSummary(
         String bookingId,
         String ref,
@@ -13,6 +13,7 @@ public record BookingSummary(
         String providerId,
         String listingId,
         String serviceTitle,
+        String categoryId,
         Instant slotStart,
         Instant slotEnd
 ) {

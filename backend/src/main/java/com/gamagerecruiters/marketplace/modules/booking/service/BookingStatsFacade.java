@@ -8,6 +8,7 @@ import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.BookingSummary;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.BookingUserStats;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.DailyCount;
+import com.gamagerecruiters.marketplace.modules.booking.dto.stats.LateStart;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.RepeatCancellation;
 
 /**
@@ -26,6 +27,15 @@ public interface BookingStatsFacade {
      * oldest first. {@code limit} 1–200.
      */
     List<BookingSummary> findOverdueBookings(int limit);
+
+    /** Same as {@link #findOverdueBookings(int)}, only for one category when {@code categoryId} is not blank. */
+    List<BookingSummary> findOverdueBookings(int limit, String categoryId);
+
+    /**
+     * Late starts: CONFIRMED bookings whose slotStart has passed (the provider has not started them), most late
+     * first. {@code limit} 1–200; {@code categoryId} optional (null/blank = all categories).
+     */
+    List<LateStart> findLateStarts(int limit, String categoryId);
 
     /**
      * Users who cancelled at least {@code minCount} bookings in the last {@code days} days,

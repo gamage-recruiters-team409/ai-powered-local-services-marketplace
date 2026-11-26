@@ -73,6 +73,7 @@ class BookingStatsFacadeImplTest {
         assertThatThrownBy(() -> facade.findOverdueBookings(10)).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(() -> facade.getUserStats("u-2")).isInstanceOf(AccessDeniedException.class);
         assertThatThrownBy(() -> facade.countByStatus()).isInstanceOf(AccessDeniedException.class);
+        assertThatThrownBy(() -> facade.findLateStarts(10, null)).isInstanceOf(AccessDeniedException.class);
         verifyNoInteractions(mongoTemplate);
     }
 
@@ -108,6 +109,8 @@ class BookingStatsFacadeImplTest {
         loginAs(Role.ADMIN);
         assertCode(() -> facade.findOverdueBookings(0), "INVALID_LIMIT");
         assertCode(() -> facade.findOverdueBookings(201), "INVALID_LIMIT");
+        assertCode(() -> facade.findLateStarts(0, null), "INVALID_LIMIT");
+        assertCode(() -> facade.findLateStarts(201, "cat-1"), "INVALID_LIMIT");
         assertCode(() -> facade.findRepeatCancellations(0, 30), "INVALID_MIN_COUNT");
         assertCode(() -> facade.findRepeatCancellations(3, 0), "INVALID_DAYS");
         assertCode(() -> facade.findRepeatCancellations(3, 366), "INVALID_DAYS");

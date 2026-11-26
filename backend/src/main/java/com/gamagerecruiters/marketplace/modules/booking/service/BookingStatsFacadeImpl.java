@@ -37,6 +37,7 @@ import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChan
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.BookingSummary;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.BookingUserStats;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.DailyCount;
+import com.gamagerecruiters.marketplace.modules.booking.dto.stats.LateStart;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.MonthlyCount;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.RepeatCancellation;
 
@@ -124,16 +125,52 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
 
     @Override
     public List<BookingSummary> findOverdueBookings(int limit) {
+        return findOverdueBookings(limit, null);
+    }
+
+    @Override
+    public List<BookingSummary> findOverdueBookings(int limit, String categoryId) {
         assertStatsAccess();
+        assertLimit(limit);
+        Criteria criteria = Criteria.where("status").in(OVERDUE_STATUSES).and("slotEnd").lt(clock.instant());
+        withCategory(criteria, categoryId);
+        Query query = new Query(criteria)
+                .with(Sort.by(Sort.Order.asc("slotEnd"), Sort.Order.asc("id")))
+                .limit(limit);
+        return mongoTemplate.find(query, Booking.class).stream().map(BookingStatsFacadeImpl::toSummary).toList();
+    }
+
+    @Override
+    public List<LateStart> findLateStarts(int limit, String categoryId) {
+        assertStatsAccess();
+        assertLimit(limit);
+        Instant now = clock.instant();
+        Criteria criteria = Criteria.where("status").is(BookingStatus.CONFIRMED).and("slotStart").lt(now);
+        withCategory(criteria, categoryId);
+        // Oldest start first = most late first; _id breaks ties so the list is stable.
+        Query query = new Query(criteria)
+                .with(Sort.by(Sort.Order.asc("slotStart"), Sort.Order.asc("id")))
+                .limit(limit);
+        return mongoTemplate.find(query, Booking.class).stream()
+                .map(b -> new LateStart(b.getId(), b.getRef(), b.getListingId(),
+                        b.getPriceSnapshot() == null ? null : b.getPriceSnapshot().serviceTitle(),
+                        b.getPriceSnapshot() == null ? null : b.getPriceSnapshot().categoryId(),
+                        b.getCustomerId(), b.getProviderId(), b.getSlotStart(),
+                        Duration.between(b.getSlotStart(), now).toMinutes()))
+                .toList();
+    }
+
+    private static void assertLimit(int limit) {
         if (limit < 1 || limit > MAX_OVERDUE_LIMIT) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_LIMIT",
                     "limit must be between 1 and " + MAX_OVERDUE_LIMIT);
         }
-        Query query = new Query(Criteria.where("status").in(OVERDUE_STATUSES)
-                .and("slotEnd").lt(clock.instant()))
-                .with(Sort.by(Sort.Direction.ASC, "slotEnd"))
-                .limit(limit);
-        return mongoTemplate.find(query, Booking.class).stream().map(BookingStatsFacadeImpl::toSummary).toList();
+    }
+
+    private static void withCategory(Criteria criteria, String categoryId) {
+        if (categoryId != null && !categoryId.isBlank()) {
+            criteria.and("priceSnapshot.categoryId").is(categoryId.trim());
+        }
     }
 
     @Override
@@ -164,16 +201,54 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
                 last.merge(key, c.getChangedAt(), (a, x) -> a.isAfter(x) ? a : x);
             }
         }
+        List<String> repeaters = counts.entrySet().stream()
+                .filter(e -> e.getValue()[0] >= minCount).map(Map.Entry::getKey).toList();
+        Map<String, Long> totals = totalBookingsInWindow(repeaters, since);
+
         List<RepeatCancellation> result = new ArrayList<>();
-        counts.forEach((key, n) -> {
-            if (n[0] >= minCount) {
-                String[] parts = key.split("\\|", 2);
-                result.add(new RepeatCancellation(parts[1], parts[0], n[0], last.get(key)));
-            }
-        });
+        for (String key : repeaters) {
+            String[] parts = key.split("\\|", 2);
+            long count = counts.get(key)[0];
+            result.add(new RepeatCancellation(parts[1], parts[0], count,
+                    Math.max(count, totals.getOrDefault(key, 0L)), last.get(key)));
+        }
         result.sort(Comparator.comparingLong(RepeatCancellation::count).reversed()
                 .thenComparing(RepeatCancellation::lastCancelledAt, Comparator.reverseOrder()));
         return result;
+    }
+
+    /**
+     * For each "ROLE|userId" key: bookings that user had in that role during the window, i.e. created in the
+     * window or cancelled in the window. Each counted cancellation is in this set, so the rate is never above 100%.
+     */
+    private Map<String, Long> totalBookingsInWindow(List<String> keys, Instant since) {
+        Map<String, Long> totals = new HashMap<>();
+        if (keys.isEmpty()) {
+            return totals;
+        }
+        List<String> customers = new ArrayList<>();
+        List<String> providers = new ArrayList<>();
+        for (String key : keys) {
+            String[] parts = key.split("\\|", 2);
+            ("CUSTOMER".equals(parts[0]) ? customers : providers).add(parts[1]);
+        }
+        Criteria inWindow = new Criteria().orOperator(
+                Criteria.where("createdAt").gte(since),
+                Criteria.where("timeline").elemMatch(Criteria.where("toStatus").in(CANCELLED)
+                        .and("changedAt").gte(since)));
+        Criteria ofUsers = new Criteria().orOperator(
+                Criteria.where("customerId").in(customers), Criteria.where("providerId").in(providers));
+        Query query = new Query(new Criteria().andOperator(ofUsers, inWindow));
+        query.fields().include("customerId", "providerId");
+        for (Booking b : mongoTemplate.find(query, Booking.class)) {
+            if (customers.contains(b.getCustomerId())) {
+                totals.merge("CUSTOMER|" + b.getCustomerId(), 1L, Long::sum);
+            }
+            if (providers.contains(b.getProviderId())) {
+                totals.merge("PROVIDER|" + b.getProviderId(), 1L, Long::sum);
+            }
+        }
+        return totals;
     }
 
     @Override
@@ -239,6 +314,7 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
     static BookingSummary toSummary(Booking b) {
         return new BookingSummary(b.getId(), b.getRef(), b.getStatus(), b.getCustomerId(), b.getProviderId(),
                 b.getListingId(), b.getPriceSnapshot() == null ? null : b.getPriceSnapshot().serviceTitle(),
+                b.getPriceSnapshot() == null ? null : b.getPriceSnapshot().categoryId(),
                 b.getSlotStart(), b.getSlotEnd());
     }
 }
