@@ -35,7 +35,9 @@ public record DisputeDetailResponse(
         boolean appealEligible,
         Instant appealDeadline,
         AppealStatus appealStatus,
-        AppealView appeal
+        AppealView appeal,
+        /* Uploaded evidence files (metadata only); each is opened through a short-lived signed URL. */
+        List<EvidenceView> evidenceFiles
 ) {
 
     /** A dispute without any decision yet (raise and response results). */
@@ -45,7 +47,7 @@ public record DisputeDetailResponse(
                                  Instant createdAt, Instant updatedAt, List<StatusHistoryView> statusHistory) {
         this(id, bookingId, customerId, providerId, raisedBy, raisedByRole, category, description, evidence, status,
                 response, responseDueAt, createdAt, updatedAt, statusHistory, null, false, null,
-                AppealStatus.NOT_AVAILABLE, null);
+                AppealStatus.NOT_AVAILABLE, null, List.of());
     }
 
     public record PartyResponseView(String responderId, String text, List<String> evidence, Instant respondedAt) {
@@ -63,15 +65,22 @@ public record DisputeDetailResponse(
 
     /**
      * The decision as the parties see it. {@code providerPenaltyApplied} is shown to the provider only (null for the
-     * customer). No admin identity, no note.
+     * customer). No admin identity, no note. {@code paymentNote} is a neutral text while a final decision is still
+     * being carried out ({@link #PAYMENT_IN_PROGRESS}), or when payment handling requires assistance
+     * ({@link #PAYMENT_REQUIRES_ASSISTANCE}), else null: parties never see settlement states or reasons.
      */
     public record OutcomeView(
             ResolutionAction action,
             int customerRefundPercent,
             Boolean providerPenaltyApplied,
             Instant decidedAt,
-            boolean finalDecision
+            boolean finalDecision,
+            String paymentNote
     ) {
+
+        public static final String PAYMENT_IN_PROGRESS = "Payment handling for this dispute is being processed.";
+        public static final String PAYMENT_REQUIRES_ASSISTANCE =
+                "Payment handling for this dispute requires assistance. Our support team is reviewing this case.";
     }
 
     /** The appeal as the parties see it: no reviewer identity, no review note. */

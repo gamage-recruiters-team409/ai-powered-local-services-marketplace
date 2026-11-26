@@ -90,7 +90,8 @@ describe('DisputeResponseForm', () => {
     expect(submitButton().disabled).toBe(true)
 
     resolve({ id: 'd-1', status: 'UNDER_REVIEW' })
-    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith({ id: 'd-1', status: 'UNDER_REVIEW' }))
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledWith(
+      { id: 'd-1', status: 'UNDER_REVIEW', evidenceFiles: [] }, { failedUploads: 0 }))
   })
 
   it('is replaced by the closed message when the window is closed', () => {

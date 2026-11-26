@@ -3,6 +3,7 @@ import { createBrowserRouter } from 'react-router-dom'
 import { disputeRoutes } from '../features/disputes/routes/disputeRoutes'
 import { adminRoutes } from '../features/disputes-admin/routes/adminRoutes'
 import { authRoutes } from '../features/auth'
+import { providerRoutes } from '../features/provider-onboarding/routes/providerRoutes'
 import { paymentsEarningsRoutes } from '../features/payments-earnings/routes/paymentsEarningsRoutes'
 import ProviderProfilePage from '../features/search-discovery/pages/ProviderProfilePage'
 import SearchResultsPage from '../features/search-discovery/pages/SearchResultsPage'
@@ -16,6 +17,7 @@ import { NotFoundPage } from './NotFoundPage'
 export const router = createBrowserRouter([
   adminRoutes,
   authRoutes,
+  providerRoutes,
   // WP04 – Search & Discovery routes
   { path: '/search', element: <SearchResultsPage /> },
   { path: '/providers/:providerId', element: <ProviderProfilePage /> },

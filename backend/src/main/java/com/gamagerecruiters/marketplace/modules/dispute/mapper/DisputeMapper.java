@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.dispute.mapper;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.Roles;
@@ -11,19 +12,24 @@ import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeAppeal;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeDecision;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeSettlement;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.EvidenceFile;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.PartyResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.StatusHistoryEntry;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse.AppealReviewView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse.DecisionView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse.SettlementView;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.SettlementState;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealStatus;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAiSummaryData;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse.AppealView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse.OutcomeView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse.PartyResponseView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse.StatusHistoryView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.EvidenceView;
 
 public final class DisputeMapper {
 
@@ -67,12 +73,13 @@ public final class DisputeMapper {
                 appealEligible,
                 dispute.getAppealDeadline(),
                 appealStatus(dispute, now),
-                toPartyView(dispute.getAppeal()));
+                toPartyView(dispute.getAppeal()),
+                evidenceViews(dispute));
     }
 
-    /** Admin view; names may be null when they cannot be read. */
+    /** Admin view; names may be null when they cannot be read. {@code actions} are the signed-in admin's actions. */
     public static AdminDisputeDetailResponse toAdminDetail(Dispute dispute, String customerName, String providerName,
-                                                           Instant now) {
+                                                           Instant now, AdminDisputeDetailResponse.Actions actions) {
         List<StatusHistoryView> history = dispute.getStatusHistory().stream()
                 .map(DisputeMapper::toView)
                 .toList();
@@ -100,7 +107,89 @@ public final class DisputeMapper {
                 toView(dispute.getFinalDecision()),
                 dispute.getFinalizedAt(),
                 toView(dispute.getSettlement()),
-                history);
+                history,
+                evidenceViews(dispute),
+                actions);
+    }
+
+    public static EvidenceView toView(EvidenceFile file) {
+        return new EvidenceView(file.getId(), file.getFileName(), file.getType(),
+                file.getType() == null ? null : file.getType().mediaType(), file.getSizeBytes(),
+                file.getUploadedByRole(), file.getUploadedAt());
+    }
+
+    private static List<EvidenceView> evidenceViews(Dispute dispute) {
+        return dispute.getEvidenceFiles().stream().map(DisputeMapper::toView).toList();
+    }
+
+    private static final Pattern EMAIL_PATTERN =
+            Pattern.compile("(?i)(?<![a-z0-9])[a-z0-9][a-z0-9._%+-]*@[a-z0-9.-]+\\.[a-z]{2,}(?![a-z0-9])");
+    private static final Pattern PHONE_PATTERN =
+            Pattern.compile("(?i)(?:\\+?\\d{1,3}[-. ]?)?\\(?\\d{2,4}\\)?[-. ]?\\d{3,4}[-. ]?\\d{3,4}\\b");
+
+    /**
+     * Redacts direct personal identifiers (emails, phone numbers) from user-entered text before AI processing.
+     */
+    public static String redactPii(String text) {
+        if (text == null || text.isBlank()) {
+            return text;
+        }
+        String redacted = EMAIL_PATTERN.matcher(text).replaceAll("[EMAIL]");
+        return PHONE_PATTERN.matcher(redacted).replaceAll("[PHONE]");
+    }
+
+    /**
+     * Content for an AI summary (WP01 AI-005): only the fields of {@link DisputeAiSummaryData}. Parties become
+     * CUSTOMER / PROVIDER, history actors lose their ids and reasons, decisions are reduced to their result, and
+     * user-entered text undergoes PII minimization (redacting emails and phone numbers).
+     */
+    public static DisputeAiSummaryData toAiSummaryData(Dispute dispute, Instant now) {
+        boolean isFinal = dispute.getStatus() == DisputeStatus.RESOLVED_FINAL;
+        return new DisputeAiSummaryData(
+                dispute.getId(),
+                dispute.getStatus(),
+                dispute.getCategory(),
+                raiserSide(dispute),
+                redactPii(dispute.getDescription()),
+                dispute.getResponse() == null ? null : redactPii(dispute.getResponse().getText()),
+                dispute.getEvidenceFiles().stream()
+                        .map(f -> new DisputeAiSummaryData.EvidenceItem(redactPii(f.getFileName()),
+                                f.getType() == null ? null : f.getType().name()))
+                        .toList(),
+                dispute.getStatusHistory().stream()
+                        .map(e -> new DisputeAiSummaryData.HistoryItem(e.getToStatus(), e.getTimestamp(),
+                                actorKind(e.getActorRole())))
+                        .toList(),
+                toOutcomeOnly(dispute.getDecision()),
+                new DisputeAiSummaryData.AppealResult(appealStatus(dispute, now),
+                        isFinal ? toOutcomeOnly(dispute.getFinalDecision()) : null,
+                        isFinal ? DisputeStatus.RESOLVED_FINAL : null));
+    }
+
+    private static DisputeAiSummaryData.Side raiserSide(Dispute dispute) {
+        if (dispute.getRaisedByRole() == Role.PROVIDER) {
+            return DisputeAiSummaryData.Side.PROVIDER;
+        }
+        if (dispute.getRaisedByRole() == Role.CUSTOMER) {
+            return DisputeAiSummaryData.Side.CUSTOMER;
+        }
+        return dispute.getRaisedBy() != null && dispute.getRaisedBy().equals(dispute.getProviderId())
+                ? DisputeAiSummaryData.Side.PROVIDER : DisputeAiSummaryData.Side.CUSTOMER;
+    }
+
+    private static DisputeAiSummaryData.ActorKind actorKind(Role role) {
+        if (role == Role.CUSTOMER) {
+            return DisputeAiSummaryData.ActorKind.CUSTOMER;
+        }
+        if (role == Role.PROVIDER) {
+            return DisputeAiSummaryData.ActorKind.PROVIDER;
+        }
+        return isAdminRole(role) ? DisputeAiSummaryData.ActorKind.ADMIN : DisputeAiSummaryData.ActorKind.SYSTEM;
+    }
+
+    private static DisputeAiSummaryData.Outcome toOutcomeOnly(DisputeDecision decision) {
+        return decision == null ? null : new DisputeAiSummaryData.Outcome(decision.getAction(),
+                decision.getCustomerRefundPercent(), decision.isProviderPenaltyApplied());
     }
 
     public static DisputeSummaryResponse toSummary(Dispute dispute) {
@@ -141,12 +230,33 @@ public final class DisputeMapper {
             return null;
         }
         boolean viewerIsProvider = viewerId != null && viewerId.equals(dispute.getProviderId());
+        boolean isFinal = dispute.getStatus() == DisputeStatus.RESOLVED_FINAL;
         return new OutcomeView(
                 binding.getAction(),
                 binding.getCustomerRefundPercent(),
                 viewerIsProvider ? binding.isProviderPenaltyApplied() : null,
                 binding.getDecidedAt(),
-                dispute.getStatus() == DisputeStatus.RESOLVED_FINAL);
+                isFinal,
+                paymentNote(dispute, isFinal));
+    }
+
+    private static String paymentNote(Dispute dispute, boolean isFinal) {
+        if (!isFinal) {
+            return null;
+        }
+        DisputeSettlement settlement = dispute.getSettlement();
+        if (settlement == null) {
+            return OutcomeView.PAYMENT_IN_PROGRESS;
+        }
+        SettlementState state = settlement.getState();
+        if (state == null) {
+            return OutcomeView.PAYMENT_IN_PROGRESS;
+        }
+        return switch (state) {
+            case APPLIED -> null;
+            case MANUAL_REVIEW, REJECTED -> OutcomeView.PAYMENT_REQUIRES_ASSISTANCE;
+            case PENDING, NOT_APPLIED, FAILED -> OutcomeView.PAYMENT_IN_PROGRESS;
+        };
     }
 
     private static PartyResponseView toView(PartyResponse response) {
@@ -179,9 +289,14 @@ public final class DisputeMapper {
                 entry.getFromStatus(),
                 entry.getToStatus(),
                 null,
-                Roles.ADMIN_ROLES.contains(entry.getActorRole()) ? entry.getActorRole() : null,
+                isAdminRole(entry.getActorRole()) ? entry.getActorRole() : null,
                 null,
                 entry.getTimestamp());
+    }
+
+    /** Null-safe: SYSTEM entries (e.g. the finalizer's) have no role, and Set.of(...).contains(null) throws. */
+    private static boolean isAdminRole(Role role) {
+        return role != null && Roles.ADMIN_ROLES.contains(role);
     }
 
     private static boolean isPartyRole(Role role) {
@@ -240,9 +355,32 @@ public final class DisputeMapper {
         }
         return new SettlementView(
                 settlement.getState(),
+                settlement.financeStateOrPending(),
                 settlement.getBookingState(),
-                settlement.getPayoutState(),
                 settlement.getAttempts(),
-                settlement.getLastAttemptAt());
+                settlement.getLastAttemptAt(),
+                settlement.getNextAttemptAt(),
+                settlement.getLastErrorCode(),
+                settlement.getNotAppliedReason(),
+                settlement.getManualReviewReason());
+    }
+
+    /** Admin list row: the summary plus the read-only settlement state and manual review reason. */
+    public static AdminDisputeSummaryResponse toAdminSummary(Dispute dispute) {
+        DisputeSettlement settlement = dispute.getSettlement();
+        return new AdminDisputeSummaryResponse(
+                dispute.getId(),
+                dispute.getBookingId(),
+                dispute.getCustomerId(),
+                dispute.getProviderId(),
+                dispute.getRaisedByRole(),
+                dispute.getCategory(),
+                dispute.getStatus(),
+                dispute.getResponseDueAt(),
+                dispute.getAppealDeadline(),
+                dispute.getCreatedAt(),
+                dispute.getUpdatedAt(),
+                settlement == null ? null : settlement.getState(),
+                settlement == null ? null : settlement.getManualReviewReason());
     }
 }

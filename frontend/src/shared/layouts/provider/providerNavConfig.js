@@ -41,6 +41,12 @@ export const PROVIDER_NAV_SECTIONS = Object.freeze([
         icon: 'bookings',
       },
       {
+        id: 'disputes',
+        label: 'My Disputes',
+        to: '/provider/disputes',
+        icon: 'list',
+      },
+      {
         id: 'availability',
         label: 'Availability',
         to: '/provider/availability',

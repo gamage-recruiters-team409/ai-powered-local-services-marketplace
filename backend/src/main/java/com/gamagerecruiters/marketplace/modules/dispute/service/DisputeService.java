@@ -1,6 +1,10 @@
 package com.gamagerecruiters.marketplace.modules.dispute.service;
 
+import java.util.Set;
+
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAiSummaryData;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
@@ -20,6 +24,10 @@ public interface DisputeService {
     /** Disputes where the user is the customer or the provider, newest first. */
     DisputePageResponse<DisputeSummaryResponse> getMyDisputes(String userId, int page, int size);
 
+    /** As above, only in one of {@code statuses} (empty or null = every status). */
+    DisputePageResponse<DisputeSummaryResponse> getMyDisputes(String userId, Set<DisputeStatus> statuses, int page,
+                                                              int size);
+
     /** A dispute for one of its parties; 403 for anyone else. */
     DisputeDetailResponse getDisputeForParty(String userId, String disputeId);
 
@@ -32,4 +40,24 @@ public interface DisputeService {
 
     /** Admin detail. Caller must be authorized for the area. */
     DisputeDetailResponse getDisputeForAdmin(String disputeId);
+
+    /**
+     * Dispute content for an AI summary (WP01 AI-005). Enforces authorization: only parties to the dispute (customer
+     * or provider) or authorized admins (ADMIN, SUPER_ADMIN) may access it; unauthorized callers receive 403
+     * NOT_DISPUTE_PARTY. Unsynced/unknown disputes return 404 DISPUTE_NOT_FOUND.
+     *
+     * @param disputeId the dispute ID
+     * @param actorId the ID of the calling party or admin
+     * @param actorRole the role of the calling party or admin
+     * @return the AI summary data
+     */
+    DisputeAiSummaryData getDisputeForAiSummary(String disputeId, String actorId, Role actorRole);
+
+    /**
+     * In-process / trusted system overload for dispute content for an AI summary.
+     *
+     * @param disputeId the dispute ID
+     * @return the AI summary data
+     */
+    DisputeAiSummaryData getDisputeForAiSummary(String disputeId);
 }

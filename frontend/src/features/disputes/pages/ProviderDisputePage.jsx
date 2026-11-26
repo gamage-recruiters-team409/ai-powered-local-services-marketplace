@@ -13,17 +13,20 @@ import {
   StatusBadge,
 } from '../components/DisputeParts'
 import { DisputeAccessDenied, DisputeErrorState, DisputeNotFound, DisputeSkeleton } from '../components/DisputeStates'
+import { AppealSection } from '../components/AppealSection'
 import { DisputeIcon } from '../components/DisputeIcon'
 import { DisputeResponseForm } from '../components/DisputeResponseForm'
+import { EvidenceSection } from '../components/EvidenceSection'
 import { DISPUTE_STATUS, responderRoleOf } from '../config/disputeStatus'
 import { useDispute } from '../hooks/useDispute'
 import { useNow } from '../hooks/useNow'
 import { isResponseOverdue } from '../utils/countdown'
+import { EVIDENCE_OPEN_STATUSES } from '../utils/evidence'
 import { disputeTitle } from '../utils/format'
 import { responseClosedReason } from '../utils/responseState'
 import styles from '../disputes.module.css'
 
-const MY_BOOKINGS_PATH = '/provider/bookings'
+const MY_DISPUTES_PATH = '/provider/disputes'
 const ACTIVE_STATUSES = new Set([DISPUTE_STATUS.OPEN, DISPUTE_STATUS.AWAITING_RESPONSE, DISPUTE_STATUS.UNDER_REVIEW])
 
 /** Provider "Response dispute", rendered inside the shared ProviderLayout. */
@@ -44,7 +47,7 @@ export function ProviderDisputePage() {
       return <DisputeAccessDenied />
     }
     if (error.kind === 'not-found') {
-      return <DisputeNotFound backTo={MY_BOOKINGS_PATH} />
+      return <DisputeNotFound backTo={MY_DISPUTES_PATH} />
     }
     return <DisputeErrorState message={error.message} onRetry={reload} />
   }
@@ -52,7 +55,10 @@ export function ProviderDisputePage() {
 }
 
 function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
-  const [justSubmitted, setJustSubmitted] = useState(false)
+  const location = useLocation()
+  const justRaised = location.state?.justRaised === true
+  const raisedFailedUploads = location.state?.failedUploads ?? 0
+  const [justSubmitted, setJustSubmitted] = useState(null)
   const responderRole = responderRoleOf(dispute)
   const providerResponds = responderRole === 'PROVIDER'
   const title = disputeTitle(dispute)
@@ -63,7 +69,7 @@ function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
     <div className={styles.page}>
       <Breadcrumb items={[
         { label: 'Dashboard', to: '/provider' },
-        { label: 'My Bookings', to: MY_BOOKINGS_PATH },
+        { label: 'My Disputes', to: MY_DISPUTES_PATH },
         { label: title },
       ]}
       />
@@ -94,9 +100,18 @@ function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
       )}
 
       <div aria-live="polite">
+        {justRaised && (
+          <InlineMessage variant={raisedFailedUploads > 0 ? 'warning' : 'success'}>
+            Your dispute was submitted. The customer has 72 hours to respond.
+            {raisedFailedUploads > 0
+              && ` ${raisedFailedUploads} file(s) could not be uploaded; you can add them below.`}
+          </InlineMessage>
+        )}
         {justSubmitted && (
-          <InlineMessage variant="success">
+          <InlineMessage variant={justSubmitted.failedUploads > 0 ? 'warning' : 'success'}>
             Your response was submitted. An admin will now review both sides.
+            {justSubmitted.failedUploads > 0
+              && ` ${justSubmitted.failedUploads} file(s) could not be uploaded; you can add them below.`}
           </InlineMessage>
         )}
       </div>
@@ -113,16 +128,23 @@ function ProviderDisputeView({ dispute, now, onUpdated, onReload }) {
             waitingTitle={providerResponds ? 'Waiting for your response' : "Waiting for the customer's response"}
             overdue={overdue}
           />
+          <EvidenceSection
+            dispute={dispute}
+            viewerRole="PROVIDER"
+            canUpload={EVIDENCE_OPEN_STATUSES.has(dispute.status)}
+            onUploaded={(uploaded) => onUpdated({ ...dispute, evidenceFiles: [...(dispute.evidenceFiles ?? []), ...uploaded] })}
+          />
         </div>
         <div className={styles.column}>
+          <AppealSection dispute={dispute} now={now} viewerRole="PROVIDER" onUpdated={onUpdated} onReload={onReload} />
           {providerResponds && dispute.response && <ResponseView response={dispute.response} title="Your response" />}
           {providerResponds && !dispute.response && (
             <DisputeResponseForm
               disputeId={dispute.id}
               canRespond={reason === null}
               closedMessage={reason}
-              onSubmitted={(updated) => {
-                setJustSubmitted(true)
+              onSubmitted={(updated, result) => {
+                setJustSubmitted({ failedUploads: result?.failedUploads ?? 0 })
                 onUpdated(updated)
               }}
               onWindowClosed={onReload}

@@ -52,6 +52,7 @@ import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAdminSummaryR
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService;
+import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeEvidenceService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeResolutionService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
 
@@ -91,6 +92,9 @@ class DisputeResolutionWebTest {
     @MockitoBean
     private DisputeAdminQueryService adminQueryService;
 
+    @MockitoBean
+    private DisputeEvidenceService evidenceService;
+
     private String bearer(Role role) {
         String token = "token-" + role.name();
         String userId = "user-" + role.name();
@@ -110,7 +114,8 @@ class DisputeResolutionWebTest {
         Instant now = Instant.parse("2026-11-10T10:00:00Z");
         return new AdminDisputeDetailResponse(ID, "booking-1", "cust-1", null, "prov-1", null, "cust-1", Role.CUSTOMER,
                 DisputeCategory.NO_SHOW, "x", List.of(), DisputeStatus.RESOLVED, null, now, now, now, null,
-                now.plusSeconds(3600), AppealStatus.OPEN, null, null, null, null, List.of());
+                now.plusSeconds(3600), AppealStatus.OPEN, null, null, null, null, List.of(), List.of(),
+                new AdminDisputeDetailResponse.Actions(false, false, "ALREADY_DECIDED"));
     }
 
     private static DisputeDetailResponse partyDetail() {
@@ -203,7 +208,7 @@ class DisputeResolutionWebTest {
     @EnumSource(value = Role.class, names = {"ADMIN", "SUPER_ADMIN"})
     @DisplayName("GET /admin/disputes/summary and the filtered list: ADMIN and SUPER_ADMIN (read-only) -> 200")
     void summaryAndListAllowed(Role role) throws Exception {
-        when(adminQueryService.summary()).thenReturn(new DisputeAdminSummaryResponse(1, 2, 3, 4, Instant.EPOCH));
+        when(adminQueryService.summary()).thenReturn(new DisputeAdminSummaryResponse(1, 2, 3, 4, Instant.EPOCH, 5));
         when(adminQueryService.search(any(), any(), any(), any(), any(), any(), anyInt(), anyInt()))
                 .thenReturn(new DisputePageResponse<>(List.of(), 0, 20, 0, 0));
         String auth = bearer(role);
@@ -211,7 +216,8 @@ class DisputeResolutionWebTest {
         mockMvc.perform(get(ADMIN_DISPUTES + "/summary").header("Authorization", auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.appealed").value(3))
-                .andExpect(jsonPath("$.resolvedLast30Days").value(4));
+                .andExpect(jsonPath("$.resolvedLast30Days").value(4))
+                .andExpect(jsonPath("$.manualReview").value(5));
         mockMvc.perform(get(ADMIN_DISPUTES).header("Authorization", auth)
                         .param("status", "UNDER_REVIEW").param("category", "NO_SHOW").param("q", "booking-1")
                         .param("from", "2026-11-01").param("to", "2026-11-17").param("sort", "createdAt,asc"))
@@ -310,7 +316,7 @@ class DisputeResolutionWebTest {
     @Test
     @DisplayName("GET /admin/disputes/summary is not taken as a dispute id")
     void summaryIsNotAnId() throws Exception {
-        when(adminQueryService.summary()).thenReturn(new DisputeAdminSummaryResponse(0, 0, 0, 0, Instant.EPOCH));
+        when(adminQueryService.summary()).thenReturn(new DisputeAdminSummaryResponse(0, 0, 0, 0, Instant.EPOCH, 0));
 
         mockMvc.perform(get(ADMIN_DISPUTES + "/summary").header("Authorization", bearer(Role.ADMIN)))
                 .andExpect(status().isOk());

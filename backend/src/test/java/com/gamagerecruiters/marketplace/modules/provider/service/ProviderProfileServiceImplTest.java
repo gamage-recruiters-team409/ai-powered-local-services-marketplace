@@ -129,6 +129,64 @@ class ProviderProfileServiceImplTest {
     }
 
     @Test
+    void updateMyProfile_shouldRejectIndividualToBusinessAndPreserveVerificationIntegrity() {
+        ProviderProfile existingProfile = createExistingProfile();
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        UpdateProviderProfileRequest request = new UpdateProviderProfileRequest();
+        request.setProviderType(ProviderType.BUSINESS);
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> providerProfileService.updateMyProfile(request));
+
+        assertEquals("PROVIDER_TYPE_IMMUTABLE", exception.getErrorCode());
+        assertEquals(ProviderType.INDIVIDUAL, existingProfile.getProviderType());
+        verify(mongoTemplate, never()).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
+        verify(providerVerificationReverificationService, never())
+                .requestCategoryReverification(anyString());
+    }
+
+    @Test
+    void updateMyProfile_shouldRejectBusinessToIndividualAndPreserveVerificationIntegrity() {
+        ProviderProfile existingProfile = createExistingProfile();
+        existingProfile.setProviderType(ProviderType.BUSINESS);
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        UpdateProviderProfileRequest request = new UpdateProviderProfileRequest();
+        request.setProviderType(ProviderType.INDIVIDUAL);
+
+        ResourceConflictException exception = assertThrows(
+                ResourceConflictException.class,
+                () -> providerProfileService.updateMyProfile(request));
+
+        assertEquals("PROVIDER_TYPE_IMMUTABLE", exception.getErrorCode());
+        assertEquals(ProviderType.BUSINESS, existingProfile.getProviderType());
+        verify(mongoTemplate, never()).findAndModify(
+                any(Query.class), any(Update.class),
+                any(FindAndModifyOptions.class), eq(ProviderProfile.class));
+    }
+
+    @Test
+    void updateMyProfile_shouldAllowUnchangedTypeAndOtherProfileEdits() {
+        ProviderProfile existingProfile = createExistingProfile();
+        when(providerProfileRepository.findByUserId(USER_ID))
+                .thenReturn(Optional.of(existingProfile));
+
+        UpdateProviderProfileRequest request = new UpdateProviderProfileRequest();
+        request.setProviderType(ProviderType.INDIVIDUAL);
+        request.setDisplayName("Updated Provider");
+
+        ProviderProfileResponse response = providerProfileService.updateMyProfile(request);
+        assertEquals(ProviderType.INDIVIDUAL, response.getProviderType());
+        assertEquals("Updated Provider", response.getDisplayName());
+    }
+
+    @Test
     void createMyProfile_shouldCreateProfileForCurrentProvider() {
 
         CreateProviderProfileRequest request = createProfileRequest();
