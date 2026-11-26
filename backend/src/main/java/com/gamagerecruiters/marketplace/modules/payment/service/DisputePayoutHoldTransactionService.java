@@ -9,6 +9,7 @@ import java.util.Objects;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.gamagerecruiters.marketplace.modules.payment.domain.DisputePayoutHold;
 import com.gamagerecruiters.marketplace.modules.payment.domain.DisputePayoutHold.HoldStatus;
@@ -212,7 +213,8 @@ public class DisputePayoutHoldTransactionService {
             }
 
             if (existing.getStatus() == HoldStatus.PENDING
-                    || existing.getStatus() == HoldStatus.APPLIED) {
+                    || existing.getStatus() == HoldStatus.APPLIED
+                    || existing.getStatus() == HoldStatus.SETTLING) {
 
                 throw new IllegalStateException(
                         "Another active payout hold exists "
@@ -509,6 +511,58 @@ public class DisputePayoutHoldTransactionService {
                     "Committed release does not match original reservation");
         }
     }
+    /**
+     * Claims an applied dispute hold for refund settlement.
+     *
+     * This method must participate in the caller's existing MongoDB
+     * refund reservation transaction. It must not commit independently.
+     */
+    public DisputePayoutHold claimHoldForRefund(
+            DisputePayoutHold expectedHold) {
+
+        Objects.requireNonNull(expectedHold, "Expected hold is required");
+
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException(
+                    "Refund hold claim requires an active transaction");
+        }
+
+        String disputeId = expectedHold.getDisputeId();
+        requireDisputeId(disputeId);
+
+        DisputePayoutHold hold = requireHold(disputeId);
+
+        if (hold.getStatus() != HoldStatus.APPLIED
+                || !Objects.equals(hold.getId(), expectedHold.getId())
+                || !Objects.equals(hold.getPaymentId(), expectedHold.getPaymentId())
+                || !Objects.equals(hold.getBookingId(), expectedHold.getBookingId())
+                || !Objects.equals(hold.getProviderId(), expectedHold.getProviderId())
+                || !Objects.equals(hold.getCurrency(), expectedHold.getCurrency())
+                || hold.getAmount().compareTo(expectedHold.getAmount()) != 0) {
+
+            throw new IllegalStateException(
+                    "Dispute hold changed before refund settlement");
+        }
+
+        validateNoConflictingHold(hold);
+
+        requireMatchingCommittedEvent(
+                hold, HOLD_EVENT_PREFIX + disputeId);
+
+        String releaseKey = "DISPUTE_RELEASE:" + disputeId;
+
+        if (ledgerRepository.existsByEventKey(releaseKey)
+                || ledgerRepository.existsByEventKey(releaseKey + ":AVAILABLE")) {
+
+            throw new IllegalStateException(
+                    "Dispute hold already has release events");
+        }
+
+        hold.markSettling();
+
+        return holdRepository.save(hold);
+    }
+
     private static void requireDisputeId(String disputeId) {
 
         if (disputeId == null || disputeId.isBlank()) {

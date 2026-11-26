@@ -420,4 +420,198 @@ class PaymentIndexInitializerTest {
                                         return destination;
                                 });
         }
+
+        /**
+         * Verifies that an existing compatible PaymentIntent index
+         * is accepted without unnecessary index creation.
+         */
+        @Test
+        void shouldAcceptExistingPaymentIntentIndex() {
+                mockIndexes(paymentIntentIndex());
+
+                initializer.ensureIndex(
+                                "gatewayPaymentIntentId",
+                                PaymentIndexInitializer.GATEWAY_PAYMENT_INTENT_INDEX,
+                                true, true);
+
+                verify(collection, never())
+                                .createIndex(any(Bson.class), any(IndexOptions.class));
+        }
+
+        /**
+         * Verifies the exact index key, uniqueness, name,
+         * and string-only partial filter used during creation.
+         */
+        @Test
+        void shouldCreateMissingPaymentIntentIndex() {
+                mockIndexCreation(paymentIntentIndex());
+
+                initializer.ensureIndex(
+                                "gatewayPaymentIntentId",
+                                PaymentIndexInitializer.GATEWAY_PAYMENT_INTENT_INDEX,
+                                true, true);
+
+                ArgumentCaptor<Bson> keyCaptor =
+                                ArgumentCaptor.forClass(Bson.class);
+
+                ArgumentCaptor<IndexOptions> optionsCaptor =
+                                ArgumentCaptor.forClass(IndexOptions.class);
+
+                verify(collection, times(1))
+                                .createIndex(
+                                                keyCaptor.capture(),
+                                                optionsCaptor.capture());
+
+                org.bson.BsonDocument actualKey =
+                                keyCaptor.getValue().toBsonDocument(
+                                                Document.class,
+                                                com.mongodb.MongoClientSettings
+                                                                .getDefaultCodecRegistry());
+
+                org.bson.BsonDocument expectedKey =
+                                new Document("gatewayPaymentIntentId", 1)
+                                                .toBsonDocument(
+                                                                Document.class,
+                                                                com.mongodb.MongoClientSettings
+                                                                                .getDefaultCodecRegistry());
+
+                assertEquals(expectedKey, actualKey);
+
+                IndexOptions options = optionsCaptor.getValue();
+
+                assertEquals(
+                                "gatewayPaymentIntentId_1",
+                                options.getName());
+
+                assertTrue(Boolean.TRUE.equals(options.isUnique()));
+
+                assertEquals(
+                                new Document(
+                                                "gatewayPaymentIntentId",
+                                                new Document("$type", "string")),
+                                options.getPartialFilterExpression());
+        }
+
+        @Test
+        void shouldRejectNonUniquePaymentIntentIndex() {
+                Document index = paymentIntentIndex()
+                                .append("unique", false);
+
+                mockIndexes(index);
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureIndex(
+                                                "gatewayPaymentIntentId",
+                                                PaymentIndexInitializer.GATEWAY_PAYMENT_INTENT_INDEX,
+                                                true, true));
+        }
+
+        @Test
+        void shouldRejectPaymentIntentIndexWithoutPartialFilter() {
+                Document index = paymentIntentIndex();
+                index.remove("partialFilterExpression");
+
+                mockIndexes(index);
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureIndex(
+                                                "gatewayPaymentIntentId",
+                                                PaymentIndexInitializer.GATEWAY_PAYMENT_INTENT_INDEX,
+                                                true, true));
+        }
+
+        @Test
+        void shouldRejectPaymentIntentIndexWithIncorrectPartialFilter() {
+                Document index = paymentIntentIndex()
+                                .append(
+                                                "partialFilterExpression",
+                                                new Document(
+                                                                "gatewayPaymentIntentId",
+                                                                new Document("$exists", true)));
+
+                mockIndexes(index);
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureIndex(
+                                                "gatewayPaymentIntentId",
+                                                PaymentIndexInitializer.GATEWAY_PAYMENT_INTENT_INDEX,
+                                                true, true));
+        }
+
+        @Test
+        void shouldRejectPaymentIntentIndexWithIncorrectKey() {
+                Document index = paymentIntentIndex()
+                                .append("key",
+                                                new Document("gatewayRef", 1));
+
+                mockIndexes(index);
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureIndex(
+                                                "gatewayPaymentIntentId",
+                                                PaymentIndexInitializer.GATEWAY_PAYMENT_INTENT_INDEX,
+                                                true, true));
+        }
+
+        @Test
+        void shouldRejectPaymentIntentIndexWithIncorrectSortDirection() {
+                Document index = paymentIntentIndex()
+                                .append("key",
+                                                new Document("gatewayPaymentIntentId", -1));
+
+                mockIndexes(index);
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureIndex(
+                                                "gatewayPaymentIntentId",
+                                                PaymentIndexInitializer.GATEWAY_PAYMENT_INTENT_INDEX,
+                                                true, true));
+        }
+
+        /**
+         * Incompatible financial indexes require explicit migration.
+         * They must never be automatically dropped or replaced.
+         */
+        @Test
+        void shouldNotDropIncompatiblePaymentIntentIndex() {
+                Document index = paymentIntentIndex()
+                                .append("unique", false);
+
+                mockIndexes(index);
+
+                assertThrows(
+                                IllegalStateException.class,
+                                () -> initializer.ensureIndex(
+                                                "gatewayPaymentIntentId",
+                                                PaymentIndexInitializer.GATEWAY_PAYMENT_INTENT_INDEX,
+                                                true, true));
+
+                verify(collection, never()).dropIndex(anyString());
+
+                verify(collection, never())
+                                .createIndex(any(Bson.class), any(IndexOptions.class));
+        }
+
+        /**
+         * Creates metadata for a valid partial unique
+         * Stripe PaymentIntent index.
+         */
+        private Document paymentIntentIndex() {
+                return new Document(
+                                "name",
+                                PaymentIndexInitializer.GATEWAY_PAYMENT_INTENT_INDEX)
+                                .append("key",
+                                                new Document("gatewayPaymentIntentId", 1))
+                                .append("unique", true)
+                                .append(
+                                                "partialFilterExpression",
+                                                new Document(
+                                                                "gatewayPaymentIntentId",
+                                                                new Document("$type", "string")));
+        }
 }

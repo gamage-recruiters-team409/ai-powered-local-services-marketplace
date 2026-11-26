@@ -46,6 +46,13 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- WP07: Stripe SDK for hosted checkout and secure webhook verification -->
+        <dependency>
+            <groupId>com.stripe</groupId>
+            <artifactId>stripe-java</artifactId>
+            <version>29.2.0</version>
+        </dependency>
+
         <!-- Cloudinary file storage -->
         <dependency>
             <groupId>com.cloudinary</groupId>
