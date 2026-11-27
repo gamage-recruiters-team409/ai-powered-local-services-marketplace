@@ -18,6 +18,54 @@ class StripeCheckoutRedirectPolicyTest {
     private static final String CANCEL =
             "https://example.com/payment/cancel";
 
+    /**
+     * Returns only the explicitly configured server-side destinations.
+     */
+    @Test
+    void returnsConfiguredRedirects() {
+
+        var policy = new StripeCheckoutRedirectPolicy(
+                SUCCESS, CANCEL);
+
+        var redirects = policy.getConfiguredRedirects();
+
+        assertEquals(SUCCESS, redirects.successUrl());
+        assertEquals(CANCEL, redirects.cancelUrl());
+    }
+
+    @Test
+    void rejectsRedirectAccessWhenSuccessConfigurationIsMissing() {
+
+        var policy = new StripeCheckoutRedirectPolicy(
+                "", CANCEL);
+
+        assertThrows(
+                IllegalStateException.class,
+                policy::getConfiguredRedirects);
+    }
+
+    @Test
+    void rejectsRedirectAccessWhenCancelConfigurationIsMissing() {
+
+        var policy = new StripeCheckoutRedirectPolicy(
+                SUCCESS, "");
+
+        assertThrows(
+                IllegalStateException.class,
+                policy::getConfiguredRedirects);
+    }
+
+    @Test
+    void rejectsRedirectAccessWhenBothConfigurationsAreMissing() {
+
+        var policy = new StripeCheckoutRedirectPolicy(
+                null, null);
+
+        assertThrows(
+                IllegalStateException.class,
+                policy::getConfiguredRedirects);
+    }
+
     @Test
     void acceptsExactlyConfiguredHttpsUrls() {
         var policy = new StripeCheckoutRedirectPolicy(

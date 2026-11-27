@@ -2,11 +2,15 @@ package com.gamagerecruiters.marketplace.modules.payment.gateway;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import java.math.BigDecimal;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import com.gamagerecruiters.marketplace.modules.payment.config.StripeGatewayProperties;
 
@@ -31,6 +35,42 @@ class StripeCheckoutGatewayTest {
                     throw new AssertionError(
                             "Invalid checkout input must not reach Stripe.");
                 });
+    }
+
+    /**
+     * Currency capability is a local operation and must remain
+     * independent of gateway activation.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "USD", "EUR", "GBP", "LKR",
+            "usd", "eur", " gbp ", " lkr "
+    })
+    void supportsConfiguredCurrenciesWithoutExternalRequests(
+            String currency) {
+
+        StripeCheckoutGateway disabledGateway =
+                new StripeCheckoutGateway(
+                        new StripeGatewayProperties(false, "", ""));
+
+        assertTrue(gateway.supportsCurrency(currency));
+        assertTrue(disabledGateway.supportsCurrency(currency));
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {
+            " ", "JPY", "AUD", "CAD", "CHF", "INVALID"
+    })
+    void rejectsUnsupportedOrInvalidCurrencyCapability(
+            String currency) {
+
+        StripeCheckoutGateway disabledGateway =
+                new StripeCheckoutGateway(
+                        new StripeGatewayProperties(false, "", ""));
+
+        assertFalse(gateway.supportsCurrency(currency));
+        assertFalse(disabledGateway.supportsCurrency(currency));
     }
 
     @Test

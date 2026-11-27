@@ -8,6 +8,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -20,7 +21,8 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.StripeWebhookEven
  * Atomically processes verified Stripe payment captures.
  *
  * <p>Webhook event claiming, payment capture and event completion
- * are committed within one MongoDB transaction.</p>
+ * and booking confirmation are committed within one MongoDB
+ * transaction.</p>
  *
  * <p>Only authenticated, validated Stripe payment data may be passed
  * to this service. It does not verify webhook signatures.</p>
@@ -30,15 +32,24 @@ public class StripeWebhookTransactionService {
 
     private final MongoTemplate mongoTemplate;
     private final TransactionTemplate transactionTemplate;
+    private final BookingPaymentConfirmationService bookingConfirmationService;
+    private final boolean bookingConfirmationEnabled;
     private final PaymentStatusTransitionService transitionService =
             new PaymentStatusTransitionService();
 
     public StripeWebhookTransactionService(
             MongoTemplate mongoTemplate,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            BookingPaymentConfirmationService bookingConfirmationService,
+            @Value("${app.payment.booking-confirmation.enabled:false}") boolean bookingConfirmationEnabled) {
 
         this.mongoTemplate = Objects.requireNonNull(
                 mongoTemplate, "MongoTemplate is required");
+
+        this.bookingConfirmationService = Objects.requireNonNull(
+                bookingConfirmationService,
+                "Booking payment confirmation service is required");
+        this.bookingConfirmationEnabled = bookingConfirmationEnabled;
 
         this.transactionTemplate = new TransactionTemplate(
                 Objects.requireNonNull(
@@ -215,6 +226,12 @@ public class StripeWebhookTransactionService {
                     throw new IllegalStateException(
                             "Concurrent payment capture detected");
                 }
+            }
+
+            // Synchronize the booking before completing the verified event.
+            // A confirmation failure rolls back the local capture transaction.
+            if (bookingConfirmationEnabled) {
+                bookingConfirmationService.confirmVerifiedPayment(payment);
             }
 
             Query eventQuery = Query.query(
