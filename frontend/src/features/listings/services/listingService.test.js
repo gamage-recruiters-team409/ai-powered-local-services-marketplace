@@ -2,17 +2,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  computeListingPayoutBreakdown,
   createListing,
+  deleteListingMedia,
   extractListingApiError,
   extractListingErrorCode,
   findNearestSriLankaDistrict,
   formatModerationFeedback,
   getMyListings,
   getMyListingsSummary,
+  getPublicCategories,
   listingHttp,
+  normalizeCategoryTree,
+  resolveCategoryIconAsset,
   screenListingContent,
   updateListing,
   updateListingStatus,
+  uploadListingPhoto,
 } from './listingService'
 import {
   computeHaversineKm,
@@ -157,6 +163,85 @@ describe('listingService utilities & live shared apiClient integration', () => {
         'LINK_DETECTED: External URLs are not allowed',
       ]),
     ).toBe('Listing content appears to include a phone number. External URLs are not allowed.')
+  })
+
+  it('normalizes backend CategoryTreeResponse subcategories, resolves 3D icon assets, computes payouts, and uploads media', async () => {
+    vi.spyOn(listingHttp, 'get').mockResolvedValueOnce({
+      data: [
+        {
+          id: 'root-solar',
+          name: 'Solar & Renewable Energy',
+          slug: 'solar-energy',
+          icon: 'solar',
+          commissionRate: 0.08,
+          active: true,
+          subcategories: [
+            {
+              id: 'sub-inverter',
+              name: 'Inverter Servicing',
+              slug: 'inverter-servicing',
+              parentId: 'root-solar',
+              commissionRate: 0.125,
+              active: true,
+            },
+          ],
+        },
+      ],
+    })
+
+    const catRes = await getPublicCategories()
+    expect(catRes.categories).toHaveLength(1)
+    expect(catRes.categories[0].subcategories).toHaveLength(1)
+    expect(catRes.categories[0].children).toHaveLength(1)
+    expect(catRes.categories[0].subcategories[0].id).toBe('sub-inverter')
+    expect(catRes.categories[0].subcategories[0].commissionRate).toBe(0.125)
+    expect(resolveCategoryIconAsset(catRes.categories[0])).toBeTruthy()
+    expect(normalizeCategoryTree(null)).toEqual([])
+
+    const breakdown = computeListingPayoutBreakdown({
+      basePrice: 4000,
+      addOns: [
+        { addOnId: 'ao-1', extraPrice: 1000, extraDurationMin: 30, active: true },
+        { addOnId: 'ao-2', extraPrice: 500, extraDurationMin: 15, active: true },
+      ],
+      selectedAddOnIds: ['ao-1'],
+      commissionRate: 0.125,
+    })
+    expect(breakdown.customerTotal).toBe(5000)
+    expect(breakdown.platformFee).toBe(625)
+    expect(breakdown.providerNetPayout).toBe(4375)
+    expect(breakdown.commissionPctLabel).toBe('12.5%')
+    expect(breakdown.addOnsDurationMin).toBe(30)
+
+    const progressValues = []
+    vi.spyOn(listingHttp, 'post').mockImplementationOnce(async (_url, _body, config) => {
+      config?.onUploadProgress?.({ loaded: 50, total: 100 })
+      return {
+        data: {
+          publicId: 'localserve/service-listings/prov-1/photo-1',
+          secureUrl: 'https://res.cloudinary.com/demo/image/upload/v1/photo-1.jpg',
+          fileName: 'photo-1.jpg',
+          contentType: 'image/jpeg',
+          sizeBytes: 1024,
+        },
+      }
+    })
+
+    const sampleFile = new File(['abc'], 'photo-1.jpg', { type: 'image/jpeg' })
+    const uploadRes = await uploadListingPhoto(sampleFile, {
+      onProgress: (pct) => progressValues.push(pct),
+    })
+    expect(uploadRes.isFallback).toBe(false)
+    expect(uploadRes.uploaded.secureUrl).toContain('res.cloudinary.com')
+    expect(progressValues).toEqual([50, 100])
+
+    const deleteSpy = vi.spyOn(listingHttp, 'delete').mockResolvedValueOnce({ status: 204 })
+    const delRes = await deleteListingMedia('localserve/service-listings/prov-1/photo-1')
+    expect(delRes).toEqual({ deleted: true, isFallback: false })
+    expect(deleteSpy).toHaveBeenCalledWith('/listings/media', {
+      params: { publicId: 'localserve/service-listings/prov-1/photo-1' },
+      signal: undefined,
+    })
   })
 })
 

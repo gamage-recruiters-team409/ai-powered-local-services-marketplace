@@ -1,4 +1,24 @@
 import apiClient from '../../../shared/services/apiClient'
+import {
+  iconCatAppliance,
+  iconCatBarbering,
+  iconCatBeauty,
+  iconCatCctv,
+  iconCatCivil,
+  iconCatCleaning,
+  iconCatElectrical,
+  iconCatGardening,
+  iconCatHvac,
+  iconCatItTech,
+  iconCatMoving,
+  iconCatPainting,
+  iconCatPlumbing,
+  iconCatSafety,
+  iconCatSolar,
+  iconCatVideo,
+  iconCatWellness,
+  iconCatWoodwork,
+} from '../assets'
 
 const LOCAL_STORAGE_KEY = 'wp03.providerListings.v1'
 
@@ -75,66 +95,184 @@ export const DURATION_OPTIONS = Object.freeze([
   { label: 'Full Day (8 Hours)', value: 480 },
 ])
 
-export const FALLBACK_CATEGORIES = Object.freeze([
+const RAW_FALLBACK_CATEGORIES = [
   {
     id: 'cat-plumbing',
     name: 'Plumbing & Water Systems',
     slug: 'plumbing-water-systems',
+    icon: 'plumbing',
+    commissionRate: 0.1,
     active: true,
-    children: [
-      { id: 'cat-leak-repair', name: 'Emergency Leak Repair', slug: 'emergency-leak-repair', parentId: 'cat-plumbing', active: true },
-      { id: 'cat-pipe-drain', name: 'Drainage & Sewer Cleaning', slug: 'drainage-sewer-cleaning', parentId: 'cat-plumbing', active: false },
-      { id: 'cat-tank-motor', name: 'Water Tank & Motor Service', slug: 'water-tank-motor-service', parentId: 'cat-plumbing', active: true },
+    subcategories: [
+      { id: 'cat-leak-repair', name: 'Emergency Leak Repair', slug: 'emergency-leak-repair', parentId: 'cat-plumbing', commissionRate: 0.1, active: true },
+      { id: 'cat-pipe-drain', name: 'Drainage & Sewer Cleaning', slug: 'drainage-sewer-cleaning', parentId: 'cat-plumbing', commissionRate: 0.1, active: false },
+      { id: 'cat-tank-motor', name: 'Water Tank & Motor Service', slug: 'water-tank-motor-service', parentId: 'cat-plumbing', commissionRate: 0.1, active: true },
     ],
   },
   {
     id: 'cat-electrical',
     name: 'Electrical & Wiring',
     slug: 'electrical-wiring',
+    icon: 'electrical',
+    commissionRate: 0.1,
     active: true,
-    children: [
-      { id: 'cat-breaker', name: 'Circuit Breaker & Wiring', slug: 'circuit-breaker-wiring', parentId: 'cat-electrical', active: true },
-      { id: 'cat-solar', name: 'Solar & Inverter Maintenance', slug: 'solar-inverter-maintenance', parentId: 'cat-electrical', active: true },
+    subcategories: [
+      { id: 'cat-breaker', name: 'Circuit Breaker & Wiring', slug: 'circuit-breaker-wiring', parentId: 'cat-electrical', commissionRate: 0.1, active: true },
+      { id: 'cat-solar', name: 'Solar & Inverter Maintenance', slug: 'solar-inverter-maintenance', parentId: 'cat-electrical', commissionRate: 0.08, active: true },
     ],
   },
   {
     id: 'cat-hvac',
     name: 'Air Conditioning & HVAC',
     slug: 'air-conditioning-hvac',
+    icon: 'hvac',
+    commissionRate: 0.12,
     active: true,
-    children: [
-      { id: 'cat-ac-wash', name: 'Split AC Chemical Wash', slug: 'split-ac-chemical-wash', parentId: 'cat-hvac', active: true },
-      { id: 'cat-ac-gas', name: 'Inverter Gas Refill & Tune-up', slug: 'inverter-gas-refill', parentId: 'cat-hvac', active: true },
+    subcategories: [
+      { id: 'cat-ac-wash', name: 'Split AC Chemical Wash', slug: 'split-ac-chemical-wash', parentId: 'cat-hvac', commissionRate: 0.12, active: true },
+      { id: 'cat-ac-gas', name: 'Inverter Gas Refill & Tune-up', slug: 'inverter-gas-refill', parentId: 'cat-hvac', commissionRate: 0.12, active: true },
     ],
   },
   {
     id: 'cat-cleaning',
     name: 'Cleaning & Janitorial',
     slug: 'cleaning-janitorial',
+    icon: 'cleaning',
+    commissionRate: 0.1,
     active: true,
-    children: [
-      { id: 'cat-deep-clean', name: 'Deep Home Sanitation', slug: 'deep-home-sanitation', parentId: 'cat-cleaning', active: true },
+    subcategories: [
+      { id: 'cat-deep-clean', name: 'Deep Home Sanitation', slug: 'deep-home-sanitation', parentId: 'cat-cleaning', commissionRate: 0.1, active: true },
     ],
   },
   {
     id: 'cat-carpentry',
     name: 'Carpentry & Woodwork',
     slug: 'carpentry-woodwork',
+    icon: 'woodwork',
+    commissionRate: 0.1,
     active: true,
-    children: [
-      { id: 'cat-cabinet', name: 'Door, Lock & Cabinet Repair', slug: 'door-lock-cabinet-repair', parentId: 'cat-carpentry', active: true },
+    subcategories: [
+      { id: 'cat-cabinet', name: 'Door, Lock & Cabinet Repair', slug: 'door-lock-cabinet-repair', parentId: 'cat-carpentry', commissionRate: 0.1, active: true },
     ],
   },
   {
     id: 'cat-painting',
     name: 'Painting & Finishing',
     slug: 'painting-finishing',
+    icon: 'painting',
+    commissionRate: 0.1,
     active: true,
-    children: [
-      { id: 'cat-interior-paint', name: 'Interior & Waterproof Painting', slug: 'interior-waterproof-painting', parentId: 'cat-painting', active: true },
+    subcategories: [
+      { id: 'cat-interior-paint', name: 'Interior & Waterproof Painting', slug: 'interior-waterproof-painting', parentId: 'cat-painting', commissionRate: 0.1, active: true },
     ],
   },
-])
+]
+
+/**
+ * Normalizes backend CategoryTreeResponse (`subcategories`) and fixture trees (`children`)
+ * into a unified shape exposing both `subcategories` and `children`, plus numeric `commissionRate`.
+ */
+export function normalizeCategoryTree(rawCategories = []) {
+  if (!Array.isArray(rawCategories)) return []
+  return rawCategories.map((root) => {
+    const rootRate = Number.isFinite(Number(root?.commissionRate))
+      ? Number(root.commissionRate)
+      : 0.1
+    const rawSubs = Array.isArray(root?.subcategories)
+      ? root.subcategories
+      : Array.isArray(root?.children)
+        ? root.children
+        : []
+    const normalizedSubs = rawSubs.map((sub) => ({
+      ...sub,
+      parentId: sub?.parentId ?? root.id,
+      commissionRate: Number.isFinite(Number(sub?.commissionRate))
+        ? Number(sub.commissionRate)
+        : rootRate,
+      active: sub?.active !== false,
+    }))
+    return {
+      ...root,
+      commissionRate: rootRate,
+      active: root?.active !== false,
+      subcategories: normalizedSubs,
+      children: normalizedSubs,
+    }
+  })
+}
+
+export const FALLBACK_CATEGORIES = Object.freeze(normalizeCategoryTree(RAW_FALLBACK_CATEGORIES))
+
+const CATEGORY_ICON_MATCHERS = [
+  { pattern: /solar|renewable|inverter/i, asset: iconCatSolar },
+  { pattern: /electr|wiring|breaker/i, asset: iconCatElectrical },
+  { pattern: /plumb|pipe|water|leak|drain/i, asset: iconCatPlumbing },
+  { pattern: /hvac|air[\s-]*cond|ac\b|cooling/i, asset: iconCatHvac },
+  { pattern: /wood|carpent|cabinet|furniture/i, asset: iconCatWoodwork },
+  { pattern: /civil|mason|tile|roof|concret/i, asset: iconCatCivil },
+  { pattern: /appliance|fridge|washing/i, asset: iconCatAppliance },
+  { pattern: /paint|finish|waterproof/i, asset: iconCatPainting },
+  { pattern: /clean|sanit|janitor|pest/i, asset: iconCatCleaning },
+  { pattern: /cctv|camera|alarm|security/i, asset: iconCatCctv },
+  { pattern: /garden|landscap|lawn|tree/i, asset: iconCatGardening },
+  { pattern: /beauty|salon|bridal|makeup/i, asset: iconCatBeauty },
+  { pattern: /barber|groom/i, asset: iconCatBarbering },
+  { pattern: /wellness|spa|massage|fitness/i, asset: iconCatWellness },
+  { pattern: /it\b|computer|laptop|network|tech/i, asset: iconCatItTech },
+  { pattern: /mov|relocat|pack|assembl|transport/i, asset: iconCatMoving },
+  { pattern: /photo|video|event|media/i, asset: iconCatVideo },
+]
+
+export function resolveCategoryIconAsset(category) {
+  if (!category) return iconCatSafety
+  const haystack = `${category.icon || ''} ${category.slug || ''} ${category.name || ''}`
+  const hit = CATEGORY_ICON_MATCHERS.find((entry) => entry.pattern.test(haystack))
+  return hit ? hit.asset : iconCatSafety
+}
+
+export function computeListingPayoutBreakdown({
+  basePrice = 0,
+  addOns = [],
+  selectedAddOnIds = null,
+  commissionRate = 0.1,
+} = {}) {
+  const safeBase = Math.max(0, Number.isFinite(Number(basePrice)) ? Number(basePrice) : 0)
+  const selectedSet = Array.isArray(selectedAddOnIds) ? new Set(selectedAddOnIds) : null
+
+  let addOnsTotal = 0
+  let addOnsDurationMin = 0
+  if (Array.isArray(addOns) && selectedSet && selectedSet.size > 0) {
+    for (const item of addOns) {
+      if (item && item.active !== false && selectedSet.has(item.addOnId)) {
+        addOnsTotal += Math.max(0, Number(item.extraPrice || 0))
+        addOnsDurationMin += Math.max(0, Number(item.extraDurationMin || 0))
+      }
+    }
+  }
+
+  const normalizedRate = Math.min(
+    1,
+    Math.max(0, Number.isFinite(Number(commissionRate)) ? Number(commissionRate) : 0.1),
+  )
+  const customerTotal = Number((safeBase + addOnsTotal).toFixed(2))
+  const platformFee = Number((customerTotal * normalizedRate).toFixed(2))
+  const providerNetPayout = Number(Math.max(0, customerTotal - platformFee).toFixed(2))
+  const rawPct = Number((normalizedRate * 100).toFixed(2))
+  const commissionPctLabel = `${rawPct % 1 === 0 ? rawPct.toFixed(0) : rawPct}%`
+  const providerSharePct = Math.max(0, Math.min(100, Math.round((1 - normalizedRate) * 100)))
+
+  return {
+    baseAmount: Number(safeBase.toFixed(2)),
+    addOnsAmount: Number(addOnsTotal.toFixed(2)),
+    addOnsDurationMin,
+    customerTotal,
+    commissionRate: normalizedRate,
+    commissionPctLabel,
+    platformFee,
+    providerNetPayout,
+    providerSharePct,
+  }
+}
 
 export const SRI_LANKA_PROVINCES_FALLBACK = Object.freeze([
   {
@@ -642,9 +780,61 @@ export async function getPublicCategories(signal) {
   if (isListingFixtureMode()) {
     return { categories: FALLBACK_CATEGORIES, isFallback: true }
   }
-  const response = await listingHttp.get('/categories', { signal })
-  const list = Array.isArray(response?.data) ? response.data : []
+  const response = await listingHttp.get('/categories', { signal, _skipAuth: true })
+  const list = Array.isArray(response?.data) ? normalizeCategoryTree(response.data) : []
   return { categories: list, isFallback: false }
+}
+
+export async function uploadListingPhoto(file, { onProgress, signal } = {}) {
+  if (isListingFixtureMode()) {
+    if (typeof onProgress === 'function') {
+      onProgress(100)
+    }
+    const ext = file?.type === 'image/png' ? 'png' : file?.type === 'image/webp' ? 'webp' : 'jpg'
+    return {
+      uploaded: {
+        publicId: `fixture-${Date.now()}`,
+        secureUrl: `https://res.cloudinary.com/localserve/image/upload/v1/listings/fixture-${Date.now()}.${ext}`,
+        fileName: file?.name || `portfolio.${ext}`,
+        contentType: file?.type || 'image/jpeg',
+        sizeBytes: file?.size || 0,
+      },
+      isFallback: true,
+    }
+  }
+
+  const formData = new FormData()
+  formData.append('file', file)
+
+  const response = await listingHttp.post('/listings/media/upload', formData, {
+    signal,
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress: (progressEvent) => {
+      if (typeof onProgress === 'function' && progressEvent?.total) {
+        const pct = Math.min(99, Math.round((progressEvent.loaded / progressEvent.total) * 100))
+        onProgress(pct)
+      }
+    },
+  })
+  if (typeof onProgress === 'function') {
+    onProgress(100)
+  }
+  return { uploaded: response.data, isFallback: false }
+}
+
+export async function deleteListingMedia(publicId, signal) {
+  const trimmed = String(publicId || '').trim()
+  if (!trimmed) {
+    return { deleted: false, isFallback: isListingFixtureMode() }
+  }
+  if (isListingFixtureMode()) {
+    return { deleted: true, isFallback: true }
+  }
+  await listingHttp.delete('/listings/media', {
+    params: { publicId: trimmed },
+    signal,
+  })
+  return { deleted: true, isFallback: false }
 }
 
 export async function getDistrictLocations(signal) {

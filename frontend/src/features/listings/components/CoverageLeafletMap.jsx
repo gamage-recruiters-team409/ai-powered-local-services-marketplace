@@ -4,6 +4,7 @@ import 'leaflet/dist/leaflet.css'
 
 import { SRI_LANKA_BOUNDS } from '../services/sriLankaZones'
 import styles from '../styles/providerListings.module.css'
+import { IconClock, IconGps, IconMapPin, IconUsers } from './ListingIcons'
 
 function getZoomForRadius(radiusKm) {
   if (radiusKm <= 5) return 13
@@ -66,9 +67,9 @@ export function CoverageLeafletMap({
 
       const pinIcon = L.divIcon({
         className: 'wp03-leaflet-pin-wrapper',
-        html: '<span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:999px;background:rgba(15,118,110,0.22);border:2px solid #0f766e;"><span style="width:10px;height:10px;border-radius:999px;background:#0f766e;border:2px solid #ffffff;"></span></span>',
-        iconSize: [24, 24],
-        iconAnchor: [12, 12],
+        html: `<span class="${styles.mapPinRadarWrap}"><span class="${styles.mapPinRadarPulse}"></span><span class="${styles.mapPinCore}"></span></span>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
       })
 
       const circle = L.circle([latitude, longitude], {
@@ -153,8 +154,14 @@ export function CoverageLeafletMap({
         aria-label={`Leaflet coverage map centered on ${districtLabel} with ${radiusKm} km radius`}
       />
 
+      <div className={styles.leafletHintChip} aria-hidden="true">
+        <IconGps size={12} />
+        <span>Click map to move pin</span>
+      </div>
+
       <div className={styles.leafletTopChip}>
-        <span>📍 {districtLabel}</span>
+        <IconMapPin size={13} className={styles.iconTeal} />
+        <span>{districtLabel}</span>
         <span>·</span>
         <span>
           {Number(latitude).toFixed(4)}° N, {Number(longitude).toFixed(4)}° E
@@ -163,10 +170,14 @@ export function CoverageLeafletMap({
 
       <div className={styles.leafletBottomOverlay}>
         <span className={styles.coverageStatPill}>
-          ⚡ Avg. Emergency Response: <strong>32 mins</strong>
+          <IconClock size={13} className={styles.iconTeal} />
+          <span>Avg. Emergency Response:</span>
+          <strong>32 mins</strong>
         </span>
         <span className={styles.coverageStatPill}>
-          👥 Est. Reach: <strong>{estHouseholds}k households</strong>
+          <IconUsers size={13} className={styles.iconTeal} />
+          <span>Est. Reach:</span>
+          <strong>{estHouseholds}k households</strong>
         </span>
       </div>
     </div>
