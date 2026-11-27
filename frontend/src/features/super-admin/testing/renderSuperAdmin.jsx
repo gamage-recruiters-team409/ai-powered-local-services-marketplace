@@ -1,0 +1,145 @@
+import { render } from '@testing-library/react'
+import { createMemoryRouter, RouterProvider } from 'react-router-dom'
+
+import { ToastProvider } from '../../../shared/components/feedback'
+import { AreaAccessContext } from '../../disputes-admin/access/accessContexts'
+
+// jsdom does not implement the native <dialog> methods the shared Modal uses; provide minimal behaviour.
+if (typeof HTMLDialogElement !== 'undefined') {
+  HTMLDialogElement.prototype.showModal =
+    HTMLDialogElement.prototype.showModal ||
+    function showModal() {
+      this.open = true
+    }
+  HTMLDialogElement.prototype.close =
+    HTMLDialogElement.prototype.close ||
+    function close() {
+      this.open = false
+      this.dispatchEvent(new Event('close'))
+    }
+}
+
+/**
+ * Renders a super admin page inside a data router with SUPER_ADMIN access context.
+ */
+export function renderSuperAdminPage(Page, { path = '/', canEdit = true } = {}) {
+  const access = { area: 'SUPER_ADMIN', mode: canEdit ? 'edit' : 'view', canEdit, isViewOnly: !canEdit }
+  const router = createMemoryRouter(
+    [
+      {
+        path: '*',
+        element: (
+          <AreaAccessContext.Provider value={access}>
+            <ToastProvider>
+              <Page />
+            </ToastProvider>
+          </AreaAccessContext.Provider>
+        ),
+      },
+    ],
+    { initialEntries: [path] },
+  )
+  render(<RouterProvider router={router} />)
+  return router
+}
+
+export function apiError(status, error, message = error) {
+  return Object.assign(new Error(error), { response: { status, data: { status, error, message } } })
+}
+
+/** Build a mock analytics summary response with real + unavailable metrics. */
+export function analyticsSummary(overrides = {}) {
+  return {
+    openDisputes: { available: true, value: 19 },
+    adminAccounts: { available: true, value: 5 },
+    pendingVerifications: { available: true, value: 47 },
+    users: { available: false, reason: 'Not available yet — needs WP01 auth module' },
+    providers: { available: false, reason: 'Not available yet — needs WP01 auth module' },
+    bookings: { available: false, reason: 'Not available yet — needs WP05 booking module' },
+    bookingValue: { available: false, reason: 'Not available yet — needs WP07 payment module' },
+    commission: { available: false, reason: 'Not available yet — needs WP07 payment module' },
+    refunds: { available: false, reason: 'Not available yet — needs WP07 payment module' },
+    disputeBreakdown: { underReview: 8, awaitingResponse: 6, appealed: 3, manualReview: 2 },
+    recentAuditActivity: [
+      { id: 'a1', actorId: 'Eleanor Vance', action: 'PLATFORM_SETTINGS_UPDATED', targetRef: 'setting:booking', createdAt: new Date().toISOString() },
+    ],
+    ...overrides,
+  }
+}
+
+/** Build a mock disputes report response. */
+export function disputeReport(overrides = {}) {
+  return {
+    available: true,
+    type: 'disputes',
+    rows: [
+      { date: '2026-11-20', opened: 5, resolved: 3, underReview: 2, fullRefund: 2, partialRefund: 1, noRefund: 0, avgResolutionHours: 6.0 },
+    ],
+    totals: { opened: 5, resolved: 3, underReview: 2, fullRefund: 2, partialRefund: 1, noRefund: 0 },
+    totalElements: 1,
+    totalPages: 1,
+    page: 0,
+    size: 20,
+    ...overrides,
+  }
+}
+
+/** Build a mock grouped settings response. */
+export function settingsResponse() {
+  return [
+    {
+      group: 'booking',
+      version: 4,
+      updatedBy: 'Eleanor Vance',
+      updatedAt: '2026-03-24T10:00:00Z',
+      settings: [
+        { key: 'min_booking_notice_hours', value: 3, version: 4 },
+        { key: 'provider_response_cutoff_hours', value: 1, version: 4 },
+        { key: 'default_buffer_minutes', value: 30, version: 4 },
+        { key: 'max_reschedules_per_booking', value: 2, version: 4 },
+        { key: 'max_series_occurrences', value: 8, version: 4 },
+        { key: 'max_series_length_months', value: 3, version: 4 },
+        { key: 'provider_confirmation_window_hours', value: 12, version: 4 },
+      ],
+    },
+    {
+      group: 'cancellation',
+      version: 2,
+      settings: [
+        { key: 'refund_full_pct', value: 100, version: 2 },
+        { key: 'refund_partial_pct', value: 50, version: 2 },
+        { key: 'refund_none_window_hours', value: 2, version: 2 },
+        { key: 'refund_partial_window_hours', value: 24, version: 2 },
+        { key: 'repeat_cancellation_threshold', value: 4, version: 2 },
+        { key: 'provider_cancellation_refund_pct', value: 100, version: 2 },
+      ],
+    },
+    {
+      group: 'customer',
+      version: 1,
+      settings: [{ key: 'max_active_bookings', value: 5, version: 1 }],
+    },
+    {
+      group: 'dispute',
+      version: 1,
+      settings: [
+        { key: 'dispute_raise_window_hours', value: 72, version: 1 },
+        { key: 'dispute_response_cutoff_hours', value: 48, version: 1 },
+        { key: 'dispute_appeal_window_hours', value: 48, version: 1 },
+      ],
+    },
+    {
+      group: 'penalty',
+      version: 1,
+      settings: [{ key: 'provider_penalty_pct', value: 15, version: 1 }],
+    },
+    {
+      group: 'ai_thresholds',
+      version: 1,
+      settings: [
+        { key: 'ai_flag_threshold', value: 0.6, version: 1 },
+        { key: 'ai_high_risk_threshold', value: 0.85, version: 1 },
+      ],
+    },
+  ]
+}
