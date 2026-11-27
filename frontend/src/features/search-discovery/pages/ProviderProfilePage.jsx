@@ -53,9 +53,14 @@ const MESSAGE_PENDING_ACTION = {
     'Direct messaging will be connected in a later milestone. For now, review the provider details and request booking when it becomes available.',
 };
 
+const MAX_REVIEW_PAGE = 2147483647;
+
 function normalizeReviewPage(value) {
   const page = Number(value);
-  return Number.isInteger(page) && page >= 0 ? page : 0;
+  if (!Number.isInteger(page) || page < 0) {
+    return 0;
+  }
+  return Math.min(page, MAX_REVIEW_PAGE);
 }
 
 function formatReviewDate(value) {
@@ -573,13 +578,26 @@ function ReviewsPanel({
             })}
           </ul>
 
-          {reviewState.hasMore && nextReviewPageHref && (
-            <p className="provider-profile-panel-actions">
-              <Link className="provider-profile-primary-btn" to={nextReviewPageHref}>
-                Load more reviews
+          <div className="provider-profile-review-pagination">
+            {reviewState.page > 0 && firstReviewPageHref && (
+              <Link
+                className="provider-profile-secondary-btn"
+                to={firstReviewPageHref}
+                data-testid="review-prev-page"
+              >
+                Previous page
               </Link>
-            </p>
-          )}
+            )}
+            {reviewState.hasMore && nextReviewPageHref && (
+              <Link
+                className="provider-profile-primary-btn"
+                to={nextReviewPageHref}
+                data-testid="review-next-page"
+              >
+                Next page
+              </Link>
+            )}
+          </div>
         </>
       ) : (
         <>
@@ -597,14 +615,6 @@ function ReviewsPanel({
               </button>
             </p>
           )}
-          {reviewState.page > 0 &&
-            reviewState.totalPages !== null &&
-            !reviewState.hasMore &&
-            firstReviewPageHref && (
-              <p className="provider-profile-state-link">
-                <Link to={firstReviewPageHref}>Back to first review page</Link>
-              </p>
-            )}
         </>
       )}
     </section>

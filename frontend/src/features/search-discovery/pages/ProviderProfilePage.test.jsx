@@ -443,8 +443,9 @@ describe('ProviderProfilePage public review content', () => {
     expect(within(panel).getByText('Provider reply: Thank you')).toBeTruthy();
     expect(within(panel).getByText('2026-11-20')).toBeTruthy();
     expect(within(panel).queryByText(/private customer/i)).toBeNull();
-    expect(within(panel).getByRole('link', { name: 'Load more reviews' }))
-      .toBeTruthy();
+    // Page 0 of 3 — only "Next page" is shown; no "Previous page" on first page
+    expect(within(panel).getByRole('link', { name: 'Next page' })).toBeTruthy();
+    expect(within(panel).queryByRole('link', { name: 'Previous page' })).toBeNull();
   });
 
   it('keeps the usable profile visible and offers a review retry when content fails', async () => {
@@ -514,6 +515,128 @@ describe('ProviderProfilePage public review content', () => {
     expect(screen.queryByRole('heading', { name: 'First Provider' })).toBeNull();
     expect(fetchProviderProfile).toHaveBeenNthCalledWith(1, 'user-a', 0);
     expect(fetchProviderProfile).toHaveBeenNthCalledWith(2, 'user-b', 0);
+  });
+});
+
+describe('ProviderProfilePage review pagination navigation', () => {
+  function makeReviewPage(page, totalPages, text = 'A review') {
+    return liveResponse({
+      ...maya,
+      providerId: 'paged-prov',
+      name: 'Paged Provider',
+      reviewCount: totalPages * 5,
+      reviews: [{
+        id: `rev-p${page}`,
+        rating: 4,
+        text,
+        createdAt: '2026-11-01T08:00:00Z',
+        providerReply: null,
+      }],
+      reviewContentStatus: 'AVAILABLE',
+      reviewPage: page,
+      reviewPageSize: 5,
+      reviewTotalElements: totalPages * 5,
+      reviewTotalPages: totalPages,
+    });
+  }
+
+  it('navigates from page 0 to page 1 and shows Previous page on page 1', async () => {
+    fetchProviderProfile
+      .mockResolvedValueOnce(makeReviewPage(0, 3, 'Page zero review'))
+      .mockResolvedValueOnce(makeReviewPage(1, 3, 'Page one review'));
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/providers/paged-prov?tab=reviews']}>
+        <Routes>
+          <Route path="/providers/:providerId" element={<ProviderProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // Page 0: Next page shown, no Previous page
+    const nextLink = await screen.findByRole('link', { name: 'Next page' });
+    expect(nextLink.getAttribute('href')).toContain('reviewPage=1');
+    expect(screen.queryByRole('link', { name: 'Previous page' })).toBeNull();
+
+    await user.click(nextLink);
+
+    // Page 1: Both Previous and Next page shown (3 total pages)
+    expect(
+      await screen.findByRole('link', { name: 'Previous page' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Next page' })).toBeTruthy();
+    expect(screen.getByText('Page one review')).toBeTruthy();
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(1, 'paged-prov', 0);
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(2, 'paged-prov', 1);
+  });
+
+  it('shows no Next page on the final page and Previous page navigates back', async () => {
+    fetchProviderProfile
+      .mockResolvedValueOnce(makeReviewPage(1, 2, 'Last page review'))
+      .mockResolvedValueOnce(makeReviewPage(0, 2, 'First page review'));
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/providers/paged-prov?tab=reviews&reviewPage=1']}>
+        <Routes>
+          <Route path="/providers/:providerId" element={<ProviderProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // Page 1 (final of 2): Previous shown, Next hidden
+    const prevLink = await screen.findByRole('link', { name: 'Previous page' });
+    expect(prevLink.getAttribute('href')).not.toContain('reviewPage');
+    expect(screen.queryByRole('link', { name: 'Next page' })).toBeNull();
+
+    await user.click(prevLink);
+
+    // Page 0: only Next shown
+    expect(
+      await screen.findByRole('link', { name: 'Next page' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Previous page' })).toBeNull();
+    expect(screen.getByText('First page review')).toBeTruthy();
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(1, 'paged-prov', 1);
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(2, 'paged-prov', 0);
+  });
+
+  it('renders a later page directly from a URL without showing next on the last page', async () => {
+    fetchProviderProfile.mockResolvedValueOnce(makeReviewPage(2, 3, 'Third page review'));
+
+    render(
+      <MemoryRouter initialEntries={['/providers/paged-prov?tab=reviews&reviewPage=2']}>
+        <Routes>
+          <Route path="/providers/:providerId" element={<ProviderProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // Page 2 (final of 3): Previous shown, no Next
+    expect(
+      await screen.findByRole('link', { name: 'Previous page' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Next page' })).toBeNull();
+    expect(screen.getByText('Third page review')).toBeTruthy();
+    expect(fetchProviderProfile).toHaveBeenCalledWith('paged-prov', 2);
+  });
+
+  it('clamps a malformed reviewPage URL parameter to 0', async () => {
+    fetchProviderProfile.mockResolvedValueOnce(makeReviewPage(0, 2, 'Clamped page review'));
+
+    render(
+      <MemoryRouter initialEntries={['/providers/paged-prov?tab=reviews&reviewPage=not-a-number']}>
+        <Routes>
+          <Route path="/providers/:providerId" element={<ProviderProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText('Clamped page review'),
+    ).toBeTruthy();
+    expect(fetchProviderProfile).toHaveBeenCalledWith('paged-prov', 0);
   });
 });
 
