@@ -13,6 +13,7 @@ import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.adminusers.dto.AccountActionResponse;
 import com.gamagerecruiters.marketplace.modules.adminusers.service.AdminUserAccountService;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsActionType;
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsActorArea;
 import com.gamagerecruiters.marketplace.modules.operations.domain.OpsCaseAction;
@@ -78,6 +79,7 @@ public class OpsCaseActionService {
         eligibility.assertEligible(caseType, subjectId);
 
         boolean suspensionApplied = false;
+        boolean accountSuspended = false;
         Boolean listingVisibilitySynced = null;
         if (action == OpsActionType.SUSPEND) {
             // Runs the existing Admin Users suspend flow (its audit, 409 handling and listing-visibility cascade).
@@ -85,6 +87,7 @@ public class OpsCaseActionService {
             AccountActionResponse suspendResponse =
                     adminUserAccountService.suspend(actorId, actorRole, subjectId, SUSPEND_REASON_CODE, cleanNote);
             suspensionApplied = suspendResponse.changed();
+            accountSuspended = suspendResponse.status() == UserStatus.SUSPENDED;
             listingVisibilitySynced = suspendResponse.listingVisibilitySynced();
         }
 
@@ -93,7 +96,7 @@ public class OpsCaseActionService {
             recorded = store.insert(new OpsCaseAction(caseType, subjectId, action, cleanNote, actorId,
                     actorArea, clock.instant(), action.resultingStatus()));
         } catch (RuntimeException e) {
-            if (!suspensionApplied) {
+            if (!suspensionApplied && !accountSuspended) {
                 throw e; // No side-effect to reconcile: propagate as-is.
             }
             // Suspension succeeded but ops log failed: retry once before accepting partial success.

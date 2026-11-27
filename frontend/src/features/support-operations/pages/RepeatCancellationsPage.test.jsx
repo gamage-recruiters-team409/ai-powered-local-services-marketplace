@@ -105,7 +105,52 @@ describe('Repeat cancellations page', () => {
     })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
 
-    expect(await screen.findByText(/operations log could not be saved.*reconciled automatically/i)).toBeTruthy()
+    expect(await screen.findByText(/operations log could not be saved.*re-apply the action to sync/i)).toBeTruthy()
+  })
+
+  it('allows manual recovery by re-applying the action after partial success (F3 recovery)', async () => {
+    // 1st attempt: partial success
+    recordRepeatAction.mockResolvedValueOnce({
+      caseType: 'REPEAT_CANCELLATIONS',
+      subjectId: 'user-david-miller',
+      action: 'SUSPEND',
+      caseStatus: 'SUSPENDED',
+      suspensionApplied: true,
+      listingVisibilitySynced: true,
+      opsRecordPending: true,
+    })
+    renderOpsPage(RepeatCancellationsPage, { area: 'ADMIN' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Take action' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'SUSPEND' } })
+    fireEvent.change(within(dialog).getByLabelText(/Administrative note/), {
+      target: { value: 'Excessive cancellations impacting marketplace reliability.' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    // First attempt warns with actionable re-apply instruction
+    expect(await screen.findByText(/operations log could not be saved.*re-apply the action to sync/i)).toBeTruthy()
+
+    // 2nd attempt (manual recovery): re-apply succeeds
+    recordRepeatAction.mockResolvedValueOnce({
+      caseType: 'REPEAT_CANCELLATIONS',
+      subjectId: 'user-david-miller',
+      action: 'SUSPEND',
+      caseStatus: 'SUSPENDED',
+      suspensionApplied: false,
+      listingVisibilitySynced: null,
+      opsRecordPending: false,
+    })
+    fireEvent.click(await screen.findByRole('button', { name: 'Take action' }))
+    const dialog2 = screen.getByRole('dialog')
+    fireEvent.change(within(dialog2).getByRole('combobox'), { target: { value: 'SUSPEND' } })
+    fireEvent.change(within(dialog2).getByLabelText(/Administrative note/), {
+      target: { value: 'Re-applying to sync operations log after initial persistence failure.' },
+    })
+    fireEvent.click(within(dialog2).getByRole('button', { name: 'Apply' }))
+
+    // Manual recovery confirms complete recorded action
+    expect(await screen.findByText(/Suspension recorded for/)).toBeTruthy()
   })
 
   it('warns when account is suspended but provider listing visibility sync failed (partial success F3)', async () => {

@@ -325,4 +325,20 @@ class OpsCaseActionServiceTest {
         assertThat(retry.opsRecordPending()).isFalse();
         assertThat(retry.caseStatus()).isEqualTo(OpsCaseStatus.SUSPENDED);
     }
+
+    @Test
+    @DisplayName("F3: retrying an already-suspended account with continued ops log failure still safely returns partial success")
+    void retryAlreadySuspendedWithContinuedOpsFailureReturnsPartialSuccess() {
+        when(adminUserAccountService.suspend(eq(ADMIN_ID), eq(Role.ADMIN), eq(USER), any(), any()))
+                .thenReturn(new AccountActionResponse(USER, Role.CUSTOMER, UserStatus.SUSPENDED,
+                        UserStatus.SUSPENDED, false, null));
+        when(store.insert(any())).thenThrow(new RuntimeException("DB still down"));
+
+        OpsActionResult retry = service.record(OpsCaseType.REPEAT_CANCELLATION, USER, "SUSPEND", NOTE, ADMIN_ID,
+                Role.ADMIN);
+
+        assertThat(retry.opsRecordPending()).isTrue();
+        assertThat(retry.suspensionApplied()).isTrue();
+        assertThat(retry.caseStatus()).isEqualTo(OpsCaseStatus.SUSPENDED);
+    }
 }

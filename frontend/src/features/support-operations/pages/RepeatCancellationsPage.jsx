@@ -159,7 +159,7 @@ export default function RepeatCancellationsPage() {
     setActing(null)
     if (result?.opsRecordPending) {
       toast.warning(
-        `Account suspended for ${shortId(acting.userId)}, but the operations log could not be saved. It will be reconciled automatically.`
+        `Account suspended in Admin Users for ${shortId(acting.userId)}, but the operations log could not be saved. Please re-apply the action to sync the operations record.`
       )
     } else if (result?.listingVisibilitySynced === false) {
       toast.warning(
