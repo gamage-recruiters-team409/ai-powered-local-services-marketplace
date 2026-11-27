@@ -1,0 +1,261 @@
+{
+  "info": {
+    "_postman_id": "wp09-support-operations",
+    "name": "WP09 - Support Operations",
+    "description": "Support Admin operations API (`/api/v1/admin/operations`): overdue bookings, late cases (late-start stub + No-show reports), repeat cancellations and the support dashboard, plus CSV exports and case actions.\n\nReads: SUPPORT_ADMIN and ADMIN areas; SUPER_ADMIN read-only. Writes: SUPPORT_ADMIN and ADMIN record actions; SUSPEND (repeat cancellations only) is ADMIN-only (SUPPORT_ADMIN gets 403). No notifications are sent (record only). Sections from unavailable sources return `available:false` with a reason and no numbers.\n\nSet the collection variables before running: `supportToken`, `adminToken`, `superAdminToken` (access tokens from POST /auth/login) and the ids. Values below are placeholders only; never commit real tokens.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080/api/v1", "type": "string" },
+    { "key": "bearerPrefix", "value": "Bearer ", "type": "string" },
+    { "key": "supportToken", "value": "<SUPPORT_ADMIN_ACCESS_TOKEN>", "type": "string" },
+    { "key": "adminToken", "value": "<ADMIN_ACCESS_TOKEN>", "type": "string" },
+    { "key": "superAdminToken", "value": "<SUPER_ADMIN_ACCESS_TOKEN>", "type": "string" },
+    { "key": "bookingId", "value": "<OVERDUE_BOOKING_ID>", "type": "string" },
+    { "key": "lateCaseId", "value": "<LATE_CASE_ID>", "type": "string" },
+    { "key": "userId", "value": "<FLAGGED_USER_ID>", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "1. Reads (SUPPORT_ADMIN / ADMIN; SUPER_ADMIN read-only)",
+      "item": [
+        {
+          "name": "1.1 Overdue bookings",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "{{bearerPrefix}}{{supportToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/overdue-bookings?page=0&size=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "overdue-bookings"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" },
+                { "key": "search", "value": "", "disabled": true },
+                { "key": "delayBucket", "value": "4+", "disabled": true }
+              ]
+            },
+            "description": "Overdue bookings with days overdue, case status, summary cards and the 1/2/3/4+ day distribution. `available:false` with a reason if the WP05 source is unavailable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('has available flag', function () { pm.expect(pm.response.json()).to.have.property('available'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 Late cases (late-start stub + No-show reports)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "{{bearerPrefix}}{{supportToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/late-cases?page=0&size=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "late-cases"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" },
+                { "key": "urgency", "value": "CRITICAL", "disabled": true }
+              ]
+            },
+            "description": "`lateStarts` is a WP05 stub (available:false, no rows/counts/urgency/per-day). `noShowReports` lists NO_SHOW disputes with their real status."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('lateStarts stub is unavailable', function () {",
+                  "    pm.expect(pm.response.json().lateStarts.available).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 Repeat cancellations",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "{{bearerPrefix}}{{adminToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/repeat-cancellations?page=0&size=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "repeat-cancellations"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" },
+                { "key": "role", "value": "CUSTOMER", "disabled": true }
+              ]
+            },
+            "description": "Users at/over the configured threshold, with count, summary, top 5 and pending suspension recommendations. No cancellation rate %."
+          }
+        },
+        {
+          "name": "1.4 Support dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Authorization", "value": "{{bearerPrefix}}{{superAdminToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/dashboard",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "dashboard"]
+            },
+            "description": "Counts (overdue, late, flagged users), overdue distribution, late per day and the 5 most overdue bookings; each part carries its own `available`. Shown here with a SUPER_ADMIN read-only token."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Support actions (SUPPORT_ADMIN or ADMIN; recorded only)",
+      "item": [
+        {
+          "name": "2.1 Overdue: contact provider",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "{{bearerPrefix}}{{supportToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"CONTACT_PROVIDER\",\n  \"note\": \"Called the provider to confirm whether the job was completed.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/overdue-bookings/{{bookingId}}/actions",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "overdue-bookings", "{{bookingId}}", "actions"]
+            },
+            "description": "Actions: CONTACT_PROVIDER | CONTACT_CUSTOMER | ESCALATE | MARK_RESOLVED | REVIEWED | FLAG_CONCERN. Note required (10-1000)."
+          }
+        },
+        {
+          "name": "2.2 Late case: escalate",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "{{bearerPrefix}}{{supportToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"ESCALATE\",\n  \"note\": \"Escalating the late case for closer handling by the team.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/late-cases/{{lateCaseId}}/actions",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "late-cases", "{{lateCaseId}}", "actions"]
+            }
+          }
+        },
+        {
+          "name": "2.3 Repeat cancellation: recommend suspension (SUPPORT_ADMIN)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "{{bearerPrefix}}{{supportToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"RECOMMEND_SUSPENSION\",\n  \"note\": \"Repeated cancellations across several bookings; recommend an admin review.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/repeat-cancellations/{{userId}}/actions",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "repeat-cancellations", "{{userId}}", "actions"]
+            },
+            "description": "Recorded only. A SUPPORT_ADMIN SUSPEND here returns 403."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Admin actions (ADMIN only)",
+      "item": [
+        {
+          "name": "3.1 Repeat cancellation: SUSPEND (ADMIN)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "{{bearerPrefix}}{{adminToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"SUSPEND\",\n  \"note\": \"Suspending the account for repeated cancellations after review.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/repeat-cancellations/{{userId}}/actions",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "repeat-cancellations", "{{userId}}", "actions"]
+            },
+            "description": "Runs the Admin Users suspend flow (reasonCode REPEATED_CANCELLATIONS) with its audit, 409 handling and listing visibility. Reactivation is only in Admin Users. SUPPORT_ADMIN calling this is 403."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. CSV exports (ids / refs only; injection-safe; max 5000 rows)",
+      "item": [
+        {
+          "name": "4.1 Overdue bookings export.csv",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "{{bearerPrefix}}{{supportToken}}" } ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/overdue-bookings/export.csv",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "overdue-bookings", "export.csv"]
+            }
+          }
+        },
+        {
+          "name": "4.2 Late cases (No-show reports) export.csv",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "{{bearerPrefix}}{{supportToken}}" } ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/late-cases/export.csv",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "late-cases", "export.csv"]
+            }
+          }
+        },
+        {
+          "name": "4.3 Repeat cancellations export.csv",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "{{bearerPrefix}}{{adminToken}}" } ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/operations/repeat-cancellations/export.csv",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "operations", "repeat-cancellations", "export.csv"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

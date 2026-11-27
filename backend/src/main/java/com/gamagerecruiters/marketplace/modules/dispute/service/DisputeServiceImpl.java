@@ -425,6 +425,14 @@ public class DisputeServiceImpl implements DisputeService {
     }
 
     @Override
+    public DisputePageResponse<DisputeSummaryResponse> getDisputesForAdminByCategory(DisputeCategory category, int page,
+                                                                                     int size) {
+        Pageable pageable = pageRequest(page, size);
+        Page<Dispute> disputes = disputeRepository.findVisibleByCategory(category, pageable);
+        return DisputePageResponse.from(disputes.map(DisputeMapper::toSummary));
+    }
+
+    @Override
     public DisputeDetailResponse getDisputeForAdmin(String disputeId) {
         return DisputeMapper.toDetail(findDispute(disputeId));
     }

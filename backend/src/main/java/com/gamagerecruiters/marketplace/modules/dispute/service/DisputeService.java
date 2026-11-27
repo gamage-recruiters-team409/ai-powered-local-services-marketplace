@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.dispute.service;
 import java.util.Set;
 
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAiSummaryData;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
@@ -37,6 +38,13 @@ public interface DisputeService {
 
     /** Admin list, optionally filtered by status, newest first. Caller must be authorized for the area. */
     DisputePageResponse<DisputeSummaryResponse> getDisputesForAdmin(String status, int page, int size);
+
+    /**
+     * Admin list filtered by dispute category (e.g. {@link DisputeCategory#NO_SHOW}), newest first. The summaries carry
+     * the real dispute status. Read path for the operations No-show reports (WP09). Caller must be authorized for the area.
+     */
+    DisputePageResponse<DisputeSummaryResponse> getDisputesForAdminByCategory(DisputeCategory category, int page,
+                                                                              int size);
 
     /** Admin detail. Caller must be authorized for the area. */
     DisputeDetailResponse getDisputeForAdmin(String disputeId);
