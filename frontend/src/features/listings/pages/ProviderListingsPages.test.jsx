@@ -205,6 +205,17 @@ describe('WP03 Provider Listings Dashboard & 4-Step Wizard UI', () => {
     })
 
     vi.spyOn(listingHttp, 'post').mockImplementation(async (url, payload) => {
+      if (url === '/listings/media/upload') {
+        return {
+          data: {
+            publicId: `localserve/service-listings/prov-1/upload-${Date.now()}`,
+            secureUrl: `https://res.cloudinary.com/demo/image/upload/v1/localserve/service-listings/prov-1/uploaded-${Date.now()}.jpg`,
+            fileName: 'uploaded-work.jpg',
+            contentType: 'image/jpeg',
+            sizeBytes: 2048,
+          },
+        }
+      }
       const created = {
         id: `lst-${Date.now()}`,
         providerId: 'prov-1',
@@ -270,12 +281,12 @@ describe('WP03 Provider Listings Dashboard & 4-Step Wizard UI', () => {
     expect(screen.getByText('MODERATION & POLICY')).toBeTruthy()
 
     // Switch to List View and verify real Location & Delivery column
-    fireEvent.click(screen.getByRole('button', { name: /☰ List/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^List$/i }))
     expect(await screen.findByText('PRICE & BILLING MODEL')).toBeTruthy()
     expect(screen.getByText('LOCATION & DELIVERY')).toBeTruthy()
 
     // Switch back to Cards and open Pause modal
-    fireEvent.click(screen.getByRole('button', { name: /⊞ Cards/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Cards$/i }))
     const pauseButtons = await screen.findAllByRole('button', { name: /^Pause$/i })
     const enabledPauseBtn = pauseButtons.find((btn) => !btn.disabled)
     expect(enabledPauseBtn).toBeTruthy()
@@ -358,19 +369,30 @@ describe('WP03 Provider Listings Dashboard & 4-Step Wizard UI', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Add-On' }))
     expect(await screen.findByText('Roof Collector Valve Replacement')).toBeTruthy()
 
-    // Advance to Step 3: Portfolio Media
+    // Advance to Step 3: Portfolio Media (starts honestly empty without fake URLs; test upload + URL paste + keyboard reorder)
     fireEvent.click(screen.getByRole('button', { name: /Continue To Portfolio Media/i }))
     expect(await screen.findByRole('heading', { name: 'Media Dropzone' })).toBeTruthy()
+    expect(screen.getByText(/No portfolio photos added yet/i)).toBeTruthy()
+
+    const fileInput = screen.getByLabelText('Upload portfolio photos')
+    const samplePhoto = new File(['jpeg-bytes'], 'heater-install.jpg', { type: 'image/jpeg' })
+    fireEvent.change(fileInput, { target: { files: [samplePhoto] } })
+    expect(await screen.findByText(/1 \/ 8/)).toBeTruthy()
+
     fireEvent.change(screen.getByLabelText('HTTPS image URL'), {
-      target: { value: 'https://cdn.localserve.lk/listings/solar-2.jpg' },
+      target: { value: 'https://res.cloudinary.com/demo/image/upload/v1/solar-2.jpg' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
     expect(await screen.findByText(/2 \/ 8/)).toBeTruthy()
 
-    // Advance to Step 4: Review & Publish
+    // Keyboard reorder: move second photo earlier to become cover
+    fireEvent.click(screen.getByLabelText('Move solar-2.jpg left'))
+
+    // Advance to Step 4: Review & Publish (includes Live Customer Marketplace Preview)
     fireEvent.click(screen.getByRole('button', { name: /Continue To Review & Publish/i }))
     expect(await screen.findByText('Basic Details & Geography')).toBeTruthy()
-    expect(screen.getByText('Solar Water Heater Annual Service & Pipe Seal')).toBeTruthy()
+    expect(screen.getByText('Customer Marketplace Preview')).toBeTruthy()
+    expect(screen.getAllByText('Solar Water Heater Annual Service & Pipe Seal').length).toBeGreaterThan(0)
     expect(screen.getByText('Hourly Rate (LKR)')).toBeTruthy()
 
     // Publish listing -> returns to dashboard showing newly published item
@@ -411,6 +433,11 @@ describe('WP03 Provider Listings Dashboard & 4-Step Wizard UI', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: /Continue To Pricing & Add-Ons/i }))
     fireEvent.click(screen.getByRole('button', { name: /Continue To Portfolio Media/i }))
+    fireEvent.change(screen.getByLabelText('HTTPS image URL'), {
+      target: { value: 'https://res.cloudinary.com/demo/image/upload/v1/pipe-work.jpg' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
+    expect(await screen.findByText(/1 \/ 8/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Continue To Review & Publish/i }))
 
     fireEvent.click(screen.getByRole('button', { name: /Publish Service Listing/i }))
@@ -666,5 +693,174 @@ describe('WP03 Provider Listings Dashboard & 4-Step Wizard UI', () => {
         delete window.navigator.geolocation
       }
     }
+  })
+
+  it('guards unsaved Cancel edits, recovers interrupted sessionStorage drafts, calculates live net payout, and protects inactive-category edits', async () => {
+    // 1. Seed an interrupted sessionStorage draft and verify Resume Draft + Unsaved Cancel Confirmation
+    window.sessionStorage.setItem(
+      'wp03.wizardDraft.new.v1',
+      JSON.stringify({
+        savedAt: '2026-11-24T14:00:00Z',
+        step: 1,
+        form: {
+          title: 'Recovered Deep AC Coil Sanitation',
+          primaryCategoryId: 'cat-hvac',
+          subcategoryId: 'cat-ac-wash',
+          executionModel: 'ON_SITE',
+          district: 'Colombo',
+          baseCity: 'Nugegoda',
+          location: { longitude: 79.8891, latitude: 6.8649 },
+          coverageRadiusKm: 15,
+          serviceAreas: ['Nugegoda'],
+          description: '',
+          pricingModel: 'FIXED',
+          basePrice: '5000',
+          durationMin: 90,
+          addOns: [],
+          photos: [],
+        },
+      }),
+    )
+
+    renderWithRouter(['/provider/listings/new'])
+    expect(await screen.findByText(/Unsaved listing draft found:/i)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Resume Draft' }))
+    expect(screen.getByDisplayValue('Recovered Deep AC Coil Sanitation')).toBeTruthy()
+
+    // Insert a 1-click Scope Structure Starter and complete >= 50 chars
+    fireEvent.click(screen.getByRole('button', { name: /\+ What's Included/i }))
+    fireEvent.change(screen.getByLabelText(/Detailed Service Scope/i), {
+      target: {
+        value:
+          'Included in service: Complete indoor and outdoor coil wash, drain flush, and airflow check.',
+      },
+    })
+    expect(screen.getByText(/Ready to publish/i)).toBeTruthy()
+
+    // Clicking Cancel when dirty opens Unsaved Listing Changes confirmation; Keep Editing stays on page
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
+    expect(await screen.findByText('Unsaved Listing Changes')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Keep Editing' }))
+    expect(screen.queryByText('Unsaved Listing Changes')).toBeNull()
+
+    // Advance to Step 2 and verify Live Payout Simulator (HVAC 12% fee on Rs. 5,000 => Rs. 4,400 net)
+    fireEvent.click(screen.getByRole('button', { name: /Continue To Pricing & Add-Ons/i }))
+    expect(await screen.findByText('Your Estimated Take-Home Payout')).toBeTruthy()
+    expect(screen.getByText('Rs. 4,400.00')).toBeTruthy()
+
+    // Add an Add-On and verify two-step Delete confirmation (Keep vs Confirm Remove)
+    fireEvent.click(screen.getByRole('button', { name: /Add Another Extra/i }))
+    fireEvent.change(screen.getByLabelText(/Add-On Title/i), {
+      target: { value: 'Anti-Fungal Coil Coating' },
+    })
+    fireEvent.change(screen.getByLabelText(/Extra Price/i), {
+      target: { value: '1000' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save Add-On' }))
+    expect(await screen.findByText('Anti-Fungal Coil Coating')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Keep' }))
+    expect(screen.getByText('Anti-Fungal Coil Coating')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Remove' }))
+    expect(screen.queryByText('Anti-Fungal Coil Coating')).toBeNull()
+
+    // Discard Changes returns to Dashboard
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard Changes' }))
+    expect(await screen.findByText('My Service Listings')).toBeTruthy()
+
+    // 2. Verify Inactive-Category Edit Safeguard when backend GET /categories omits an admin-deactivated category
+    cleanup()
+    dbListings.push({
+      id: 'lst-deactivated-root',
+      providerId: 'prov-1',
+      categoryId: 'cat-removed-by-admin',
+      categoryName: 'Legacy Pool Maintenance',
+      parentCategoryId: null,
+      title: 'Swimming Pool Filter & Chlorine Maintenance',
+      description:
+        'Complete pool water pH balancing, sand filter backwash, vacuuming, and skimmer basket sanitation.',
+      pricingModel: 'FIXED',
+      basePrice: 4500,
+      durationMin: 120,
+      executionModel: 'ON_SITE',
+      district: 'Colombo',
+      baseCity: 'Colombo 07',
+      location: { longitude: 79.8653, latitude: 6.9125 },
+      coverageRadiusKm: 15,
+      serviceAreas: ['Colombo 07'],
+      images: ['https://res.cloudinary.com/demo/image/upload/v1/pool-1.jpg'],
+      coverImageUrl: 'https://res.cloudinary.com/demo/image/upload/v1/pool-1.jpg',
+      addOns: [],
+      status: 'ACTIVE',
+      availableForBooking: false,
+      categoryActive: false,
+      activeAddOnCount: 0,
+      moderationFlags: [],
+      ratingAvg: 0,
+      ratingCount: 0,
+    })
+
+    renderWithRouter(['/provider/listings/lst-deactivated-root/edit'])
+    expect(await screen.findByText('Edit Service Listing')).toBeTruthy()
+    expect(screen.getByText(/Your current category was deactivated by an administrator/i)).toBeTruthy()
+
+    // Blocked until provider picks an active category
+    fireEvent.click(screen.getByRole('button', { name: /Continue To Pricing & Add-Ons/i }))
+    expect(await screen.findByText(/Selected primary category is currently inactive/i)).toBeTruthy()
+  })
+
+  it('renders clean 3D-icon studio fallback cover, Price not set yet, New listing pill, and KPI Action Needed badge', async () => {
+    dbListings.unshift({
+      id: 'lst-draft-electrical',
+      providerId: 'prov-1',
+      categoryId: 'cat-breaker',
+      categoryName: 'Electrical & Wiring',
+      parentCategoryId: 'cat-electrical',
+      title: 'Home Electrical Wiring & Panel Check',
+      description: '',
+      pricingModel: 'FIXED',
+      basePrice: 0,
+      durationMin: 60,
+      executionModel: 'ON_SITE',
+      district: 'Colombo',
+      baseCity: 'Colombo',
+      location: { longitude: 79.8612, latitude: 6.9271 },
+      coverageRadiusKm: 15,
+      serviceAreas: ['Colombo'],
+      images: [],
+      coverImageUrl: null,
+      addOns: [],
+      status: 'DRAFT',
+      availableForBooking: false,
+      categoryActive: true,
+      activeAddOnCount: 0,
+      moderationFlags: [],
+      ratingAvg: 0,
+      ratingCount: 0,
+    })
+
+    renderWithRouter(['/provider/listings'])
+
+    expect(await screen.findByText('Home Electrical Wiring & Panel Check')).toBeTruthy()
+    expect(screen.getByTestId('studio-cover-fallback')).toBeTruthy()
+    expect(screen.getByText('No cover photo yet')).toBeTruthy()
+    expect(screen.getByText('Price not set yet')).toBeTruthy()
+    expect(screen.getByText('New listing')).toBeTruthy()
+    expect(screen.getByText(/1 Action Needed/i)).toBeTruthy()
+    expect(screen.queryByText(/Plumbing & Pipe Leak Repair/i)).toBeNull()
+  })
+
+  it('shows matched shimmer loading skeletons during initial dashboard and wizard load', async () => {
+    vi.spyOn(listingHttp, 'get').mockImplementation(() => new Promise(() => {}))
+
+    renderWithRouter(['/provider/listings'])
+    expect(screen.getByTestId('dashboard-loading-skeleton')).toBeTruthy()
+
+    cleanup()
+    renderWithRouter(['/provider/listings/new'])
+    expect(screen.getByTestId('wizard-loading-skeleton')).toBeTruthy()
   })
 })
