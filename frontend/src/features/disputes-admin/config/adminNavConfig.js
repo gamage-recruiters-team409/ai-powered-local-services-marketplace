@@ -33,8 +33,8 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
   { id: 'super-admin.dashboard', area: SUPER_ADMIN, section: null, label: 'Dashboard', path: '', icon: 'dashboard', description: 'Overview of the platform', page: lazy(() => import('../../super-admin/pages/SuperAdminDashboardPage')) },
   { id: 'super-admin.reports', area: SUPER_ADMIN, section: 'Insights', label: 'Reports', path: 'reports', icon: 'reports', description: 'Platform-wide reports', page: lazy(() => import('../../super-admin/pages/ReportsExportPage')) },
   { id: 'super-admin.platform-settings', area: SUPER_ADMIN, section: 'System', label: 'Platform settings', path: 'platform-settings', icon: 'settings', description: 'Commission, time windows and platform rules', page: lazy(() => import('../../super-admin/pages/PlatformSettingsPage')) },
-  { id: 'super-admin.admin-accounts', area: SUPER_ADMIN, section: 'System', label: 'Admin accounts', path: 'admin-accounts', icon: 'userPlus', description: 'Create and manage admin accounts' },
-  { id: 'super-admin.audit-log', area: SUPER_ADMIN, section: 'System', label: 'Audit log', path: 'audit-log', icon: 'fileText', description: 'Record of administrative actions' },
+  { id: 'super-admin.admin-accounts', area: SUPER_ADMIN, section: 'System', label: 'Admin accounts', path: 'admin-accounts', icon: 'userPlus', description: 'Create and manage admin accounts', page: lazy(() => import('../../super-admin/pages/AdminAccountsPage')) },
+  { id: 'super-admin.audit-log', area: SUPER_ADMIN, section: 'System', label: 'Audit log', path: 'audit-log', icon: 'fileText', description: 'Record of administrative actions', page: lazy(() => import('../../super-admin/pages/AuditLogPage')) },
 
   // ---------- Admin ----------
   { id: 'admin.dashboard', area: ADMIN, section: null, label: 'Dashboard', path: '', icon: 'dashboard', description: 'Overview of admin operations' },

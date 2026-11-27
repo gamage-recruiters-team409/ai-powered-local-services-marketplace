@@ -86,6 +86,52 @@ export async function exportReportCsv(type, { from, to } = {}) {
   return { blob: response.data, filename }
 }
 
+// ---- Admin accounts (PR #20) ----
+
+/** GET /admin/accounts?role=&status=&q=&page=&size=&sort= -> AdminPageResponse<AdminAccountResponse>. */
+export async function listAdminAccounts({ role, status, q, page = 0, size = 20, sort = 'createdAt,desc' } = {}, signal) {
+  const params = Object.fromEntries(
+    Object.entries({ role, status, q, page, size, sort }).filter(([, v]) => v !== undefined && v !== null && v !== ''),
+  )
+  const { data } = await superHttp.get('/admin/accounts', { params, signal })
+  return data
+}
+
+/** GET /admin/accounts/summary -> AdminAccountSummaryResponse { total, byRole, byStatus }. */
+export async function getAdminAccountsSummary(signal) {
+  const { data } = await superHttp.get('/admin/accounts/summary', { signal })
+  return data
+}
+
+/** POST /admin/accounts { fullName, email, temporaryPassword, role } -> AdminAccountResponse. */
+export async function createAdminAccount(body) {
+  const { data } = await superHttp.post('/admin/accounts', body)
+  return data
+}
+
+/** PATCH /admin/accounts/{userId}/status { status, reason } -> AdminStatusChangeResponse. */
+export async function changeAdminStatus(userId, { status, reason }) {
+  const { data } = await superHttp.patch(`/admin/accounts/${encodeURIComponent(userId)}/status`, { status, reason })
+  return data
+}
+
+/** PATCH /admin/accounts/{userId}/role { role, reason } -> change role endpoint. */
+export async function changeAdminRole(userId, { role, reason }) {
+  const { data } = await superHttp.patch(`/admin/accounts/${encodeURIComponent(userId)}/role`, { role, reason })
+  return data
+}
+
+// ---- Audit logs (PR #20, FR-ADM-009) ----
+
+/** GET /admin/audit-logs?actorId=&targetUserId=&action=&from=&to=&page=&size= -> AdminPageResponse<AdminAuditLogResponse>. */
+export async function getAdminAuditLogs({ actorId, targetUserId, action, from, to, page = 0, size = 20 } = {}, signal) {
+  const params = Object.fromEntries(
+    Object.entries({ actorId, targetUserId, action, from, to, page, size }).filter(([, v]) => v !== undefined && v !== null && v !== ''),
+  )
+  const { data } = await superHttp.get('/admin/audit-logs', { params, signal })
+  return data
+}
+
 export function isRequestCancelled(error) {
   return axios.isCancel(error)
 }

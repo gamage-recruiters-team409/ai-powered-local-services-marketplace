@@ -143,3 +143,98 @@ export function settingsResponse() {
     },
   ]
 }
+
+/** Build mock admin accounts page response. */
+export function adminAccountsResponse(overrides = {}) {
+  return {
+    items: [
+      {
+        id: 'user-1',
+        fullName: 'Eleanor Vance',
+        email: 'eleanor.vance@marketplace.local',
+        role: 'SUPER_ADMIN',
+        status: 'ACTIVE',
+        createdAt: '2026-03-24T10:00:00Z',
+      },
+      {
+        id: 'user-2',
+        fullName: 'Alex Dawson',
+        email: 'alex.dawson@marketplace.local',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        createdAt: '2026-03-24T10:00:00Z',
+      },
+      {
+        id: 'user-3',
+        fullName: 'David Silva',
+        email: 'david.silva@marketplace.local',
+        role: 'MODERATOR',
+        status: 'SUSPENDED',
+        createdAt: '2026-03-14T10:00:00Z',
+      },
+    ],
+    total: 3,
+    page: 0,
+    size: 20,
+    totalPages: 1,
+    ...overrides,
+  }
+}
+
+/** Build mock admin accounts summary response. */
+export function adminAccountsSummary(overrides = {}) {
+  return {
+    total: 7,
+    byRole: {
+      SUPER_ADMIN: 1,
+      ADMIN: 1,
+      SUPPORT_ADMIN: 2,
+      MODERATOR: 2,
+      FINANCE_ADMIN: 1,
+    },
+    byStatus: {
+      ACTIVE: 6,
+      SUSPENDED: 1,
+    },
+    ...overrides,
+  }
+}
+
+/** Build mock audit logs response. */
+export function auditLogsResponse(overrides = {}) {
+  return {
+    items: [
+      {
+        id: 'log-1',
+        actorId: 'Eleanor Vance',
+        actorRole: 'SUPER_ADMIN',
+        action: 'ADMIN_ACCOUNT_CREATED',
+        targetUserId: 'Kasun Fernando',
+        targetRole: 'SUPPORT_ADMIN',
+        fromStatus: null,
+        toStatus: null,
+        reason: null,
+        outcome: 'SUCCESS',
+        createdAt: '2026-03-24T11:00:00Z',
+      },
+      {
+        id: 'log-2',
+        actorId: 'Eleanor Vance',
+        actorRole: 'SUPER_ADMIN',
+        action: 'ADMIN_STATUS_CHANGED',
+        targetUserId: 'David Silva',
+        targetRole: 'MODERATOR',
+        fromStatus: 'ACTIVE',
+        toStatus: 'SUSPENDED',
+        reason: 'Policy violation',
+        outcome: 'SUCCESS',
+        createdAt: '2026-03-24T12:00:00Z',
+      },
+    ],
+    total: 248,
+    page: 0,
+    size: 20,
+    totalPages: 13,
+    ...overrides,
+  }
+}
