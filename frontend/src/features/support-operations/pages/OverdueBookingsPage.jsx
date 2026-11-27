@@ -94,9 +94,15 @@ export default function OverdueBookingsPage() {
   const exportCsv = async () => {
     setExporting(true)
     try {
-      const { blob, filename } = await exportOverdueCsv({ search: q || undefined, delayBucket: delayBucket || undefined })
+      const { blob, filename, sourceLimited, truncated } = await exportOverdueCsv({ search: q || undefined, delayBucket: delayBucket || undefined })
       downloadBlob(blob, filename)
-      toast.success(`Exported ${filename}.`)
+      if (sourceLimited) {
+        toast.warning(`Exported ${filename}. Note: Data source limit reached; some records may be omitted.`)
+      } else if (truncated) {
+        toast.warning(`Exported ${filename}. Note: Export capped at maximum export limit.`)
+      } else {
+        toast.success(`Exported ${filename}.`)
+      }
     } catch (error) {
       toast.error(parseApiError(error).message)
     } finally {

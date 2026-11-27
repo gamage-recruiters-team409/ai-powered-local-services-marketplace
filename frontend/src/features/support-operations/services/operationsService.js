@@ -122,8 +122,14 @@ export function fallbackExportName(prefix, now = new Date()) {
 
 async function downloadCsv(path, params, prefix) {
   const response = await opsHttp.get(path, { params, responseType: 'blob' })
-  const filename = filenameFromDisposition(response.headers?.['content-disposition']) ?? fallbackExportName(prefix)
-  return { blob: response.data, filename }
+  const headers = response.headers ?? {}
+  const getHeader = (name) => headers[name.toLowerCase()] ?? headers[name]
+  const filename = filenameFromDisposition(getHeader('content-disposition')) ?? fallbackExportName(prefix)
+  const sourceLimited = String(getHeader('x-export-source-limited')).toLowerCase() === 'true'
+  const truncated = String(getHeader('x-export-truncated')).toLowerCase() === 'true'
+  const rowsRaw = getHeader('x-export-rows')
+  const rows = rowsRaw != null && !Number.isNaN(Number(rowsRaw)) ? Number(rowsRaw) : null
+  return { blob: response.data, filename, sourceLimited, truncated, rows }
 }
 
 export function isRequestCancelled(error) {

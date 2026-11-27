@@ -91,6 +91,18 @@ describe('Overdue bookings page', () => {
     await waitFor(() => expect(exportOverdueCsv).toHaveBeenCalled())
   })
 
+  it('warns when CSV export is source-limited (F4)', async () => {
+    exportOverdueCsv.mockResolvedValue({
+      blob: new Blob(['x']),
+      filename: 'overdue-bookings.csv',
+      sourceLimited: true,
+      truncated: false,
+    })
+    renderOpsPage(OverdueBookingsPage)
+    fireEvent.click(await screen.findByRole('button', { name: 'Export' }))
+    expect(await screen.findByText(/Data source limit reached; some records may be omitted/i)).toBeTruthy()
+  })
+
   it('F6: filtering the table does not change distribution percentages or produce values above 100%', async () => {
     // 50 bookings in 1-day bucket out of 100 total overdue bookings, but table returns only 5 filtered rows
     getOverdueBookings.mockResolvedValue(

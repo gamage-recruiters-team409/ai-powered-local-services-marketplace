@@ -4,7 +4,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import RepeatCancellationsPage from './RepeatCancellationsPage'
-import { getRepeatCancellations, recordRepeatAction } from '../services/operationsService'
+import { exportRepeatCsv, getRepeatCancellations, recordRepeatAction } from '../services/operationsService'
 import { renderOpsPage, repeatSection } from '../testing/renderOps'
 
 vi.mock('../services/operationsService', () => ({
@@ -84,5 +84,85 @@ describe('Repeat cancellations page', () => {
     await waitFor(() =>
       expect(recordRepeatAction).toHaveBeenCalledWith('user-david-miller', expect.objectContaining({ action: 'FLAG_CONCERN' })),
     )
+  })
+
+  it('warns when account is suspended but operations record persistence is pending (partial success F3)', async () => {
+    recordRepeatAction.mockResolvedValue({
+      caseType: 'REPEAT_CANCELLATIONS',
+      subjectId: 'user-david-miller',
+      action: 'SUSPEND',
+      caseStatus: 'SUSPENDED',
+      suspensionApplied: true,
+      listingVisibilitySynced: true,
+      opsRecordPending: true,
+    })
+    renderOpsPage(RepeatCancellationsPage, { area: 'ADMIN' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Take action' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'SUSPEND' } })
+    fireEvent.change(within(dialog).getByLabelText(/Administrative note/), {
+      target: { value: 'Excessive cancellations impacting marketplace reliability.' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    expect(await screen.findByText(/operations log could not be saved.*reconciled automatically/i)).toBeTruthy()
+  })
+
+  it('warns when account is suspended but provider listing visibility sync failed (partial success F3)', async () => {
+    recordRepeatAction.mockResolvedValue({
+      caseType: 'REPEAT_CANCELLATIONS',
+      subjectId: 'user-david-miller',
+      action: 'SUSPEND',
+      caseStatus: 'SUSPENDED',
+      suspensionApplied: true,
+      listingVisibilitySynced: false,
+      opsRecordPending: false,
+    })
+    renderOpsPage(RepeatCancellationsPage, { area: 'ADMIN' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Take action' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByRole('combobox'), { target: { value: 'SUSPEND' } })
+    fireEvent.change(within(dialog).getByLabelText(/Administrative note/), {
+      target: { value: 'Excessive cancellations impacting marketplace reliability.' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }))
+
+    expect(await screen.findByText(/listing visibility synchronization remains incomplete.*verify listings/i)).toBeTruthy()
+  })
+
+  it('warns when CSV export is source-limited (F4)', async () => {
+    exportRepeatCsv.mockResolvedValue({
+      blob: new Blob(['x']),
+      filename: 'repeat-cancellations.csv',
+      sourceLimited: true,
+      truncated: false,
+    })
+    renderOpsPage(RepeatCancellationsPage)
+    fireEvent.click(await screen.findByRole('button', { name: 'Export log' }))
+    expect(await screen.findByText(/Data source limit reached; some records may be omitted/i)).toBeTruthy()
+  })
+
+  it('warns when CSV export is truncated at max limit (F4)', async () => {
+    exportRepeatCsv.mockResolvedValue({
+      blob: new Blob(['x']),
+      filename: 'repeat-cancellations.csv',
+      sourceLimited: false,
+      truncated: true,
+    })
+    renderOpsPage(RepeatCancellationsPage)
+    fireEvent.click(await screen.findByRole('button', { name: 'Export log' }))
+    expect(await screen.findByText(/Export capped at maximum export limit/i)).toBeTruthy()
+  })
+
+  it('shows standard success notification when CSV export is complete (F4)', async () => {
+    exportRepeatCsv.mockResolvedValue({
+      blob: new Blob(['x']),
+      filename: 'repeat-cancellations.csv',
+      sourceLimited: false,
+      truncated: false,
+    })
+    renderOpsPage(RepeatCancellationsPage)
+    fireEvent.click(await screen.findByRole('button', { name: 'Export log' }))
+    expect(await screen.findByText(/Exported repeat-cancellations\.csv\./)).toBeTruthy()
   })
 })

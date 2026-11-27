@@ -100,9 +100,15 @@ export default function RepeatCancellationsPage() {
   const exportCsv = async () => {
     setExporting(true)
     try {
-      const { blob, filename } = await exportRepeatCsv({ search: q || undefined, role: role || undefined })
+      const { blob, filename, sourceLimited, truncated } = await exportRepeatCsv({ search: q || undefined, role: role || undefined })
       downloadBlob(blob, filename)
-      toast.success(`Exported ${filename}.`)
+      if (sourceLimited) {
+        toast.warning(`Exported ${filename}. Note: Data source limit reached; some records may be omitted.`)
+      } else if (truncated) {
+        toast.warning(`Exported ${filename}. Note: Export capped at maximum export limit.`)
+      } else {
+        toast.success(`Exported ${filename}.`)
+      }
     } catch (error) {
       toast.error(parseApiError(error).message)
     } finally {
@@ -143,14 +149,25 @@ export default function RepeatCancellationsPage() {
     : undefined
 
   const submitAction = async (action, note) => {
+    let result
     try {
-      await recordRepeatAction(acting.userId, { action, note })
+      result = await recordRepeatAction(acting.userId, { action, note })
     } catch (err) {
       if (parseApiError(err).code === 'CONCURRENT_MODIFICATION') setReloadKey((k) => k + 1)
       throw err
     }
     setActing(null)
-    toast.success(`${ACTION_LABEL[action] ?? 'Action'} recorded for ${shortId(acting.userId)}.`)
+    if (result?.opsRecordPending) {
+      toast.warning(
+        `Account suspended for ${shortId(acting.userId)}, but the operations log could not be saved. It will be reconciled automatically.`
+      )
+    } else if (result?.listingVisibilitySynced === false) {
+      toast.warning(
+        `Account suspended for ${shortId(acting.userId)}, but provider listing visibility synchronization remains incomplete. Please verify listings in Admin Users.`
+      )
+    } else {
+      toast.success(`${ACTION_LABEL[action] ?? 'Action'} recorded for ${shortId(acting.userId)}.`)
+    }
     setReloadKey((k) => k + 1)
   }
 

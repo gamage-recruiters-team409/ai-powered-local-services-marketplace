@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import LateCasesPage from './LateCasesPage'
-import { getLateCases } from '../services/operationsService'
+import { exportLateCasesCsv, getLateCases } from '../services/operationsService'
 import { lateCasesResponse, renderOpsPage } from '../testing/renderOps'
 
 vi.mock('../services/operationsService', () => ({
@@ -59,5 +59,17 @@ describe('Late cases page', () => {
     renderOpsPage(LateCasesPage, { area: 'SUPER_ADMIN', canEdit: false })
     await screen.findByText('14')
     expect(screen.queryByRole('button', { name: 'Handle' })).toBeNull()
+  })
+
+  it('warns when CSV export is source-limited (F4)', async () => {
+    exportLateCasesCsv.mockResolvedValue({
+      blob: new Blob(['x']),
+      filename: 'late-cases.csv',
+      sourceLimited: true,
+      truncated: false,
+    })
+    renderOpsPage(LateCasesPage)
+    fireEvent.click(await screen.findByRole('button', { name: 'Export' }))
+    expect(await screen.findByText(/Data source limit reached; some records may be omitted/i)).toBeTruthy()
   })
 })
