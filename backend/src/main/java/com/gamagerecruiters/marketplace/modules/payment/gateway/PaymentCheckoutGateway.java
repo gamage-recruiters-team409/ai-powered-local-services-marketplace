@@ -16,6 +16,19 @@ import java.util.Optional;
 public interface PaymentCheckoutGateway {
 
     /**
+     * Determines whether the gateway supports the supplied currency
+     * for new hosted checkout sessions.
+     *
+     * <p>This is a local capability check. It must not submit an
+     * external request, modify financial records or depend on
+     * whether gateway activation is currently enabled.</p>
+     *
+     * @param currency trusted payment currency
+     * @return true when the currency is supported
+     */
+    boolean supportsCurrency(String currency);
+
+    /**
      * Creates or retrieves a hosted checkout session for a payment attempt.
      *
      * @param paymentId persisted internal payment attempt identifier
@@ -57,6 +70,33 @@ public interface PaymentCheckoutGateway {
         throw new UnsupportedOperationException(
                 "Checkout session recovery is not supported");
     }
+
+    /**
+     * Retrieves an already attached Checkout Session without creating
+     * another external payment request.
+     *
+     * Implementations must verify the session identifier, internal
+     * payment identity, amount, currency and supported session state.
+     *
+     * Retrieval must never confirm payment capture, replace a session
+     * or release an existing checkout reservation.
+     *
+     * @param sessionId persisted gateway session identifier
+     * @param paymentId persisted internal payment identifier
+     * @param amount trusted payment amount
+     * @param currency trusted payment currency
+     * @return verified existing Checkout Session
+     */
+    default RecoveredCheckoutSession retrieveCheckoutSession(
+            String sessionId,
+            String paymentId,
+            BigDecimal amount,
+            String currency) {
+
+        throw new UnsupportedOperationException(
+                "Checkout session retrieval is not supported");
+    }
+
 
     /**
      * Verified session discovered through read-only gateway recovery.

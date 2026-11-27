@@ -250,6 +250,43 @@ public class PaymentDeadlineService {
     }
 
     /**
+     * Validates payment initiation against the authoritative booking deadline.
+     *
+     * <p>The persisted WP05 payment deadline is the source of truth.
+     * Verification grace must not extend the initiation window.</p>
+     *
+     * @param providerAcceptedAt provider acceptance timestamp
+     * @param paymentDueAt authoritative booking payment deadline
+     * @param paymentInitiatedAt trusted payment initiation timestamp
+     * @throws IllegalArgumentException when timestamps are invalid
+     *                                  or initiation is outside the window
+     */
+    public void validateAuthoritativePaymentInitiation(
+            Instant providerAcceptedAt,
+            Instant paymentDueAt,
+            Instant paymentInitiatedAt) {
+
+        requireTimestamp(providerAcceptedAt, "Provider acceptance timestamp");
+        requireTimestamp(paymentDueAt, "Booking payment deadline");
+        requireTimestamp(paymentInitiatedAt, "Payment initiation timestamp");
+
+        if (!paymentDueAt.isAfter(providerAcceptedAt)) {
+            throw new IllegalArgumentException(
+                    "Authoritative booking payment deadline is invalid.");
+        }
+
+        if (paymentInitiatedAt.isBefore(providerAcceptedAt)) {
+            throw new IllegalArgumentException(
+                    "Payment initiation rejected: payment cannot be initiated before provider acceptance.");
+        }
+
+        if (paymentInitiatedAt.isAfter(paymentDueAt)) {
+            throw new IllegalArgumentException(
+                    "Payment initiation rejected: the booking payment deadline has expired.");
+        }
+    }
+
+    /**
      * Rejects missing timestamps with a descriptive validation message.
      *
      * @param timestamp timestamp to validate
