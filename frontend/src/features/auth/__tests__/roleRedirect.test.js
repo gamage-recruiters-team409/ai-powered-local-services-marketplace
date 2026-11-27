@@ -13,9 +13,12 @@ describe('roleRedirect', () => {
     cleanup();
   });
 
-  it('directs ADMIN and SUPER_ADMIN to /admin', () => {
+  it('directs every admin role to /admin', () => {
     expect(getRoleHomePath('ADMIN')).toBe(DEFAULT_ADMIN_HOME);
     expect(getRoleHomePath('SUPER_ADMIN')).toBe(DEFAULT_ADMIN_HOME);
+    expect(getRoleHomePath('SUPPORT_ADMIN')).toBe(DEFAULT_ADMIN_HOME);
+    expect(getRoleHomePath('MODERATOR')).toBe(DEFAULT_ADMIN_HOME);
+    expect(getRoleHomePath('FINANCE_ADMIN')).toBe(DEFAULT_ADMIN_HOME);
   });
 
   it('directs CUSTOMER and PROVIDER to /', () => {

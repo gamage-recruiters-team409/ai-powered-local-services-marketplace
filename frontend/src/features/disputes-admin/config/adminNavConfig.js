@@ -41,9 +41,9 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
   { id: 'admin.disputes', area: ADMIN, section: 'Operations', label: 'Disputes', path: 'disputes', icon: 'alertCircle', description: 'Dispute console and appeals', nested: true, page: lazy(() => import('../../admin-disputes/pages/DisputesSection')) },
   { id: 'admin.users', area: ADMIN, section: 'Operations', label: 'Users', path: 'users', icon: 'users', description: 'Customer and provider accounts', nested: true, page: lazy(() => import('../../admin-users/pages/UsersSection')) },
   { id: 'admin.provider-verification', area: ADMIN, section: 'Operations', label: 'Provider verification', path: 'provider-verification', icon: 'shield', description: 'Review provider verification requests' },
-  { id: 'admin.overdue-bookings', area: ADMIN, section: 'Operations', label: 'Overdue bookings', path: 'overdue-bookings', icon: 'clock', description: 'Bookings still open 72 hours after the slot ended' },
-  { id: 'admin.late-cases', area: ADMIN, section: 'Operations', label: 'Late cases', path: 'late-cases', icon: 'calendar', description: 'Problems reported after the 72-hour window' },
-  { id: 'admin.repeat-cancellations', area: ADMIN, section: 'Operations', label: 'Repeat cancellations', path: 'repeat-cancellations', icon: 'xCircle', description: 'Warnings and suspensions for repeat cancellations' },
+  { id: 'admin.overdue-bookings', area: ADMIN, section: 'Operations', label: 'Overdue bookings', path: 'overdue-bookings', icon: 'clock', description: 'Bookings past scheduled completion awaiting closure', page: lazy(() => import('../../support-operations/pages/OverdueBookingsPage')) },
+  { id: 'admin.late-cases', area: ADMIN, section: 'Operations', label: 'Late cases', path: 'late-cases', icon: 'calendar', description: 'Bookings past scheduled start and no-show reports', page: lazy(() => import('../../support-operations/pages/LateCasesPage')) },
+  { id: 'admin.repeat-cancellations', area: ADMIN, section: 'Operations', label: 'Repeat cancellations', path: 'repeat-cancellations', icon: 'xCircle', description: 'Warnings and suspensions for repeat cancellations', page: lazy(() => import('../../support-operations/pages/RepeatCancellationsPage')) },
   { id: 'admin.categories', area: ADMIN, section: 'Management', label: 'Categories', path: 'categories', icon: 'grid', description: 'Service categories and commission', page: AdminCategoriesPage },
   { id: 'admin.announcements', area: ADMIN, section: 'Management', label: 'Announcements', path: 'announcements', icon: 'message', description: 'Platform announcements', nested: true, page: lazy(() => import('../../admin-announcements/pages/AnnouncementsSection')) },
   { id: 'admin.audit-log', area: ADMIN, section: 'Management', label: 'Audit log', path: 'audit-log', icon: 'fileText', description: 'Record of administrative actions' },
@@ -51,10 +51,10 @@ export const ADMIN_NAV_ENTRIES = Object.freeze([
   { id: 'admin.reports', area: ADMIN, section: 'Insights', label: 'Reports', path: 'reports', icon: 'reports', description: 'Operational reports' },
 
   // ---------- Support Admin ----------
-  { id: 'support.dashboard', area: SUPPORT_ADMIN, section: null, label: 'Dashboard', path: '', icon: 'dashboard', description: 'Overview of support cases' },
-  { id: 'support.overdue-bookings', area: SUPPORT_ADMIN, section: 'Operations', label: 'Overdue bookings', path: 'overdue-bookings', icon: 'clock', description: 'Bookings still open 72 hours after the slot ended' },
-  { id: 'support.late-cases', area: SUPPORT_ADMIN, section: 'Operations', label: 'Late cases', path: 'late-cases', icon: 'calendar', description: 'Problems reported after the 72-hour window' },
-  { id: 'support.repeat-cancellations', area: SUPPORT_ADMIN, section: 'Operations', label: 'Repeat cancellations', path: 'repeat-cancellations', icon: 'xCircle', description: 'Repeat cancellation cases' },
+  { id: 'support.dashboard', area: SUPPORT_ADMIN, section: null, label: 'Dashboard', path: '', icon: 'dashboard', description: 'Overview of support cases', page: lazy(() => import('../../support-operations/pages/SupportDashboardPage')) },
+  { id: 'support.overdue-bookings', area: SUPPORT_ADMIN, section: 'Operations', label: 'Overdue bookings', path: 'overdue-bookings', icon: 'clock', description: 'Bookings past scheduled completion awaiting closure', page: lazy(() => import('../../support-operations/pages/OverdueBookingsPage')) },
+  { id: 'support.late-cases', area: SUPPORT_ADMIN, section: 'Operations', label: 'Late cases', path: 'late-cases', icon: 'calendar', description: 'Bookings past scheduled start and no-show reports', page: lazy(() => import('../../support-operations/pages/LateCasesPage')) },
+  { id: 'support.repeat-cancellations', area: SUPPORT_ADMIN, section: 'Operations', label: 'Repeat cancellations', path: 'repeat-cancellations', icon: 'xCircle', description: 'Repeat cancellation cases', page: lazy(() => import('../../support-operations/pages/RepeatCancellationsPage')) },
 
   // ---------- Moderator ----------
   // Moderation writes (WP06 reported content, WP08 review moderation) belong to the MODERATOR area only; the ADMIN area
