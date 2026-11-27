@@ -191,14 +191,29 @@ export function getProviderReviewState(provider = {}) {
   const reviewCount =
     typeof provider.reviewCount === 'number' ? provider.reviewCount : null;
   const rating = typeof provider.rating === 'number' ? provider.rating : null;
+  const status = provider.reviewContentStatus === 'UNAVAILABLE'
+    ? 'unavailable'
+    : 'available';
+  const page = typeof provider.reviewPage === 'number' ? provider.reviewPage : 0;
+  const totalElements = typeof provider.reviewTotalElements === 'number'
+    ? provider.reviewTotalElements
+    : null;
+  const totalPages = typeof provider.reviewTotalPages === 'number'
+    ? provider.reviewTotalPages
+    : null;
+  const hasMore = totalPages !== null && page + 1 < totalPages;
 
   let message = null;
 
-  if (reviews.length === 0) {
-    if (reviewCount === null) {
-      message = 'Review details are not provided for this provider.';
-    } else if (reviewCount === 0) {
+  if (status === 'unavailable') {
+    message = 'Reviews are temporarily unavailable. The rest of this profile is still available.';
+  } else if (reviews.length === 0) {
+    if (totalElements === 0 || (totalElements === null && reviewCount === 0)) {
       message = 'This provider has no reviews yet.';
+    } else if (page > 0 && totalPages !== null && page + 1 >= totalPages) {
+      message = 'There are no more reviews on this page.';
+    } else if (reviewCount === null && totalElements === null) {
+      message = 'Review details are not provided for this provider.';
     } else {
       message =
         'Individual review content is not available. The aggregate rating is shown above.';
@@ -209,6 +224,11 @@ export function getProviderReviewState(provider = {}) {
     rating,
     reviewCount,
     reviews,
+    status,
+    page,
+    totalElements,
+    totalPages,
+    hasMore,
     hasReviewContent: reviews.length > 0,
     message,
   };

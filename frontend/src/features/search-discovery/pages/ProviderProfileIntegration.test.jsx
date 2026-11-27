@@ -21,6 +21,9 @@ describe('provider profile integration', () => {
     window.sessionStorage.clear();
   });
 
+  // This test intentionally boots the real App/router and waits for the search
+  // (200ms) + profile (120ms) fixture latency; parallel CI workers can stretch
+  // that legitimate startup past the 5s Vitest default without a logic failure.
   it('opens the intended provider profile from a real search card link', async () => {
     const user = userEvent.setup();
     await renderAppAt('/search');
@@ -40,7 +43,7 @@ describe('provider profile integration', () => {
       }),
     ).toBeTruthy();
     expect(window.location.pathname).toBe('/providers/prv-001');
-  });
+  }, 15000);
 
   it('renders a provider profile from a direct URL and after a reload', async () => {
     await renderAppAt('/providers/prv-002');

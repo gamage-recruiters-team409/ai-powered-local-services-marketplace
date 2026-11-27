@@ -1,6 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.search.service;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -10,6 +11,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
@@ -22,11 +25,14 @@ import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.dto.RatingSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.review.dto.ReviewPageResponse;
+import com.gamagerecruiters.marketplace.modules.review.dto.ReviewResponse;
 import com.gamagerecruiters.marketplace.modules.review.service.ReviewService;
 import com.gamagerecruiters.marketplace.modules.search.dto.PublicPricingResponse;
 import com.gamagerecruiters.marketplace.modules.search.dto.PublicProfileSupportedFlags;
 import com.gamagerecruiters.marketplace.modules.search.dto.PublicProviderListingSummary;
 import com.gamagerecruiters.marketplace.modules.search.dto.PublicProviderProfileResponse;
+import com.gamagerecruiters.marketplace.modules.search.dto.PublicProviderReviewResponse;
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification;
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerificationStatus;
 import com.gamagerecruiters.marketplace.modules.verification.repository.ProviderVerificationRepository;
@@ -34,10 +40,15 @@ import com.gamagerecruiters.marketplace.modules.verification.repository.Provider
 @Service
 public class PublicProviderProfileServiceImpl implements PublicProviderProfileService {
 
+    private static final Logger log = LoggerFactory.getLogger(PublicProviderProfileServiceImpl.class);
+
     private static final Comparator<ListingResponse> BEST_LISTING = Comparator
             .comparing(ListingResponse::basePrice, Comparator.nullsLast(BigDecimal::compareTo))
             .thenComparing(ListingResponse::id, Comparator.nullsLast(String::compareTo));
     private static final String UNAVAILABLE = "UNAVAILABLE";
+    private static final String REVIEW_CONTENT_AVAILABLE = "AVAILABLE";
+    private static final String REVIEW_CONTENT_UNAVAILABLE = "UNAVAILABLE";
+    private static final int REVIEW_PAGE_SIZE = 5;
 
     private final ListingService listingService;
     private final ProviderProfileRepository providerProfileRepository;
@@ -61,6 +72,11 @@ public class PublicProviderProfileServiceImpl implements PublicProviderProfileSe
 
     @Override
     public PublicProviderProfileResponse getPublicProfile(String providerIdOrProfileId) {
+        return getPublicProfile(providerIdOrProfileId, 0);
+    }
+
+    @Override
+    public PublicProviderProfileResponse getPublicProfile(String providerIdOrProfileId, int reviewPage) {
         ProviderProfile profile = resolveProfile(providerIdOrProfileId);
         String canonicalProviderId = hasText(profile.getUserId()) ? profile.getUserId() : profile.getId();
 
@@ -70,6 +86,7 @@ public class PublicProviderProfileServiceImpl implements PublicProviderProfileSe
         List<ProviderVerification> verifications = hasText(profile.getId())
                 ? verificationRepository.findAllByProviderIdIn(List.of(profile.getId()))
                 : List.of();
+        PublicReviewContent reviewContent = loadReviews(canonicalProviderId, reviewPage);
 
         RatingSummaryResponse summary = ratings == null ? null : ratings.get(canonicalProviderId);
         boolean verified = verifications != null && verifications.stream()
@@ -91,6 +108,7 @@ public class PublicProviderProfileServiceImpl implements PublicProviderProfileSe
             ));
         }
 
+        boolean reviewContentAvailable = REVIEW_CONTENT_AVAILABLE.equals(reviewContent.status());
         return new PublicProviderProfileResponse(
                 canonicalProviderId,
                 profile.getId(),
@@ -107,8 +125,77 @@ public class PublicProviderProfileServiceImpl implements PublicProviderProfileSe
                 bestListing == null ? null : bestListing.coverageRadiusKm(),
                 listingSummaries,
                 UNAVAILABLE,
-                PublicProfileSupportedFlags.NONE
+                new PublicProfileSupportedFlags(false, false, reviewContentAvailable, false),
+                reviewContent.content(),
+                reviewContent.status(),
+                reviewContent.page(),
+                reviewContent.size(),
+                reviewContent.totalElements(),
+                reviewContent.totalPages()
         );
+    }
+
+    private PublicReviewContent loadReviews(String canonicalProviderId, int requestedPage) {
+        try {
+            ReviewPageResponse page = reviewService.getPublishedReviews(
+                    canonicalProviderId, requestedPage, REVIEW_PAGE_SIZE);
+            if (page == null) {
+                return new PublicReviewContent(
+                        List.of(), REVIEW_CONTENT_UNAVAILABLE, Math.max(requestedPage, 0),
+                        REVIEW_PAGE_SIZE, 0L, 0);
+            }
+
+            List<PublicProviderReviewResponse> mapped = new ArrayList<>();
+            if (page.content() != null) {
+                for (ReviewResponse review : page.content()) {
+                    PublicProviderReviewResponse publicReview = mapReview(review);
+                    if (publicReview != null) {
+                        mapped.add(publicReview);
+                    }
+                }
+            }
+            return new PublicReviewContent(
+                    mapped, REVIEW_CONTENT_AVAILABLE, page.page(), page.size(),
+                    page.totalElements(), page.totalPages());
+        } catch (RuntimeException error) {
+            log.warn("event=PUBLIC_PROFILE_REVIEWS_UNAVAILABLE providerId={} cause={}",
+                    canonicalProviderId, error.getClass().getSimpleName());
+            return new PublicReviewContent(
+                    List.of(), REVIEW_CONTENT_UNAVAILABLE, Math.max(requestedPage, 0),
+                    REVIEW_PAGE_SIZE, 0L, 0);
+        }
+    }
+
+    private PublicProviderReviewResponse mapReview(ReviewResponse review) {
+        if (review == null) {
+            return null;
+        }
+        var reply = review.providerReply();
+        return new PublicProviderReviewResponse(
+                review.id(),
+                review.rating(),
+                review.comment(),
+                instantString(review.createdAt()),
+                review.edited(),
+                instantString(review.editedAt()),
+                reply == null
+                        ? null
+                        : new PublicProviderReviewResponse.PublicProviderReplyResponse(
+                                reply.text(), instantString(reply.repliedAt())));
+    }
+
+    private static String instantString(Instant instant) {
+        return instant == null ? null : instant.toString();
+    }
+
+    private record PublicReviewContent(
+            List<PublicProviderReviewResponse> content,
+            String status,
+            int page,
+            int size,
+            long totalElements,
+            int totalPages
+    ) {
     }
 
     private ProviderProfile resolveProfile(String providerIdOrProfileId) {

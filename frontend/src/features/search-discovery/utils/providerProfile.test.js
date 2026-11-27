@@ -317,6 +317,51 @@ describe('getProviderReviewState', () => {
     expect(state.message).toBeNull();
     expect(state.reviews).toHaveLength(1);
   });
+
+  it('does not turn a failed review lookup into a claim that reviews are absent', () => {
+    const state = getProviderReviewState({
+      rating: 4.2,
+      reviewCount: 9,
+      reviewContentStatus: 'UNAVAILABLE',
+      reviews: [],
+    });
+
+    expect(state.status).toBe('unavailable');
+    expect(state.hasReviewContent).toBe(false);
+    expect(state.message).toMatch(/temporarily unavailable/i);
+    expect(state.message).not.toMatch(/no reviews/i);
+  });
+
+  it('reports an empty middle page without claiming the provider has no reviews', () => {
+    const state = getProviderReviewState({
+      rating: 4.5,
+      reviewCount: 12,
+      reviewContentStatus: 'AVAILABLE',
+      reviewPage: 2,
+      reviewTotalElements: 12,
+      reviewTotalPages: 3,
+      reviews: [],
+    });
+
+    expect(state.hasMore).toBe(false);
+    expect(state.message).toMatch(/no more reviews on this page/i);
+    expect(state.message).not.toMatch(/provider has no reviews/i);
+  });
+
+  it('exposes when more public review pages are available', () => {
+    const state = getProviderReviewState({
+      rating: 4.5,
+      reviewCount: 12,
+      reviewContentStatus: 'AVAILABLE',
+      reviewPage: 0,
+      reviewTotalElements: 12,
+      reviewTotalPages: 3,
+      reviews: [{ id: 'r1', rating: 5, text: 'Great.' }],
+    });
+
+    expect(state.hasMore).toBe(true);
+    expect(state.totalPages).toBe(3);
+  });
 });
 
 describe('getProviderAvailabilityState', () => {

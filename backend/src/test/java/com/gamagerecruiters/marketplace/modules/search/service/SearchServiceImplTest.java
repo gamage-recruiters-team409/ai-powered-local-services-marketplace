@@ -209,6 +209,37 @@ class SearchServiceImplTest {
     }
 
     @Test
+    @DisplayName("Multiple listings for one provider share the same provider rating identity")
+    void sharesProviderRatingAcrossListings() {
+        ListingResponse first = listing("listing-1", "user-shared", new BigDecimal("2000.00"),
+                "Wiring Repair", "Licensed Home Electrical Repair", null, 10);
+        ListingResponse second = listing("listing-2", "user-shared", new BigDecimal("3000.00"),
+                "Panel Upgrade", "Electrical Panel Upgrade", null, 20);
+        Page<ListingResponse> listingPage = new PageImpl<>(
+                List.of(first, second), PageRequest.of(0, 12), 2L);
+        when(listingService.searchPublicListings(any(), any(), any(), any(), any(), any()))
+                .thenReturn(listingPage);
+        when(providerProfileRepository.findAllByUserIdIn(Set.of("user-shared")))
+                .thenReturn(List.of(profile("profile-shared", "user-shared", "Shared Provider", null)));
+        when(reviewService.getRatingSummaries(any()))
+                .thenReturn(Map.of("user-shared", summary("user-shared", 4.6, 3)));
+
+        SearchResponse response = service.search(request("recommended", 0, 12).toSearchRequest());
+
+        assertThat(response.results()).hasSize(2);
+        assertThat(response.results())
+                .extracting(ProviderSearchResult::providerId)
+                .containsExactly("user-shared", "user-shared");
+        assertThat(response.results())
+                .extracting(ProviderSearchResult::rating)
+                .containsExactly(4.6, 4.6);
+        assertThat(response.results())
+                .extracting(ProviderSearchResult::reviewCount)
+                .containsExactly(3L, 3L);
+        verify(reviewService).getRatingSummaries(Set.of("user-shared"));
+    }
+
+    @Test
     @DisplayName("verified=true resolves approved profile ids to user ids and maps verification status back")
     void verifiedFilterResolvesProfileIdsToUserIds() {
         ListingResponse listing = listing("listing-1", "user-1", new BigDecimal("100"),

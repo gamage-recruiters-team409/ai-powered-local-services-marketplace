@@ -72,6 +72,34 @@ function renderProfile(path = '/providers/prv-001') {
   );
 }
 
+function ProviderSwitchControls() {
+  const navigate = useNavigate();
+
+  return (
+    <button
+      type="button"
+      onClick={() => navigate('/providers/user-b?tab=reviews')}
+    >
+      Switch provider
+    </button>
+  );
+}
+
+function renderProfileWithSwitch(path) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <ProviderSwitchControls />
+      <Routes>
+        <Route
+          path="/providers/:providerId"
+          element={<ProviderProfilePage />}
+        />
+        <Route path="/search" element={<div>Search page</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
   fetchProviderProfile.mockResolvedValue(fixtureResponse(maya));
 });
@@ -383,6 +411,235 @@ describe('ProviderProfilePage tabs', () => {
   });
 });
 
+describe('ProviderProfilePage public review content', () => {
+  it('renders only the returned public review fields and links to more pages', async () => {
+    fetchProviderProfile.mockResolvedValueOnce(liveResponse({
+      ...maya,
+      providerId: 'user-1',
+      name: 'Review Provider',
+      reviewCount: 12,
+      reviews: [{
+        id: 'rev-1',
+        rating: 5,
+        text: 'Excellent work',
+        createdAt: '2026-11-20T10:15:30Z',
+        providerReply: { text: 'Thank you', repliedAt: '2026-11-21T09:00:00Z' },
+        customerName: 'Private Customer',
+        bookingId: 'booking-private',
+      }],
+      reviewContentStatus: 'AVAILABLE',
+      reviewPage: 0,
+      reviewPageSize: 5,
+      reviewTotalElements: 12,
+      reviewTotalPages: 3,
+    }));
+    renderProfile('/providers/user-1?tab=reviews');
+
+    const panel = await screen.findByRole('region', {
+      name: 'What customers are saying',
+    });
+
+    expect(within(panel).getByText('Excellent work')).toBeTruthy();
+    expect(within(panel).getByText('Provider reply: Thank you')).toBeTruthy();
+    expect(within(panel).getByText('2026-11-20')).toBeTruthy();
+    expect(within(panel).queryByText(/private customer/i)).toBeNull();
+    // Page 0 of 3 — only "Next page" is shown; no "Previous page" on first page
+    expect(within(panel).getByRole('link', { name: 'Next page' })).toBeTruthy();
+    expect(within(panel).queryByRole('link', { name: 'Previous page' })).toBeNull();
+  });
+
+  it('keeps the usable profile visible and offers a review retry when content fails', async () => {
+    const unavailableProvider = {
+      ...maya,
+      providerId: 'user-2',
+      name: 'Retry Provider',
+      reviewCount: 9,
+      reviews: [],
+      reviewContentStatus: 'UNAVAILABLE',
+      reviewPage: 0,
+      reviewTotalElements: 0,
+      reviewTotalPages: 0,
+    };
+    fetchProviderProfile
+      .mockResolvedValueOnce(liveResponse(unavailableProvider))
+      .mockResolvedValueOnce(liveResponse(unavailableProvider));
+    const user = userEvent.setup();
+    renderProfile('/providers/user-2?tab=reviews');
+
+    expect(
+      await screen.findByRole('heading', { name: 'Retry Provider' }),
+    ).toBeTruthy();
+    const panel = screen.getByRole('region', {
+      name: 'What customers are saying',
+    });
+    expect(within(panel).getByText(/temporarily unavailable/i)).toBeTruthy();
+    await user.click(within(panel).getByRole('button', { name: 'Retry reviews' }));
+
+    await waitFor(() => {
+      expect(fetchProviderProfile).toHaveBeenCalledTimes(2);
+    });
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(1, 'user-2', 0);
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(2, 'user-2', 0);
+  });
+
+  it('does not render a stale profile after the provider changes', async () => {
+    let resolveFirstProfile;
+    const firstProvider = {
+      ...maya,
+      providerId: 'user-a',
+      name: 'First Provider',
+      reviews: [],
+    };
+    const secondProvider = {
+      ...maya,
+      providerId: 'user-b',
+      name: 'Second Provider',
+      reviews: [],
+    };
+    fetchProviderProfile
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstProfile = resolve;
+      }))
+      .mockResolvedValueOnce(liveResponse(secondProvider));
+    const user = userEvent.setup();
+    renderProfileWithSwitch('/providers/user-a?tab=reviews');
+
+    await user.click(screen.getByRole('button', { name: 'Switch provider' }));
+    await act(async () => {
+      resolveFirstProfile(liveResponse(firstProvider));
+    });
+
+    expect(
+      await screen.findByRole('heading', { name: 'Second Provider' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'First Provider' })).toBeNull();
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(1, 'user-a', 0);
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(2, 'user-b', 0);
+  });
+});
+
+describe('ProviderProfilePage review pagination navigation', () => {
+  function makeReviewPage(page, totalPages, text = 'A review') {
+    return liveResponse({
+      ...maya,
+      providerId: 'paged-prov',
+      name: 'Paged Provider',
+      reviewCount: totalPages * 5,
+      reviews: [{
+        id: `rev-p${page}`,
+        rating: 4,
+        text,
+        createdAt: '2026-11-01T08:00:00Z',
+        providerReply: null,
+      }],
+      reviewContentStatus: 'AVAILABLE',
+      reviewPage: page,
+      reviewPageSize: 5,
+      reviewTotalElements: totalPages * 5,
+      reviewTotalPages: totalPages,
+    });
+  }
+
+  it('navigates from page 0 to page 1 and shows Previous page on page 1', async () => {
+    fetchProviderProfile
+      .mockResolvedValueOnce(makeReviewPage(0, 3, 'Page zero review'))
+      .mockResolvedValueOnce(makeReviewPage(1, 3, 'Page one review'));
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/providers/paged-prov?tab=reviews']}>
+        <Routes>
+          <Route path="/providers/:providerId" element={<ProviderProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // Page 0: Next page shown, no Previous page
+    const nextLink = await screen.findByRole('link', { name: 'Next page' });
+    expect(nextLink.getAttribute('href')).toContain('reviewPage=1');
+    expect(screen.queryByRole('link', { name: 'Previous page' })).toBeNull();
+
+    await user.click(nextLink);
+
+    // Page 1: Both Previous and Next page shown (3 total pages)
+    expect(
+      await screen.findByRole('link', { name: 'Previous page' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Next page' })).toBeTruthy();
+    expect(screen.getByText('Page one review')).toBeTruthy();
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(1, 'paged-prov', 0);
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(2, 'paged-prov', 1);
+  });
+
+  it('shows no Next page on the final page and Previous page navigates back', async () => {
+    fetchProviderProfile
+      .mockResolvedValueOnce(makeReviewPage(1, 2, 'Last page review'))
+      .mockResolvedValueOnce(makeReviewPage(0, 2, 'First page review'));
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/providers/paged-prov?tab=reviews&reviewPage=1']}>
+        <Routes>
+          <Route path="/providers/:providerId" element={<ProviderProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // Page 1 (final of 2): Previous shown, Next hidden
+    const prevLink = await screen.findByRole('link', { name: 'Previous page' });
+    expect(prevLink.getAttribute('href')).not.toContain('reviewPage');
+    expect(screen.queryByRole('link', { name: 'Next page' })).toBeNull();
+
+    await user.click(prevLink);
+
+    // Page 0: only Next shown
+    expect(
+      await screen.findByRole('link', { name: 'Next page' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Previous page' })).toBeNull();
+    expect(screen.getByText('First page review')).toBeTruthy();
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(1, 'paged-prov', 1);
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(2, 'paged-prov', 0);
+  });
+
+  it('renders a later page directly from a URL without showing next on the last page', async () => {
+    fetchProviderProfile.mockResolvedValueOnce(makeReviewPage(2, 3, 'Third page review'));
+
+    render(
+      <MemoryRouter initialEntries={['/providers/paged-prov?tab=reviews&reviewPage=2']}>
+        <Routes>
+          <Route path="/providers/:providerId" element={<ProviderProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // Page 2 (final of 3): Previous shown, no Next
+    expect(
+      await screen.findByRole('link', { name: 'Previous page' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Next page' })).toBeNull();
+    expect(screen.getByText('Third page review')).toBeTruthy();
+    expect(fetchProviderProfile).toHaveBeenCalledWith('paged-prov', 2);
+  });
+
+  it('clamps a malformed reviewPage URL parameter to 0', async () => {
+    fetchProviderProfile.mockResolvedValueOnce(makeReviewPage(0, 2, 'Clamped page review'));
+
+    render(
+      <MemoryRouter initialEntries={['/providers/paged-prov?tab=reviews&reviewPage=not-a-number']}>
+        <Routes>
+          <Route path="/providers/:providerId" element={<ProviderProfilePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText('Clamped page review'),
+    ).toBeTruthy();
+    expect(fetchProviderProfile).toHaveBeenCalledWith('paged-prov', 0);
+  });
+});
+
 describe('ProviderProfilePage states', () => {
   it('shows a not-found state and returns to search', async () => {
     fetchProviderProfile.mockRejectedValueOnce(
@@ -447,7 +704,7 @@ describe('ProviderProfilePage states', () => {
       }),
     ).toBeTruthy();
     expect(fetchProviderProfile).toHaveBeenCalledTimes(2);
-    expect(fetchProviderProfile).toHaveBeenLastCalledWith('prv-001');
+    expect(fetchProviderProfile).toHaveBeenLastCalledWith('prv-001', 0);
 
     consoleError.mockRestore();
   });
@@ -496,7 +753,7 @@ describe('ProviderProfilePage states', () => {
     );
 
     await waitFor(() =>
-      expect(fetchProviderProfile).toHaveBeenCalledWith('prv-001'),
+      expect(fetchProviderProfile).toHaveBeenCalledWith('prv-001', 0),
     );
 
     const user = userEvent.setup();
@@ -505,7 +762,7 @@ describe('ProviderProfilePage states', () => {
     );
 
     await waitFor(() =>
-      expect(fetchProviderProfile).toHaveBeenCalledWith('prv-002'),
+      expect(fetchProviderProfile).toHaveBeenCalledWith('prv-002', 0),
     );
 
     await act(async () => {

@@ -160,6 +160,52 @@ describe('fetchProviderProfile live mode', () => {
     ]);
   });
 
+  it('maps public review fields and page metadata from the live aggregate', async () => {
+    axios.get.mockResolvedValueOnce({
+      data: {
+        ...liveProfile,
+        reviews: [{
+          id: 'rev-1',
+          rating: 5,
+          comment: 'Great service',
+          createdAt: '2026-11-20T10:15:30Z',
+          edited: false,
+          editedAt: null,
+          providerReply: { text: 'Thank you', repliedAt: '2026-11-21T09:00:00Z' },
+          bookingId: 'booking-private',
+          customerName: 'Private Customer',
+        }],
+        reviewContentStatus: 'AVAILABLE',
+        reviewPage: 2,
+        reviewPageSize: 5,
+        reviewTotalElements: 12,
+        reviewTotalPages: 3,
+      },
+    });
+
+    const { provider } = await fetchProviderProfile('usr-123', 2);
+
+    expect(axios.get).toHaveBeenCalledWith(
+      'http://localhost:8080/api/v1/providers/usr-123?reviewPage=2',
+    );
+    expect(provider.reviews).toEqual([{
+      id: 'rev-1',
+      rating: 5,
+      text: 'Great service',
+      createdAt: '2026-11-20T10:15:30Z',
+      edited: false,
+      editedAt: null,
+      providerReply: { text: 'Thank you', repliedAt: '2026-11-21T09:00:00Z' },
+    }]);
+    expect(provider.reviews[0]).not.toHaveProperty('bookingId');
+    expect(provider.reviews[0]).not.toHaveProperty('customerName');
+    expect(provider.reviewContentStatus).toBe('AVAILABLE');
+    expect(provider.reviewPage).toBe(2);
+    expect(provider.reviewPageSize).toBe(5);
+    expect(provider.reviewTotalElements).toBe(12);
+    expect(provider.reviewTotalPages).toBe(3);
+  });
+
   it('keeps hourlyRate null for non-hourly live pricing and missing values', async () => {
     axios.get.mockResolvedValueOnce({
       data: {
