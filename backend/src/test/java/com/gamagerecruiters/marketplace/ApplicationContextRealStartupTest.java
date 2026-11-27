@@ -27,6 +27,7 @@ import com.gamagerecruiters.marketplace.modules.auth.security.RateLimitService;
 import com.gamagerecruiters.marketplace.modules.availability.repository.AvailabilityRuleRepository;
 import com.gamagerecruiters.marketplace.modules.availability.repository.BlockedDateRepository;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
+import com.gamagerecruiters.marketplace.modules.booking.repository.CalendarFeedTokenRepository;
 import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepository;
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
@@ -83,6 +84,9 @@ class ApplicationContextRealStartupTest {
 
         @MockitoBean
         private BookingRepository bookingRepository;
+        
+        @MockitoBean
+        private CalendarFeedTokenRepository calendarFeedTokenRepository;
 
         @MockitoBean
         private CustomerAddressRepository customerAddressRepository;

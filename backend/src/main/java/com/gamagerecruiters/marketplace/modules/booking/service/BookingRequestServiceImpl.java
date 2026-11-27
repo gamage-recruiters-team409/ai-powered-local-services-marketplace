@@ -82,6 +82,7 @@ public class BookingRequestServiceImpl implements BookingRequestService {
     private final boolean creationEnabled;
     private final Clock clock;
     private final long retryDelayMillis;
+    private final BookingNotifier notifier;
 
     @Autowired
     public BookingRequestServiceImpl(BookingRepository bookingRepository, ListingService listingService,
@@ -89,18 +90,20 @@ public class BookingRequestServiceImpl implements BookingRequestService {
                                      ProviderBookingGuard providerBookingGuard,
                                      BookingReferenceGenerator referenceGenerator,
                                      ObjectProvider<MongoTransactionManager> transactionManager,
+                                     BookingNotifier notifier,
                                      @Value("${booking.creation.enabled:true}") boolean creationEnabled) {
         this(bookingRepository, listingService, providerVerification, slotService, providerBookingGuard,
                 referenceGenerator,
-                transactionTemplate(transactionManager.getIfAvailable()), creationEnabled, Clock.systemUTC(),
-                DEFAULT_RETRY_DELAY_MILLIS);
+                transactionTemplate(transactionManager.getIfAvailable()), notifier, creationEnabled,
+                Clock.systemUTC(), DEFAULT_RETRY_DELAY_MILLIS);
     }
 
     BookingRequestServiceImpl(BookingRepository bookingRepository, ListingService listingService,
                               ProviderVerificationFacade providerVerification, SlotService slotService,
                               ProviderBookingGuard providerBookingGuard, BookingReferenceGenerator referenceGenerator,
-                              TransactionOperations transactions, boolean creationEnabled, Clock clock,
-                              long retryDelayMillis) {
+                              TransactionOperations transactions, BookingNotifier notifier, boolean creationEnabled,
+                              Clock clock, long retryDelayMillis) {
+        this.notifier = notifier;
         this.bookingRepository = bookingRepository;
         this.listingService = listingService;
         this.providerVerification = providerVerification;
@@ -161,6 +164,8 @@ public class BookingRequestServiceImpl implements BookingRequestService {
 
         log.info("Booking request created: ref={}, provider={}, slotStart={}", saved.getRef(),
                 saved.getProviderId(), saved.getSlotStart());
+        // After the transaction has committed: the provider is told only about a booking that really exists.
+        notifier.requestReceived(saved);
         return toResponse(saved);
     }
 

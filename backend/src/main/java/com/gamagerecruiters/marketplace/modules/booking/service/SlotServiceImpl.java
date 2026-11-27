@@ -76,6 +76,12 @@ public class SlotServiceImpl implements SlotService {
 
     @Override
     public AvailableSlotsResponse getAvailableSlots(String providerId, String dateText, String durationText) {
+        return getAvailableSlots(providerId, dateText, durationText, null);
+    }
+
+    @Override
+    public AvailableSlotsResponse getAvailableSlots(String providerId, String dateText, String durationText,
+                                                    String excludeBookingId) {
         if (providerId == null || providerId.isBlank()) {
             throw badRequest("INVALID_PROVIDER", "providerId is required");
         }
@@ -111,7 +117,10 @@ public class SlotServiceImpl implements SlotService {
         List<Booking> existing = bookingRepository
                 .findByProviderIdAndStatusInAndSlotStartLessThanAndSlotEndGreaterThan(
                         providerId, TIME_BLOCKING_STATUSES, workEnd.plus(bufferDuration),
-                        workStart.minus(bufferDuration));
+                        workStart.minus(bufferDuration))
+                .stream()
+                .filter(b -> excludeBookingId == null || !excludeBookingId.equals(b.getId()))
+                .toList();
 
         List<TimeSlot> slots = new ArrayList<>();
         Duration length = Duration.ofMinutes(duration);
@@ -129,12 +138,18 @@ public class SlotServiceImpl implements SlotService {
 
     @Override
     public boolean isSlotAvailable(String providerId, Instant slotStart, int durationMinutes) {
+        return isSlotAvailable(providerId, slotStart, durationMinutes, null);
+    }
+
+    @Override
+    public boolean isSlotAvailable(String providerId, Instant slotStart, int durationMinutes,
+                                   String excludeBookingId) {
         if (slotStart == null) {
             return false;
         }
         LocalDate date = slotStart.atZone(BUSINESS_ZONE).toLocalDate();
         AvailableSlotsResponse available = getAvailableSlots(providerId, date.toString(),
-                String.valueOf(durationMinutes));
+                String.valueOf(durationMinutes), excludeBookingId);
         return available.slots().stream().anyMatch(slot -> slot.start().equals(slotStart));
     }
 

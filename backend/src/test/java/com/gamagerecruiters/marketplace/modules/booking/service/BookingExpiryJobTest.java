@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.booking.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -18,10 +19,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.data.domain.Pageable;
 
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
+import com.gamagerecruiters.marketplace.modules.booking.domain.RescheduleRequest;
+import com.gamagerecruiters.marketplace.modules.booking.domain.RescheduleStatus;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 
 @ExtendWith(MockitoExtension.class)
@@ -32,8 +36,11 @@ class BookingExpiryJobTest {
     @Mock
     private BookingRepository bookingRepository;
 
+    @Mock
+    private BookingNotifier notifier;
+
     private BookingExpiryJob job(boolean enabled) {
-        return new BookingExpiryJob(bookingRepository, new BookingPaymentPolicy(15, 15),
+        return new BookingExpiryJob(bookingRepository, new BookingPaymentPolicy(15, 15), notifier,
                 Clock.fixed(NOW, ZoneOffset.UTC), enabled);
     }
 
@@ -64,6 +71,32 @@ class BookingExpiryJobTest {
         assertThat(request.getTimeline().get(0).getChangedBy()).isEqualTo(BookingStatusChange.SYSTEM);
         assertThat(request.getTimeline().get(0).getReason()).isEqualTo("Provider did not respond in time");
         assertThat(unpaid.getTimeline().get(0).getReason()).isEqualTo("Payment not completed in time");
+        verify(notifier).requestExpired(request);
+        verify(notifier).paymentExpired(unpaid);
+    }
+
+    @Test
+    @DisplayName("Reschedule request not answered in time → EXPIRED, booking keeps its time, requester notified")
+    void expiresRescheduleRequests() {
+        Booking booking = booking("b-3", BookingStatus.CONFIRMED);
+        booking.setSlotStart(NOW.plusSeconds(3600));
+        RescheduleRequest late = new RescheduleRequest();
+        late.setStatus(RescheduleStatus.PENDING);
+        late.setRequestedBy("cust-1");
+        late.setExpiresAt(NOW.minusSeconds(60));
+        booking.getRescheduleRequests().add(late);
+        when(bookingRepository.findWithExpiredRescheduleRequests(eq(NOW), any(Pageable.class)))
+                .thenReturn(List.of(booking));
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BookingExpiryJob.Result result = job(true).run();
+
+        assertThat(result.reschedulesExpired()).isEqualTo(1);
+        assertThat(late.getStatus()).isEqualTo(RescheduleStatus.EXPIRED);
+        assertThat(late.getRespondedBy()).isEqualTo(BookingStatusChange.SYSTEM);
+        assertThat(booking.getSlotStart()).isEqualTo(NOW.plusSeconds(3600));
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.CONFIRMED);
+        verify(notifier).rescheduleExpired(booking, late);
     }
 
     @Test

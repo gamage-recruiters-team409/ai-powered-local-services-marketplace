@@ -15,11 +15,11 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
@@ -54,8 +54,12 @@ class BookingQueryServiceImplTest {
     @Mock
     private BookingRepository bookingRepository;
 
-    @InjectMocks
     private BookingQueryServiceImpl service;
+
+    @BeforeEach
+    void setUp() {
+        service = new BookingQueryServiceImpl(bookingRepository, new ReschedulePolicy(2, 6, 12));
+    }
 
     @AfterEach
     void clearSecurity() {
@@ -187,6 +191,8 @@ class BookingQueryServiceImplTest {
         assertThat(d.price().totalPrice()).isEqualByComparingTo("6500");
         assertThat(d.timeline()).extracting(BookingDetailsResponse.TimelineEntry::actor)
                 .containsExactly("CUSTOMER", "PROVIDER");
+        assertThat(d.pendingReschedule()).isNull();
+        assertThat(d.remainingReschedules()).isEqualTo(2);
     }
 
     @Test

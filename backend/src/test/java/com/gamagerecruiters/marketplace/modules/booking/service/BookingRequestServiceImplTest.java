@@ -79,6 +79,9 @@ class BookingRequestServiceImplTest {
     @Mock
     private BookingReferenceGenerator referenceGenerator;
 
+    @Mock
+    private BookingNotifier notifier;
+
     private BookingRequestServiceImpl enabledService;
 
     @BeforeEach
@@ -88,7 +91,8 @@ class BookingRequestServiceImplTest {
 
     private BookingRequestServiceImpl service(boolean enabled, TransactionOperations transactions) {
         return new BookingRequestServiceImpl(bookingRepository, listingService, providerVerification, slotService,
-                providerBookingGuard, referenceGenerator, transactions, enabled, Clock.fixed(NOW, ZoneOffset.UTC), 0);
+                providerBookingGuard, referenceGenerator, transactions, notifier, enabled, Clock.fixed(NOW, ZoneOffset.UTC),
+                0);
     }
 
     @AfterEach
@@ -429,6 +433,22 @@ class BookingRequestServiceImplTest {
                 .isInstanceOf(ResourceConflictException.class)
                 .satisfies(e -> assertThat(((ResourceConflictException) e).getErrorCode())
                         .isEqualTo("DURATION_NOT_SCHEDULABLE"));
-        verifyNoInteractions(providerBookingGuard, slotService, bookingRepository);
+        verifyNoInteractions(providerBookingGuard, slotService, bookingRepository, notifier);
+    }
+
+    @Test
+    @DisplayName("New booking → provider is notified once, after it was saved")
+    void notifiesProviderAfterCreate() {
+        loginAs(CUSTOMER, Role.CUSTOMER);
+        when(listingService.getListingPriceSnapshot("listing-1", List.of()))
+                .thenReturn(listing(PROVIDER, List.of(), new BigDecimal("5000.00"), 60));
+        when(providerVerification.isApprovedProvider(PROVIDER)).thenReturn(true);
+        when(slotService.isSlotAvailable(PROVIDER, SLOT_START, 60)).thenReturn(true);
+        when(referenceGenerator.next(NOW)).thenReturn("BK-20261120-ABCDEF");
+        givenInsertAssignsId("booking-1");
+
+        enabledService.createBookingRequest(request(PROVIDER));
+
+        verify(notifier).requestReceived(argThat((Booking b) -> "booking-1".equals(b.getId())));
     }
 }

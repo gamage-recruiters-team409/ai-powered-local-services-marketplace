@@ -17,4 +17,14 @@ public interface SlotService {
      * blocked date, 3 h notice, 30-minute start grid and existing bookings plus buffer.
      */
     boolean isSlotAvailable(String providerId, Instant slotStart, int durationMinutes);
+
+    /**
+     * Same as {@link #getAvailableSlots(String, String, String)} but ignores one booking's own time
+     * (used when that booking is being rescheduled). No access check: callers must check the booking.
+     */
+    AvailableSlotsResponse getAvailableSlots(String providerId, String date, String durationMinutes,
+                                             String excludeBookingId);
+
+    /** Same as {@link #isSlotAvailable(String, Instant, int)} but ignores one booking's own time. */
+    boolean isSlotAvailable(String providerId, Instant slotStart, int durationMinutes, String excludeBookingId);
 }

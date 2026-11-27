@@ -24,6 +24,7 @@ import com.gamagerecruiters.marketplace.modules.booking.dto.BookingAddressReques
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingDetailsResponse;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingListItem;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingPageResponse;
+import com.gamagerecruiters.marketplace.modules.booking.dto.RescheduleView;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 
 /**
@@ -44,9 +45,11 @@ public class BookingQueryServiceImpl implements BookingQueryService {
             .withZone(SlotServiceImpl.BUSINESS_ZONE);
 
     private final BookingRepository bookingRepository;
+    private final ReschedulePolicy reschedulePolicy;
 
-    public BookingQueryServiceImpl(BookingRepository bookingRepository) {
+    public BookingQueryServiceImpl(BookingRepository bookingRepository, ReschedulePolicy reschedulePolicy) {
         this.bookingRepository = bookingRepository;
+        this.reschedulePolicy = reschedulePolicy;
     }
 
     @Override
@@ -108,7 +111,9 @@ public class BookingQueryServiceImpl implements BookingQueryService {
                 local(LOCAL_DATE, booking), localTime(booking.getSlotStart()), localTime(booking.getSlotEnd()),
                 booking.getDurationMinutes(), addressVisible, address,
                 addressVisible ? booking.getNotes() : null, price, booking.getResponseDeadline(),
-                booking.getAcceptedAt(), booking.getPaymentDueAt(), booking.getCreatedAt(), timeline);
+                booking.getAcceptedAt(), booking.getPaymentDueAt(), booking.getCreatedAt(), timeline,
+                RescheduleView.from(booking.pendingReschedule().orElse(null)),
+                reschedulePolicy.remaining(booking.approvedRescheduleCount()));
     }
 
     private static String currentUserId() {

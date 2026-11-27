@@ -62,11 +62,14 @@ class BookingFacadePaymentTest {
     @Mock
     private BookingRepository bookingRepository;
 
+    @Mock
+    private BookingNotifier notifier;
+
     private BookingFacadeImpl facade;
 
     @BeforeEach
     void setUp() {
-        facade = new BookingFacadeImpl(bookingRepository, new BookingPaymentPolicy(15, 15),
+        facade = new BookingFacadeImpl(bookingRepository, new BookingPaymentPolicy(15, 15), notifier,
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -201,6 +204,7 @@ class BookingFacadePaymentTest {
         assertThat(change.getChangedBy()).isEqualTo(BookingStatusChange.SYSTEM);
         assertThat(change.getReference()).isEqualTo(PAY_REF);
         assertThat(change.getChangedAt()).isEqualTo(NOW);
+        verify(notifier).confirmed(booking);
     }
 
     @Test
@@ -223,6 +227,7 @@ class BookingFacadePaymentTest {
 
         assertThat(result.status()).isEqualTo(BookingStatus.CONFIRMED);
         verify(bookingRepository, never()).save(any(Booking.class));
+        verifyNoInteractions(notifier);
     }
 
     @Test
@@ -359,6 +364,7 @@ class BookingFacadePaymentTest {
 
         assertThat(result.status()).isEqualTo(BookingStatus.EXPIRED);
         assertThat(booking.getTimeline().get(0).getReference()).isEqualTo(PAY_REF);
+        verify(notifier).paymentExpired(booking);
     }
 
     @Test

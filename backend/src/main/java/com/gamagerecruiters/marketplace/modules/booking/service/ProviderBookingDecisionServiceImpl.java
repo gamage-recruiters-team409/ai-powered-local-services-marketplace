@@ -42,17 +42,19 @@ public class ProviderBookingDecisionServiceImpl implements ProviderBookingDecisi
     private final ProviderVerificationFacade providerVerification;
     private final BookingPaymentPolicy paymentPolicy;
     private final Clock clock;
+    private final BookingNotifier notifier;
 
     @Autowired
     public ProviderBookingDecisionServiceImpl(BookingRepository bookingRepository,
                                               ProviderVerificationFacade providerVerification,
-                                              BookingPaymentPolicy paymentPolicy) {
-        this(bookingRepository, providerVerification, paymentPolicy, Clock.systemUTC());
+                                              BookingPaymentPolicy paymentPolicy, BookingNotifier notifier) {
+        this(bookingRepository, providerVerification, paymentPolicy, notifier, Clock.systemUTC());
     }
 
     ProviderBookingDecisionServiceImpl(BookingRepository bookingRepository,
                                        ProviderVerificationFacade providerVerification,
-                                       BookingPaymentPolicy paymentPolicy, Clock clock) {
+                                       BookingPaymentPolicy paymentPolicy, BookingNotifier notifier, Clock clock) {
+        this.notifier = notifier;
         this.bookingRepository = bookingRepository;
         this.providerVerification = providerVerification;
         this.paymentPolicy = paymentPolicy;
@@ -75,6 +77,7 @@ public class ProviderBookingDecisionServiceImpl implements ProviderBookingDecisi
         booking.setPaymentDueAt(paymentPolicy.paymentDueAt(now));
         Booking saved = save(booking);
         log.info("Booking accepted: ref={}, paymentDueAt={}", saved.getRef(), saved.getPaymentDueAt());
+        notifier.accepted(saved);
         return toResponse(saved);
     }
 
@@ -97,6 +100,7 @@ public class ProviderBookingDecisionServiceImpl implements ProviderBookingDecisi
         booking.changeStatus(BookingStatus.DECLINED, providerId, reason, now);
         Booking saved = save(booking);
         log.info("Booking declined: ref={}, reason={}", saved.getRef(), request.reason());
+        notifier.declined(saved, request.reason());
         return toResponse(saved);
     }
 

@@ -2,6 +2,7 @@ package com.gamagerecruiters.marketplace.modules.booking.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -38,11 +39,13 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.testcontainers.containers.MongoDBContainer;
 
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingPriceSnapshot;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.BookingSummary;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.BookingUserStats;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.DailyCount;
+import com.gamagerecruiters.marketplace.modules.booking.dto.stats.LateStart;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.MonthlyCount;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.RepeatCancellation;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
@@ -168,6 +171,31 @@ class BookingStatsMongoIntegrationTest {
     }
 
     @Test
+    @DisplayName("User stats for a user without bookings: all zeros, six zero months (aggregation on an empty match)")
+    void userStatsEmpty() {
+        save("someone-else", "prov-9", BookingStatus.COMPLETED, daysAgo(2), daysAgo(3));
+
+        BookingUserStats s = stats.getUserStats("nobody");
+
+        assertThat(s.total()).isZero();
+        assertThat(s.completed()).isZero();
+        assertThat(s.cancelled()).isZero();
+        assertThat(s.disputed()).isZero();
+        assertThat(s.lastSixMonths()).hasSize(6).allSatisfy(m -> assertThat(m.count()).isZero());
+        assertThat(s.nextBookings()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Monthly counts use Colombo time: 31 May 19:00 UTC is already June in Sri Lanka")
+    void userStatsMonthBoundary() {
+        save("cust-tz", "prov-tz", BookingStatus.COMPLETED, daysAgo(100), Instant.parse("2026-05-31T19:00:00Z"));
+
+        BookingUserStats s = stats.getUserStats("cust-tz");
+
+        assertThat(s.lastSixMonths().get(0)).isEqualTo(new MonthlyCount(YearMonth.of(2026, 6), 1));
+    }
+
+    @Test
     @DisplayName("Overdue: CONFIRMED / IN_PROGRESS whose slot already ended, oldest first, limited")
     void overdue() {
         Booking yesterday = save("c", "p", BookingStatus.CONFIRMED, daysAgo(1), daysAgo(5));
@@ -207,6 +235,75 @@ class BookingStatsMongoIntegrationTest {
         assertThat(result.get(1).userId()).isEqualTo("prov-B");
         assertThat(result.get(1).role()).isEqualTo("PROVIDER");
         assertThat(result.get(1).count()).isEqualTo(2);
+        // cust-A's 4th booking was created and cancelled 40+ days ago: outside the window, not in the total.
+        assertThat(result.get(0).totalBookings()).isEqualTo(3);
+        assertThat(result.get(1).totalBookings()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Repeat cancellations: totalBookings counts the user's bookings in the window (same role) for the rate")
+    void repeatCancellationTotals() {
+        for (int i = 0; i < 2; i++) {
+            save("cust-A", "prov-X", BookingStatus.CANCELLED_BY_CUSTOMER, daysAgo(5), daysAgo(40),
+                    change(BookingStatus.CONFIRMED, BookingStatus.CANCELLED_BY_CUSTOMER, daysAgo(i + 2)));
+        }
+        save("cust-A", "prov-X", BookingStatus.COMPLETED, daysAgo(4), daysAgo(10));   // created in window
+        save("cust-A", "prov-X", BookingStatus.CONFIRMED, daysAgo(-3), daysAgo(1));    // created in window
+        save("cust-A", "prov-X", BookingStatus.COMPLETED, daysAgo(60), daysAgo(70));   // before the window
+        save("prov-X", "cust-A", BookingStatus.COMPLETED, daysAgo(4), daysAgo(10));    // cust-A as PROVIDER: not counted
+
+        List<RepeatCancellation> result = stats.findRepeatCancellations(2, 30);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).userId()).isEqualTo("cust-A");
+        assertThat(result.get(0).count()).isEqualTo(2);
+        // 2 cancelled in the window (created before it) + 2 created in the window = 4 → rate 50%.
+        assertThat(result.get(0).totalBookings()).isEqualTo(4);
+    }
+
+    private Booking inCategory(Booking booking, String categoryId) {
+        booking.setPriceSnapshot(new BookingPriceSnapshot("Service " + categoryId, categoryId, "FIXED",
+                new BigDecimal("1000.00"), List.of(), new BigDecimal("1000.00"), "LKR", new BigDecimal("0.10"), 120,
+                booking.getCreatedAt()));
+        return mongoTemplate.save(booking);
+    }
+
+    @Test
+    @DisplayName("Late starts: CONFIRMED and past slotStart only, most late first, minutesLate, limit")
+    void lateStarts() {
+        Booking late90 = inCategory(save("c", "p", BookingStatus.CONFIRMED, NOW.minus(Duration.ofMinutes(90)),
+                daysAgo(3)), "cat-A");
+        Booking late10 = inCategory(save("c", "p", BookingStatus.CONFIRMED, NOW.minus(Duration.ofMinutes(10)),
+                daysAgo(3)), "cat-B");
+        save("c", "p", BookingStatus.CONFIRMED, NOW.plus(Duration.ofMinutes(30)), daysAgo(3));       // future
+        save("c", "p", BookingStatus.IN_PROGRESS, NOW.minus(Duration.ofMinutes(60)), daysAgo(3));    // started
+        save("c", "p", BookingStatus.AWAITING_PAYMENT, NOW.minus(Duration.ofMinutes(60)), daysAgo(3)); // not booked
+
+        List<LateStart> result = stats.findLateStarts(10, null);
+
+        assertThat(result).extracting(LateStart::bookingId).containsExactly(late90.getId(), late10.getId());
+        assertThat(result).extracting(LateStart::minutesLate).containsExactly(90L, 10L);
+        assertThat(result.get(0).serviceTitle()).isEqualTo("Service cat-A");
+        assertThat(result.get(0).categoryId()).isEqualTo("cat-A");
+        assertThat(stats.findLateStarts(1, null)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("Category filter: late starts and overdue lists return only the chosen category; BookingSummary has it")
+    void categoryFilter() {
+        inCategory(save("c", "p", BookingStatus.CONFIRMED, NOW.minus(Duration.ofMinutes(30)), daysAgo(3)), "cat-A");
+        Booking lateB = inCategory(save("c", "p", BookingStatus.CONFIRMED, NOW.minus(Duration.ofMinutes(20)),
+                daysAgo(3)), "cat-B");
+        inCategory(save("c", "p", BookingStatus.CONFIRMED, daysAgo(1), daysAgo(3)), "cat-A");
+        Booking overdueB = inCategory(save("c", "p", BookingStatus.IN_PROGRESS, daysAgo(2), daysAgo(3)), "cat-B");
+
+        assertThat(stats.findLateStarts(10, "cat-B")).extracting(LateStart::bookingId)
+                .containsExactly(lateB.getId());
+        List<BookingSummary> overdue = stats.findOverdueBookings(10, "cat-B");
+        assertThat(overdue).extracting(BookingSummary::bookingId).containsExactly(overdueB.getId());
+        assertThat(overdue.get(0).categoryId()).isEqualTo("cat-B");
+        assertThat(stats.findOverdueBookings(10, " ")).hasSize(2);
+        assertThat(stats.findLateStarts(10, "cat-none")).isEmpty();
     }
 
     @Test

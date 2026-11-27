@@ -52,12 +52,15 @@ class ProviderBookingDecisionServiceImplTest {
     @Mock
     private ProviderVerificationFacade providerVerification;
 
+    @Mock
+    private BookingNotifier notifier;
+
     private ProviderBookingDecisionServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new ProviderBookingDecisionServiceImpl(bookingRepository, providerVerification,
-                new BookingPaymentPolicy(15, 15), Clock.fixed(NOW, ZoneOffset.UTC));
+                new BookingPaymentPolicy(15, 15), notifier, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @AfterEach
@@ -102,6 +105,7 @@ class ProviderBookingDecisionServiceImplTest {
         assertThat(response.paymentDueAt()).isEqualTo(NOW.plusSeconds(15 * 60));
         assertThat(booking.getTimeline()).hasSize(1);
         assertThat(booking.getTimeline().get(0).getChangedBy()).isEqualTo(PROVIDER);
+        verify(notifier).accepted(booking);
     }
 
     @Test
@@ -115,6 +119,7 @@ class ProviderBookingDecisionServiceImplTest {
                 .isInstanceOf(ResourceConflictException.class)
                 .satisfies(e -> assertThat(((ApiException) e).getErrorCode()).isEqualTo("PROVIDER_NOT_BOOKABLE"));
         verify(bookingRepository, never()).save(any(Booking.class));
+        verifyNoInteractions(notifier);
     }
 
     @Test
@@ -197,6 +202,7 @@ class ProviderBookingDecisionServiceImplTest {
         assertThat(response.status()).isEqualTo(BookingStatus.DECLINED);
         assertThat(booking.getTimeline().get(0).getReason()).isEqualTo("Declined: Not available at this time");
         verifyNoInteractions(providerVerification);
+        verify(notifier).declined(booking, BookingDeclineReason.NOT_AVAILABLE);
     }
 
     @Test

@@ -58,11 +58,15 @@ class BookingFacadeImplTest {
     @Mock
     private BookingRepository bookingRepository;
 
+    @Mock
+    private BookingNotifier notifier;
+
     private BookingFacadeImpl facade;
 
     @BeforeEach
     void setUp() {
-        facade = new BookingFacadeImpl(bookingRepository, new BookingPaymentPolicy(15, 15), Clock.fixed(NOW, ZoneOffset.UTC));
+        facade = new BookingFacadeImpl(bookingRepository, new BookingPaymentPolicy(15, 15), notifier,
+                Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @AfterEach

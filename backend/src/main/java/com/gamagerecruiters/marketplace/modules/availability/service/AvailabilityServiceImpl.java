@@ -61,6 +61,14 @@ public class AvailabilityServiceImpl implements AvailabilityService {
     private final MongoTemplate mongoTemplate;
     private final Clock clock;
 
+    /** Booking module check for bookings on the date (optional, so availability never depends on booking). */
+    private BlockedDateBookingCheck bookingCheck;
+
+    @Autowired(required = false)
+    void setBlockedDateBookingCheck(BlockedDateBookingCheck bookingCheck) {
+        this.bookingCheck = bookingCheck;
+    }
+
     @Autowired
     public AvailabilityServiceImpl(AvailabilityRuleRepository availabilityRuleRepository,
                                    BlockedDateRepository blockedDateRepository,
@@ -177,7 +185,11 @@ public class AvailabilityServiceImpl implements AvailabilityService {
         blockedDate.setCreatedAt(Instant.now(clock));
 
         try {
-            return AvailabilityMapper.toResponse(blockedDateRepository.save(blockedDate));
+            BlockedDate saved = bookingCheck == null
+                ? blockedDateRepository.save(blockedDate)
+                : bookingCheck.createIfNoBookingsToHandle(providerId, date,
+                    () -> blockedDateRepository.save(blockedDate));
+            return AvailabilityMapper.toResponse(saved);
         } catch (DuplicateKeyException e) {
             // Two requests for the same date at the same time: the unique index stops the second one.
             throw new ResourceConflictException("BLOCKED_DATE_EXISTS", "This date is already blocked");

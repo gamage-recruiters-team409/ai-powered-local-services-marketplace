@@ -8,6 +8,7 @@ import java.time.YearMonth;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -37,6 +38,7 @@ import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChan
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.BookingSummary;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.BookingUserStats;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.DailyCount;
+import com.gamagerecruiters.marketplace.modules.booking.dto.stats.LateStart;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.MonthlyCount;
 import com.gamagerecruiters.marketplace.modules.booking.dto.stats.RepeatCancellation;
 
@@ -49,6 +51,7 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
     static final int MAX_DAY_RANGE = 366;
     static final int NEXT_BOOKINGS = 5;
     static final int MONTHS = 6;
+    static final String BOOKINGS_COLLECTION = "bookings";
 
     private static final Set<BookingStatus> CANCELLED = EnumSet.of(
             BookingStatus.CANCELLED_BY_CUSTOMER, BookingStatus.CANCELLED_BY_PROVIDER);
@@ -80,31 +83,43 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
         Criteria ofUser = new Criteria().orOperator(
                 Criteria.where("customerId").is(userId), Criteria.where("providerId").is(userId));
 
-        Query all = new Query(ofUser);
-        all.fields().include("status", "createdAt", "timeline.toStatus");
-        List<Booking> bookings = mongoTemplate.find(all, Booking.class);
-
-        long completed = 0;
-        long cancelled = 0;
-        long disputed = 0;
+        // Counted inside MongoDB (TL review): one $facet aggregation instead of loading every booking.
+        // The $or match is index-backed: customerId_1_status_1 and providerId_1_slotStart_1 both start with the
+        // matched field, so MongoDB answers each branch from an index.
         YearMonth thisMonth = YearMonth.now(clock.withZone(SlotServiceImpl.BUSINESS_ZONE));
+        YearMonth firstMonth = thisMonth.minusMonths(MONTHS - 1L);
+        Date monthsFrom = Date.from(firstMonth.atDay(1).atStartOfDay(SlotServiceImpl.BUSINESS_ZONE).toInstant());
+
+        Document totalsGroup = new Document("$group", new Document("_id", null)
+                .append("total", new Document("$sum", 1))
+                .append("completed", countWhen(new Document("$eq",
+                        List.of("$status", BookingStatus.COMPLETED.name()))))
+                .append("cancelled", countWhen(new Document("$in", List.of("$status",
+                        CANCELLED.stream().map(Enum::name).toList()))))
+                .append("disputed", countWhen(new Document("$in", List.of(BookingStatus.DISPUTED.name(),
+                        new Document("$ifNull", List.of("$timeline.toStatus", List.of())))))));
+        List<Document> monthsPipeline = List.of(
+                new Document("$match", new Document("createdAt", new Document("$gte", monthsFrom))),
+                new Document("$group", new Document("_id", new Document("$dateToString",
+                        new Document("format", "%Y-%m").append("date", "$createdAt")
+                                .append("timezone", SlotServiceImpl.BUSINESS_ZONE.getId())))
+                        .append("count", new Document("$sum", 1))));
+        Document facet = new Document("$facet", new Document("totals", List.of(totalsGroup))
+                .append("months", monthsPipeline));
+
+        Aggregation aggregation = Aggregation.newAggregation(Aggregation.match(ofUser), context -> facet);
+        Document result = mongoTemplate.aggregate(aggregation, BOOKINGS_COLLECTION, Document.class)
+                .getUniqueMappedResult();
+
+        Document totals = firstOrEmpty(result, "totals");
         Map<YearMonth, Long> months = new LinkedHashMap<>();
         for (int i = MONTHS - 1; i >= 0; i--) {
             months.put(thisMonth.minusMonths(i), 0L);
         }
-        for (Booking b : bookings) {
-            if (b.getStatus() == BookingStatus.COMPLETED) {
-                completed++;
-            }
-            if (CANCELLED.contains(b.getStatus())) {
-                cancelled++;
-            }
-            if (b.getTimeline().stream().anyMatch(c -> c.getToStatus() == BookingStatus.DISPUTED)) {
-                disputed++;
-            }
-            if (b.getCreatedAt() != null) {
-                YearMonth m = YearMonth.from(b.getCreatedAt().atZone(SlotServiceImpl.BUSINESS_ZONE));
-                months.computeIfPresent(m, (k, v) -> v + 1);
+        if (result != null && result.getList("months", Document.class) != null) {
+            for (Document m : result.getList("months", Document.class)) {
+                YearMonth month = YearMonth.parse(m.getString("_id"));
+                months.computeIfPresent(month, (k, v) -> v + number(m, "count"));
             }
         }
 
@@ -118,22 +133,75 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
 
         List<MonthlyCount> lastSixMonths = months.entrySet().stream()
                 .map(e -> new MonthlyCount(e.getKey(), e.getValue())).toList();
-        return new BookingUserStats(userId, bookings.size(), completed, cancelled, disputed, lastSixMonths,
-                nextBookings);
+        return new BookingUserStats(userId, number(totals, "total"), number(totals, "completed"),
+                number(totals, "cancelled"), number(totals, "disputed"), lastSixMonths, nextBookings);
+    }
+
+    private static Document countWhen(Document condition) {
+        return new Document("$sum", new Document("$cond", List.of(condition, 1, 0)));
+    }
+
+    private static Document firstOrEmpty(Document result, String key) {
+        if (result == null) {
+            return new Document();
+        }
+        List<Document> list = result.getList(key, Document.class);
+        return list == null || list.isEmpty() ? new Document() : list.get(0);
+    }
+
+    private static long number(Document document, String key) {
+        Object value = document.get(key);
+        return value instanceof Number n ? n.longValue() : 0L;
     }
 
     @Override
     public List<BookingSummary> findOverdueBookings(int limit) {
+        return findOverdueBookings(limit, null);
+    }
+
+    @Override
+    public List<BookingSummary> findOverdueBookings(int limit, String categoryId) {
         assertStatsAccess();
+        assertLimit(limit);
+        Criteria criteria = Criteria.where("status").in(OVERDUE_STATUSES).and("slotEnd").lt(clock.instant());
+        withCategory(criteria, categoryId);
+        Query query = new Query(criteria)
+                .with(Sort.by(Sort.Order.asc("slotEnd"), Sort.Order.asc("id")))
+                .limit(limit);
+        return mongoTemplate.find(query, Booking.class).stream().map(BookingStatsFacadeImpl::toSummary).toList();
+    }
+
+    @Override
+    public List<LateStart> findLateStarts(int limit, String categoryId) {
+        assertStatsAccess();
+        assertLimit(limit);
+        Instant now = clock.instant();
+        Criteria criteria = Criteria.where("status").is(BookingStatus.CONFIRMED).and("slotStart").lt(now);
+        withCategory(criteria, categoryId);
+        // Oldest start first = most late first; _id breaks ties so the list is stable.
+        Query query = new Query(criteria)
+                .with(Sort.by(Sort.Order.asc("slotStart"), Sort.Order.asc("id")))
+                .limit(limit);
+        return mongoTemplate.find(query, Booking.class).stream()
+                .map(b -> new LateStart(b.getId(), b.getRef(), b.getListingId(),
+                        b.getPriceSnapshot() == null ? null : b.getPriceSnapshot().serviceTitle(),
+                        b.getPriceSnapshot() == null ? null : b.getPriceSnapshot().categoryId(),
+                        b.getCustomerId(), b.getProviderId(), b.getSlotStart(),
+                        Duration.between(b.getSlotStart(), now).toMinutes()))
+                .toList();
+    }
+
+    private static void assertLimit(int limit) {
         if (limit < 1 || limit > MAX_OVERDUE_LIMIT) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_LIMIT",
                     "limit must be between 1 and " + MAX_OVERDUE_LIMIT);
         }
-        Query query = new Query(Criteria.where("status").in(OVERDUE_STATUSES)
-                .and("slotEnd").lt(clock.instant()))
-                .with(Sort.by(Sort.Direction.ASC, "slotEnd"))
-                .limit(limit);
-        return mongoTemplate.find(query, Booking.class).stream().map(BookingStatsFacadeImpl::toSummary).toList();
+    }
+
+    private static void withCategory(Criteria criteria, String categoryId) {
+        if (categoryId != null && !categoryId.isBlank()) {
+            criteria.and("priceSnapshot.categoryId").is(categoryId.trim());
+        }
     }
 
     @Override
@@ -164,16 +232,54 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
                 last.merge(key, c.getChangedAt(), (a, x) -> a.isAfter(x) ? a : x);
             }
         }
+        List<String> repeaters = counts.entrySet().stream()
+                .filter(e -> e.getValue()[0] >= minCount).map(Map.Entry::getKey).toList();
+        Map<String, Long> totals = totalBookingsInWindow(repeaters, since);
+
         List<RepeatCancellation> result = new ArrayList<>();
-        counts.forEach((key, n) -> {
-            if (n[0] >= minCount) {
-                String[] parts = key.split("\\|", 2);
-                result.add(new RepeatCancellation(parts[1], parts[0], n[0], last.get(key)));
-            }
-        });
+        for (String key : repeaters) {
+            String[] parts = key.split("\\|", 2);
+            long count = counts.get(key)[0];
+            result.add(new RepeatCancellation(parts[1], parts[0], count,
+                    Math.max(count, totals.getOrDefault(key, 0L)), last.get(key)));
+        }
         result.sort(Comparator.comparingLong(RepeatCancellation::count).reversed()
                 .thenComparing(RepeatCancellation::lastCancelledAt, Comparator.reverseOrder()));
         return result;
+    }
+
+    /**
+     * For each "ROLE|userId" key: bookings that user had in that role during the window, i.e. created in the
+     * window or cancelled in the window. Each counted cancellation is in this set, so the rate is never above 100%.
+     */
+    private Map<String, Long> totalBookingsInWindow(List<String> keys, Instant since) {
+        Map<String, Long> totals = new HashMap<>();
+        if (keys.isEmpty()) {
+            return totals;
+        }
+        List<String> customers = new ArrayList<>();
+        List<String> providers = new ArrayList<>();
+        for (String key : keys) {
+            String[] parts = key.split("\\|", 2);
+            ("CUSTOMER".equals(parts[0]) ? customers : providers).add(parts[1]);
+        }
+        Criteria inWindow = new Criteria().orOperator(
+                Criteria.where("createdAt").gte(since),
+                Criteria.where("timeline").elemMatch(Criteria.where("toStatus").in(CANCELLED)
+                        .and("changedAt").gte(since)));
+        Criteria ofUsers = new Criteria().orOperator(
+                Criteria.where("customerId").in(customers), Criteria.where("providerId").in(providers));
+        Query query = new Query(new Criteria().andOperator(ofUsers, inWindow));
+        query.fields().include("customerId", "providerId");
+        for (Booking b : mongoTemplate.find(query, Booking.class)) {
+            if (customers.contains(b.getCustomerId())) {
+                totals.merge("CUSTOMER|" + b.getCustomerId(), 1L, Long::sum);
+            }
+            if (providers.contains(b.getProviderId())) {
+                totals.merge("PROVIDER|" + b.getProviderId(), 1L, Long::sum);
+            }
+        }
+        return totals;
     }
 
     @Override
@@ -239,6 +345,7 @@ public class BookingStatsFacadeImpl implements BookingStatsFacade {
     static BookingSummary toSummary(Booking b) {
         return new BookingSummary(b.getId(), b.getRef(), b.getStatus(), b.getCustomerId(), b.getProviderId(),
                 b.getListingId(), b.getPriceSnapshot() == null ? null : b.getPriceSnapshot().serviceTitle(),
+                b.getPriceSnapshot() == null ? null : b.getPriceSnapshot().categoryId(),
                 b.getSlotStart(), b.getSlotEnd());
     }
 }

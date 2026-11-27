@@ -96,6 +96,8 @@ public class SecurityConfig {
                                 ApiPaths.API_V1 + "/listings/*"
                         ).permitAll()
                         .requestMatchers(HttpMethod.GET, "/ws").permitAll()
+                        // Booking calendar feed: calendar apps cannot log in; the secret in the link is the key.
+                        .requestMatchers(HttpMethod.GET, ApiPaths.API_V1 + "/calendar/feed/*").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
