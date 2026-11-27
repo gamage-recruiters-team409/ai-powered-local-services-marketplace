@@ -35,6 +35,7 @@ public class ProviderItemizedEarningsService {
     private static final String SUPPORTED_CURRENCY = "LKR";
     private static final String PENDING_EVENT_PREFIX = "earning-pending:";
     private static final int MAX_PAGE_SIZE = 100;
+    private static final long MAX_PAGE_OFFSET = 100_000L;
 
     private static final Set<PaymentStatus> RECOGNIZED_PAYMENT_STATUSES =
             Set.of(
@@ -79,11 +80,12 @@ public class ProviderItemizedEarningsService {
                     "Authentication is required to access earnings");
         }
 
-        if (page < 0 || size < 1 || size > MAX_PAGE_SIZE) {
+        if (page < 0 || size < 1 || size > MAX_PAGE_SIZE
+                || (long) page * size > MAX_PAGE_OFFSET) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
                     "INVALID_PAGINATION",
-                    "Page must be non-negative and size must be between 1 and 100");
+                    "Page must be non-negative, size must be between 1 and 100, and offset must not exceed 100000");
         }
 
         PageRequest pageable = PageRequest.of(
@@ -156,8 +158,8 @@ public class ProviderItemizedEarningsService {
                 || entry.getBookingId() == null
                 || entry.getBookingId().isBlank()
                 || entry.getCreatedAt() == null
-                || entry.getSequenceNumber() == null
-                || entry.getSequenceNumber() <= 0) {
+                || (entry.getSequenceNumber() != null
+                        && entry.getSequenceNumber() <= 0)) {
 
             throw inconsistentData();
         }

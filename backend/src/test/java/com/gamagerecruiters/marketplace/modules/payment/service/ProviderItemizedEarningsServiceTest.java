@@ -220,6 +220,43 @@ class ProviderItemizedEarningsServiceTest {
     }
 
     @Test
+    void rejectsOffsetAboveMaximum() {
+        int page = 1001;
+        int size = 100;
+        rejectsInvalidPagination(page, size);
+    }
+
+    @Test
+    void rejectsOffsetJustAboveMaximum() {
+        int page = 100001;
+        int size = 1;
+        rejectsInvalidPagination(page, size);
+    }
+
+    @Test
+    void rejectsOffsetThatWouldOverflowInteger() {
+        int page = Integer.MAX_VALUE;
+        int size = 100;
+        rejectsInvalidPagination(page, size);
+    }
+
+    @Test
+    void acceptsMaximumAllowedOffset() {
+        when(ledgerRepository.findByProviderIdAndCurrencyAndEventType(
+                eq(PROVIDER_ID), eq(CURRENCY),
+                eq(EarningsLedgerEventType.EARNING_PENDING),
+                any(Pageable.class)))
+                .thenAnswer(invocation ->
+                        Page.empty(invocation.getArgument(3, Pageable.class)));
+
+        var response = service.getItemizedEarnings(PROVIDER_ID, 1000, 100);
+
+        assertEquals(1000, response.page());
+        assertEquals(100, response.size());
+        assertTrue(response.content().isEmpty());
+    }
+
+    @Test
     void preservesPaginationMetadata() {
         PageRequest pageable = PageRequest.of(0, 1);
 
@@ -319,9 +356,62 @@ class ProviderItemizedEarningsServiceTest {
     }
 
     @Test
-    void rejectsMissingRecognitionSequence() {
+    void supportsMixedSequencedAndLegacyRecognitionRecords() {
+        EarningsLedgerEntry current = recognition();
+
+        EarningsLedgerEntry legacy = recognition();
+        legacy.setId("recognition-legacy");
+        legacy.setPaymentId("payment-legacy");
+        legacy.setBookingId("booking-legacy");
+        legacy.setEventKey("earning-pending:payment-legacy");
+        legacy.setSequenceNumber(null);
+
+        Payment currentPayment = payment("0.00");
+
+        Payment legacyPayment = payment("2000.00");
+        legacyPayment.setId("payment-legacy");
+        legacyPayment.setBookingId("booking-legacy");
+
+        stubRecognition(current, legacy);
+
+        when(paymentRepository.findAllById(any()))
+                .thenReturn(List.of(legacyPayment, currentPayment));
+
+        ItemizedEarningsPageResponse result =
+                service.getItemizedEarnings(PROVIDER_ID, 0, 10);
+
+        assertEquals(2, result.content().size());
+        assertEquals(2L, result.totalElements());
+        assertEquals(1, result.totalPages());
+
+        ItemizedEarningsResponse currentRow = result.content().get(0);
+        ItemizedEarningsResponse legacyRow = result.content().get(1);
+
+        assertEquals(PAYMENT_ID, currentRow.paymentId());
+        assertMoney("9000.00", currentRow.netEarnings());
+
+        assertEquals("payment-legacy", legacyRow.paymentId());
+        assertEquals("booking-legacy", legacyRow.bookingId());
+        assertEquals(CURRENCY, legacyRow.currency());
+        assertEquals(RECOGNIZED_AT, legacyRow.recognizedAt());
+        assertMoney("10000.00", legacyRow.grossAmount());
+        assertMoney("1000.00", legacyRow.commissionAmount());
+        assertMoney("1800.00", legacyRow.refundAdjustmentAmount());
+        assertMoney("7200.00", legacyRow.netEarnings());
+
+        assertNull(legacy.getSequenceNumber());
+
+        verify(paymentRepository).findAllById(
+                Set.of(PAYMENT_ID, "payment-legacy"));
+
+        verifyNoMoreInteractions(paymentRepository);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0L, -1L})
+    void rejectsInvalidRecognitionSequence(long sequence) {
         EarningsLedgerEntry entry = recognition();
-        entry.setSequenceNumber(null);
+        entry.setSequenceNumber(sequence);
 
         stubRecognition(entry);
 

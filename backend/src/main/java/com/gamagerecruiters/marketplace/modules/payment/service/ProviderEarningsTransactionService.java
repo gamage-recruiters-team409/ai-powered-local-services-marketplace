@@ -24,6 +24,7 @@ public class ProviderEarningsTransactionService {
 
     private static final String SUPPORTED_CURRENCY = "LKR";
     private static final int MAX_PAGE_SIZE = 100;
+    private static final long MAX_PAGE_OFFSET = 100_000L;
 
     private final EarningsLedgerRepository earningsLedgerRepository;
 
@@ -93,11 +94,12 @@ public class ProviderEarningsTransactionService {
      */
     private void validatePagination(int page, int size) {
 
-        if (page < 0 || size < 1 || size > MAX_PAGE_SIZE) {
+        if (page < 0 || size < 1 || size > MAX_PAGE_SIZE
+                || (long) page * size > MAX_PAGE_OFFSET) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
                     "INVALID_PAGINATION",
-                    "Page must be non-negative and size must be between 1 and 100");
+                    "Page must be non-negative, size must be between 1 and 100, and offset must not exceed 100000");
         }
     }
 }

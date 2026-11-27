@@ -103,6 +103,40 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ProviderItemizedEarningsPage", () => {
+  it("renders current and legacy recognized earnings without omitting records", async () => {
+    const legacy = {
+      ...EARNING,
+      paymentId: "legacy-payment-001",
+      bookingId: "legacy-booking-001",
+      commissionRate: 0.10,
+      commissionAmount: 1000,
+      refundAdjustmentAmount: 1800,
+      netEarnings: 7200,
+    };
+
+    getProviderItemizedEarnings.mockResolvedValue({
+      content: [EARNING, legacy],
+      page: 0,
+      size: 10,
+      totalElements: 2,
+      totalPages: 1,
+    });
+
+    renderPage();
+
+    const currentRow = (await screen.findByText(EARNING.bookingId))
+      .closest("tr");
+    const legacyRow = (await screen.findByText(legacy.bookingId))
+      .closest("tr");
+
+    expect(currentRow.textContent).toContain("6,800.00");
+    expect(legacyRow.textContent).toContain("7,200.00");
+    expect(legacyRow.textContent).toContain("1,000.00");
+    expect(legacyRow.textContent).toContain("1,800.00");
+    expect(getProviderItemizedEarnings)
+      .toHaveBeenCalledWith(0, 10);
+  });
+
   it("does not request earnings while authentication is loading", () => {
     useAuth.mockReturnValue({
       user: null,

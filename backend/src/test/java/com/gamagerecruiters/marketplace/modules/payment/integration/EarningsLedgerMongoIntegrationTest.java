@@ -1031,7 +1031,7 @@ class EarningsLedgerMongoIntegrationTest {
             String paymentId,
             String providerId,
             String currency,
-            long sequence,
+            Long sequence,
             String refundedAmount,
             PaymentStatus status) {
 
@@ -1061,7 +1061,7 @@ class EarningsLedgerMongoIntegrationTest {
             String paymentId,
             String providerId,
             String currency,
-            long sequence) {
+            Long sequence) {
 
         EarningsLedgerEntry entry = new EarningsLedgerEntry();
 
@@ -1228,6 +1228,68 @@ class EarningsLedgerMongoIntegrationTest {
                             .toList());
 
             assertEquals(5L, repository.count());
+        });
+    }
+
+    @Test
+    void itemizedEarningsPreservesMixedLegacyRecognitionHistory() {
+        withLedger((service, repository, template) -> {
+            new EarningsLedgerIndexInitializer(template)
+                    .initializeIndexes();
+
+            seedItemizedPayment(
+                    repository, template, "payment-current",
+                    "provider-a", "LKR", 2L,
+                    "0.00", PaymentStatus.CAPTURED);
+
+            seedItemizedPayment(
+                    repository, template, "payment-legacy",
+                    "provider-a", "LKR", null,
+                    "2000.00", PaymentStatus.PARTIALLY_REFUNDED);
+
+            var itemized = itemizedService(repository, template);
+
+            var mixed = itemized.getItemizedEarnings("provider-a", 0, 10);
+            var recent = itemized.getItemizedEarnings("provider-a", 0, 5);
+            var first = itemized.getItemizedEarnings("provider-a", 0, 1);
+            var second = itemized.getItemizedEarnings("provider-a", 1, 1);
+
+            assertEquals(2L, mixed.totalElements());
+            assertEquals(1, mixed.totalPages());
+
+            assertEquals(
+                    List.of("payment-current", "payment-legacy"),
+                    mixed.content().stream()
+                            .map(item -> item.paymentId())
+                            .toList());
+
+            assertEquals(mixed.content(), recent.content());
+
+            assertEquals("payment-current",
+                    first.content().get(0).paymentId());
+            assertEquals("payment-legacy",
+                    second.content().get(0).paymentId());
+
+            assertEquals(2L, second.totalElements());
+            assertEquals(2, second.totalPages());
+
+            assertEquals(0, new BigDecimal("9000.00")
+                    .compareTo(mixed.content().get(0).netEarnings()));
+
+            assertEquals(0, new BigDecimal("7200.00")
+                    .compareTo(mixed.content().get(1).netEarnings()));
+
+            assertEquals(2L, repository.count());
+
+            var legacy = repository.findAll().stream()
+                    .filter(entry -> "payment-legacy"
+                            .equals(entry.getPaymentId()))
+                    .findFirst()
+                    .orElseThrow();
+
+            assertNull(legacy.getSequenceNumber());
+            assertEquals(0, new BigDecimal("9000.00")
+                    .compareTo(legacy.getAmount()));
         });
     }
 

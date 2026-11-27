@@ -110,6 +110,39 @@ class CustomerRefundRetrievalServiceTest {
     }
 
     @Test
+    void rejectsOffsetAboveMaximum() {
+        int page = 1001;
+        int size = 100;
+        assertInvalidPagination(page, size);
+    }
+
+    @Test
+    void rejectsOffsetJustAboveMaximum() {
+        int page = 100001;
+        int size = 1;
+        assertInvalidPagination(page, size);
+    }
+
+    @Test
+    void rejectsOffsetThatWouldOverflowInteger() {
+        int page = Integer.MAX_VALUE;
+        int size = 100;
+        assertInvalidPagination(page, size);
+    }
+
+    @Test
+    void acceptsMaximumAllowedOffset() {
+        authorizePayment();
+        stubRefunds(List.of());
+
+        var response = service.getRefundsForCustomer(PAYMENT_ID, CUSTOMER_ID, 1000, 100);
+
+        assertEquals(1000, response.page());
+        assertEquals(100, response.size());
+        assertTrue(response.content().isEmpty());
+    }
+
+    @Test
     void returnsEmptyPageWhenPaymentHasNoRefunds() {
         authorizePayment();
 

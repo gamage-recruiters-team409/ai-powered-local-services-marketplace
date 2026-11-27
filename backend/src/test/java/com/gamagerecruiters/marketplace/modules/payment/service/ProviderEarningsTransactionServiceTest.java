@@ -167,6 +167,38 @@ class ProviderEarningsTransactionServiceTest {
     }
 
     @Test
+    void rejectsOffsetAboveMaximum() {
+        int page = 1001;
+        int size = 100;
+        rejectsInvalidPagination(page, size);
+    }
+
+    @Test
+    void rejectsOffsetJustAboveMaximum() {
+        int page = 100001;
+        int size = 1;
+        rejectsInvalidPagination(page, size);
+    }
+
+    @Test
+    void rejectsOffsetThatWouldOverflowInteger() {
+        int page = Integer.MAX_VALUE;
+        int size = 100;
+        rejectsInvalidPagination(page, size);
+    }
+
+    @Test
+    void acceptsMaximumAllowedOffset() {
+        stubEntries(List.of(), 0);
+
+        var response = service.getTransactions(PROVIDER_ID, 1000, 100);
+
+        assertEquals(1000, response.page());
+        assertEquals(100, response.size());
+        assertTrue(response.content().isEmpty());
+    }
+
+    @Test
     void preservesDatabasePaginationMetadata() {
 
         stubEntries(List.of(entry(
