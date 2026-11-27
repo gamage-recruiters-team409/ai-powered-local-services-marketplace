@@ -9,21 +9,21 @@ export function countLetters(str = '') {
 
 export function normalizeFullName(name = '') {
   if (!name) return '';
-  return name.trim().replace(/\s+/g, ' ');
+  return name.replace(/[\s\p{Z}\uFEFF]+/gu, ' ').trim();
 }
 
 export function validateFullName(name, { requiredMessage = 'Please enter your full name.' } = {}) {
   if (!name || !name.trim()) {
     return requiredMessage;
   }
-  const trimmed = name.trim();
-  if (trimmed.length < 2) {
+  const normalized = normalizeFullName(name);
+  if (normalized.length < 2) {
     return 'Full name must be at least 2 characters';
   }
-  if (trimmed.length > 100) {
+  if (normalized.length > 100) {
     return 'Full name must be 100 characters or fewer';
   }
-  if (!FULL_NAME_REGEX.test(trimmed) || countLetters(trimmed) < 2) {
+  if (!FULL_NAME_REGEX.test(normalized) || countLetters(normalized) < 2) {
     return 'Full name can only contain letters, spaces, apostrophes, hyphens and dots.';
   }
   return null;
@@ -56,7 +56,7 @@ export function validatePhone(phone) {
 
 export function checkPasswordCriteria(password = '') {
   const hasMinLength = password.length >= 8;
-  const hasMaxLength = new TextEncoder().encode(password).length <= 72 && password.length <= 72;
+  const hasMaxLength = new TextEncoder().encode(password).length <= 72;
   const hasUppercase = /[A-Z]/.test(password);
   const hasLowercase = /[a-z]/.test(password);
   const hasDigit = /\d/.test(password);
@@ -79,8 +79,8 @@ export function validatePassword(password) {
   if (!password) {
     return 'Please enter a password.';
   }
-  if (new TextEncoder().encode(password).length > 72 || password.length > 72) {
-    return 'Password must not exceed 72 characters.';
+  if (new TextEncoder().encode(password).length > 72) {
+    return 'Password must not exceed 72 bytes (some characters, such as emoji or symbols, use more than one byte).';
   }
   const { isValid } = checkPasswordCriteria(password);
   if (!isValid) {

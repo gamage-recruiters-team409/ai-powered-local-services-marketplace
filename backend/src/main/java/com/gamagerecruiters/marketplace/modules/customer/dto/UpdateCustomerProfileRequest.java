@@ -1,15 +1,15 @@
 package com.gamagerecruiters.marketplace.modules.customer.dto;
 
 import com.gamagerecruiters.marketplace.common.util.ValidationConstants;
+import com.gamagerecruiters.marketplace.common.util.ValidationUtils;
+import com.gamagerecruiters.marketplace.common.validation.ValidFullName;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
-import jakarta.validation.constraints.Size;
 
 public record UpdateCustomerProfileRequest(
         @NotBlank(message = "Full name is required")
-        @Size(min = 2, max = 100, message = "Full name must not exceed 100 characters")
-        @Pattern(regexp = ValidationConstants.FULL_NAME_REGEX, message = ValidationConstants.FULL_NAME_MESSAGE)
+        @ValidFullName
         String fullName,
 
         @NotBlank(message = "Phone number is required")
@@ -18,10 +18,10 @@ public record UpdateCustomerProfileRequest(
 ) {
     public UpdateCustomerProfileRequest {
         if (fullName != null) {
-            fullName = fullName.trim().replaceAll("\\s+", " ");
+            fullName = ValidationUtils.normalizeFullName(fullName);
         }
         if (phone != null) {
-            phone = phone.trim().replaceAll("[\\s\\-\\(\\)]", "");
+            phone = ValidationUtils.stripSpaces(phone).replaceAll("[\\s\\-\\(\\)]", "");
         }
     }
 }

@@ -32,6 +32,15 @@ describe('validators', () => {
 
     it('returns error when name exceeds 100 characters', () => {
       expect(validateFullName('A'.repeat(101))).toEqual(expect.stringContaining('100 characters'));
+      const invalid101 = 'A ' + 'B'.repeat(100);
+      expect(validateFullName(invalid101)).toEqual(expect.stringContaining('100 characters'));
+    });
+
+    it('accepts name that is 100 characters after normalization but longer before', () => {
+      const nameWithSpaces = 'A' + '   '.repeat(5) + 'B'.repeat(98) + ' ';
+      expect(nameWithSpaces.length).toBeGreaterThan(100);
+      expect(normalizeFullName(nameWithSpaces).length).toBe(100);
+      expect(validateFullName(nameWithSpaces)).toBeNull();
     });
 
     it('accepts valid English and Sri Lankan names', () => {
@@ -60,11 +69,13 @@ describe('validators', () => {
   });
 
   describe('normalizeFullName', () => {
-    it('trims and collapses multiple spaces', () => {
+    it('trims and collapses multiple spaces and unicode whitespace (NBSP, BOM)', () => {
       expect(normalizeFullName('')).toBe('');
       expect(normalizeFullName('   ')).toBe('');
       expect(normalizeFullName('  Kalana    Dinuja  ')).toBe('Kalana Dinuja');
       expect(normalizeFullName('Anne   Marie   Perera')).toBe('Anne Marie Perera');
+      expect(normalizeFullName('\u00A0Kalana\u00A0\u00A0Dinuja\u00A0')).toBe('Kalana Dinuja');
+      expect(normalizeFullName('Kalana\u202FDinuja')).toBe('Kalana Dinuja');
     });
   });
 
@@ -166,9 +177,20 @@ describe('validators', () => {
       expect(validatePassword('ValidPass123!')).toBeNull();
     });
 
-    it('rejects password exceeding 72 bytes', () => {
+    it('accepts password with exactly 72 bytes', () => {
+      const pw72 = 'Aa1!' + '€'.repeat(22) + 'ab'; // 4 + 66 + 2 = 72 bytes
+      expect(new TextEncoder().encode(pw72).length).toBe(72);
+      expect(validatePassword(pw72)).toBeNull();
+    });
+
+    it('rejects password exceeding 72 bytes (even if character count is small)', () => {
       const longPw = 'Aa1!' + 'b'.repeat(70);
-      expect(validatePassword(longPw)).toEqual(expect.stringContaining('72 characters'));
+      expect(validatePassword(longPw)).toEqual(expect.stringContaining('72 bytes'));
+
+      const pw73Bytes = 'Aa1!' + '€'.repeat(23); // 4 + 69 = 73 bytes, only 27 characters
+      expect(pw73Bytes.length).toBe(27);
+      expect(new TextEncoder().encode(pw73Bytes).length).toBe(73);
+      expect(validatePassword(pw73Bytes)).toEqual(expect.stringContaining('72 bytes'));
     });
   });
 

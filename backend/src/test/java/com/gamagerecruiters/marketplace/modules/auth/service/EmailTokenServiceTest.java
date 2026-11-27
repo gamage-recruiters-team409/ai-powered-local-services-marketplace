@@ -705,6 +705,21 @@ class EmailTokenServiceTest {
     }
 
     @Test
+    @DisplayName("resetPassword throws 400 WEAK_PASSWORD when password exceeds 72 UTF-8 bytes and does not consume token")
+    void resetPassword_passwordExceeding72Bytes_throws400AndDoesNotConsumeToken() {
+        String longPassword = "ValidPassword1" + "x".repeat(59);
+        assertEquals(73, longPassword.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+
+        ApiException ex = assertThrows(ApiException.class, () -> emailTokenService.resetPassword("token", longPassword));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        assertEquals("WEAK_PASSWORD", ex.getErrorCode());
+
+        verifyNoInteractions(authTokenRepository);
+        verifyNoInteractions(userRepository);
+        verifyNoInteractions(passwordEncoder);
+    }
+
+    @Test
     @DisplayName("resetPassword throws 400 INVALID_OR_EXPIRED_TOKEN on token lookup failure")
     void resetPassword_invalidToken_throws400() {
         when(tokenService.hashToken("bad-token")).thenReturn("bad-hash");

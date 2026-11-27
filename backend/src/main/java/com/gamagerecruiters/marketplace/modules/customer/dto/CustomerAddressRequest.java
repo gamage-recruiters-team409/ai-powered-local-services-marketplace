@@ -1,6 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.customer.dto;
 
 import com.gamagerecruiters.marketplace.common.util.ValidationConstants;
+import com.gamagerecruiters.marketplace.common.util.ValidationUtils;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -18,7 +19,7 @@ public record CustomerAddressRequest(
         String addressLine1,
 
         @Size(max = 120, message = "Address line 2 must not exceed 120 characters")
-        @Pattern(regexp = "^$|^[^\\p{Cntrl}]+$", message = "Address line 2 must not contain control characters")
+        @Pattern(regexp = "^$|^[^\\p{Cc}]+$", message = "Address line 2 must not contain control characters")
         String addressLine2,
 
         @NotBlank(message = "City is required")
@@ -36,23 +37,11 @@ public record CustomerAddressRequest(
         Boolean isDefault
 ) {
     public CustomerAddressRequest {
-        if (label != null) {
-            label = label.trim();
-        }
-        if (addressLine1 != null) {
-            addressLine1 = addressLine1.trim();
-        }
-        if (addressLine2 != null) {
-            addressLine2 = addressLine2.trim();
-        }
-        if (city != null) {
-            city = city.trim();
-        }
-        if (district != null) {
-            district = district.trim();
-        }
-        if (postalCode != null) {
-            postalCode = postalCode.trim();
-        }
+        label = ValidationUtils.stripSpaces(label);
+        addressLine1 = ValidationUtils.stripSpaces(addressLine1);
+        addressLine2 = ValidationUtils.stripSpaces(addressLine2);
+        city = ValidationUtils.stripSpaces(city);
+        district = ValidationUtils.stripSpaces(district);
+        postalCode = ValidationUtils.stripSpaces(postalCode);
     }
 }

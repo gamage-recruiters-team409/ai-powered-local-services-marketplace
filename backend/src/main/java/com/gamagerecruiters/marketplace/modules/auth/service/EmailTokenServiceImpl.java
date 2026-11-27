@@ -15,6 +15,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
+import com.gamagerecruiters.marketplace.common.util.ValidationUtils;
 import com.gamagerecruiters.marketplace.modules.auth.domain.AuthToken;
 import com.gamagerecruiters.marketplace.modules.auth.domain.TokenType;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
@@ -209,7 +210,7 @@ public class EmailTokenServiceImpl implements EmailTokenService {
 
     @Override
     public void resetPassword(String rawToken, String newPassword) {
-        if (newPassword == null || !PASSWORD_POLICY.matcher(newPassword).matches()) {
+        if (newPassword == null || !PASSWORD_POLICY.matcher(newPassword).matches() || !ValidationUtils.isValidPasswordLength(newPassword)) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
                     "WEAK_PASSWORD",

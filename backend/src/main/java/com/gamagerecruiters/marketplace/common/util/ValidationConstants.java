@@ -22,14 +22,14 @@ public final class ValidationConstants {
     public static final String SRI_LANKAN_PHONE_REGEX = "^(\\+94|0|94)[0-9]{9}$";
     public static final String SRI_LANKAN_PHONE_MESSAGE = "Invalid Sri Lankan phone number format. Expected +94XXXXXXXXX or 07XXXXXXXX";
 
-    public static final String NO_CONTROL_CHARS_REGEX = "^[^\\p{Cntrl}]+$";
+    public static final String NO_CONTROL_CHARS_REGEX = "^[^\\p{Cc}]+$";
     public static final String NO_CONTROL_CHARS_MESSAGE = "Must not contain control characters";
 
-    public static final String CITY_REGEX = "^(?!^\\d+$)[^\\p{Cntrl}]+$";
+    public static final String CITY_REGEX = "^(?!^\\d+$)[^\\p{Cc}]+$";
     public static final String CITY_MESSAGE = "City must not be digits only and must not contain control characters";
 
     public static final int MAX_PASSWORD_BYTES = 72;
-    public static final String PASSWORD_MAX_MESSAGE = "Password must not exceed 72 characters";
+    public static final String PASSWORD_MAX_MESSAGE = "Password must not exceed 72 bytes (some characters, such as emoji or symbols, use more than one byte).";
 
     private ValidationConstants() {
     }

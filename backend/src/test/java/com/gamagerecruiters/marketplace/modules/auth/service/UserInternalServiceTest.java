@@ -365,7 +365,7 @@ class UserInternalServiceTest {
         user.setPhone("+94711111111");
 
         when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
-        when(userRepository.findByPhone("+94771234567")).thenReturn(Optional.empty());
+        when(userRepository.findByPhoneIn(any())).thenReturn(List.of());
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
         User updated = userInternalService.updateContactDetails("u-1", "New Name", "0771234567");
@@ -386,7 +386,7 @@ class UserInternalServiceTest {
         other.setPhone("+94771234567");
 
         when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
-        when(userRepository.findByPhone("+94771234567")).thenReturn(Optional.of(other));
+        when(userRepository.findByPhoneIn(any())).thenReturn(List.of(other));
 
         ResourceConflictException ex = assertThrows(
                 ResourceConflictException.class,
@@ -404,12 +404,50 @@ class UserInternalServiceTest {
         user.setPhone("+94771234567");
 
         when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
-        when(userRepository.findByPhone("+94771234567")).thenReturn(Optional.of(user));
+        when(userRepository.findByPhoneIn(any())).thenReturn(List.of(user));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
         User updated = userInternalService.updateContactDetails("u-1", "Updated Name", "+94771234567");
         assertEquals("Updated Name", updated.getName());
         assertEquals("+94771234567", updated.getPhone());
+    }
+
+    @Test
+    @DisplayName("updateContactDetails: Should allow updating phone to equivalent form of own existing phone")
+    void shouldAllowKeepingOwnPhoneInEquivalentFormatOnContactUpdate() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPhone("+94771234567");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(userRepository.findByPhoneIn(any())).thenReturn(List.of(user));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User updated = userInternalService.updateContactDetails("u-1", "Updated Name", "0771234567");
+        assertEquals("Updated Name", updated.getName());
+        assertEquals("+94771234567", updated.getPhone());
+    }
+
+    @Test
+    @DisplayName("updateContactDetails: Should reject phone when another user holds an equivalent format")
+    void shouldRejectDuplicatePhoneWhenAnotherUserHasEquivalentFormatOnContactUpdate() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPhone("+94711111111");
+
+        User other = new User();
+        other.setId("u-2");
+        other.setPhone("0771234567");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(userRepository.findByPhoneIn(any())).thenReturn(List.of(other));
+
+        ResourceConflictException ex = assertThrows(
+                ResourceConflictException.class,
+                () -> userInternalService.updateContactDetails("u-1", "New Name", "+94771234567")
+        );
+        assertEquals("PHONE_ALREADY_EXISTS", ex.getErrorCode());
+        verify(userRepository, never()).save(any());
     }
 
     @Test
@@ -512,6 +550,65 @@ class UserInternalServiceTest {
     }
 
     @Test
+    @DisplayName("changePassword: New password exceeding 72 UTF-8 bytes should be rejected with 400")
+    void shouldRejectNewPasswordExceeding72Utf8Bytes() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPasswordHash("hashed-old-pass");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("OldPass123!", "hashed-old-pass")).thenReturn(true);
+        String longPassword = "ValidPass1" + "a".repeat(63);
+        when(passwordEncoder.matches(longPassword, "hashed-old-pass")).thenReturn(false);
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> userInternalService.changePassword("u-1", "OldPass123!", longPassword)
+        );
+        assertEquals("WEAK_PASSWORD", ex.getErrorCode());
+        verify(passwordEncoder, never()).encode(longPassword);
+    }
+
+    @Test
+    @DisplayName("changePassword: Valid historical current password exceeding 72 bytes should be accepted")
+    void shouldAllowCurrentPasswordExceeding72BytesWhenValid() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPasswordHash("hashed-old-long-pass");
+
+        String longCurrentPassword = "HistoricalLongPass123!" + "x".repeat(60);
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches(longCurrentPassword, "hashed-old-long-pass")).thenReturn(true);
+        when(passwordEncoder.matches("NewPass123!", "hashed-old-long-pass")).thenReturn(false);
+        when(passwordEncoder.encode("NewPass123!")).thenReturn("hashed-new-pass");
+
+        userInternalService.changePassword("u-1", longCurrentPassword, "NewPass123!");
+
+        assertEquals("hashed-new-pass", user.getPasswordHash());
+        verify(userRepository).save(user);
+    }
+
+    @Test
+    @DisplayName("changePassword: IllegalArgumentException from passwordEncoder.matches should be handled as INVALID_CURRENT_PASSWORD")
+    void shouldCatchIllegalArgumentExceptionInPasswordEncoderMatchesAsInvalidCurrentPassword() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPasswordHash("corrupted-hash");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("CurrentPass123!", "corrupted-hash"))
+                .thenThrow(new IllegalArgumentException("Invalid salt or format"));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> userInternalService.changePassword("u-1", "CurrentPass123!", "NewPass123!")
+        );
+        assertEquals("INVALID_CURRENT_PASSWORD", ex.getErrorCode());
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("verifyPassword: Valid password passes without exception")
     void shouldVerifyPasswordSuccessfully() {
         User user = new User();
@@ -540,6 +637,25 @@ class UserInternalServiceTest {
         );
         assertEquals("INVALID_PASSWORD", ex.getErrorCode());
         assertEquals("Password confirmation is incorrect", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("verifyPassword: IllegalArgumentException from passwordEncoder.matches should be handled as INVALID_PASSWORD")
+    void shouldCatchIllegalArgumentExceptionInPasswordEncoderMatchesAsInvalidPassword() {
+        User user = new User();
+        user.setId("u-1");
+        user.setPasswordHash("corrupted-hash");
+
+        when(userRepository.findById("u-1")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("Pass123!", "corrupted-hash"))
+                .thenThrow(new IllegalArgumentException("Invalid salt or format"));
+
+        ApiException ex = assertThrows(
+                ApiException.class,
+                () -> userInternalService.verifyPassword("u-1", "Pass123!")
+        );
+        assertEquals("INVALID_PASSWORD", ex.getErrorCode());
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
     }
 
     @Test

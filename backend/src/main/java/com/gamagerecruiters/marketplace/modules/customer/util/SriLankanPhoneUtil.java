@@ -1,5 +1,8 @@
 package com.gamagerecruiters.marketplace.modules.customer.util;
 
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
@@ -50,5 +53,22 @@ public final class SriLankanPhoneUtil {
         }
 
         return cleaned;
+    }
+
+    /**
+     * Returns the set of equivalent historical and canonical forms for a Sri Lankan phone number:
+     * {@code {+94XXXXXXXXX, 0XXXXXXXXX, 94XXXXXXXXX}}.
+     *
+     * @param phone raw or normalized phone
+     * @return unmodifiable set containing all three equivalent string representations
+     */
+    public static Set<String> equivalentForms(String phone) {
+        String canonical = normalize(phone);
+        String digits9 = canonical.substring(3);
+        Set<String> forms = new LinkedHashSet<>();
+        forms.add(canonical);
+        forms.add("0" + digits9);
+        forms.add("94" + digits9);
+        return Collections.unmodifiableSet(forms);
     }
 }

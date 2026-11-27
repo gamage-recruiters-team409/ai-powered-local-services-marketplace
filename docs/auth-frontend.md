@@ -161,19 +161,20 @@ The user interface implements the 15 high-fidelity visual designs matching the L
 ## Input Validation Rules (WP01)
 
 - **Full Name Rule (Backend Authority & Frontend Mirror):**
-  - **Canonical Normalization:** Input is trimmed and inner whitespace sequences are collapsed to a single space (`name.trim().replaceAll("\\s+", " ")`).
-  - **Length:** 2 to 100 characters after trimming.
+  - **Canonical Normalization:** Input is trimmed and inner whitespace sequences (including Unicode whitespace, NBSP, BOM) are collapsed to a single space (`normalizeFullName`). Length 2 to 100 characters is evaluated after normalization.
   - **Character Set:** Unicode letters (`\p{L}`), Unicode combining marks (`\p{M}`, supporting Sinhala and Tamil vowels/diacritics), single spaces, hyphens `-`, apostrophes `'` and `’`, and dots `.`.
   - **Boundary Rules:** Must start and end with a Unicode letter or mark; no digits, emoji, or symbols allowed. Canonical regex: `^[\p{L}\p{M}][\p{L}\p{M} .'’-]*[\p{L}\p{M}]$`.
-  - **Letter Count:** Must contain at least 2 Unicode letters (`countLetters(name) >= 2`).
-  - **Application:** Applied on registration (`POST /api/v1/auth/register`) and customer profile updates (`PUT /api/v1/customers/me`). Never applied to login or token refresh, preventing existing users with legacy names from being locked out.
+  - **Letter Count:** Must contain at least 2 Unicode letters (`countLetters(name) >= 2`). Inputs with fewer than 2 letters (such as `"e\u0301"` with combining mark, or `"A."`) are rejected.
+  - **Application:** Applied on registration (`POST /api/v1/auth/register`) and customer profile updates (`PUT /api/v1/customers/me`) via the `@ValidFullName` bean validation constraint. Never applied to login or token refresh, preventing existing users with legacy names from being locked out.
   - **Error Code / Message:** Returns `400 VALIDATION_FAILED` with message: `"Full name can only contain letters, spaces, apostrophes, hyphens and dots."`.
 - **Sri Lankan Phone Number:**
   - Standard format: `^(\+94|0|94)[0-9]{9}$`. Strips whitespace, hyphens, and parentheses on submit and normalizes to `+94XXXXXXXXX`.
+  - **Equivalent-Form Duplicate Prevention:** Both registration and profile updates check existence across all equivalent forms (`+94XXXXXXXXX`, `0XXXXXXXXX`, `94XXXXXXXXX`) via `SriLankanPhoneUtil.equivalentForms` and `userRepository.existsByPhoneIn` / `findByPhoneIn`.
 - **Email:**
   - Trimmed and lowercased. Maximum length is 254 characters (`@Size(max = 254)`).
-- **Password (BCrypt 72-Byte Boundary):**
+- **Password (BCrypt 72-Byte Boundary for NEW Passwords Only):**
   - Minimum 8 characters with at least one uppercase letter, one lowercase letter, and one digit.
-  - Maximum size: 72 bytes (UTF-8 encoding). Passwords are never trimmed to preserve leading/trailing intentional spaces.
-  - Applied across registration, force password change, password reset, customer settings change-password, and account deactivation.
+  - Maximum size: 72 bytes (UTF-8 encoding). Passwords are never trimmed to preserve leading/trailing intentional spaces. Enforced via `@MaxUtf8Bytes(72)` with message `"Password must not exceed 72 bytes (some characters, such as emoji or symbols, use more than one byte)."` and in the service layer before password encoding and before token consumption.
+  - **Target Fields:** Strictly applied to **NEW** passwords only: `RegisterRequest.password`, `ResetPasswordRequest.newPassword`, auth `ChangePasswordRequest.newPassword`, and customer `ChangePasswordRequest.newPassword`.
+  - **Current & Confirmation Password Fields:** Current password and deactivation password confirmation fields intentionally omit the 72-byte limit (protected instead by a generous 1000-character request guard) to ensure backward compatibility for any legacy accounts with passwords exceeding 72 bytes.
 

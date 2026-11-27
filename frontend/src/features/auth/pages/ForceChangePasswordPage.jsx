@@ -77,7 +77,6 @@ export default function ForceChangePasswordPage() {
           placeholder="Enter current password"
           value={currentPassword}
           onChange={(e) => setCurrentPassword(e.target.value)}
-          maxLength={72}
           error={errors.currentPassword}
           autoComplete="current-password"
           disabled={loading}

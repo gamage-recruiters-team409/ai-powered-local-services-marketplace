@@ -44,8 +44,8 @@ export function SettingsPage() {
     } else {
       const bytes = new TextEncoder().encode(newPassword).length;
       const criteria = checkPasswordCriteria(newPassword);
-      if (bytes > 72 || newPassword.length > 72) {
-        errors.newPassword = 'Password must not exceed 72 characters';
+      if (bytes > 72) {
+        errors.newPassword = 'Password must not exceed 72 bytes (some characters, such as emoji or symbols, use more than one byte).';
       } else if (!criteria.isValid) {
         errors.newPassword = 'Password must meet all complexity requirements';
       } else if (newPassword === currentPassword) {
@@ -133,7 +133,6 @@ export function SettingsPage() {
               <input
                 id="settings-currentPassword"
                 type="password"
-                maxLength={72}
                 className={styles.input}
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}

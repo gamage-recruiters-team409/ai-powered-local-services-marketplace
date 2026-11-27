@@ -1,5 +1,7 @@
 package com.gamagerecruiters.marketplace.modules.auth.repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.mongodb.repository.MongoRepository;
@@ -16,9 +18,13 @@ public interface UserRepository extends MongoRepository<User, String> {
 
     Optional<User> findByPhone(String phone);
 
+    List<User> findByPhoneIn(Collection<String> phones);
+
     boolean existsByEmail(String email);
 
     boolean existsByPhone(String phone);
+
+    boolean existsByPhoneIn(Collection<String> phones);
 
     boolean existsByRole(Role role);
 

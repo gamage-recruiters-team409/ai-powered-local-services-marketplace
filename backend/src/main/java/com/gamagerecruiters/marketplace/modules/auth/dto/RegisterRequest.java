@@ -1,6 +1,9 @@
 package com.gamagerecruiters.marketplace.modules.auth.dto;
 
 import com.gamagerecruiters.marketplace.common.util.ValidationConstants;
+import com.gamagerecruiters.marketplace.common.util.ValidationUtils;
+import com.gamagerecruiters.marketplace.common.validation.MaxUtf8Bytes;
+import com.gamagerecruiters.marketplace.common.validation.ValidFullName;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 
 import jakarta.validation.constraints.AssertTrue;
@@ -12,8 +15,7 @@ import jakarta.validation.constraints.Size;
 
 public record RegisterRequest(
         @NotBlank(message = "Name is required")
-        @Size(min = 2, max = 100, message = "Name must be between 2 and 100 characters")
-        @Pattern(regexp = ValidationConstants.FULL_NAME_REGEX, message = ValidationConstants.FULL_NAME_MESSAGE)
+        @ValidFullName
         String name,
 
         @NotBlank(message = "Email is required")
@@ -26,7 +28,7 @@ public record RegisterRequest(
         String phone,
 
         @NotBlank(message = "Password is required")
-        @Size(max = 72, message = "Password must not exceed 72 characters")
+        @MaxUtf8Bytes(72)
         @Pattern(
                 regexp = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}$",
                 message = "Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one digit"
@@ -46,13 +48,13 @@ public record RegisterRequest(
 ) {
     public RegisterRequest {
         if (name != null) {
-            name = name.trim().replaceAll("\\s+", " ");
+            name = ValidationUtils.normalizeFullName(name);
         }
         if (email != null) {
-            email = email.trim().toLowerCase(java.util.Locale.ROOT);
+            email = ValidationUtils.stripSpaces(email).toLowerCase(java.util.Locale.ROOT);
         }
         if (phone != null) {
-            phone = phone.trim().replaceAll("[\\s\\-\\(\\)]", "");
+            phone = ValidationUtils.stripSpaces(phone).replaceAll("[\\s\\-\\(\\)]", "");
         }
     }
 }
