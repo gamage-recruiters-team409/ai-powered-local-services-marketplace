@@ -202,4 +202,86 @@ class PaymentResponseTest {
         assertFalse(tree.has("commissionRate"), "Internal commissionRate must not be exposed");
         assertFalse(tree.has("commissionAmount"), "Internal commissionAmount must not be exposed");
     }
+
+    /**
+     * Verifies customer-facing refund status compatibility.
+     */
+    @Test
+    void mapsSucceededRefundToCompleted() {
+        Payment payment = createPayment();
+        payment.setRefundStatus("SUCCEEDED");
+
+        assertEquals(
+                "COMPLETED",
+                PaymentResponse.from(payment).refundStatus());
+
+        // Response mapping must not modify persisted refund state.
+        assertEquals("SUCCEEDED", payment.getRefundStatus());
+    }
+
+    @Test
+    void mapsPendingRefundToProcessing() {
+        Payment payment = createPayment();
+        payment.setRefundStatus("PENDING");
+
+        assertEquals(
+                "PROCESSING",
+                PaymentResponse.from(payment).refundStatus());
+
+        assertEquals("PENDING", payment.getRefundStatus());
+    }
+
+    @Test
+    void mapsReconciliationRefundToUnderReview() {
+        Payment payment = createPayment();
+        payment.setRefundStatus("REQUIRES_RECONCILIATION");
+
+        assertEquals(
+                "UNDER_REVIEW",
+                PaymentResponse.from(payment).refundStatus());
+
+        assertEquals(
+                "REQUIRES_RECONCILIATION",
+                payment.getRefundStatus());
+    }
+
+    @Test
+    void preservesExistingCustomerFacingRefundStatuses() {
+        String[] statuses = {
+                "PROCESSING",
+                "COMPLETED",
+                "UNDER_REVIEW",
+                "FAILED"
+        };
+
+        for (String status : statuses) {
+            Payment payment = createPayment();
+            payment.setRefundStatus(status);
+
+            assertEquals(
+                    status,
+                    PaymentResponse.from(payment).refundStatus());
+
+            assertEquals(status, payment.getRefundStatus());
+        }
+    }
+
+    @Test
+    void preservesUnknownRefundStatusForCompatibility() {
+        Payment payment = createPayment();
+        payment.setRefundStatus("FUTURE_STATUS");
+
+        assertEquals(
+                "FUTURE_STATUS",
+                PaymentResponse.from(payment).refundStatus());
+    }
+
+    @Test
+    void preservesNullRefundStatus() {
+        Payment payment = createPayment();
+        payment.setRefundStatus(null);
+
+        assertNull(PaymentResponse.from(payment).refundStatus());
+        assertNull(payment.getRefundStatus());
+    }
 }

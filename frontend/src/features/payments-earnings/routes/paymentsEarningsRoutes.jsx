@@ -1,3 +1,4 @@
+import ProviderItemizedEarningsPage from "../pages/ProviderItemizedEarningsPage";
 import RequireRole from "../../auth/guards/RequireRole";
 import ProviderEarningsShell from "../components/ProviderEarningsShell";
 
@@ -14,6 +15,16 @@ export const paymentsEarningsRoutes = [
     element: (
       <RequireRole roles={["PROVIDER"]}>
         <ProviderEarningsShell />
+      </RequireRole>
+    ),
+  },
+  {
+    path: "/provider/earnings/itemized",
+    element: (
+      <RequireRole roles={["PROVIDER"]}>
+        <ProviderEarningsShell>
+          <ProviderItemizedEarningsPage />
+        </ProviderEarningsShell>
       </RequireRole>
     ),
   },

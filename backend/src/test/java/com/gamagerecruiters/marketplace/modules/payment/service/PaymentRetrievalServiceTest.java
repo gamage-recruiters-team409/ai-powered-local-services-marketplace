@@ -11,6 +11,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.math.BigDecimal;
+import java.time.Instant;
+
+import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
+import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentReceiptResponse;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -591,5 +597,155 @@ class PaymentRetrievalServiceTest {
         assertEquals(
                 "INVALID_PAYMENT_REQUEST",
                 exception.getErrorCode());
+    }
+
+    /**
+     * Creates a payment with verified capture and receipt metadata.
+     */
+    private Payment capturedReceiptPayment() {
+        Payment payment = payment();
+        payment.setStatus(PaymentStatus.CAPTURED);
+        payment.setAmount(new BigDecimal("4500.00"));
+        payment.setCurrency("LKR");
+        payment.setReceiptReference("RCT-payment-123");
+        payment.setPaidAt(Instant.parse("2026-11-26T10:00:00Z"));
+        return payment;
+    }
+
+    private void stubReceiptPayment(Payment payment) {
+        when(persistenceService.findPaymentById(PAYMENT_ID))
+                .thenReturn(Optional.of(payment));
+    }
+
+    private void assertReceiptUnavailable(Payment payment) {
+        stubReceiptPayment(payment);
+
+        assertThrows(ApiException.class,
+                () -> retrievalService.getReceiptForCustomer(
+                        PAYMENT_ID, CUSTOMER_ID));
+    }
+
+    @Test
+    void getReceiptReturnsVerifiedCaptureForOwner() {
+        Payment payment = capturedReceiptPayment();
+        stubReceiptPayment(payment);
+
+        PaymentReceiptResponse receipt = retrievalService
+                .getReceiptForCustomer(PAYMENT_ID, CUSTOMER_ID);
+
+        assertEquals(PAYMENT_ID, receipt.paymentId());
+        assertEquals(BOOKING_ID, receipt.bookingId());
+        assertEquals(payment.getReceiptReference(), receipt.receiptReference());
+        assertEquals(payment.getAmount(), receipt.amount());
+        assertEquals("LKR", receipt.currency());
+        assertEquals(payment.getPaidAt(), receipt.paidAt());
+
+        verify(authorizationService)
+                .requireCustomerOwnership(BOOKING_ID, CUSTOMER_ID);
+    }
+
+    @Test
+    void getReceiptRejectsAnotherCustomer() {
+        stubReceiptPayment(capturedReceiptPayment());
+
+        org.mockito.Mockito.doThrow(
+                new AccessDeniedException("Access denied"))
+                .when(authorizationService)
+                .requireCustomerOwnership(BOOKING_ID, CUSTOMER_ID);
+
+        assertThrows(ApiException.class,
+                () -> retrievalService.getReceiptForCustomer(
+                        PAYMENT_ID, CUSTOMER_ID));
+    }
+
+    @Test
+    void getReceiptRejectsMissingPayment() {
+        when(persistenceService.findPaymentById(PAYMENT_ID))
+                .thenReturn(Optional.empty());
+
+        assertThrows(ApiException.class,
+                () -> retrievalService.getReceiptForCustomer(
+                        PAYMENT_ID, CUSTOMER_ID));
+
+        verifyNoInteractions(authorizationService);
+    }
+
+    @Test
+    void getReceiptRejectsUnpaidPayment() {
+        Payment payment = capturedReceiptPayment();
+        payment.setStatus(PaymentStatus.INITIATED);
+        assertReceiptUnavailable(payment);
+    }
+
+    @Test
+    void getReceiptRejectsAuthorizedButUncapturedPayment() {
+        Payment payment = capturedReceiptPayment();
+        payment.setStatus(PaymentStatus.AUTHORIZED);
+        assertReceiptUnavailable(payment);
+    }
+
+    @Test
+    void getReceiptRejectsFailedPayment() {
+        Payment payment = capturedReceiptPayment();
+        payment.setStatus(PaymentStatus.FAILED);
+        assertReceiptUnavailable(payment);
+    }
+
+    @Test
+    void getReceiptRejectsMissingReceiptReference() {
+        Payment payment = capturedReceiptPayment();
+        payment.setReceiptReference(null);
+        assertReceiptUnavailable(payment);
+    }
+
+    @Test
+    void getReceiptRejectsMissingVerifiedCaptureTime() {
+        Payment payment = capturedReceiptPayment();
+        payment.setPaidAt(null);
+        assertReceiptUnavailable(payment);
+    }
+
+    @Test
+    void getReceiptRejectsZeroPaymentAmount() {
+        Payment payment = capturedReceiptPayment();
+        payment.setAmount(BigDecimal.ZERO);
+        assertReceiptUnavailable(payment);
+    }
+
+    @Test
+    void getReceiptRejectsMissingCurrency() {
+        Payment payment = capturedReceiptPayment();
+        payment.setCurrency(null);
+        assertReceiptUnavailable(payment);
+    }
+
+    @Test
+    void getReceiptPreservesOriginalAmountAfterPartialRefund() {
+        Payment payment = capturedReceiptPayment();
+        payment.setStatus(PaymentStatus.PARTIALLY_REFUNDED);
+        payment.setRefundedAmount(new BigDecimal("1000.00"));
+        stubReceiptPayment(payment);
+
+        PaymentReceiptResponse receipt = retrievalService
+                .getReceiptForCustomer(PAYMENT_ID, CUSTOMER_ID);
+
+        assertEquals(new BigDecimal("4500.00"), receipt.amount());
+        assertEquals(payment.getReceiptReference(), receipt.receiptReference());
+        assertEquals(payment.getPaidAt(), receipt.paidAt());
+    }
+
+    @Test
+    void getReceiptPreservesOriginalAmountAfterFullRefund() {
+        Payment payment = capturedReceiptPayment();
+        payment.setStatus(PaymentStatus.REFUNDED);
+        payment.setRefundedAmount(payment.getAmount());
+        stubReceiptPayment(payment);
+
+        PaymentReceiptResponse receipt = retrievalService
+                .getReceiptForCustomer(PAYMENT_ID, CUSTOMER_ID);
+
+        assertEquals(new BigDecimal("4500.00"), receipt.amount());
+        assertEquals(payment.getReceiptReference(), receipt.receiptReference());
+        assertEquals(payment.getPaidAt(), receipt.paidAt());
     }
 }

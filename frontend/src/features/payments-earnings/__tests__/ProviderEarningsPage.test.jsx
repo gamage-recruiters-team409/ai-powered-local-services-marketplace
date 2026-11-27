@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -14,6 +15,7 @@ import ProviderEarningsPage from "../pages/ProviderEarningsPage";
 
 import {
   getProviderEarningsSummary,
+  getProviderItemizedEarnings,
   getProviderPayoutHistory,
   getProviderPayoutDetails,
   requestProviderPayout,
@@ -39,6 +41,7 @@ import { useAuth } from "../../auth/hooks/useAuth";
 
 vi.mock("../services/paymentsEarningsApi", () => ({
   getProviderEarningsSummary: vi.fn(),
+  getProviderItemizedEarnings: vi.fn(),
   getProviderPayoutHistory: vi.fn(),
   getProviderPayoutDetails: vi.fn(),
   requestProviderPayout: vi.fn(),
@@ -191,6 +194,14 @@ function installWebLocksMock() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+
+  getProviderItemizedEarnings.mockResolvedValue({
+    content: [],
+    page: 0,
+    size: 5,
+    totalElements: 0,
+    totalPages: 0,
+  });
   window.localStorage.clear();
   installWebLocksMock();
 
@@ -1283,3 +1294,297 @@ if (typeof HTMLDialogElement.prototype.close !== "function") {
     this.removeAttribute("open");
   };
 }
+
+/**
+ * Verifies the recent earnings preview independently of payout operations.
+ * All financial values below are synthetic test fixtures.
+ */
+describe("Provider Recent Earnings", () => {
+  const EARNING = {
+    paymentId: "recent-payment-001",
+    bookingId: "recent-booking-001",
+    grossAmount: 10000,
+    commissionRate: 0.15,
+    commissionAmount: 1500,
+    refundedAmount: 2000,
+    refundAdjustmentAmount: 1700,
+    netEarnings: 6800,
+    currency: "LKR",
+    recognizedAt: "2026-11-26T10:00:00Z",
+  };
+
+  function earningsPage(content) {
+    return {
+      content,
+      page: 0,
+      size: 5,
+      totalElements: content.length,
+      totalPages: content.length ? 1 : 0,
+    };
+  }
+
+  it("renders current and legacy recognized earnings without omitting records", async () => {
+    const legacy = {
+      ...EARNING,
+      paymentId: "legacy-payment-001",
+      bookingId: "legacy-booking-001",
+      commissionRate: 0.10,
+      commissionAmount: 1000,
+      refundAdjustmentAmount: 1800,
+      netEarnings: 7200,
+    };
+
+    getProviderItemizedEarnings.mockResolvedValue({
+      content: [EARNING, legacy],
+      page: 0,
+      size: 5,
+      totalElements: 2,
+      totalPages: 1,
+    });
+
+    renderPage();
+
+    const currentRow = (await screen.findByText(EARNING.bookingId))
+      .closest("tr");
+    const legacyRow = (await screen.findByText(legacy.bookingId))
+      .closest("tr");
+
+    expect(currentRow.textContent).toContain("6,800.00");
+    expect(legacyRow.textContent).toContain("7,200.00");
+    expect(legacyRow.textContent).toContain("1,000.00");
+    expect(legacyRow.textContent).toContain("1,800.00");
+    expect(getProviderItemizedEarnings)
+      .toHaveBeenCalledWith(0, 5);
+  });
+
+  it("requests the first five recognized earnings", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(getProviderItemizedEarnings).toHaveBeenCalledWith(0, 5);
+    });
+
+    expect(await screen.findByText(
+      "No recognized earnings are available yet.",
+    )).toBeTruthy();
+  });
+
+  it("displays actual booking earnings and commission values", async () => {
+    getProviderItemizedEarnings.mockResolvedValue(
+      earningsPage([EARNING]),
+    );
+
+    renderPage();
+
+    const booking = await screen.findByText(EARNING.bookingId);
+    const row = booking.closest("tr");
+    const text = row.textContent.replace(/\s+/g, " ");
+
+    expect(text).toContain("10,000.00");
+    expect(text).toContain("15%");
+    expect(text).toContain("1,500.00");
+    expect(text).toContain("1,700.00");
+    expect(text).toContain("6,800.00");
+  });
+
+  it("does not invent a missing commission rate", async () => {
+    getProviderItemizedEarnings.mockResolvedValue(
+      earningsPage([{ ...EARNING, commissionRate: null }]),
+    );
+
+    renderPage();
+
+    const booking = await screen.findByText(EARNING.bookingId);
+
+    expect(booking.closest("tr").textContent).toContain("Unavailable");
+  });
+
+  it("handles an earnings API failure independently of balances", async () => {
+    getProviderItemizedEarnings.mockRejectedValue(
+      new Error("Network failure"),
+    );
+
+    renderPage();
+
+    expect(await screen.findByText(
+      "Unable to load recent earnings.",
+    )).toBeTruthy();
+
+    expect(await screen.findByText(
+      "Available Balance",
+      { exact: true },
+    )).toBeTruthy();
+  });
+
+  it("rejects malformed earnings responses", async () => {
+    getProviderItemizedEarnings.mockResolvedValue({
+      content: null,
+      page: 0,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(
+      "Unable to load recent earnings.",
+    )).toBeTruthy();
+  });
+
+  it("rejects an unexpected earnings page", async () => {
+    getProviderItemizedEarnings.mockResolvedValue({
+      ...earningsPage([EARNING]),
+      page: 1,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(
+      "Unable to load recent earnings.",
+    )).toBeTruthy();
+
+    expect(screen.queryByText(EARNING.bookingId)).toBeNull();
+  });
+
+  it("links to the complete itemized earnings history", async () => {
+    renderPage();
+
+    const link = await screen.findByRole("link", {
+      name: /view all earnings/i,
+    });
+
+    expect(link.getAttribute("href")).toBe(
+      "/provider/earnings/itemized",
+    );
+  });
+
+  it("does not display an empty state while earnings are loading", async () => {
+    let resolveEarnings;
+
+    getProviderItemizedEarnings.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveEarnings = resolve;
+      }),
+    );
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(getProviderItemizedEarnings).toHaveBeenCalledWith(0, 5);
+    });
+
+    expect(screen.queryByText(
+      "No recognized earnings are available yet.",
+    )).toBeNull();
+
+    resolveEarnings(earningsPage([EARNING]));
+
+    expect(await screen.findByText(EARNING.bookingId)).toBeTruthy();
+  });
+
+  it("ignores delayed earnings from a previous provider account", async () => {
+    let resolvePrevious;
+
+    getProviderItemizedEarnings.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePrevious = resolve;
+      }),
+    );
+
+    const view = renderPage();
+
+    await waitFor(() => {
+      expect(getProviderItemizedEarnings).toHaveBeenCalledTimes(1);
+    });
+
+    const nextEarning = {
+      ...EARNING,
+      paymentId: "recent-payment-002",
+      bookingId: "recent-booking-002",
+    };
+
+    getProviderItemizedEarnings.mockResolvedValue(
+      earningsPage([nextEarning]),
+    );
+
+    useAuth.mockReturnValue({
+      user: {
+        id: "provider-test-002",
+        role: "PROVIDER",
+        name: "Second Provider",
+      },
+      isLoading: false,
+      isAuthenticated: true,
+    });
+
+    view.rerender(
+      <MemoryRouter>
+        <ProviderEarningsPage />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(nextEarning.bookingId);
+
+    await act(async () => {
+      resolvePrevious(earningsPage([EARNING]));
+    });
+
+    expect(screen.queryByText(EARNING.bookingId)).toBeNull();
+    expect(screen.getByText(nextEarning.bookingId)).toBeTruthy();
+  });
+
+  it("refreshes recent earnings after the dashboard is refreshed", async () => {
+    getProviderItemizedEarnings.mockResolvedValue(
+      earningsPage([EARNING]),
+    );
+
+    renderPage();
+
+    await screen.findByText(EARNING.bookingId);
+
+    getProviderItemizedEarnings.mockResolvedValue(
+      earningsPage([]),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /^refresh$/i }),
+    );
+
+    expect(await screen.findByText(
+      "No recognized earnings are available yet.",
+    )).toBeTruthy();
+
+    expect(screen.queryByText(EARNING.bookingId)).toBeNull();
+    expect(getProviderItemizedEarnings).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears previous earnings when the provider account changes", async () => {
+    getProviderItemizedEarnings.mockResolvedValueOnce(
+      earningsPage([EARNING]),
+    );
+
+    const view = renderPage();
+
+    await screen.findByText(EARNING.bookingId);
+
+    useAuth.mockReturnValue({
+      user: {
+        id: "provider-test-002",
+        role: "PROVIDER",
+        name: "Second Provider",
+      },
+      isLoading: false,
+      isAuthenticated: true,
+    });
+
+    view.rerender(
+      <MemoryRouter>
+        <ProviderEarningsPage />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByText(EARNING.bookingId)).toBeNull();
+
+    expect(await screen.findByText(
+      "No recognized earnings are available yet.",
+    )).toBeTruthy();
+  });
+});

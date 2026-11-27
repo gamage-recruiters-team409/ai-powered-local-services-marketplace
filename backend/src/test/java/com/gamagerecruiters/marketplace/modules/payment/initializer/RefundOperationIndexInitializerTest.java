@@ -174,13 +174,13 @@ class RefundOperationIndexInitializerTest {
     }
 
     @Test
-    void shouldCreateAllFiveRequiredIndexes() {
+    void shouldCreateAllSixRequiredIndexes() {
 
         initializer.initializeIndexes();
 
-        assertEquals(5, storedIndexes.size());
+        assertEquals(6, storedIndexes.size());
 
-        verify(collection, times(5))
+        verify(collection, times(6))
                 .createIndex(
                         any(Bson.class),
                         any(IndexOptions.class));
@@ -197,7 +197,7 @@ class RefundOperationIndexInitializerTest {
         verify(mongoTemplate)
                 .createCollection(COLLECTION);
 
-        assertEquals(5, storedIndexes.size());
+        assertEquals(6, storedIndexes.size());
     }
 
     @Test
@@ -213,7 +213,7 @@ class RefundOperationIndexInitializerTest {
         assertDoesNotThrow(
                 initializer::initializeIndexes);
 
-        assertEquals(5, storedIndexes.size());
+        assertEquals(6, storedIndexes.size());
     }
 
     @Test
@@ -353,7 +353,7 @@ class RefundOperationIndexInitializerTest {
                         any(Bson.class),
                         any(IndexOptions.class));
 
-        assertEquals(5, storedIndexes.size());
+        assertEquals(6, storedIndexes.size());
     }
 
     @Test
@@ -628,5 +628,39 @@ class RefundOperationIndexInitializerTest {
                 this::ensureIdempotencyIndex);
 
         assertNotNull(exception.getCause());
+    }
+
+    /**
+     * Verifies the compound index supporting deterministic
+     * customer refund history pagination.
+     */
+    @Test
+    void shouldCreateOrderedPaymentHistoryIndex() {
+
+        initializer.initializeIndexes();
+
+        Document metadata = storedIndexes.stream()
+                .filter(value ->
+                        RefundOperationIndexInitializer.PAYMENT_HISTORY_INDEX
+                                .equals(value.getString("name")))
+                .findFirst()
+                .orElseThrow();
+
+        Document actualKey = metadata.get("key", Document.class);
+
+        assertEquals(
+                List.of("paymentId", "createdAt", "_id"),
+                new ArrayList<>(actualKey.keySet()));
+
+        assertEquals(
+                new Document("paymentId", 1)
+                        .append("createdAt", -1)
+                        .append("_id", -1),
+                actualKey);
+
+        assertFalse(Boolean.TRUE.equals(metadata.get("unique")));
+        assertNull(metadata.get("partialFilterExpression"));
+        assertNull(metadata.get("expireAfterSeconds"));
+        assertFalse(Boolean.TRUE.equals(metadata.get("sparse")));
     }
 }

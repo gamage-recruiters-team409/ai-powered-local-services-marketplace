@@ -43,6 +43,11 @@ import com.gamagerecruiters.marketplace.modules.auth.service.UserInternalService
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import com.gamagerecruiters.marketplace.modules.payment.service.PaymentRetrievalService;
+import com.gamagerecruiters.marketplace.modules.payment.service.CustomerRefundRetrievalService;
+import com.gamagerecruiters.marketplace.modules.payment.service.PaymentReceiptPdfService;
+import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentReceiptResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.CustomerRefundResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.CustomerRefundPageResponse;
 
 /**
  * Spring MVC security tests for customer payment retrieval endpoints.
@@ -80,6 +85,12 @@ class PaymentControllerSecurityTest {
 
         @MockitoBean
         private PaymentRetrievalService paymentRetrievalService;
+
+        @MockitoBean
+        private CustomerRefundRetrievalService refundRetrievalService;
+
+        @MockitoBean
+        private PaymentReceiptPdfService receiptPdfService;
 
         @MockitoBean
         private TokenService tokenService;
@@ -542,4 +553,403 @@ class PaymentControllerSecurityTest {
 
                 return token;
         }
+
+        // Receipt and refund endpoints must enforce customer-only access.
+
+        @Test
+        void receiptEndpointReturns401WithoutToken() throws Exception {
+                mockMvc.perform(get(PAYMENT_URL + "/receipt"))
+                                .andExpect(status().isUnauthorized());
+
+                verifyNoInteractions(
+                                paymentRetrievalService,
+                                refundRetrievalService);
+        }
+
+        @Test
+        void refundEndpointReturns401WithoutToken() throws Exception {
+                mockMvc.perform(get(PAYMENT_URL + "/refunds"))
+                                .andExpect(status().isUnauthorized());
+
+                verifyNoInteractions(
+                                paymentRetrievalService,
+                                refundRetrievalService);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = { "PROVIDER", "ADMIN" })
+        void receiptEndpointReturns403ForNonCustomer(Role role)
+                        throws Exception {
+
+                String token = authenticateAs(role);
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isForbidden());
+
+                verifyNoInteractions(
+                                paymentRetrievalService,
+                                refundRetrievalService);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = { "PROVIDER", "ADMIN" })
+        void refundEndpointReturns403ForNonCustomer(Role role)
+                        throws Exception {
+
+                String token = authenticateAs(role);
+
+                mockMvc.perform(get(PAYMENT_URL + "/refunds")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isForbidden());
+
+                verifyNoInteractions(
+                                paymentRetrievalService,
+                                refundRetrievalService);
+        }
+
+        @Test
+        void receiptEndpointReturnsVerifiedReceiptForCustomer()
+                        throws Exception {
+
+                String token = authenticateAs(Role.CUSTOMER);
+
+                PaymentReceiptResponse receipt = new PaymentReceiptResponse(
+                                "RCT-payment-123",
+                                PAYMENT_ID,
+                                BOOKING_ID,
+                                new BigDecimal("2500.00"),
+                                "LKR",
+                                Instant.parse("2026-11-19T06:30:00Z"));
+
+                when(paymentRetrievalService.getReceiptForCustomer(
+                                PAYMENT_ID, "user-customer"))
+                                .thenReturn(receipt);
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt")
+                                .param("customerId", "another-customer")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.receiptReference")
+                                                .value("RCT-payment-123"))
+                                .andExpect(jsonPath("$.paymentId").value(PAYMENT_ID))
+                                .andExpect(jsonPath("$.bookingId").value(BOOKING_ID))
+                                .andExpect(jsonPath("$.amount").value(2500.00))
+                                .andExpect(jsonPath("$.currency").value("LKR"))
+                                .andExpect(jsonPath("$.paidAt").exists())
+                                .andExpect(jsonPath("$.gatewayRef").doesNotExist())
+                                .andExpect(jsonPath("$.commissionAmount").doesNotExist())
+                                .andExpect(org.springframework.test.web.servlet
+                                                .result.MockMvcResultMatchers.header()
+                                                .string("Cache-Control", "no-store"));
+
+                verify(paymentRetrievalService).getReceiptForCustomer(
+                                PAYMENT_ID, "user-customer");
+        }
+
+        @Test
+        void receiptEndpointHidesUnauthorizedPayment() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(paymentRetrievalService.getReceiptForCustomer(
+                                PAYMENT_ID, "user-customer"))
+                                .thenThrow(new ApiException(
+                                                HttpStatus.NOT_FOUND,
+                                                "PAYMENT_NOT_FOUND",
+                                                "Payment not found"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error")
+                                                .value("PAYMENT_NOT_FOUND"))
+                                .andExpect(jsonPath("$.receiptReference")
+                                                .doesNotExist());
+        }
+
+        @Test
+        void receiptEndpointReturns404WhenReceiptUnavailable()
+                        throws Exception {
+
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(paymentRetrievalService.getReceiptForCustomer(
+                                PAYMENT_ID, "user-customer"))
+                                .thenThrow(new ApiException(
+                                                HttpStatus.NOT_FOUND,
+                                                "RECEIPT_NOT_FOUND",
+                                                "Payment receipt is not available"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error")
+                                                .value("RECEIPT_NOT_FOUND"));
+        }
+
+        @Test
+        void refundEndpointReturnsCustomerSafeRefundHistory()
+                        throws Exception {
+
+                String token = authenticateAs(Role.CUSTOMER);
+
+                Instant createdAt = Instant.parse("2026-11-19T06:30:00Z");
+                Instant completedAt = createdAt.plusSeconds(60);
+
+                CustomerRefundResponse refund = new CustomerRefundResponse(
+                                "refund-123",
+                                PAYMENT_ID,
+                                BOOKING_ID,
+                                new BigDecimal("1500.00"),
+                                "LKR",
+                                CustomerRefundResponse.CustomerRefundStatus.COMPLETED,
+                                createdAt,
+                                completedAt,
+                                completedAt);
+
+                when(refundRetrievalService.getRefundsForCustomer(
+                                PAYMENT_ID, "user-customer", 0, 10))
+                                .thenReturn(new CustomerRefundPageResponse(
+                                                List.of(refund), 0, 10, 1, 1));
+
+                mockMvc.perform(get(PAYMENT_URL + "/refunds")
+                                .param("customerId", "another-customer")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.content[0].refundId")
+                                                .value("refund-123"))
+                                .andExpect(jsonPath("$.content[0].paymentId")
+                                                .value(PAYMENT_ID))
+                                .andExpect(jsonPath("$.content[0].amount")
+                                                .value(1500.00))
+                                .andExpect(jsonPath("$.content[0].status")
+                                                .value("COMPLETED"))
+                                .andExpect(jsonPath("$.content[0].completedAt").exists())
+                                .andExpect(jsonPath("$.content[0].gatewayRefundReference")
+                                                .doesNotExist())
+                                .andExpect(jsonPath("$.content[0].idempotencyKey")
+                                                .doesNotExist())
+                                .andExpect(jsonPath("$.content[0].disputeId")
+                                                .doesNotExist())
+                                .andExpect(jsonPath("$.content[0].reservation")
+                                                .doesNotExist())
+                                .andExpect(jsonPath("$.page").value(0))
+                                .andExpect(jsonPath("$.size").value(10))
+                                .andExpect(jsonPath("$.totalElements").value(1))
+                                .andExpect(jsonPath("$.totalPages").value(1))
+                                .andExpect(org.springframework.test.web.servlet
+                                                .result.MockMvcResultMatchers.header()
+                                                .string("Cache-Control", "no-store"));
+
+                verify(refundRetrievalService).getRefundsForCustomer(
+                                PAYMENT_ID, "user-customer", 0, 10);
+        }
+
+        @Test
+        void refundEndpointHidesUnauthorizedPayment() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(refundRetrievalService.getRefundsForCustomer(
+                                PAYMENT_ID, "user-customer", 0, 10))
+                                .thenThrow(new ApiException(
+                                                HttpStatus.NOT_FOUND,
+                                                "PAYMENT_NOT_FOUND",
+                                                "Payment not found"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/refunds")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error")
+                                                .value("PAYMENT_NOT_FOUND"))
+                                .andExpect(jsonPath("$.content").doesNotExist());
+        }
+
+        @Test
+        void refundEndpointRejectsNegativePage() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(refundRetrievalService.getRefundsForCustomer(
+                                PAYMENT_ID, "user-customer", -1, 10))
+                                .thenThrow(new ApiException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "INVALID_PAGINATION",
+                                                "Invalid pagination"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/refunds")
+                                .param("page", "-1")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isBadRequest())
+                                .andExpect(jsonPath("$.error")
+                                                .value("INVALID_PAGINATION"));
+        }
+
+        @Test
+        void refundEndpointRejectsExcessivePageSize() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(refundRetrievalService.getRefundsForCustomer(
+                                PAYMENT_ID, "user-customer", 0, 101))
+                                .thenThrow(new ApiException(
+                                                HttpStatus.BAD_REQUEST,
+                                                "INVALID_PAGINATION",
+                                                "Invalid pagination"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/refunds")
+                                .param("size", "101")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isBadRequest())
+                                .andExpect(jsonPath("$.error")
+                                                .value("INVALID_PAGINATION"));
+        }
+
+        @Test
+        void refundEndpointAcceptsCustomPaginationAndEmptyPage()
+                        throws Exception {
+
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(refundRetrievalService.getRefundsForCustomer(
+                                PAYMENT_ID, "user-customer", 1, 5))
+                                .thenReturn(new CustomerRefundPageResponse(
+                                                List.of(), 1, 5, 0, 0));
+
+                mockMvc.perform(get(PAYMENT_URL + "/refunds")
+                                .param("page", "1")
+                                .param("size", "5")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isOk())
+                                .andExpect(jsonPath("$.content").isEmpty())
+                                .andExpect(jsonPath("$.page").value(1))
+                                .andExpect(jsonPath("$.size").value(5))
+                                .andExpect(jsonPath("$.totalElements").value(0));
+
+                verify(refundRetrievalService).getRefundsForCustomer(
+                                PAYMENT_ID, "user-customer", 1, 5);
+        }
+
+        @Test
+        void pdfDownloadReturns401WithoutToken() throws Exception {
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download"))
+                                .andExpect(status().isUnauthorized());
+
+                verifyNoInteractions(receiptPdfService);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {
+                "PROVIDER", "ADMIN", "FINANCE_ADMIN"
+        })
+        void pdfDownloadReturns403ForNonCustomer(Role role)
+                        throws Exception {
+
+                String token = authenticateAs(role);
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isForbidden());
+
+                verifyNoInteractions(receiptPdfService);
+        }
+
+        @Test
+        void pdfDownloadReturnsSecureAttachmentForCustomer()
+                        throws Exception {
+
+                String token = authenticateAs(Role.CUSTOMER);
+
+                byte[] pdf = "%PDF-1.7".getBytes(
+                        java.nio.charset.StandardCharsets.US_ASCII);
+
+                when(receiptPdfService.generateForCustomer(
+                        PAYMENT_ID, "user-customer"))
+                        .thenReturn(pdf);
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download")
+                                .param("customerId", "another-customer")
+                                .header("Authorization", "Bearer " + token)
+                                .accept("application/pdf"))
+                                .andExpect(status().isOk())
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.content()
+                                        .contentType("application/pdf"))
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.header()
+                                        .string("Content-Disposition",
+                                                "attachment; filename=\"payment-receipt.pdf\""))
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.header()
+                                        .string("Cache-Control", "no-store"))
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.header()
+                                        .string("X-Content-Type-Options", "nosniff"))
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.content().bytes(pdf));
+
+                verify(receiptPdfService).generateForCustomer(
+                        PAYMENT_ID, "user-customer");
+        }
+
+        @Test
+        void pdfDownloadHidesUnauthorizedPayment() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(receiptPdfService.generateForCustomer(
+                        PAYMENT_ID, "user-customer"))
+                        .thenThrow(new ApiException(
+                                HttpStatus.NOT_FOUND,
+                                "PAYMENT_NOT_FOUND",
+                                "Payment not found"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download")
+                                .header("Authorization", "Bearer " + token)
+                                .accept("application/pdf", "application/json"))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error")
+                                        .value("PAYMENT_NOT_FOUND"))
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.header()
+                                        .doesNotExist("Content-Disposition"));
+        }
+
+        @Test
+        void pdfDownloadReturns404WhenReceiptUnavailable()
+                        throws Exception {
+
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(receiptPdfService.generateForCustomer(
+                        PAYMENT_ID, "user-customer"))
+                        .thenThrow(new ApiException(
+                                HttpStatus.NOT_FOUND,
+                                "RECEIPT_NOT_FOUND",
+                                "Payment receipt is not available"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download")
+                                .header("Authorization", "Bearer " + token)
+                                .accept("application/pdf", "application/json"))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error")
+                                        .value("RECEIPT_NOT_FOUND"));
+        }
+
+
+        @Test
+        void pdfOnlyAcceptReturnsStructuredError() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(receiptPdfService.generateForCustomer(
+                        PAYMENT_ID, "user-customer"))
+                        .thenThrow(new ApiException(
+                                HttpStatus.NOT_FOUND,
+                                "RECEIPT_NOT_FOUND",
+                                "Payment receipt is not available"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download")
+                                .header("Authorization", "Bearer " + token)
+                                .accept("application/pdf"))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error")
+                                        .value("RECEIPT_NOT_FOUND"));
+        }
+
 }

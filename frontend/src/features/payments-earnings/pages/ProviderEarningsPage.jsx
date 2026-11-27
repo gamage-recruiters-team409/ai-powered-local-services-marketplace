@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 
 import { ProviderPage } from "../../../shared/layouts/provider/ProviderPage";
@@ -13,6 +14,7 @@ import PageLoader from "../../../shared/components/feedback/PageLoader";
 
 import {
   getProviderEarningsSummary,
+  getProviderItemizedEarnings,
   requestProviderPayout,
   getProviderPayoutHistory,
   getProviderPayoutDetails,
@@ -32,6 +34,7 @@ import {
 import styles from "./ProviderEarningsPage.module.css";
 
 const PAGE_SIZE = 10;
+const RECENT_EARNINGS_SIZE = 5;
 const MINIMUM_PAYOUT = 5000;
 
 const STATUS_VARIANTS = {
@@ -88,6 +91,80 @@ function validateAmount(value, available) {
 
   return "";
 }
+
+/** Formats verified earnings amounts without inventing missing values. */
+function formatRecentMoney(value, currency) {
+  if (
+    value == null ||
+    value === "" ||
+    !currency ||
+    !Number.isFinite(Number(value))
+  ) {
+    return "Unavailable";
+  }
+
+  try {
+    return formatMoney(value, currency);
+  } catch {
+    return "Unavailable";
+  }
+}
+
+/** Displays the actual commission rate recorded for each payment. */
+function formatRecentCommissionRate(value) {
+  if (
+    value == null ||
+    value === "" ||
+    !Number.isFinite(Number(value))
+  ) {
+    return "Unavailable";
+  }
+
+  return new Intl.NumberFormat("en-LK", {
+    style: "percent",
+    maximumFractionDigits: 2,
+  }).format(Number(value));
+}
+
+/** Booking-level earnings preview; amounts are not withdrawable balances. */
+const recentEarningsColumns = [
+  {
+    key: "recognizedAt",
+    header: "Recognized Date",
+    render: (value) => formatDate(value),
+  },
+  {
+    key: "bookingId",
+    header: "Booking ID",
+  },
+  {
+    key: "grossAmount",
+    header: "Gross Amount",
+    render: (value, row) => formatRecentMoney(value, row.currency),
+  },
+  {
+    key: "commissionRate",
+    header: "Commission Rate",
+    render: (value) => formatRecentCommissionRate(value),
+  },
+  {
+    key: "commissionAmount",
+    header: "Commission",
+    render: (value, row) => formatRecentMoney(value, row.currency),
+  },
+  {
+    key: "refundAdjustmentAmount",
+    header: "Refund Adjustments",
+    render: (value, row) => formatRecentMoney(value, row.currency),
+  },
+  {
+    key: "netEarnings",
+    header: "Net Earnings",
+    render: (value, row) => (
+      <strong>{formatRecentMoney(value, row.currency)}</strong>
+    ),
+  },
+];
 
 function PayoutStatusBadge({ status }) {
   return (
@@ -169,6 +246,8 @@ function ProviderEarningsContent({ providerId }) {
   const [summary, setSummary] = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState("");
+
+  const [recentEarningsResult, setRecentEarningsResult] = useState(null);
 
   const [history, setHistory] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -303,6 +382,56 @@ function ProviderEarningsContent({ providerId }) {
       active = false;
     };
   }, [page, refreshVersion]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadRecentEarnings() {
+      try {
+        const result = await getProviderItemizedEarnings(
+          0,
+          RECENT_EARNINGS_SIZE,
+        );
+
+        if (
+          !Array.isArray(result?.content) ||
+          result.page !== 0 ||
+          result.content.length > RECENT_EARNINGS_SIZE
+        ) {
+          throw new Error("Invalid recent earnings response.");
+        }
+
+        if (active) {
+          setRecentEarningsResult({
+            version: refreshVersion,
+            content: result.content,
+            error: "",
+          });
+        }
+      } catch {
+        if (active) {
+          setRecentEarningsResult({
+            version: refreshVersion,
+            content: [],
+            error: "Unable to load recent earnings.",
+          });
+        }
+      }
+    }
+
+    loadRecentEarnings();
+
+    // Ignore responses from obsolete requests or unmounted accounts.
+    return () => {
+      active = false;
+    };
+  }, [refreshVersion]);
+
+  // Hide stale results immediately when the dashboard is refreshed.
+  const currentRecentEarnings =
+    recentEarningsResult?.version === refreshVersion
+      ? recentEarningsResult
+      : null;
 
   function refreshData() {
     setRefreshVersion((previous) => previous + 1);
@@ -696,6 +825,36 @@ function ProviderEarningsContent({ providerId }) {
             />
           </div>
         ) : null}
+
+        <section className={styles.panel}>
+          <div className={styles.sectionHeader}>
+            <div>
+              <h2>Recent Earnings</h2>
+              <p className={styles.description}>
+                Your latest booking-level earnings, commissions and refund
+                adjustments.
+              </p>
+            </div>
+
+            <Link to="/provider/earnings/itemized">
+              View All Earnings
+            </Link>
+          </div>
+
+          <DataTable
+            columns={recentEarningsColumns}
+            data={currentRecentEarnings?.content ?? []}
+            getRowId={(row) => row.paymentId}
+            loading={currentRecentEarnings === null}
+            error={currentRecentEarnings?.error || undefined}
+            emptyMessage="No recognized earnings are available yet."
+          />
+
+          <p className={styles.description}>
+            Net earnings reflect booking-level earnings after commission and
+            refund adjustments, not the amount currently available for payout.
+          </p>
+        </section>
 
         <section className={styles.panel}>
           <div className={styles.sectionHeader}>

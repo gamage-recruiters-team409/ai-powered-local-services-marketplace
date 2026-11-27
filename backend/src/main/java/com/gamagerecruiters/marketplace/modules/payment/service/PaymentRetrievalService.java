@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
+import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
+import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentReceiptResponse;
 
 /**
  * Provides customer-authorized access to payment records.
@@ -227,5 +229,53 @@ public class PaymentRetrievalService {
                                 HttpStatus.NOT_FOUND,
                                 "PAYMENT_NOT_FOUND",
                                 "Payment not found");
+        }
+
+        /**
+         * Retrieves an issued receipt for an authenticated customer.
+         *
+         * <p>Payment ownership is verified before receipt eligibility.
+         * The original receipt remains available after a refund because
+         * it represents the original verified payment capture.</p>
+         *
+         * @param paymentId associated payment identifier
+         * @param customerId authenticated customer identifier
+         * @return verified customer-facing payment receipt
+         * @throws ApiException if the payment or receipt is unavailable
+         */
+        public PaymentReceiptResponse getReceiptForCustomer(
+                        String paymentId,
+                        String customerId) {
+
+                // Reuse existing payment ownership authorization.
+                Payment payment = getPaymentForCustomer(
+                                paymentId, customerId);
+
+                PaymentStatus status = payment.getStatus();
+
+                boolean capturedPayment =
+                                status == PaymentStatus.CAPTURED
+                                || status == PaymentStatus.RELEASED
+                                || status == PaymentStatus.REFUND_PENDING
+                                || status == PaymentStatus.PARTIALLY_REFUNDED
+                                || status == PaymentStatus.REFUNDED;
+
+                // Never generate a receipt from incomplete or unverified data.
+                if (!capturedPayment
+                                || payment.getReceiptReference() == null
+                                || payment.getReceiptReference().isBlank()
+                                || payment.getPaidAt() == null
+                                || payment.getAmount() == null
+                                || payment.getAmount().signum() <= 0
+                                || payment.getCurrency() == null
+                                || payment.getCurrency().isBlank()) {
+
+                        throw new ApiException(
+                                        HttpStatus.NOT_FOUND,
+                                        "RECEIPT_NOT_FOUND",
+                                        "Payment receipt is not available");
+                }
+
+                return PaymentReceiptResponse.from(payment);
         }
 }
