@@ -5,4 +5,6 @@ import com.gamagerecruiters.marketplace.modules.search.dto.PublicProviderProfile
 public interface PublicProviderProfileService {
 
     PublicProviderProfileResponse getPublicProfile(String providerIdOrProfileId);
+
+    PublicProviderProfileResponse getPublicProfile(String providerIdOrProfileId, int reviewPage);
 }

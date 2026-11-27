@@ -55,6 +55,15 @@ class PublicSearchSecurityTest {
     }
 
     @Test
+    @DisplayName("Review module rating and review endpoints remain authenticated")
+    void reviewEndpointsRemainProtected() throws Exception {
+        mockMvc.perform(get("/api/v1/providers/user-1/rating-summary"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/providers/user-1/reviews"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     @DisplayName("GET /api/v1/providers/me remains protected")
     void providerMeRemainsProtected() throws Exception {
         mockMvc.perform(get("/api/v1/providers/me"))

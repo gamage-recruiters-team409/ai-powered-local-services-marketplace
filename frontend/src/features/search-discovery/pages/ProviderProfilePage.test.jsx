@@ -72,6 +72,34 @@ function renderProfile(path = '/providers/prv-001') {
   );
 }
 
+function ProviderSwitchControls() {
+  const navigate = useNavigate();
+
+  return (
+    <button
+      type="button"
+      onClick={() => navigate('/providers/user-b?tab=reviews')}
+    >
+      Switch provider
+    </button>
+  );
+}
+
+function renderProfileWithSwitch(path) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <ProviderSwitchControls />
+      <Routes>
+        <Route
+          path="/providers/:providerId"
+          element={<ProviderProfilePage />}
+        />
+        <Route path="/search" element={<div>Search page</div>} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
   fetchProviderProfile.mockResolvedValue(fixtureResponse(maya));
 });
@@ -383,6 +411,112 @@ describe('ProviderProfilePage tabs', () => {
   });
 });
 
+describe('ProviderProfilePage public review content', () => {
+  it('renders only the returned public review fields and links to more pages', async () => {
+    fetchProviderProfile.mockResolvedValueOnce(liveResponse({
+      ...maya,
+      providerId: 'user-1',
+      name: 'Review Provider',
+      reviewCount: 12,
+      reviews: [{
+        id: 'rev-1',
+        rating: 5,
+        text: 'Excellent work',
+        createdAt: '2026-11-20T10:15:30Z',
+        providerReply: { text: 'Thank you', repliedAt: '2026-11-21T09:00:00Z' },
+        customerName: 'Private Customer',
+        bookingId: 'booking-private',
+      }],
+      reviewContentStatus: 'AVAILABLE',
+      reviewPage: 0,
+      reviewPageSize: 5,
+      reviewTotalElements: 12,
+      reviewTotalPages: 3,
+    }));
+    renderProfile('/providers/user-1?tab=reviews');
+
+    const panel = await screen.findByRole('region', {
+      name: 'What customers are saying',
+    });
+
+    expect(within(panel).getByText('Excellent work')).toBeTruthy();
+    expect(within(panel).getByText('Provider reply: Thank you')).toBeTruthy();
+    expect(within(panel).getByText('2026-11-20')).toBeTruthy();
+    expect(within(panel).queryByText(/private customer/i)).toBeNull();
+    expect(within(panel).getByRole('link', { name: 'Load more reviews' }))
+      .toBeTruthy();
+  });
+
+  it('keeps the usable profile visible and offers a review retry when content fails', async () => {
+    const unavailableProvider = {
+      ...maya,
+      providerId: 'user-2',
+      name: 'Retry Provider',
+      reviewCount: 9,
+      reviews: [],
+      reviewContentStatus: 'UNAVAILABLE',
+      reviewPage: 0,
+      reviewTotalElements: 0,
+      reviewTotalPages: 0,
+    };
+    fetchProviderProfile
+      .mockResolvedValueOnce(liveResponse(unavailableProvider))
+      .mockResolvedValueOnce(liveResponse(unavailableProvider));
+    const user = userEvent.setup();
+    renderProfile('/providers/user-2?tab=reviews');
+
+    expect(
+      await screen.findByRole('heading', { name: 'Retry Provider' }),
+    ).toBeTruthy();
+    const panel = screen.getByRole('region', {
+      name: 'What customers are saying',
+    });
+    expect(within(panel).getByText(/temporarily unavailable/i)).toBeTruthy();
+    await user.click(within(panel).getByRole('button', { name: 'Retry reviews' }));
+
+    await waitFor(() => {
+      expect(fetchProviderProfile).toHaveBeenCalledTimes(2);
+    });
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(1, 'user-2', 0);
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(2, 'user-2', 0);
+  });
+
+  it('does not render a stale profile after the provider changes', async () => {
+    let resolveFirstProfile;
+    const firstProvider = {
+      ...maya,
+      providerId: 'user-a',
+      name: 'First Provider',
+      reviews: [],
+    };
+    const secondProvider = {
+      ...maya,
+      providerId: 'user-b',
+      name: 'Second Provider',
+      reviews: [],
+    };
+    fetchProviderProfile
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstProfile = resolve;
+      }))
+      .mockResolvedValueOnce(liveResponse(secondProvider));
+    const user = userEvent.setup();
+    renderProfileWithSwitch('/providers/user-a?tab=reviews');
+
+    await user.click(screen.getByRole('button', { name: 'Switch provider' }));
+    await act(async () => {
+      resolveFirstProfile(liveResponse(firstProvider));
+    });
+
+    expect(
+      await screen.findByRole('heading', { name: 'Second Provider' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'First Provider' })).toBeNull();
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(1, 'user-a', 0);
+    expect(fetchProviderProfile).toHaveBeenNthCalledWith(2, 'user-b', 0);
+  });
+});
+
 describe('ProviderProfilePage states', () => {
   it('shows a not-found state and returns to search', async () => {
     fetchProviderProfile.mockRejectedValueOnce(
@@ -447,7 +581,7 @@ describe('ProviderProfilePage states', () => {
       }),
     ).toBeTruthy();
     expect(fetchProviderProfile).toHaveBeenCalledTimes(2);
-    expect(fetchProviderProfile).toHaveBeenLastCalledWith('prv-001');
+    expect(fetchProviderProfile).toHaveBeenLastCalledWith('prv-001', 0);
 
     consoleError.mockRestore();
   });
@@ -496,7 +630,7 @@ describe('ProviderProfilePage states', () => {
     );
 
     await waitFor(() =>
-      expect(fetchProviderProfile).toHaveBeenCalledWith('prv-001'),
+      expect(fetchProviderProfile).toHaveBeenCalledWith('prv-001', 0),
     );
 
     const user = userEvent.setup();
@@ -505,7 +639,7 @@ describe('ProviderProfilePage states', () => {
     );
 
     await waitFor(() =>
-      expect(fetchProviderProfile).toHaveBeenCalledWith('prv-002'),
+      expect(fetchProviderProfile).toHaveBeenCalledWith('prv-002', 0),
     );
 
     await act(async () => {

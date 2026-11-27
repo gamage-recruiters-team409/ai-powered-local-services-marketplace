@@ -13,6 +13,35 @@ const API_BASE_URL =
 
 const FIXTURE_LATENCY_MS = 120;
 
+function mapLiveReview(review) {
+  if (!review || typeof review !== 'object') {
+    return null;
+  }
+
+  const reply = review.providerReply && typeof review.providerReply === 'object'
+    ? review.providerReply
+    : null;
+
+  return {
+    id: review.id ?? null,
+    rating: typeof review.rating === 'number' ? review.rating : null,
+    text: typeof review.comment === 'string' ? review.comment : null,
+    createdAt: review.createdAt ?? null,
+    edited: Boolean(review.edited),
+    editedAt: review.editedAt ?? null,
+    providerReply: reply
+      ? {
+          text: typeof reply.text === 'string' ? reply.text : null,
+          repliedAt: reply.repliedAt ?? null,
+        }
+      : null,
+  };
+}
+
+function mapReviewNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 export class ProviderProfileNotFoundError extends Error {
   constructor(providerId) {
     super(`No provider profile was found for "${providerId}".`);
@@ -32,13 +61,13 @@ export class ProviderProfileUnavailableError extends Error {
   }
 }
 
-async function fetchLiveProviderProfile(providerId) {
+async function fetchLiveProviderProfile(providerId, reviewPage = 0) {
   let response;
+  const url = `${API_BASE_URL}/providers/${encodeURIComponent(providerId)}`
+    + (reviewPage > 0 ? `?reviewPage=${reviewPage}` : '');
 
   try {
-    response = await axios.get(
-      `${API_BASE_URL}/providers/${encodeURIComponent(providerId)}`,
-    );
+    response = await axios.get(url);
   } catch (error) {
     if (Number(error?.response?.status) === 404) {
       throw new ProviderProfileNotFoundError(providerId);
@@ -72,7 +101,15 @@ async function fetchLiveProviderProfile(providerId) {
     responseTimeText: null,
     nextAvailable: null,
     availableSlots: [],
-    reviews: [],
+    reviews: Array.isArray(data.reviews)
+      ? data.reviews.map(mapLiveReview).filter(Boolean)
+      : [],
+    reviewContentStatus:
+      typeof data.reviewContentStatus === 'string' ? data.reviewContentStatus : null,
+    reviewPage: mapReviewNumber(data.reviewPage),
+    reviewPageSize: mapReviewNumber(data.reviewPageSize),
+    reviewTotalElements: mapReviewNumber(data.reviewTotalElements),
+    reviewTotalPages: mapReviewNumber(data.reviewTotalPages),
     inclusions: [],
     cancellationPolicy: null,
     serviceRadiusMiles: null,
@@ -101,9 +138,9 @@ async function fetchLiveProviderProfile(providerId) {
  * endpoint, maps 404 to ProviderProfileNotFoundError, and propagates every other
  * failure. It never falls back to fixture data.
  */
-export async function fetchProviderProfile(providerId) {
+export async function fetchProviderProfile(providerId, reviewPage = 0) {
   if (!isFixtureModeEnabled()) {
-    return fetchLiveProviderProfile(providerId);
+    return fetchLiveProviderProfile(providerId, reviewPage);
   }
 
   await new Promise((resolve) => setTimeout(resolve, FIXTURE_LATENCY_MS));

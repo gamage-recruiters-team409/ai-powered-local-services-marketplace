@@ -53,6 +53,18 @@ const MESSAGE_PENDING_ACTION = {
     'Direct messaging will be connected in a later milestone. For now, review the provider details and request booking when it becomes available.',
 };
 
+function normalizeReviewPage(value) {
+  const page = Number(value);
+  return Number.isInteger(page) && page >= 0 ? page : 0;
+}
+
+function formatReviewDate(value) {
+  if (typeof value !== 'string' || value.length < 10) {
+    return null;
+  }
+  return value.slice(0, 10);
+}
+
 function RatingStars({ rating }) {
   const stars = getRatingStarStates(rating);
 
@@ -500,7 +512,13 @@ function ServicesPanel({ provider, serviceOptions, onBook }) {
   );
 }
 
-function ReviewsPanel({ provider, reviewState }) {
+function ReviewsPanel({
+  provider,
+  reviewState,
+  onRetryReviews,
+  nextReviewPageHref,
+  firstReviewPageHref,
+}) {
   return (
     <section
       className="provider-profile-panel"
@@ -526,26 +544,68 @@ function ReviewsPanel({ provider, reviewState }) {
       </div>
 
       {reviewState.hasReviewContent ? (
-        <ul className="provider-profile-review-list">
-          {reviewState.reviews.map((review, index) => (
-            <li
-              key={review.id ?? index}
-              className="provider-profile-review-item"
-            >
-              <div className="provider-profile-review-meta">
-                <strong>{review.authorName || 'Customer'}</strong>
-                {typeof review.rating === 'number' && (
-                  <span>{formatRating(review.rating)}</span>
-                )}
-              </div>
-              {review.text && <p>{review.text}</p>}
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="provider-profile-review-list">
+            {reviewState.reviews.map((review, index) => {
+              const reviewDate = formatReviewDate(review.createdAt);
+
+              return (
+                <li
+                  key={review.id ?? index}
+                  className="provider-profile-review-item"
+                >
+                  <div className="provider-profile-review-meta">
+                    {typeof review.rating === 'number' && (
+                      <span>{formatRating(review.rating)}</span>
+                    )}
+                    {reviewDate && (
+                      <time dateTime={review.createdAt}>{reviewDate}</time>
+                    )}
+                  </div>
+                  {review.text && <p>{review.text}</p>}
+                  {review.providerReply?.text && (
+                    <p className="provider-profile-review-reply">
+                      Provider reply: {review.providerReply.text}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          {reviewState.hasMore && nextReviewPageHref && (
+            <p className="provider-profile-panel-actions">
+              <Link className="provider-profile-primary-btn" to={nextReviewPageHref}>
+                Load more reviews
+              </Link>
+            </p>
+          )}
+        </>
       ) : (
-        <p className="provider-profile-unavailable-note" role="status">
-          {reviewState.message}
-        </p>
+        <>
+          <p className="provider-profile-unavailable-note" role="status">
+            {reviewState.message}
+          </p>
+          {reviewState.status === 'unavailable' && (
+            <p className="provider-profile-panel-actions">
+              <button
+                type="button"
+                className="provider-profile-primary-btn"
+                onClick={onRetryReviews}
+              >
+                Retry reviews
+              </button>
+            </p>
+          )}
+          {reviewState.page > 0 &&
+            reviewState.totalPages !== null &&
+            !reviewState.hasMore &&
+            firstReviewPageHref && (
+              <p className="provider-profile-state-link">
+                <Link to={firstReviewPageHref}>Back to first review page</Link>
+              </p>
+            )}
+        </>
       )}
     </section>
   );
@@ -623,9 +683,13 @@ export function ProviderProfilePage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const activeTab = normalizeProfileTab(searchParams.get('tab'));
+  const reviewPage = normalizeReviewPage(searchParams.get('reviewPage'));
+  const profileKey = `${providerId ?? ''}|${reviewPage}`;
 
   const [profileState, setProfileState] = useState({
+    key: null,
     providerId: null,
+    reviewPage: 0,
     status: 'loading',
     provider: null,
     isFixture: false,
@@ -640,11 +704,13 @@ export function ProviderProfilePage() {
 
     async function loadProfile() {
       try {
-        const data = await fetchProviderProfile(providerId);
+        const data = await fetchProviderProfile(providerId, reviewPage);
 
         if (!isCancelled) {
           setProfileState({
+            key: profileKey,
             providerId,
+            reviewPage,
             status: 'ready',
             provider: data.provider,
             isFixture: Boolean(data.isFixture),
@@ -658,7 +724,9 @@ export function ProviderProfilePage() {
 
         if (error?.code === 'PROVIDER_PROFILE_NOT_FOUND') {
           setProfileState({
+            key: profileKey,
             providerId,
+            reviewPage,
             status: 'not-found',
             provider: null,
             isFixture: false,
@@ -666,7 +734,9 @@ export function ProviderProfilePage() {
           });
         } else if (error?.code === 'PROVIDER_PROFILE_UNAVAILABLE') {
           setProfileState({
+            key: profileKey,
             providerId,
+            reviewPage,
             status: 'unavailable',
             provider: null,
             isFixture: false,
@@ -675,7 +745,9 @@ export function ProviderProfilePage() {
         } else {
           console.error('[ProviderProfilePage] Provider profile error:', error);
           setProfileState({
+            key: profileKey,
             providerId,
+            reviewPage,
             status: 'error',
             provider: null,
             isFixture: false,
@@ -690,7 +762,7 @@ export function ProviderProfilePage() {
     return () => {
       isCancelled = true;
     };
-  }, [providerId, retryNonce]);
+  }, [providerId, profileKey, reviewPage, retryNonce]);
 
   useEffect(() => {
     if (typeof window !== 'undefined' && window.scrollY > 0) {
@@ -698,7 +770,7 @@ export function ProviderProfilePage() {
     }
   }, [providerId]);
 
-  const isCurrentProfile = profileState.providerId === providerId;
+  const isCurrentProfile = profileState.key === profileKey;
   const viewStatus = isCurrentProfile ? profileState.status : 'loading';
   const provider = isCurrentProfile ? profileState.provider : null;
   const isFixture = isCurrentProfile ? profileState.isFixture : false;
@@ -710,6 +782,21 @@ export function ProviderProfilePage() {
       params.delete('tab');
     } else {
       params.set('tab', tab);
+    }
+
+    const queryString = params.toString();
+    const path = `/providers/${encodeURIComponent(providerId ?? '')}`;
+
+    return queryString ? `${path}?${queryString}` : path;
+  };
+
+  const buildReviewPageHref = (page) => {
+    const params = new URLSearchParams(searchParams);
+
+    if (page <= 0) {
+      params.delete('reviewPage');
+    } else {
+      params.set('reviewPage', String(page));
     }
 
     const queryString = params.toString();
@@ -732,7 +819,9 @@ export function ProviderProfilePage() {
 
   const handleRetry = () => {
     setProfileState({
+      key: profileKey,
       providerId,
+      reviewPage,
       status: 'loading',
       provider: null,
       isFixture: false,
@@ -867,6 +956,9 @@ export function ProviderProfilePage() {
                     <ReviewsPanel
                       provider={provider}
                       reviewState={reviewState}
+                      onRetryReviews={handleRetry}
+                      nextReviewPageHref={buildReviewPageHref(reviewState.page + 1)}
+                      firstReviewPageHref={buildReviewPageHref(0)}
                     />
                   )}
 
