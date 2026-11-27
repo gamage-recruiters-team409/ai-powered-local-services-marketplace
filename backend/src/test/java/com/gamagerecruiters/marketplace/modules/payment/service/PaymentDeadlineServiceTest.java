@@ -359,4 +359,113 @@ class PaymentDeadlineServiceTest {
                 "verification deadline: timestamp is out of range"));
         assertNotNull(exception.getCause());
     }
+
+    // ---------------------------------------------------------
+    // Authoritative WP05 booking deadline validation
+    // ---------------------------------------------------------
+
+    @Test
+    void allowsAuthoritativeInitiationAtAcceptance() {
+        deadlineService.validateAuthoritativePaymentInitiation(
+                ACCEPTED_AT,
+                ACCEPTED_AT.plusSeconds(900),
+                ACCEPTED_AT);
+    }
+
+    @Test
+    void allowsAuthoritativeInitiationWithinWindow() {
+        deadlineService.validateAuthoritativePaymentInitiation(
+                ACCEPTED_AT,
+                ACCEPTED_AT.plusSeconds(900),
+                ACCEPTED_AT.plusSeconds(300));
+    }
+
+    @Test
+    void allowsAuthoritativeInitiationAtExactDeadline() {
+        Instant dueAt = ACCEPTED_AT.plusSeconds(900);
+
+        deadlineService.validateAuthoritativePaymentInitiation(
+                ACCEPTED_AT, dueAt, dueAt);
+    }
+
+    @Test
+    void rejectsAuthoritativeInitiationImmediatelyAfterDeadline() {
+        Instant dueAt = ACCEPTED_AT.plusSeconds(900);
+
+        assertThrows(IllegalArgumentException.class, () ->
+                deadlineService.validateAuthoritativePaymentInitiation(
+                        ACCEPTED_AT, dueAt, dueAt.plusNanos(1)));
+    }
+
+    @Test
+    void rejectsAuthoritativeInitiationDuringVerificationGrace() {
+        Instant dueAt = ACCEPTED_AT.plusSeconds(900);
+
+        // Verification grace must not authorize a new payment.
+        assertThrows(IllegalArgumentException.class, () ->
+                deadlineService.validateAuthoritativePaymentInitiation(
+                        ACCEPTED_AT, dueAt, dueAt.plusSeconds(60)));
+    }
+
+    @Test
+    void rejectsAuthoritativeInitiationBeforeAcceptance() {
+        assertThrows(IllegalArgumentException.class, () ->
+                deadlineService.validateAuthoritativePaymentInitiation(
+                        ACCEPTED_AT,
+                        ACCEPTED_AT.plusSeconds(900),
+                        ACCEPTED_AT.minusNanos(1)));
+    }
+
+    @Test
+    void rejectsMissingAuthoritativeDeadline() {
+        assertThrows(IllegalArgumentException.class, () ->
+                deadlineService.validateAuthoritativePaymentInitiation(
+                        ACCEPTED_AT, null, ACCEPTED_AT));
+    }
+
+    @Test
+    void rejectsMissingAuthoritativeAcceptanceTimestamp() {
+        assertThrows(IllegalArgumentException.class, () ->
+                deadlineService.validateAuthoritativePaymentInitiation(
+                        null,
+                        ACCEPTED_AT.plusSeconds(900),
+                        ACCEPTED_AT));
+    }
+
+    @Test
+    void rejectsMissingAuthoritativeInitiationTimestamp() {
+        assertThrows(IllegalArgumentException.class, () ->
+                deadlineService.validateAuthoritativePaymentInitiation(
+                        ACCEPTED_AT,
+                        ACCEPTED_AT.plusSeconds(900),
+                        null));
+    }
+
+    @Test
+    void rejectsAuthoritativeDeadlineBeforeAcceptance() {
+        assertThrows(IllegalArgumentException.class, () ->
+                deadlineService.validateAuthoritativePaymentInitiation(
+                        ACCEPTED_AT,
+                        ACCEPTED_AT.minusSeconds(1),
+                        ACCEPTED_AT));
+    }
+
+    @Test
+    void rejectsAuthoritativeDeadlineEqualToAcceptance() {
+        assertThrows(IllegalArgumentException.class, () ->
+                deadlineService.validateAuthoritativePaymentInitiation(
+                        ACCEPTED_AT, ACCEPTED_AT, ACCEPTED_AT));
+    }
+
+    @Test
+    void respectsAuthoritativeDeadlineBeyondLegacyPaymentWindow() {
+        // A supplied booking deadline must not be replaced
+        // by the legacy hardcoded 24-hour payment window.
+        Instant dueAt = ACCEPTED_AT.plusSeconds(48 * 60 * 60);
+        Instant initiatedAt = ACCEPTED_AT.plusSeconds(25 * 60 * 60);
+
+        deadlineService.validateAuthoritativePaymentInitiation(
+                ACCEPTED_AT, dueAt, initiatedAt);
+    }
+
 }

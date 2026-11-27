@@ -4,34 +4,39 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * Provides authoritative booking payment information to WP07.
+ * Provides authoritative booking financial information required
+ * for secure payment initiation.
  *
- * <p>Implementations must obtain values from trusted server-side booking
- * data. Client-supplied amounts, currencies, commission rates, and
- * acceptance timestamps must never be treated as authoritative.</p>
+ * <p>
+ * Payment values and deadlines must originate from the trusted
+ * booking module rather than customer-supplied request data.
+ * </p>
  */
 public interface TrustedBookingPaymentQuoteProvider {
 
     /**
-     * Retrieves the immutable payment quote for a booking.
+     * Retrieves the trusted payment quote for an eligible booking.
      *
-     * @param bookingId verified booking identifier
-     * @return trusted payment quote
+     * @param bookingId the booking identifier
+     * @return authoritative booking payment quote
      */
     BookingPaymentQuote getPaymentQuote(String bookingId);
 
     /**
-     * Server-side booking payment snapshot.
+     * Immutable financial and timing snapshot used during payment
+     * initiation.
      *
-     * @param amount amount payable by the customer
-     * @param currency ISO 4217 currency code
-     * @param commissionRate marketplace commission fraction
+     * @param amount             authoritative booking payment amount
+     * @param currency           authoritative booking currency
+     * @param commissionRate     captured booking commission rate
      * @param providerAcceptedAt provider acceptance timestamp
+     * @param paymentDueAt       authoritative booking payment deadline
      */
     record BookingPaymentQuote(
             BigDecimal amount,
             String currency,
             BigDecimal commissionRate,
-            Instant providerAcceptedAt) {
+            Instant providerAcceptedAt,
+            Instant paymentDueAt) {
     }
 }

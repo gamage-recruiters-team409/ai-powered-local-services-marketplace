@@ -1,30 +1,41 @@
 package com.gamagerecruiters.marketplace.modules.payment.config;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import com.gamagerecruiters.marketplace.modules.booking.service.BookingFacade;
+import com.gamagerecruiters.marketplace.modules.payment.gateway.BookingFacadePaymentQuoteAdapter;
+import com.gamagerecruiters.marketplace.modules.payment.gateway.TrustedBookingPaymentQuoteProvider;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import com.gamagerecruiters.marketplace.modules.payment.gateway.TrustedBookingPaymentQuoteProvider;
-import com.gamagerecruiters.marketplace.modules.payment.gateway.UnavailableBookingPaymentQuoteProvider;
-
 /**
- * Registers a fail-closed booking quote provider until a trusted WP05
- * implementation becomes available.
+ * Configures the trusted booking payment quote integration between
+ * WP05 Booking and WP07 Payments.
  *
- * <p>The fallback is created only when no other trusted booking quote
- * provider bean has been registered.</p>
+ * <p>
+ * Payment processing obtains authoritative financial information
+ * through the public booking facade instead of relying on
+ * client-supplied values or direct booking repository access.
+ * </p>
  */
 @Configuration
 public class BookingPaymentQuoteProviderConfiguration {
 
     /**
-     * Provides the fail-closed fallback when WP05 integration is absent.
+     * Registers the trusted booking payment quote adapter.
      *
-     * @return fallback booking payment quote provider
+     * <p>
+     * The booking facade is a required dependency. Application
+     * startup must fail if the required integration is unavailable,
+     * rather than silently using an unavailable quote provider.
+     * </p>
+     *
+     * @param bookingFacade authoritative WP05 booking facade
+     * @return trusted booking payment quote provider
      */
     @Bean
-    @ConditionalOnMissingBean(TrustedBookingPaymentQuoteProvider.class)
-    public TrustedBookingPaymentQuoteProvider bookingPaymentQuoteProvider() {
-        return new UnavailableBookingPaymentQuoteProvider();
+    public TrustedBookingPaymentQuoteProvider bookingPaymentQuoteProvider(
+            BookingFacade bookingFacade) {
+
+        return new BookingFacadePaymentQuoteAdapter(bookingFacade);
     }
 }

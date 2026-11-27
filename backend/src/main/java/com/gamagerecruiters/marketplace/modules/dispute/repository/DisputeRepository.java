@@ -10,6 +10,7 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.data.mongodb.repository.Query;
 
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeCategory;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 
 /**
@@ -42,6 +43,10 @@ public interface DisputeRepository extends MongoRepository<Dispute, String> {
 
     @Query("{ 'status': ?0, 'bookingSyncState': { '$ne': 'PENDING' } }")
     Page<Dispute> findVisibleByStatus(DisputeStatus status, Pageable pageable);
+
+    /** Visible disputes of one category (e.g. NO_SHOW), in any status. Used by the operations No-show reports (WP09). */
+    @Query("{ 'category': ?0, 'bookingSyncState': { '$ne': 'PENDING' } }")
+    Page<Dispute> findVisibleByCategory(DisputeCategory category, Pageable pageable);
 
     @Query("{ 'bookingSyncState': { '$ne': 'PENDING' } }")
     Page<Dispute> findAllVisible(Pageable pageable);

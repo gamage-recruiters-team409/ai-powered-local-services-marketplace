@@ -111,7 +111,13 @@ public class SecurityConfig {
         configuration.setAllowedOrigins(allowedOrigins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With", "Accept"));
-        configuration.setExposedHeaders(List.of("Authorization"));
+        configuration.setExposedHeaders(List.of(
+                "Authorization",
+                "Content-Disposition",
+                "X-Export-Rows",
+                "X-Export-Truncated",
+                "X-Export-Source-Limited"
+        ));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 

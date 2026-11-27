@@ -122,8 +122,10 @@ public class StripeCheckoutInitiationService {
                     "Trusted provider acceptance timestamp is unavailable");
         }
 
-        deadlineService.validatePaymentInitiation(
-                quote.providerAcceptedAt(), Instant.now());
+        deadlineService.validateAuthoritativePaymentInitiation(
+                quote.providerAcceptedAt(),
+                quote.paymentDueAt(),
+                Instant.now());
 
         if (quote.amount() == null
                 || quote.amount().signum() <= 0
