@@ -1,10 +1,43 @@
 export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const FULL_NAME_REGEX = /^[\p{L}\p{M}][\p{L}\p{M} .'’-]*[\p{L}\p{M}]$/u;
+
+export function countLetters(str = '') {
+  if (!str) return 0;
+  const matches = str.match(/\p{L}/gu);
+  return matches ? matches.length : 0;
+}
+
+export function normalizeFullName(name = '') {
+  if (!name) return '';
+  return name.replace(/[\s\p{Z}\uFEFF]+/gu, ' ').trim();
+}
+
+export function validateFullName(name, { requiredMessage = 'Please enter your full name.' } = {}) {
+  if (!name || !name.trim()) {
+    return requiredMessage;
+  }
+  const normalized = normalizeFullName(name);
+  if (normalized.length < 2) {
+    return 'Full name must be at least 2 characters';
+  }
+  if (normalized.length > 100) {
+    return 'Full name must be 100 characters or fewer';
+  }
+  if (!FULL_NAME_REGEX.test(normalized) || countLetters(normalized) < 2) {
+    return 'Full name can only contain letters, spaces, apostrophes, hyphens and dots.';
+  }
+  return null;
+}
 
 export function validateEmail(email) {
   if (!email || !email.trim()) {
     return 'Please enter your email address.';
   }
-  if (!EMAIL_REGEX.test(email.trim())) {
+  const trimmed = email.trim();
+  if (trimmed.length > 254) {
+    return 'Email must not exceed 254 characters.';
+  }
+  if (!EMAIL_REGEX.test(trimmed)) {
     return 'Please enter a valid email address.';
   }
   return null;
@@ -23,15 +56,17 @@ export function validatePhone(phone) {
 
 export function checkPasswordCriteria(password = '') {
   const hasMinLength = password.length >= 8;
+  const hasMaxLength = new TextEncoder().encode(password).length <= 72;
   const hasUppercase = /[A-Z]/.test(password);
   const hasLowercase = /[a-z]/.test(password);
   const hasDigit = /\d/.test(password);
 
   const validCount = [hasMinLength, hasUppercase, hasLowercase, hasDigit].filter(Boolean).length;
-  const isValid = validCount === 4;
+  const isValid = validCount === 4 && hasMaxLength;
 
   return {
     hasMinLength,
+    hasMaxLength,
     hasUppercase,
     hasLowercase,
     hasDigit,
@@ -43,6 +78,9 @@ export function checkPasswordCriteria(password = '') {
 export function validatePassword(password) {
   if (!password) {
     return 'Please enter a password.';
+  }
+  if (new TextEncoder().encode(password).length > 72) {
+    return 'Password must not exceed 72 bytes (some characters, such as emoji or symbols, use more than one byte).';
   }
   const { isValid } = checkPasswordCriteria(password);
   if (!isValid) {

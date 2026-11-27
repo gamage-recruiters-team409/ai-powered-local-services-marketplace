@@ -269,3 +269,33 @@ event=PROFILE_IMAGE_ORPHAN_UNRECOVERABLE ownerUserId=<ownerUserId> publicId=<pub
   2. **If Unreferenced:** Delete the orphaned asset manually via the Cloudinary Management Console under folder `localserve/customer-profile/<ownerUserId>` or via the Cloudinary Admin API using `<publicId>`.
   3. **If Still Referenced:** If a user document references this `publicId` (e.g. from a concurrent update), do **not** delete it; leave it active.
   4. **Optional Retry Insertion:** Alternatively, insert a document into the `profile_image_cleanup` collection with `publicId`, `ownerUserId`, `status: "PENDING"`, and `reason: "UPLOAD_ROLLBACK"` to allow the background cleanup job (`ProfileImageCleanupJob`) to safely reconcile and verify references on its next run.
+
+
+---
+
+## 9. Customer Profile & Address Input Validation Rules (WP01)
+
+### 9.1. Customer Profile (`PUT /api/v1/customers/me`)
+- **Full Name (`fullName`):**
+  - **Normalization:** Trims leading/trailing whitespace (including Unicode whitespace, NBSP, BOM) and collapses repeated internal whitespace sequences to a single ASCII space.
+  - **Length:** 2 to 100 characters after normalization.
+  - **Allowed Characters:** Unicode letters (`\p{L}`), Unicode combining marks (`\p{M}` for Sinhala and Tamil names), single spaces, hyphens `-`, apostrophes `'` and `’`, and dots `.`.
+  - **Constraints:** Cannot contain digits, emojis, control characters, or leading/trailing punctuation; must contain at least 2 Unicode letters (`\p{L}`).
+  - **Regex:** `^[\p{L}\p{M}][\p{L}\p{M} .'’-]*[\p{L}\p{M}]$` enforced via `@ValidFullName` bean validation constraint.
+  - **Validation Error:** `400 VALIDATION_FAILED` with message `"Full name can only contain letters, spaces, apostrophes, hyphens and dots."`.
+- **Phone (`phone`):**
+  - Sri Lankan phone format: `^(\+94|0|94)[0-9]{9}$`. Cleaned and stored as canonical `+94XXXXXXXXX`.
+  - **Equivalent-Form Uniqueness:** Profile update checks phone existence across all equivalent historical representations (`+94XXXXXXXXX`, `0XXXXXXXXX`, `94XXXXXXXXX`) to prevent collisions with legacy accounts, while allowing users to re-submit or canonicalize their own number.
+- **Password (Change Password & Deactivation):**
+  - **NEW Password:** Enforces UTF-8 limit of maximum 72 bytes via `@MaxUtf8Bytes(72)` (message: `"Password must not exceed 72 bytes (some characters, such as emoji or symbols, use more than one byte)."`). Complexity rule: 8+ characters, at least 1 uppercase, 1 lowercase, 1 digit.
+  - **CURRENT Password & Deactivation Confirmation:** Does **NOT** enforce the 72-byte constraint so that legacy accounts with longer passwords remain verifiable without 500 errors. Guarded by a generous 1000-character request-size cap against DoS abuse.
+
+### 9.2. Customer Addresses (`POST /api/v1/customers/me/addresses`, `PUT /api/v1/customers/me/addresses/{id}`)
+- **Label (`label`):** 1 to 30 characters, no control characters (`^[^\\p{Cc}]+$`).
+- **Address Line 1 (`addressLine1`):** 3 to 120 characters, no control characters (`^[^\\p{Cc}]+$`).
+- **Address Line 2 (`addressLine2`):** Optional, max 120 characters, no control characters (`^$|^[^\\p{Cc}]+$`).
+- **City (`city`):** 2 to 60 characters, no control characters (`\p{Cc}`), and **cannot be digits only** (`^(?!^\\d+$)[^\\p{Cc}]+$`).
+- **District (`district`):** 1 to 50 characters, must match a valid Sri Lankan district.
+
+### 9.3. Phone Pre-Check Runbook
+- Prior to migration, `docs/db-migrations/precheck-user-phones.js` can be executed read-only via mongosh to inspect the distribution of canonical vs non-canonical phones and detect potential historical equivalence collisions. See `docs/db-migrations/README-phone-precheck.md`.

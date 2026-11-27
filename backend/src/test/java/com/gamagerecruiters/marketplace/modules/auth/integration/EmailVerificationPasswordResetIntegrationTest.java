@@ -129,7 +129,7 @@ public class EmailVerificationPasswordResetIntegrationTest {
         RegisterRequest registerRequest = new RegisterRequest(
                 "Alice Wonder",
                 "alice@marketplace.local",
-                "+12345678901",
+                "+94771234502",
                 "Password123!",
                 Role.CUSTOMER,
                 true,

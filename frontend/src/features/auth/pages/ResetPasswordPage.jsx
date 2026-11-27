@@ -197,6 +197,7 @@ export default function ResetPasswordPage({ previewState } = {}) {
             placeholder="Enter new password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            maxLength={72}
             error={passwordError}
             autoComplete="new-password"
             disabled={loading}

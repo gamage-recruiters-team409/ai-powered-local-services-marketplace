@@ -1,5 +1,6 @@
 package com.gamagerecruiters.marketplace.modules.customer.controller;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -20,6 +21,9 @@ import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -187,6 +191,73 @@ class CustomerControllerTest {
     }
 
     @Test
+    @DisplayName("PUT /api/v1/customers/me returns 400 when full name contains digits")
+    void shouldReturn400WhenNameContainsDigits() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        UpdateCustomerProfileRequest req = new UpdateCustomerProfileRequest("kalana test 14444", "0779876543");
+
+        mockMvc.perform(put("/api/v1/customers/me")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("fullName"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"e\u0301", "\u0301\u0301", "A.", "a\u0301 "})
+    @DisplayName("F1: PUT /api/v1/customers/me returns 400 when full name has fewer than 2 letters")
+    void shouldRejectProfileUpdateWhenNameHasFewerThanTwoLetters(String invalidName) throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        UpdateCustomerProfileRequest req = new UpdateCustomerProfileRequest(invalidName, "0779876543");
+
+        mockMvc.perform(put("/api/v1/customers/me")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("fullName"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "කමල් පෙරේරා",
+            "கமல் பெரேரா",
+            "José",
+            "Zoë",
+            "Anne-Marie",
+            "O'Brien",
+            "Kalana   Silva"
+    })
+    @DisplayName("F1: PUT /api/v1/customers/me accepts valid diverse names and collapses repeated spaces")
+    void shouldAcceptProfileUpdateWithDiverseValidNames(String validName) throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        CustomerProfileResponse updated = new CustomerProfileResponse(
+                "cust-1", "Kalana Silva", "kamal@marketplace.local", "+94779876543",
+                Role.CUSTOMER, UserStatus.ACTIVE, true
+        );
+        when(customerService.updateProfile(eq("cust-1"), any())).thenReturn(updated);
+
+        UpdateCustomerProfileRequest req = new UpdateCustomerProfileRequest(validName, "0779876543");
+
+        mockMvc.perform(put("/api/v1/customers/me")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<UpdateCustomerProfileRequest> captor = ArgumentCaptor.forClass(UpdateCustomerProfileRequest.class);
+        verify(customerService).updateProfile(eq("cust-1"), captor.capture());
+        if (validName.equals("Kalana   Silva")) {
+            assertEquals("Kalana Silva", captor.getValue().fullName());
+        }
+    }
+
+    @Test
     @DisplayName("PUT /api/v1/customers/me/password returns 204 on success")
     void shouldChangePasswordSuccessfully() throws Exception {
         mockAuth("cust-token", "cust-1", Role.CUSTOMER);
@@ -218,6 +289,126 @@ class CustomerControllerTest {
     }
 
     @Test
+    @DisplayName("F2: PUT /api/v1/customers/me/password accepts new password with exactly 72 UTF-8 bytes")
+    void shouldAcceptNewPasswordWithExactly72Bytes() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        String exact72Bytes = "Aa1!" + "€".repeat(22) + "ab"; // 72 bytes
+        ChangePasswordRequest req = new ChangePasswordRequest("OldPass123!", exact72Bytes);
+
+        mockMvc.perform(put("/api/v1/customers/me/password")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isNoContent());
+
+        verify(customerService).changePassword(eq("cust-1"), any(ChangePasswordRequest.class));
+    }
+
+    @Test
+    @DisplayName("F2: PUT /api/v1/customers/me/password rejects new password with 73 UTF-8 bytes")
+    void shouldRejectNewPasswordWith73Bytes() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        String pw73Bytes = "Aa1!" + "€".repeat(23); // 73 bytes, 27 chars
+        ChangePasswordRequest req = new ChangePasswordRequest("OldPass123!", pw73Bytes);
+
+        mockMvc.perform(put("/api/v1/customers/me/password")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("newPassword"));
+    }
+
+    @Test
+    @DisplayName("F3: PUT /api/v1/customers/me/password allows current password longer than 72 characters when valid")
+    void shouldAllowOverLongCurrentPasswordWhenValid() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        String longCurrentPassword = "Old" + "a".repeat(100) + "123!";
+        ChangePasswordRequest req = new ChangePasswordRequest(longCurrentPassword, "NewValidPass123!");
+
+        mockMvc.perform(put("/api/v1/customers/me/password")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isNoContent());
+
+        verify(customerService).changePassword(eq("cust-1"), any(ChangePasswordRequest.class));
+    }
+
+    @Test
+    @DisplayName("F3: PUT /api/v1/customers/me/password returns 400 (never 500) when over-long current password is wrong")
+    void shouldReturn400WhenOverLongCurrentPasswordIsWrong() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        String longCurrentPassword = "Wrong" + "a".repeat(100) + "123!";
+        doThrow(new com.gamagerecruiters.marketplace.common.exception.ApiException(
+                org.springframework.http.HttpStatus.BAD_REQUEST, "INVALID_CURRENT_PASSWORD", "Current password is incorrect"
+        )).when(customerService).changePassword(eq("cust-1"), any(ChangePasswordRequest.class));
+
+        ChangePasswordRequest req = new ChangePasswordRequest(longCurrentPassword, "NewValidPass123!");
+
+        mockMvc.perform(put("/api/v1/customers/me/password")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("INVALID_CURRENT_PASSWORD"));
+    }
+
+    @Test
+    @DisplayName("F3: POST /api/v1/customers/me/deactivate allows password confirmation longer than 72 characters when valid")
+    void shouldAllowOverLongPasswordOnDeactivationWhenValid() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        String longPassword = "Valid" + "a".repeat(100) + "123!";
+        DeactivateAccountRequest req = new DeactivateAccountRequest(longPassword);
+
+        mockMvc.perform(post("/api/v1/customers/me/deactivate")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isNoContent());
+
+        verify(customerService).deactivateAccount(eq("cust-1"), any(DeactivateAccountRequest.class));
+    }
+
+    @Test
+    @DisplayName("F3: POST /api/v1/customers/me/deactivate returns 400 (never 500) when password confirmation is wrong")
+    void shouldReturn400WhenDeactivationPasswordIsWrong() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+        String longPassword = "Wrong" + "a".repeat(100) + "123!";
+        doThrow(new com.gamagerecruiters.marketplace.common.exception.ApiException(
+                org.springframework.http.HttpStatus.BAD_REQUEST, "INVALID_PASSWORD", "Password confirmation is incorrect"
+        )).when(customerService).deactivateAccount(eq("cust-1"), any(DeactivateAccountRequest.class));
+
+        DeactivateAccountRequest req = new DeactivateAccountRequest(longPassword);
+
+        mockMvc.perform(post("/api/v1/customers/me/deactivate")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("INVALID_PASSWORD"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/customers/me/addresses returns 400 when city is all digits")
+    void shouldReturn400WhenAddressCityIsAllDigits() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        CustomerAddressRequest req = new CustomerAddressRequest(
+                "Home", "123 Galle Rd", "Apt 2", "12345", "Colombo", "00300", true
+        );
+
+        mockMvc.perform(post("/api/v1/customers/me/addresses")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("city"));
+    }
+
+    @Test
     @DisplayName("POST /api/v1/customers/me/addresses returns 201 Created on valid address")
     void shouldCreateAddressSuccessfully() throws Exception {
         mockAuth("cust-token", "cust-1", Role.CUSTOMER);
@@ -238,6 +429,90 @@ class CustomerControllerTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value("addr-1"))
                 .andExpect(jsonPath("$.isDefault").value(true));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/customers/me/addresses accepts address with padded spaces and trims them")
+    void shouldCreateAddressSuccessfullyWithPaddedSpaces() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        CustomerAddressRequest req = new CustomerAddressRequest(
+                "  Home  ", "  123 Galle Rd  ", "  Apt 2  ", "  Colombo 03  ", "  Colombo  ", "  00300  ", true
+        );
+        CustomerAddressResponse res = new CustomerAddressResponse(
+                "addr-1", "cust-1", "Home", "123 Galle Rd", "Apt 2", "Colombo 03", "Colombo", "00300",
+                true, Instant.now(), Instant.now()
+        );
+        when(customerService.createAddress(eq("cust-1"), any())).thenReturn(res);
+
+        mockMvc.perform(post("/api/v1/customers/me/addresses")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value("addr-1"))
+                .andExpect(jsonPath("$.isDefault").value(true));
+    }
+
+    private void assertAddressFieldValidationError(CustomerAddressRequest request, String expectedField) throws Exception {
+        mockMvc.perform(post("/api/v1/customers/me/addresses")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value(expectedField));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\u0007", "\u007F", "\u0085", "\u009F"})
+    @DisplayName("F6: POST /api/v1/customers/me/addresses rejects control characters in label, addressLine1, addressLine2, and city at start, middle, and end")
+    void shouldRejectControlCharactersInAddressFields(String controlChar) throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        // Control char in label (start, middle, end)
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                controlChar + "Home", "No. 5, Galle Road", "Apt 2", "Colombo 03", "Colombo", "00300", false
+        ), "label");
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Ho" + controlChar + "me", "No. 5, Galle Road", "Apt 2", "Colombo 03", "Colombo", "00300", false
+        ), "label");
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Home" + controlChar, "No. 5, Galle Road", "Apt 2", "Colombo 03", "Colombo", "00300", false
+        ), "label");
+
+        // Control char in addressLine1 (start, middle, end)
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Home", controlChar + "No. 5, Galle Road", "Apt 2", "Colombo 03", "Colombo", "00300", false
+        ), "addressLine1");
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Home", "No. 5, Galle" + controlChar + " Road", "Apt 2", "Colombo 03", "Colombo", "00300", false
+        ), "addressLine1");
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Home", "No. 5, Galle Road" + controlChar, "Apt 2", "Colombo 03", "Colombo", "00300", false
+        ), "addressLine1");
+
+        // Control char in addressLine2 (start, middle, end)
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Home", "No. 5, Galle Road", controlChar + "Apt 2", "Colombo 03", "Colombo", "00300", false
+        ), "addressLine2");
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Home", "No. 5, Galle Road", "Ap" + controlChar + "t 2", "Colombo 03", "Colombo", "00300", false
+        ), "addressLine2");
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Home", "No. 5, Galle Road", "Apt 2" + controlChar, "Colombo 03", "Colombo", "00300", false
+        ), "addressLine2");
+
+        // Control char in city (start, middle, end)
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Home", "No. 5, Galle Road", "Apt 2", controlChar + "Colombo 03", "Colombo", "00300", false
+        ), "city");
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Home", "No. 5, Galle Road", "Apt 2", "Colombo " + controlChar + "03", "Colombo", "00300", false
+        ), "city");
+        assertAddressFieldValidationError(new CustomerAddressRequest(
+                "Home", "No. 5, Galle Road", "Apt 2", "Colombo 03" + controlChar, "Colombo", "00300", false
+        ), "city");
     }
 
     @Test
@@ -323,6 +598,22 @@ class CustomerControllerTest {
         DeactivateAccountRequest req = new DeactivateAccountRequest("");
 
         mockMvc.perform(post("/api/v1/customers/me/deactivate")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/customers/me/password returns 400 when new password exceeds 72 characters")
+    void shouldReturn400WhenPasswordExceeds72Chars() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        String longPassword = "A1a" + "b".repeat(70); // 73 chars
+        ChangePasswordRequest req = new ChangePasswordRequest("OldPass123!", longPassword);
+
+        mockMvc.perform(put("/api/v1/customers/me/password")
                         .header("Authorization", "Bearer cust-token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(req)))

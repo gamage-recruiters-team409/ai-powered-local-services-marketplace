@@ -18,6 +18,9 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -120,6 +123,152 @@ class AuthControllerTest {
     }
 
     @Test
+    @DisplayName("Should return 400 VALIDATION_FAILED when full name contains digits")
+    void shouldRejectRegistrationWhenFullNameContainsDigits() throws Exception {
+        RegisterRequest request = new RegisterRequest(
+                "kalana test 14444",
+                "valid@marketplace.lk",
+                "+94771234567",
+                "SecurePass123",
+                Role.CUSTOMER,
+                true,
+                "v1.0"
+        );
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("name"));
+    }
+
+    @Test
+    @DisplayName("Should return 400 VALIDATION_FAILED when password exceeds 72 characters")
+    void shouldRejectRegistrationWhenPasswordExceeds72Chars() throws Exception {
+        String longPassword = "A1a" + "b".repeat(70); // 73 chars
+        RegisterRequest request = new RegisterRequest(
+                "Kalana Dinuja",
+                "valid@marketplace.lk",
+                "+94771234567",
+                longPassword,
+                Role.CUSTOMER,
+                true,
+                "v1.0"
+        );
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("password"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"e\u0301", "\u0301\u0301", "A.", "a\u0301 "})
+    @DisplayName("F1: Should return 400 VALIDATION_FAILED when registration name has fewer than 2 letters")
+    void shouldRejectRegistrationNameWithFewerThanTwoLetters(String invalidName) throws Exception {
+        RegisterRequest request = new RegisterRequest(
+                invalidName,
+                "valid@marketplace.lk",
+                "+94771234567",
+                "SecurePass123",
+                Role.CUSTOMER,
+                true,
+                "v1.0"
+        );
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("name"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "කමල් පෙරේරා",
+            "கமல் பெரேரா",
+            "José",
+            "Zoë",
+            "Anne-Marie",
+            "O'Brien",
+            "Kalana   Dinuja"
+    })
+    @DisplayName("F1: Should accept registration with valid diverse full names and collapse whitespace")
+    void shouldAcceptRegistrationWithValidDiverseNames(String validName) throws Exception {
+        RegisterRequest request = new RegisterRequest(
+                validName,
+                "valid@marketplace.lk",
+                "+94771234567",
+                "SecurePass123",
+                Role.CUSTOMER,
+                true,
+                "v1.0"
+        );
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated());
+
+        ArgumentCaptor<RegisterRequest> captor = ArgumentCaptor.forClass(RegisterRequest.class);
+        verify(authService).register(captor.capture());
+        if (validName.equals("Kalana   Dinuja")) {
+            assertEquals("Kalana Dinuja", captor.getValue().name());
+        }
+    }
+
+    @Test
+    @DisplayName("F2: Should accept registration password with exactly 72 UTF-8 bytes")
+    void shouldAcceptRegistrationPasswordWithExactly72Bytes() throws Exception {
+        String exact72Bytes = "Aa1!" + "€".repeat(22) + "ab"; // 4 + 66 + 2 = 72 bytes
+        RegisterRequest request = new RegisterRequest(
+                "Kalana Dinuja",
+                "valid@marketplace.lk",
+                "+94771234567",
+                exact72Bytes,
+                Role.CUSTOMER,
+                true,
+                "v1.0"
+        );
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    @DisplayName("F2: Should reject registration password with 73 UTF-8 bytes even if few characters")
+    void shouldRejectRegistrationPasswordWith73Bytes() throws Exception {
+        String pw73Bytes = "Aa1!" + "€".repeat(23); // 4 + 69 = 73 bytes, only 27 characters
+        RegisterRequest request = new RegisterRequest(
+                "Kalana Dinuja",
+                "valid@marketplace.lk",
+                "+94771234567",
+                pw73Bytes,
+                Role.CUSTOMER,
+                true,
+                "v1.0"
+        );
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("password"))
+                .andExpect(jsonPath("$.fieldErrors[0].message").value("Password must not exceed 72 bytes (some characters, such as emoji or symbols, use more than one byte)."));
+    }
+
+    @Test
     @DisplayName("Should return 400 when login payload is empty")
     void shouldReturnBadRequestWhenLoginEmpty() throws Exception {
         LoginRequest request = new LoginRequest("", "");
@@ -180,7 +329,7 @@ class AuthControllerTest {
                 {
                     "name": "Jane Doe",
                     "email": "jane@example.com",
-                    "phone": "+1234567890",
+                    "phone": "+94771234567",
                     "password": "Password123",
                     "role": "NOT_A_VALID_ROLE",
                     "acceptedTerms": true,
@@ -232,6 +381,57 @@ class AuthControllerTest {
 
         verify(userInternalService).changePassword(eq("u-123"), eq("OldPass123"), eq("NewPass123"));
         verify(userInternalService, never()).changePassword(eq("attacker-id"), any(), any());
+    }
+
+    @Test
+    @DisplayName("F2: POST /api/v1/auth/change-password rejects new password exceeding 72 UTF-8 bytes")
+    void shouldRejectChangePasswordWhenNewPasswordExceeds72Bytes() throws Exception {
+        mockAuth("valid-token", "u-123", Role.CUSTOMER);
+        String pw73Bytes = "Aa1!" + "€".repeat(23); // 73 bytes, 27 chars
+        ChangePasswordRequest request = new ChangePasswordRequest("OldPass123", pw73Bytes);
+
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer valid-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("newPassword"));
+    }
+
+    @Test
+    @DisplayName("F3: POST /api/v1/auth/change-password allows current password longer than 72 characters when valid")
+    void shouldAllowOverLongCurrentPasswordOnChangePasswordWhenValid() throws Exception {
+        mockAuth("valid-token", "u-123", Role.CUSTOMER);
+        String longCurrentPassword = "Old" + "a".repeat(100) + "123!"; // 107 characters
+        ChangePasswordRequest request = new ChangePasswordRequest(longCurrentPassword, "NewValidPass123!");
+
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer valid-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isNoContent());
+
+        verify(userInternalService).changePassword("u-123", longCurrentPassword, "NewValidPass123!");
+    }
+
+    @Test
+    @DisplayName("F3: POST /api/v1/auth/change-password returns 400 INVALID_CURRENT_PASSWORD (never 500) when over-long current password is wrong")
+    void shouldReturnBadRequestWhenOverLongCurrentPasswordIsIncorrect() throws Exception {
+        mockAuth("valid-token", "u-123", Role.CUSTOMER);
+        String longCurrentPassword = "Wrong" + "a".repeat(100) + "123!";
+        doThrow(new com.gamagerecruiters.marketplace.common.exception.ApiException(
+                org.springframework.http.HttpStatus.BAD_REQUEST, "INVALID_CURRENT_PASSWORD", "Current password is incorrect"
+        )).when(userInternalService).changePassword(eq("u-123"), eq(longCurrentPassword), anyString());
+
+        ChangePasswordRequest request = new ChangePasswordRequest(longCurrentPassword, "NewValidPass123!");
+
+        mockMvc.perform(post("/api/v1/auth/change-password")
+                        .header("Authorization", "Bearer valid-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("INVALID_CURRENT_PASSWORD"));
     }
 
     @Test

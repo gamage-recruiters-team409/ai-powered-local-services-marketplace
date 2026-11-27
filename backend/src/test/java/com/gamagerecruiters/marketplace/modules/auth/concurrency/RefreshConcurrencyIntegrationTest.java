@@ -106,7 +106,7 @@ class RefreshConcurrencyIntegrationTest {
         RegisterRequest registerRequest = new RegisterRequest(
                 "Concurrency Real User",
                 "concurrent-real@marketplace.local",
-                "+12345678901",
+                "+94771234501",
                 "Password123!",
                 Role.CUSTOMER,
                 true,

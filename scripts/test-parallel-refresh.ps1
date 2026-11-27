@@ -43,7 +43,7 @@ if ([string]::IsNullOrWhiteSpace($Email)) {
     $Email = "concurrency-test-$randomSuffix@marketplace.local"
 }
 
-$phone = "+1" + (Get-Random -Minimum 1000000000 -Maximum 9999999999)
+$phone = "+947" + (Get-Random -Minimum 10000000 -Maximum 99999999)
 
 Write-Host "[1/4] Registering temporary test customer ($Email)..." -ForegroundColor Yellow
 $regBody = @{

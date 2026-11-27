@@ -3,6 +3,7 @@ package com.gamagerecruiters.marketplace.modules.auth.service;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,6 +21,8 @@ import com.gamagerecruiters.marketplace.common.exception.AccountStatusException;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.gamagerecruiters.marketplace.common.util.ValidationUtils;
+import com.gamagerecruiters.marketplace.modules.customer.util.SriLankanPhoneUtil;
 import com.gamagerecruiters.marketplace.modules.auth.domain.AuthToken;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.TokenType;
@@ -92,18 +95,27 @@ public class AuthServiceImpl implements AuthService {
         }
 
         String normalizedEmail = request.email().toLowerCase().trim();
-        String normalizedPhone = request.phone().trim();
+        String normalizedPhone = SriLankanPhoneUtil.normalize(request.phone());
 
         if (userRepository.existsByEmail(normalizedEmail)) {
             throw new ResourceConflictException("EMAIL_ALREADY_EXISTS", "A user with this email already exists");
         }
 
-        if (userRepository.existsByPhone(normalizedPhone)) {
+        Set<String> phoneForms = SriLankanPhoneUtil.equivalentForms(normalizedPhone);
+        if (userRepository.existsByPhoneIn(phoneForms)) {
             throw new ResourceConflictException("PHONE_ALREADY_EXISTS", "A user with this phone number already exists");
         }
 
+        if (request.password() == null || !ValidationUtils.isValidPasswordLength(request.password())) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "WEAK_PASSWORD",
+                    "Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, and one digit"
+            );
+        }
+
         User user = new User();
-        user.setName(request.name().trim());
+        user.setName(ValidationUtils.normalizeFullName(request.name()));
         user.setEmail(normalizedEmail);
         user.setPhone(normalizedPhone);
         user.setPasswordHash(passwordEncoder.encode(request.password()));

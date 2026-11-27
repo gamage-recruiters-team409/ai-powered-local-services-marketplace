@@ -53,6 +53,17 @@ export function AddressModal({
       setValidationError('City must be 60 characters or fewer.');
       return;
     }
+    if (/^\d+$/.test(trimmedCity)) {
+      setValidationError('City must not be digits only.');
+      return;
+    }
+
+    const CONTROL_CHAR_REGEX = /\p{Cc}/u;
+    if (CONTROL_CHAR_REGEX.test(trimmedLabel) || CONTROL_CHAR_REGEX.test(trimmedLine) || CONTROL_CHAR_REGEX.test(trimmedCity)) {
+      setValidationError('Fields must not contain control characters.');
+      return;
+    }
+
     if (!trimmedDistrict) {
       setValidationError('Please select a district.');
       return;

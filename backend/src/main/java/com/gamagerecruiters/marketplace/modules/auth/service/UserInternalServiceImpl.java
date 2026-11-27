@@ -48,6 +48,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.gamagerecruiters.marketplace.common.util.ValidationUtils;
 import com.mongodb.MongoException;
 import com.mongodb.client.result.UpdateResult;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
@@ -174,7 +175,7 @@ public class UserInternalServiceImpl implements UserInternalService {
         }
 
         User admin = new User();
-        admin.setName(name.trim());
+        admin.setName(ValidationUtils.normalizeFullName(name));
         admin.setEmail(normalizedEmail);
         admin.setPasswordHash(passwordEncoder.encode(password));
         admin.setRole(role);
@@ -192,14 +193,16 @@ public class UserInternalServiceImpl implements UserInternalService {
         User user = getById(userId);
 
         String normalizedPhone = SriLankanPhoneUtil.normalize(phone);
+        Set<String> phoneForms = SriLankanPhoneUtil.equivalentForms(normalizedPhone);
 
-        userRepository.findByPhone(normalizedPhone).ifPresent(existing -> {
+        List<User> existingUsers = userRepository.findByPhoneIn(phoneForms);
+        for (User existing : existingUsers) {
             if (!existing.getId().equals(userId)) {
                 throw new ResourceConflictException("PHONE_ALREADY_EXISTS", "Phone number is already in use");
             }
-        });
+        }
 
-        user.setName(fullName.trim());
+        user.setName(ValidationUtils.normalizeFullName(fullName));
         user.setPhone(normalizedPhone);
         return userRepository.save(user);
     }
@@ -208,15 +211,27 @@ public class UserInternalServiceImpl implements UserInternalService {
     public void changePassword(String userId, String currentPassword, String newPassword) {
         User user = getById(userId);
 
-        if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
+        boolean currentMatches = false;
+        try {
+            currentMatches = currentPassword != null && passwordEncoder.matches(currentPassword, user.getPasswordHash());
+        } catch (IllegalArgumentException ex) {
+            currentMatches = false;
+        }
+        if (!currentMatches) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_CURRENT_PASSWORD", "Current password is incorrect");
         }
 
-        if (passwordEncoder.matches(newPassword, user.getPasswordHash())) {
+        boolean samePassword = false;
+        try {
+            samePassword = newPassword != null && passwordEncoder.matches(newPassword, user.getPasswordHash());
+        } catch (IllegalArgumentException ex) {
+            samePassword = false;
+        }
+        if (samePassword) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "SAME_PASSWORD", "New password cannot be the same as the current password");
         }
 
-        if (newPassword == null || !PASSWORD_POLICY.matcher(newPassword).matches()) {
+        if (newPassword == null || !PASSWORD_POLICY.matcher(newPassword).matches() || !ValidationUtils.isValidPasswordLength(newPassword)) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
                     "WEAK_PASSWORD",
@@ -233,7 +248,15 @@ public class UserInternalServiceImpl implements UserInternalService {
     @Override
     public void verifyPassword(String userId, String rawPassword) {
         User user = getById(userId);
-        if (rawPassword == null || !passwordEncoder.matches(rawPassword, user.getPasswordHash())) {
+        boolean matches = false;
+        if (rawPassword != null) {
+            try {
+                matches = passwordEncoder.matches(rawPassword, user.getPasswordHash());
+            } catch (IllegalArgumentException ex) {
+                matches = false;
+            }
+        }
+        if (!matches) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PASSWORD", "Password confirmation is incorrect");
         }
     }

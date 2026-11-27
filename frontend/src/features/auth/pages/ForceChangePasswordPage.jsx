@@ -87,6 +87,7 @@ export default function ForceChangePasswordPage() {
           placeholder="Enter new password"
           value={newPassword}
           onChange={(e) => setNewPassword(e.target.value)}
+          maxLength={72}
           error={errors.newPassword}
           autoComplete="new-password"
           disabled={loading}
@@ -99,6 +100,7 @@ export default function ForceChangePasswordPage() {
           placeholder="Re-enter new password"
           value={confirmPassword}
           onChange={(e) => setConfirmPassword(e.target.value)}
+          maxLength={72}
           error={errors.confirmPassword}
           autoComplete="new-password"
           disabled={loading}

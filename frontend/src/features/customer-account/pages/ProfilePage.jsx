@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CustomerPage } from '../../../shared/layouts/customer/CustomerPage';
 import { useAuth } from '../../auth/hooks/useAuth';
 import { useToast } from '../../../shared/components/feedback/useToast';
+import { validateFullName, normalizeFullName } from '../../auth/utils/validators';
 import {
   getProfile,
   removeProfilePhoto,
@@ -95,19 +96,20 @@ export function ProfilePage() {
     setErrorMessage('');
   };
 
+  const handleNameBlur = () => {
+    const err = validateFullName(fullName, { requiredMessage: 'Full name is required' });
+    setNameError(err || '');
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
     setErrorMessage('');
     setNameError('');
     setPhoneError('');
 
-    const trimmedName = fullName.trim();
-    if (!trimmedName) {
-      setNameError('Full name is required');
-      return;
-    }
-    if (trimmedName.length > 100) {
-      setNameError('Full name must be 100 characters or fewer');
+    const nameValidation = validateFullName(fullName, { requiredMessage: 'Full name is required' });
+    if (nameValidation) {
+      setNameError(nameValidation);
       return;
     }
 
@@ -120,7 +122,7 @@ export function ProfilePage() {
     setSaving(true);
     try {
       const updated = await updateProfile({
-        fullName: trimmedName,
+        fullName: normalizeFullName(fullName),
         phone: phone.trim(),
       });
       setProfile(updated);
@@ -136,6 +138,14 @@ export function ProfilePage() {
       }
       toast.success('Profile updated successfully');
     } catch (err) {
+      if (err?.fieldErrors && typeof err.fieldErrors === 'object') {
+        if (err.fieldErrors.fullName) {
+          setNameError(err.fieldErrors.fullName);
+        }
+        if (err.fieldErrors.phone) {
+          setPhoneError(err.fieldErrors.phone);
+        }
+      }
       setErrorMessage(err.message || 'Failed to update profile');
     } finally {
       setSaving(false);
@@ -314,6 +324,8 @@ export function ProfilePage() {
                 className={styles.input}
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
+                onBlur={handleNameBlur}
+                maxLength={100}
                 disabled={saving}
               />
               {nameError && <span className={styles.inputError}>{nameError}</span>}
