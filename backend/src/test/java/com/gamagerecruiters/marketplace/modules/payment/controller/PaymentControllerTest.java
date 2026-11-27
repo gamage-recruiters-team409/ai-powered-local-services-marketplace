@@ -35,6 +35,7 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentResponse;
 import com.gamagerecruiters.marketplace.modules.payment.service.PaymentRetrievalService;
 import com.gamagerecruiters.marketplace.modules.payment.service.CustomerRefundRetrievalService;
+import com.gamagerecruiters.marketplace.modules.payment.service.PaymentReceiptPdfService;
 
 /**
  * Unit tests for the customer-facing payment retrieval controller.
@@ -57,6 +58,7 @@ class PaymentControllerTest {
 
     private PaymentRetrievalService retrievalService;
     private CustomerRefundRetrievalService refundRetrievalService;
+    private PaymentReceiptPdfService receiptPdfService;
     private PaymentController controller;
 
     @BeforeEach
@@ -65,8 +67,9 @@ class PaymentControllerTest {
 
         retrievalService = mock(PaymentRetrievalService.class);
         refundRetrievalService = mock(CustomerRefundRetrievalService.class);
+        receiptPdfService = mock(PaymentReceiptPdfService.class);
         controller = new PaymentController(
-                retrievalService, refundRetrievalService);
+                retrievalService, refundRetrievalService, receiptPdfService);
     }
 
     @AfterEach
@@ -504,6 +507,64 @@ class PaymentControllerTest {
                             () -> controller.getMyPayments(-1, 10));
 
             assertSame(original, actual);
+    }
+
+
+    @Test
+    void downloadsReceiptForAuthenticatedCustomer() {
+        authenticateCustomer();
+
+        byte[] pdf = "%PDF-1.7".getBytes(
+                java.nio.charset.StandardCharsets.US_ASCII);
+
+        when(receiptPdfService.generateForCustomer(
+                PAYMENT_ID, CUSTOMER_ID)).thenReturn(pdf);
+
+        ResponseEntity<byte[]> response =
+                controller.downloadPaymentReceipt(PAYMENT_ID);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals(
+                org.springframework.http.MediaType.APPLICATION_PDF,
+                response.getHeaders().getContentType());
+        assertEquals(pdf.length,
+                response.getHeaders().getContentLength());
+        assertEquals("no-store",
+                response.getHeaders().getCacheControl());
+        assertEquals("attachment",
+                response.getHeaders().getContentDisposition().getType());
+        assertEquals("payment-receipt.pdf",
+                response.getHeaders().getContentDisposition().getFilename());
+        assertEquals("nosniff",
+                response.getHeaders().getFirst("X-Content-Type-Options"));
+        assertSame(pdf, response.getBody());
+
+        verify(receiptPdfService).generateForCustomer(
+                PAYMENT_ID, CUSTOMER_ID);
+    }
+
+    @Test
+    void rejectsReceiptDownloadWithoutAuthentication() {
+        assertThrows(ApiException.class,
+                () -> controller.downloadPaymentReceipt(PAYMENT_ID));
+
+        verifyNoInteractions(receiptPdfService);
+    }
+
+    @Test
+    void propagatesReceiptOwnershipFailure() {
+        authenticateCustomer();
+
+        ApiException failure = new ApiException(
+                HttpStatus.NOT_FOUND,
+                "PAYMENT_NOT_FOUND",
+                "Payment not found");
+
+        when(receiptPdfService.generateForCustomer(
+                PAYMENT_ID, CUSTOMER_ID)).thenThrow(failure);
+
+        assertSame(failure, assertThrows(ApiException.class,
+                () -> controller.downloadPaymentReceipt(PAYMENT_ID)));
     }
 
 }

@@ -4,6 +4,9 @@ package com.gamagerecruiters.marketplace.modules.payment.controller;
 import java.util.List;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,6 +25,7 @@ import com.gamagerecruiters.marketplace.modules.payment.dto.CustomerRefundPageRe
 import com.gamagerecruiters.marketplace.modules.payment.service.CustomerRefundRetrievalService;
 import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentResponse;
 import com.gamagerecruiters.marketplace.modules.payment.service.PaymentRetrievalService;
+import com.gamagerecruiters.marketplace.modules.payment.service.PaymentReceiptPdfService;
 
 /**
  * REST endpoints for customer-authorized payment retrieval.
@@ -50,18 +54,22 @@ public class PaymentController {
 
     private final PaymentRetrievalService paymentRetrievalService;
     private final CustomerRefundRetrievalService customerRefundRetrievalService;
+    private final PaymentReceiptPdfService paymentReceiptPdfService;
 
     /**
      * Creates the payment controller.
      *
      * @param paymentRetrievalService authorized payment retrieval service
      * @param customerRefundRetrievalService authorized refund history service
+     * @param paymentReceiptPdfService authorized PDF receipt generation service
      */
     public PaymentController(
             PaymentRetrievalService paymentRetrievalService,
-            CustomerRefundRetrievalService customerRefundRetrievalService) {
+            CustomerRefundRetrievalService customerRefundRetrievalService,
+            PaymentReceiptPdfService paymentReceiptPdfService) {
         this.paymentRetrievalService = paymentRetrievalService;
         this.customerRefundRetrievalService = customerRefundRetrievalService;
+        this.paymentReceiptPdfService = paymentReceiptPdfService;
     }
 
     /**
@@ -223,4 +231,55 @@ public class PaymentController {
                 .cacheControl(org.springframework.http.CacheControl.noStore())
                 .body(refunds);
     }
+
+    /**
+     * Downloads a verified receipt belonging to the authenticated customer.
+     *
+     * @param paymentId associated payment identifier
+     * @return generated PDF attachment
+     */
+    @GetMapping(
+            value = "/{paymentId}/receipt/download",
+            produces = MediaType.APPLICATION_PDF_VALUE)
+    public ResponseEntity<byte[]> downloadPaymentReceipt(
+            @PathVariable String paymentId) {
+
+        byte[] pdf;
+
+        try {
+            String customerId = requireAuthenticatedCustomerId();
+
+            pdf = paymentReceiptPdfService.generateForCustomer(
+                    paymentId, customerId);
+        } catch (ApiException ex) {
+            // Preserve structured JSON errors for PDF-only download requests.
+            // Delegate error response construction to the shared exception handler.
+            var attributes = org.springframework.web.context.request
+                    .RequestContextHolder.getRequestAttributes();
+
+            if (attributes instanceof org.springframework.web.context.request
+                    .ServletRequestAttributes servletAttributes
+                    && servletAttributes.getResponse() != null) {
+
+                servletAttributes.getResponse()
+                        .setContentType(MediaType.APPLICATION_JSON_VALUE);
+            }
+
+            throw ex;
+        }
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_PDF)
+                .contentLength(pdf.length)
+                .cacheControl(org.springframework.http.CacheControl.noStore())
+                .header(
+                        HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.attachment()
+                                .filename("payment-receipt.pdf")
+                                .build()
+                                .toString())
+                .header("X-Content-Type-Options", "nosniff")
+                .body(pdf);
+    }
+
 }

@@ -44,6 +44,7 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.Payment;
 import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
 import com.gamagerecruiters.marketplace.modules.payment.service.PaymentRetrievalService;
 import com.gamagerecruiters.marketplace.modules.payment.service.CustomerRefundRetrievalService;
+import com.gamagerecruiters.marketplace.modules.payment.service.PaymentReceiptPdfService;
 import com.gamagerecruiters.marketplace.modules.payment.dto.PaymentReceiptResponse;
 import com.gamagerecruiters.marketplace.modules.payment.dto.CustomerRefundResponse;
 import com.gamagerecruiters.marketplace.modules.payment.dto.CustomerRefundPageResponse;
@@ -87,6 +88,9 @@ class PaymentControllerSecurityTest {
 
         @MockitoBean
         private CustomerRefundRetrievalService refundRetrievalService;
+
+        @MockitoBean
+        private PaymentReceiptPdfService receiptPdfService;
 
         @MockitoBean
         private TokenService tokenService;
@@ -822,4 +826,130 @@ class PaymentControllerSecurityTest {
                 verify(refundRetrievalService).getRefundsForCustomer(
                                 PAYMENT_ID, "user-customer", 1, 5);
         }
+
+        @Test
+        void pdfDownloadReturns401WithoutToken() throws Exception {
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download"))
+                                .andExpect(status().isUnauthorized());
+
+                verifyNoInteractions(receiptPdfService);
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = Role.class, names = {
+                "PROVIDER", "ADMIN", "FINANCE_ADMIN"
+        })
+        void pdfDownloadReturns403ForNonCustomer(Role role)
+                        throws Exception {
+
+                String token = authenticateAs(role);
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download")
+                                .header("Authorization", "Bearer " + token))
+                                .andExpect(status().isForbidden());
+
+                verifyNoInteractions(receiptPdfService);
+        }
+
+        @Test
+        void pdfDownloadReturnsSecureAttachmentForCustomer()
+                        throws Exception {
+
+                String token = authenticateAs(Role.CUSTOMER);
+
+                byte[] pdf = "%PDF-1.7".getBytes(
+                        java.nio.charset.StandardCharsets.US_ASCII);
+
+                when(receiptPdfService.generateForCustomer(
+                        PAYMENT_ID, "user-customer"))
+                        .thenReturn(pdf);
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download")
+                                .param("customerId", "another-customer")
+                                .header("Authorization", "Bearer " + token)
+                                .accept("application/pdf"))
+                                .andExpect(status().isOk())
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.content()
+                                        .contentType("application/pdf"))
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.header()
+                                        .string("Content-Disposition",
+                                                "attachment; filename=\"payment-receipt.pdf\""))
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.header()
+                                        .string("Cache-Control", "no-store"))
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.header()
+                                        .string("X-Content-Type-Options", "nosniff"))
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.content().bytes(pdf));
+
+                verify(receiptPdfService).generateForCustomer(
+                        PAYMENT_ID, "user-customer");
+        }
+
+        @Test
+        void pdfDownloadHidesUnauthorizedPayment() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(receiptPdfService.generateForCustomer(
+                        PAYMENT_ID, "user-customer"))
+                        .thenThrow(new ApiException(
+                                HttpStatus.NOT_FOUND,
+                                "PAYMENT_NOT_FOUND",
+                                "Payment not found"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download")
+                                .header("Authorization", "Bearer " + token)
+                                .accept("application/pdf", "application/json"))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error")
+                                        .value("PAYMENT_NOT_FOUND"))
+                                .andExpect(org.springframework.test.web.servlet.result
+                                        .MockMvcResultMatchers.header()
+                                        .doesNotExist("Content-Disposition"));
+        }
+
+        @Test
+        void pdfDownloadReturns404WhenReceiptUnavailable()
+                        throws Exception {
+
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(receiptPdfService.generateForCustomer(
+                        PAYMENT_ID, "user-customer"))
+                        .thenThrow(new ApiException(
+                                HttpStatus.NOT_FOUND,
+                                "RECEIPT_NOT_FOUND",
+                                "Payment receipt is not available"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download")
+                                .header("Authorization", "Bearer " + token)
+                                .accept("application/pdf", "application/json"))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error")
+                                        .value("RECEIPT_NOT_FOUND"));
+        }
+
+
+        @Test
+        void pdfOnlyAcceptReturnsStructuredError() throws Exception {
+                String token = authenticateAs(Role.CUSTOMER);
+
+                when(receiptPdfService.generateForCustomer(
+                        PAYMENT_ID, "user-customer"))
+                        .thenThrow(new ApiException(
+                                HttpStatus.NOT_FOUND,
+                                "RECEIPT_NOT_FOUND",
+                                "Payment receipt is not available"));
+
+                mockMvc.perform(get(PAYMENT_URL + "/receipt/download")
+                                .header("Authorization", "Bearer " + token)
+                                .accept("application/pdf"))
+                                .andExpect(status().isNotFound())
+                                .andExpect(jsonPath("$.error")
+                                        .value("RECEIPT_NOT_FOUND"));
+        }
+
 }
