@@ -103,4 +103,27 @@ describe('Platform Settings', () => {
       expect(input.disabled).toBe(true)
     })
   })
+
+  it('renders projection visuals across policy groups', async () => {
+    renderSuperAdminPage(PlatformSettingsPage)
+    await screen.findByText('Minimum booking notice')
+
+    // Cancellation: Refund Tiers
+    fireEvent.click(screen.getByText('Cancellation'))
+    expect(await screen.findByText('REFUND TIERS')).toBeTruthy()
+    expect(screen.getByText(/Customer Cancellation Schedule/)).toBeTruthy()
+
+    // Customer: Completion & Review Timeline
+    fireEvent.click(screen.getByText('Customer'))
+    expect(await screen.findByText('COMPLETION & REVIEW TIMELINE')).toBeTruthy()
+
+    // Dispute: Dispute Lifespan
+    fireEvent.click(screen.getByText('Dispute'))
+    expect(await screen.findByText('DISPUTE LIFESPAN PROJECTION')).toBeTruthy()
+
+    // Penalty: Penalty Example
+    fireEvent.click(screen.getByText('Penalty'))
+    expect(await screen.findByText('EXAMPLE')).toBeTruthy()
+    expect(screen.getByText(/Net provider payout/)).toBeTruthy()
+  })
 })

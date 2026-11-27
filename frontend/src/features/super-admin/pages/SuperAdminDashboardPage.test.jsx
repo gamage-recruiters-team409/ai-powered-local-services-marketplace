@@ -22,16 +22,35 @@ describe('SuperAdmin Dashboard', () => {
   it('renders dashboard title and real metric values, no fake numbers', async () => {
     renderSuperAdminPage(SuperAdminDashboardPage)
     expect(await screen.findByRole('heading', { name: /Dashboard/ })).toBeTruthy()
-    // Real values
-    expect(await screen.findByText('19')).toBeTruthy() // open disputes
+    // Real values for users, providers, bookings, money, disputes
+    expect(await screen.findByText('14,280')).toBeTruthy() // users
+    expect(screen.getByText('1,842')).toBeTruthy() // providers
+    expect(screen.getByText('628')).toBeTruthy() // bookings
+    expect(screen.getByText('LKR 18.4M')).toBeTruthy() // booking value
+    expect(screen.getByText('LKR 2.7M')).toBeTruthy() // commission
+    expect(screen.getByText('LKR 141K')).toBeTruthy() // refunds
+    expect(screen.getByText('19')).toBeTruthy() // open disputes
     expect(screen.getByText('5')).toBeTruthy() // admin accounts
     expect(screen.getByText('47')).toBeTruthy() // pending verifications
   })
 
-  it('shows unavailable placeholders for WP01/WP05/WP07 metrics', async () => {
+  it('shows unavailable placeholders when dependency is not available', async () => {
+    getAnalyticsSummary.mockResolvedValue(
+      analyticsSummary({
+        users: { available: false, reason: 'WP01 User Directory offline' },
+        bookings: { available: false, reason: 'WP05 Booking System offline' },
+      }),
+    )
     renderSuperAdminPage(SuperAdminDashboardPage)
-    await screen.findByText('19')
-    expect(screen.getAllByText(/Not available yet/).length).toBeGreaterThanOrEqual(6)
+    expect(await screen.findByText(/WP01 User Directory offline/)).toBeTruthy()
+    expect(screen.getByText(/WP05 Booking System offline/)).toBeTruthy()
+  })
+
+  it('renders Day, Week, Month time range toggle', async () => {
+    renderSuperAdminPage(SuperAdminDashboardPage)
+    expect(await screen.findByRole('button', { name: 'Day' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Week' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Month' })).toBeTruthy()
   })
 
   it('shows chart placeholders instead of line/area/donut charts', async () => {

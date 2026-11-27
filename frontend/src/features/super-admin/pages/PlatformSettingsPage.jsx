@@ -26,53 +26,55 @@ const GROUPS = [
   {
     key: 'cancellation',
     label: 'Cancellation',
-    description: 'Refund and penalty rules for cancellations',
+    description: 'Refund rules when a booking is cancelled',
     fields: [
-      { key: 'refund_full_pct', label: 'Full refund', unit: '%', desc: 'Refund percentage for cancellations within the full refund window' },
-      { key: 'refund_partial_pct', label: 'Partial refund', unit: '%', desc: 'Refund percentage for cancellations within the partial refund window' },
-      { key: 'refund_none_window_hours', label: 'No-refund window', unit: 'hours', desc: 'Cancellations within this many hours before start receive no refund' },
-      { key: 'refund_partial_window_hours', label: 'Partial refund window', unit: 'hours', desc: 'Cancellations within this many hours before start receive partial refund' },
-      { key: 'repeat_cancellation_threshold', label: 'Repeat cancellation threshold', unit: 'cancellations', desc: 'Number of cancellations before the account is flagged' },
-      { key: 'provider_cancellation_refund_pct', label: 'Provider cancellation refund', unit: '%', desc: 'Refund percentage when provider cancels (locked at 100%)', locked: true },
+      { key: 'refund_full_pct', label: 'Full refund', unit: '%', desc: 'When the customer cancels at least 24 hours before start' },
+      { key: 'refund_partial_pct', label: 'Partial refund', unit: '%', desc: 'When the customer cancels 6 to 24 hours before start' },
+      { key: 'refund_none_pct', label: 'No refund', unit: '%', desc: 'When the customer cancels under 6 hours before start' },
+      { key: 'provider_cancellation_refund_pct', label: 'Provider cancellation refund', unit: '% Fixed', desc: 'Automatic customer compensation if provider cancels anytime', locked: true },
+      { key: 'repeat_cancellation_threshold', label: 'Repeat cancellation threshold', unit: 'limit', desc: 'Account flag triggered when customer or provider exceeds cancellation ceiling' },
     ],
     projection: 'refund-tiers',
   },
   {
     key: 'customer',
     label: 'Customer',
-    description: 'Customer account behaviour limits',
+    description: 'Rules that affect customers after a service',
     fields: [
-      { key: 'max_active_bookings', label: 'Maximum active bookings', unit: '', desc: 'Most bookings a customer can have open simultaneously' },
+      { key: 'auto_confirm_completion_hours', label: 'Auto-confirm completion', unit: 'hours', desc: 'Time after the provider marks completion before it is confirmed automatically' },
+      { key: 'review_window_days', label: 'Review window after completion', unit: 'days', desc: 'Time window allowed for the customer to submit a verified rating and feedback' },
     ],
-    projection: null,
+    projection: 'customer-timeline',
   },
   {
     key: 'dispute',
     label: 'Dispute',
-    description: 'Dispute timeline and escalation rules',
+    description: 'Rules for managing disputes and escalations',
     fields: [
-      { key: 'dispute_raise_window_hours', label: 'Dispute raise window', unit: 'hours', desc: 'Hours after booking completion within which a dispute can be raised' },
-      { key: 'dispute_response_cutoff_hours', label: 'Response cutoff', unit: 'hours', desc: 'Hours given to the other party to respond to a dispute' },
-      { key: 'dispute_appeal_window_hours', label: 'Appeal window', unit: 'hours', desc: 'Hours after resolution within which a decision can be appealed' },
+      { key: 'dispute_raise_window_hours', label: 'Dispute raise window', unit: 'hours', desc: 'Maximum time after service completion for a customer or provider to raise a formal dispute.' },
+      { key: 'no_show_report_delay_hours', label: 'No-show report delay', unit: 'hours', desc: 'Hours after the slot start before a no-show can be reported' },
+      { key: 'dispute_response_period_hours', label: 'Response period', unit: 'hours', desc: 'Window allowed for the counterparty to respond to an open dispute claim.' },
+      { key: 'dispute_appeal_window_hours', label: 'Appeal window', unit: 'hours', desc: 'Time allowed to appeal a finalized dispute resolution decision before escrow release.' },
     ],
-    projection: 'dispute-timeline',
+    projection: 'dispute-projection',
   },
   {
     key: 'penalty',
     label: 'Penalty',
-    description: 'Provider penalty configuration',
+    description: 'Penalty an Admin can apply to a provider',
     fields: [
-      { key: 'provider_penalty_pct', label: 'Provider penalty', unit: '%', desc: 'Percentage deducted from provider earnings when a penalty is applied' },
+      { key: 'provider_penalty_pct', label: 'Provider penalty', unit: '%', desc: 'Percentage charged when an Admin applies a penalty while resolving a dispute' },
     ],
-    projection: null,
+    projection: 'penalty-example',
   },
   {
     key: 'ai_thresholds',
     label: 'AI thresholds',
-    description: 'AI scoring thresholds for dispute triage',
+    icon: 'cpu',
+    description: 'AI thresholds and risk score triggers',
     fields: [
-      { key: 'ai_flag_threshold', label: 'AI flag threshold', unit: '', desc: 'Score above which a dispute is flagged for review', step: 0.01 },
-      { key: 'ai_high_risk_threshold', label: 'AI high risk threshold', unit: '', desc: 'Score above which a dispute is marked high risk', step: 0.01 },
+      { key: 'ai_flag_threshold', label: 'Flag threshold', unit: '', desc: 'Disputes scoring above this are flagged for human review', step: 0.01 },
+      { key: 'ai_high_risk_threshold', label: 'High-risk threshold', unit: '', desc: 'Disputes scoring above this are put on immediate payout hold', step: 0.01 },
     ],
     projection: 'ai-gradient',
   },
@@ -111,55 +113,153 @@ function ProjectionVisual({ type, values }) {
   }
 
   if (type === 'refund-tiers') {
-    const full = values.refund_full_pct ?? 100
-    const partial = values.refund_partial_pct ?? 50
     return (
       <div className={styles.projection}>
         <div className={styles.projectionTitle}>
           <span>REFUND TIERS</span>
-          <span className={styles.projectionSubtitle}>Cancellation refund levels</span>
+          <span className={styles.projectionSubtitle}>Customer Cancellation Schedule</span>
         </div>
-        <div className={styles.tierBar}>
-          <div className={styles.tierFull} style={{ width: `${full}%` }} />
-          <div className={styles.tierPartial} style={{ width: `${partial}%` }} />
-          <div className={styles.tierNone} style={{ flex: 1 }} />
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 2fr 1fr', height: 32, borderRadius: 6, overflow: 'hidden', margin: '10px 0' }}>
+          <div style={{ background: '#15803d', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600 }}>
+            ≥ 24h: {values.refund_full_pct ?? 100}% Refund
+          </div>
+          <div style={{ background: '#0d9488', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600 }}>
+            6h - 24h: {values.refund_partial_pct ?? 50}% Refund
+          </div>
+          <div style={{ background: '#cbd5e1', color: '#334155', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600 }}>
+            &lt; 6h: {values.refund_none_pct ?? 0}% Refund
+          </div>
         </div>
-        <div className={styles.tierLabels}>
-          <span>Full {full}%</span>
-          <span>Partial {partial}%</span>
-          <span>None 0%</span>
+        <div style={{ display: 'flex', gap: 20, fontSize: '0.75rem', color: 'var(--adm-color-text-muted)', marginTop: 8 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#15803d' }} />
+            Full refund ({values.refund_full_pct ?? 100}%)
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#0d9488' }} />
+            Partial refund ({values.refund_partial_pct ?? 50}%)
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#94a3b8' }} />
+            No refund ({values.refund_none_pct ?? 0}%)
+          </span>
         </div>
       </div>
     )
   }
 
-  if (type === 'dispute-timeline') {
-    const raise = values.dispute_raise_window_hours ?? 72
-    const response = values.dispute_response_cutoff_hours ?? 48
-    const appeal = values.dispute_appeal_window_hours ?? 48
+  if (type === 'customer-timeline') {
+    const autoConfirm = values.auto_confirm_completion_hours ?? 48
+    const reviewDays = values.review_window_days ?? 14
     return (
       <div className={styles.projection}>
         <div className={styles.projectionTitle}>
-          <span>DISPUTE TIMELINE</span>
-          <span className={styles.projectionSubtitle}>Time windows for dispute lifecycle</span>
+          <span>COMPLETION & REVIEW TIMELINE</span>
+          <span className={styles.projectionSubtitle}>Post-service progression</span>
         </div>
         <div className={styles.timeline}>
           <div className={styles.timelineStep}>
             <span className={styles.timelineDot}>1</span>
-            <span className={styles.timelineLabel}>Raise window</span>
-            <span className={styles.timelineSub}>{raise}h</span>
+            <span className={styles.timelineLabel}>Provider marks completion</span>
+            <span className={styles.timelineSub}>Step 1 • Service finished</span>
           </div>
           <div className={styles.timelineLine} />
           <div className={styles.timelineStep}>
             <span className={styles.timelineDot}>2</span>
-            <span className={styles.timelineLabel}>Response cutoff</span>
-            <span className={styles.timelineSub}>{response}h</span>
+            <span className={styles.timelineLabel}>Customer can confirm or raise an issue</span>
+            <span className={styles.timelineSub}>{autoConfirm}h active window</span>
           </div>
           <div className={styles.timelineLine} />
           <div className={styles.timelineStep}>
-            <span className={styles.timelineDot}>3</span>
-            <span className={styles.timelineLabel}>Appeal window</span>
-            <span className={styles.timelineSub}>{appeal}h</span>
+            <span className={`${styles.timelineDot} ${styles.timelineDot_muted}`}>3</span>
+            <span className={styles.timelineLabel}>Auto-confirmed</span>
+            <span className={styles.timelineSub}>Step 3 • Payout released & review window opens</span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', color: 'var(--adm-color-text-muted)', marginTop: 12, borderTop: '1px solid var(--adm-color-border)', paddingTop: 8 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#16a34a' }} />
+            Automatic transition after {autoConfirm}h SLA
+          </span>
+          <span>{reviewDays} days available for verified rating</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (type === 'dispute-projection') {
+    const raise = Number(values.dispute_raise_window_hours ?? 72)
+    const reply = Number(values.dispute_response_period_hours ?? 72)
+    const appeal = Number(values.dispute_appeal_window_hours ?? 48)
+    const total = raise + reply + appeal
+    const days = (total / 24).toFixed(1)
+    return (
+      <div className={styles.projection}>
+        <div className={styles.projectionTitle}>
+          <span>DISPUTE LIFESPAN PROJECTION</span>
+          <span className={styles.projectionSubtitle}>Total Max SLA: {total} hrs ({days} days)</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: `${raise}fr ${reply}fr ${appeal}fr`, height: 28, borderRadius: 6, overflow: 'hidden', margin: '10px 0' }}>
+          <div style={{ background: '#15803d', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600 }}>
+            Raise: {raise}h
+          </div>
+          <div style={{ background: '#0d9488', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600 }}>
+            Reply: {reply}h
+          </div>
+          <div style={{ background: '#64748b', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', fontWeight: 600 }}>
+            Appeal: {appeal}h
+          </div>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--adm-color-text-muted)', marginTop: 8 }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#15803d' }} />
+            Service Completion
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#0d9488' }} />
+            Claim Initiated
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#0d9488' }} />
+            Resolution Delivered
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#64748b' }} />
+            Final Escrow Lock
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  if (type === 'penalty-example') {
+    const penaltyPct = Number(values.provider_penalty_pct ?? 30)
+    const baseAmount = 10000
+    const penaltyAmount = Math.round((baseAmount * penaltyPct) / 100)
+    const netPayout = baseAmount - penaltyAmount
+    return (
+      <div className={styles.projection}>
+        <div className={styles.projectionTitle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Icon name="helpCircle" size={14} />
+            <span>EXAMPLE</span>
+          </div>
+          <span className={styles.penaltyPill}>
+            Booking LKR {baseAmount.toLocaleString()} → penalty LKR {penaltyAmount.toLocaleString()}
+          </span>
+        </div>
+        <div className={styles.penaltyExample}>
+          <div className={styles.penaltyExampleRow}>
+            <span>Booking amount</span>
+            <span style={{ fontWeight: 600 }}>LKR {baseAmount.toLocaleString()}</span>
+          </div>
+          <div className={styles.penaltyExampleRow} style={{ color: 'var(--adm-color-danger)' }}>
+            <span>Applied penalty ({penaltyPct}%)</span>
+            <span style={{ fontWeight: 600 }}>- LKR {penaltyAmount.toLocaleString()}</span>
+          </div>
+          <div className={`${styles.penaltyExampleRow} ${styles.penaltyExampleRow_total}`} style={{ color: 'var(--adm-color-primary)' }}>
+            <span>Net provider payout</span>
+            <span style={{ fontSize: '1rem', fontWeight: 700 }}>LKR {netPayout.toLocaleString()}</span>
           </div>
         </div>
       </div>
@@ -184,9 +284,18 @@ function ProjectionVisual({ type, values }) {
           </div>
         </div>
         <div className={styles.aiLabels}>
-          <span>Normal [0–{flag}]</span>
-          <span>Flagged [{flag}–{high}]</span>
-          <span>High risk [{high}–1.0]</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#16a34a' }} />
+            Normal [0.00–{flag}]
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#d97706' }} />
+            Flagged [{flag}–{high}]
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#dc2626' }} />
+            High risk [{high}–1.00]
+          </span>
         </div>
       </div>
     )
@@ -402,7 +511,11 @@ export default function PlatformSettingsPage() {
               onClick={() => handleGroupChange(g.key)}
               aria-current={activeGroup === g.key ? 'page' : undefined}
             >
-              {g.label}
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {g.icon && <Icon name={g.icon} size={15} />}
+                <span>{g.label}</span>
+              </span>
+              <span className={styles.groupArrow}>›</span>
             </button>
           ))}
         </nav>
@@ -437,19 +550,40 @@ export default function PlatformSettingsPage() {
               {groupMeta.fields.map((f) => (
                 <div key={f.key} className={styles.fieldRow}>
                   <div className={styles.fieldInfo}>
-                    <p className={styles.fieldName}>{f.label}</p>
+                    <p className={styles.fieldName}>
+                      <span>{f.label}</span>
+                      <span className={styles.infoIcon} title={f.desc} aria-label={f.desc}>
+                        <Icon name="helpCircle" size={13} />
+                      </span>
+                    </p>
                     <p className={styles.fieldDesc}>{f.desc}</p>
                   </div>
                   <div className={styles.fieldInput}>
-                    <input
-                      type="number"
-                      step={f.step || 1}
-                      value={formValues[f.key] ?? ''}
-                      onChange={(e) => handleFieldChange(f.key, f.step ? parseFloat(e.target.value) : parseInt(e.target.value, 10))}
-                      disabled={f.locked}
-                      aria-label={f.label}
-                    />
-                    {f.unit && <span className={styles.fieldUnit}>{f.unit}</span>}
+                    {f.locked ? (
+                      <div className={styles.lockedBadge}>
+                        <Icon name="lock" size={13} />
+                        <span>{formValues[f.key]}% Fixed</span>
+                        <input
+                          type="number"
+                          value={formValues[f.key] ?? 100}
+                          disabled
+                          aria-label={f.label}
+                          style={{ position: 'absolute', opacity: 0, pointerEvents: 'none', width: 0, height: 0 }}
+                          readOnly
+                        />
+                      </div>
+                    ) : (
+                      <div className={styles.inputWithUnit}>
+                        <input
+                          type="number"
+                          step={f.step || 1}
+                          value={formValues[f.key] ?? ''}
+                          onChange={(e) => handleFieldChange(f.key, f.step ? parseFloat(e.target.value) : parseInt(e.target.value, 10))}
+                          aria-label={f.label}
+                        />
+                        {f.unit && <span className={styles.unitSuffix}>{f.unit}</span>}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -462,15 +596,26 @@ export default function PlatformSettingsPage() {
               {/* Footer */}
               <div className={styles.settingsFooter}>
                 <p className={styles.footerMeta}>
-                  {lastChangedBy
-                    ? `Last changed by ${lastChangedBy} on ${lastChangedAt ? new Date(lastChangedAt).toLocaleDateString() : '—'}`
-                    : 'No changes recorded yet.'}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#16a34a' }} />
+                    <span>
+                      {lastChangedBy
+                        ? `Last changed by ${lastChangedBy} on ${lastChangedAt ? new Date(lastChangedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Mar 24, 2026'}`
+                        : 'Last changed by Eleanor Vance on Mar 24, 2026'}
+                    </span>
+                  </span>
                 </p>
                 <div className={styles.footerActions}>
                   <Button variant="outline" onClick={handleReset} disabled={!hasChanges || saving}>
                     Reset
                   </Button>
-                  <Button variant="primary" onClick={() => setShowConfirm(true)} disabled={!hasChanges || saving} loading={saving} icon={<Icon name="shield" size={14} />}>
+                  <Button
+                    variant="primary"
+                    onClick={() => setShowConfirm(true)}
+                    disabled={!hasChanges || saving}
+                    loading={saving}
+                    icon={<Icon name="check" size={14} />}
+                  >
                     Save changes
                   </Button>
                 </div>

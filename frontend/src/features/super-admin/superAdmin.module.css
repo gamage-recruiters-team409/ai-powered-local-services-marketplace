@@ -291,6 +291,19 @@
   text-transform: uppercase;
 }
 
+.groupArrow {
+  font-size: 1.125rem;
+  color: var(--adm-color-text-muted);
+  line-height: 1;
+}
+
+.infoIcon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--adm-color-text-muted);
+  cursor: help;
+}
+
 .groupBtn {
   display: flex;
   align-items: center;
@@ -419,6 +432,125 @@
   margin: 2px 0 0;
   color: var(--adm-color-text-muted);
   font-size: 0.8125rem;
+}
+
+/* ---------- input with attached unit & locked badge ---------- */
+.inputWithUnit {
+  display: inline-flex;
+  align-items: center;
+  background: var(--adm-color-surface);
+  border: 1px solid var(--adm-color-border);
+  border-radius: var(--adm-radius-sm);
+  overflow: hidden;
+  height: 38px;
+  box-sizing: border-box;
+}
+
+.inputWithUnit:focus-within {
+  outline: 2px solid var(--adm-color-focus);
+  border-color: var(--adm-color-primary);
+}
+
+.inputWithUnit input {
+  border: none !important;
+  outline: none !important;
+  background: transparent !important;
+  padding: 8px 12px !important;
+  width: 60px !important;
+  text-align: right !important;
+  font-weight: 600 !important;
+  color: var(--adm-color-heading) !important;
+  box-sizing: border-box;
+}
+
+.unitSuffix {
+  padding: 0 12px;
+  background: var(--adm-color-bg);
+  border-left: 1px solid var(--adm-color-border);
+  color: var(--adm-color-text-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.lockedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--adm-color-bg);
+  border: 1px solid var(--adm-color-border);
+  border-radius: var(--adm-radius-sm);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--adm-color-heading);
+}
+
+/* ---------- dashboard time range toggle ---------- */
+.timeRangeToggle {
+  display: inline-flex;
+  background: var(--adm-color-bg);
+  padding: 2px;
+  border-radius: var(--adm-radius-sm);
+  border: 1px solid var(--adm-color-border);
+}
+
+.timeToggleBtn {
+  border: none;
+  background: transparent;
+  padding: 4px 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--adm-color-text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.timeToggleBtn_active {
+  background: var(--adm-color-surface);
+  color: var(--adm-color-heading);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+}
+
+/* ---------- penalty example box ---------- */
+.penaltyExample {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  margin-top: 10px;
+  background: var(--adm-color-surface);
+  border: 1px solid var(--adm-color-border);
+  border-radius: var(--adm-radius-sm);
+}
+
+.penaltyExampleRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.875rem;
+  color: var(--adm-color-heading);
+}
+
+.penaltyExampleRow_total {
+  padding-top: 10px;
+  border-top: 1px dashed var(--adm-color-border);
+  font-weight: 700;
+}
+
+.penaltyPill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  background: var(--adm-color-primary-soft);
+  color: var(--adm-color-primary);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
 }
 
 .fieldInput {

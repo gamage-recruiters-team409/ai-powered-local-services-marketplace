@@ -1,9 +1,11 @@
 package com.gamagerecruiters.marketplace.modules.admin.service;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import org.bson.Document;
 import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -15,6 +17,8 @@ import org.mockito.Mock;
 import static org.mockito.Mockito.when;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 
 import com.gamagerecruiters.marketplace.modules.admin.domain.AdminAuditAction;
 import com.gamagerecruiters.marketplace.modules.admin.domain.AdminAuditLog;
@@ -22,7 +26,9 @@ import com.gamagerecruiters.marketplace.modules.admin.domain.AuditOutcome;
 import com.gamagerecruiters.marketplace.modules.admin.dto.AdminAnalyticsSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
+import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
+import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
 import com.gamagerecruiters.marketplace.modules.verification.dto.AdminVerificationQueueItemResponse;
 import com.gamagerecruiters.marketplace.modules.verification.service.VerificationAdminService;
 
@@ -52,8 +58,22 @@ class AdminAnalyticsServiceTest {
                 .thenReturn(1L) // appealed
                 .thenReturn(1L); // manualReview
 
-        // Admin accounts count: 5
-        when(mongoTemplate.count(any(), eq(User.class))).thenReturn(5L);
+        // Admin accounts count: 5, total users: 14280
+        when(mongoTemplate.count(any(), eq(User.class))).thenReturn(5L).thenReturn(14280L);
+
+        // Providers count: 1842
+        when(mongoTemplate.count(any(), eq(ProviderProfile.class))).thenReturn(1842L);
+
+        // Bookings count: 628
+        when(mongoTemplate.count(any(), eq(Booking.class))).thenReturn(628L);
+
+        // Payment aggregates
+        Document doc = new Document();
+        doc.put("totalAmount", new BigDecimal("18400000"));
+        doc.put("totalCommission", new BigDecimal("2700000"));
+        doc.put("totalRefunds", new BigDecimal("141000"));
+        AggregationResults<Document> aggResults = new AggregationResults<>(List.of(doc), doc);
+        when(mongoTemplate.aggregate(any(Aggregation.class), eq("payments"), eq(Document.class))).thenReturn(aggResults);
 
         // Verification pending count: 4
         AdminVerificationQueueItemResponse item = new AdminVerificationQueueItemResponse(
@@ -85,14 +105,18 @@ class AdminAnalyticsServiceTest {
         assertThat(summary.recentAuditActivity()).hasSize(1);
         assertThat(summary.recentAuditActivity().get(0).action()).isEqualTo("PLATFORM_SETTINGS_UPDATED");
 
-        // Unavailable dependencies
-        assertThat(summary.users().available()).isFalse();
-        assertThat(summary.users().source()).isEqualTo("WP01 User Directory");
-        assertThat(summary.bookings().available()).isFalse();
-        assertThat(summary.bookings().source()).isEqualTo("WP05 Booking System");
-        assertThat(summary.bookingValue().available()).isFalse();
-        assertThat(summary.bookingValue().source()).isEqualTo("WP07 Payment Gateway");
-        assertThat(summary.commission().available()).isFalse();
-        assertThat(summary.commission().source()).isEqualTo("WP07 Payment Gateway");
+        // Connected real dependencies
+        assertThat(summary.users().available()).isTrue();
+        assertThat(summary.users().value()).isEqualTo(14280L);
+        assertThat(summary.providers().available()).isTrue();
+        assertThat(summary.providers().value()).isEqualTo(1842L);
+        assertThat(summary.bookings().available()).isTrue();
+        assertThat(summary.bookings().value()).isEqualTo(628L);
+        assertThat(summary.bookingValue().available()).isTrue();
+        assertThat(summary.bookingValue().value()).isEqualTo(new BigDecimal("18400000"));
+        assertThat(summary.commission().available()).isTrue();
+        assertThat(summary.commission().value()).isEqualTo(new BigDecimal("2700000"));
+        assertThat(summary.refunds().available()).isTrue();
+        assertThat(summary.refunds().value()).isEqualTo(new BigDecimal("141000"));
     }
 }

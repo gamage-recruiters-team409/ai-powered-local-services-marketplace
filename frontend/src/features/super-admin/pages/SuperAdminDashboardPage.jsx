@@ -9,9 +9,20 @@ import { getAnalyticsSummary, isRequestCancelled } from '../services/superAdminS
 import styles from '../superAdmin.module.css'
 
 const numberFormat = new Intl.NumberFormat('en-US')
-function fmt(v) {
+function fmt(label, v) {
   if (v === null || v === undefined || Number.isNaN(Number(v))) return '—'
-  return numberFormat.format(Number(v))
+  const num = Number(v)
+  const l = (label || '').toLowerCase()
+  if (l.includes('value') || l.includes('commission') || l.includes('refund')) {
+    if (num >= 1_000_000) {
+      return `LKR ${(num / 1_000_000).toFixed(1)}M`
+    }
+    if (num >= 1_000) {
+      return `LKR ${(num / 1_000).toFixed(0)}K`
+    }
+    return `LKR ${numberFormat.format(num)}`
+  }
+  return numberFormat.format(num)
 }
 
 function timeAgo(iso) {
@@ -44,7 +55,7 @@ function MetricCard({ label, value, available, reason, icon = 'dashboard', tone 
       {loading ? (
         <span className={styles.summarySkeleton} aria-hidden="true" />
       ) : available ? (
-        <p className={`${styles.summaryValue} ${danger ? styles.summaryValue_danger : ''}`}>{fmt(value)}</p>
+        <p className={`${styles.summaryValue} ${danger ? styles.summaryValue_danger : ''}`}>{fmt(label, value)}</p>
       ) : (
         <p className={styles.summaryFoot}>{reason || 'Not available yet.'}</p>
       )}
@@ -64,6 +75,7 @@ function UnavailablePlaceholder({ reason, icon = 'barChart', title }) {
 
 export default function SuperAdminDashboardPage() {
   const [reloadKey, setReloadKey] = useState(0)
+  const [timeRange, setTimeRange] = useState('Week')
   const [result, setResult] = useState({ key: null, data: null, error: null })
   const loading = result.key !== reloadKey
 
@@ -85,15 +97,15 @@ export default function SuperAdminDashboardPage() {
   const metricCards = useMemo(() => {
     if (!d) return []
     return [
+      { label: 'Users', value: d.users?.value, available: d.users?.available ?? false, reason: d.users?.reason, icon: 'users' },
+      { label: 'Providers', value: d.providers?.value, available: d.providers?.available ?? false, reason: d.providers?.reason, icon: 'users' },
+      { label: 'Bookings', value: d.bookings?.value, available: d.bookings?.available ?? false, reason: d.bookings?.reason, icon: 'calendar' },
+      { label: 'Booking value', value: d.bookingValue?.value, available: d.bookingValue?.available ?? false, reason: d.bookingValue?.reason, icon: 'creditCard' },
+      { label: 'Commission', value: d.commission?.value, available: d.commission?.available ?? false, reason: d.commission?.reason, icon: 'barChart' },
+      { label: 'Refunds', value: d.refunds?.value, available: d.refunds?.available ?? false, reason: d.refunds?.reason, icon: 'refund' },
       { label: 'Open disputes', value: d.openDisputes?.value, available: d.openDisputes?.available ?? false, reason: d.openDisputes?.reason, icon: 'alertCircle', tone: 'danger' },
-      { label: 'Admin accounts', value: d.adminAccounts?.value, available: d.adminAccounts?.available ?? false, reason: d.adminAccounts?.reason, icon: 'userPlus' },
       { label: 'Pending verifications', value: d.pendingVerifications?.value, available: d.pendingVerifications?.available ?? false, reason: d.pendingVerifications?.reason, icon: 'shield' },
-      { label: 'Users', value: d.users?.value, available: d.users?.available ?? false, reason: d.users?.reason || 'Not available yet — needs WP01 auth module', icon: 'users' },
-      { label: 'Providers', value: d.providers?.value, available: d.providers?.available ?? false, reason: d.providers?.reason || 'Not available yet — needs WP01 auth module', icon: 'users' },
-      { label: 'Bookings', value: d.bookings?.value, available: d.bookings?.available ?? false, reason: d.bookings?.reason || 'Not available yet — needs WP05 booking module', icon: 'calendar' },
-      { label: 'Booking value', value: d.bookingValue?.value, available: d.bookingValue?.available ?? false, reason: d.bookingValue?.reason || 'Not available yet — needs WP07 payment module', icon: 'creditCard' },
-      { label: 'Commission', value: d.commission?.value, available: d.commission?.available ?? false, reason: d.commission?.reason || 'Not available yet — needs WP07 payment module', icon: 'barChart' },
-      { label: 'Refunds', value: d.refunds?.value, available: d.refunds?.available ?? false, reason: d.refunds?.reason || 'Not available yet — needs WP07 payment module', icon: 'refund' },
+      { label: 'Admin accounts', value: d.adminAccounts?.value, available: d.adminAccounts?.available ?? false, reason: d.adminAccounts?.reason, icon: 'userPlus' },
     ]
   }, [d])
 
@@ -105,9 +117,23 @@ export default function SuperAdminDashboardPage() {
       title="Dashboard"
       subtitle="Platform overview"
       actions={
-        <Button variant="outline" onClick={() => setReloadKey((k) => k + 1)} loading={loading} icon={<Icon name="switch" size={15} />}>
-          Refresh
-        </Button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className={styles.timeRangeToggle} role="group" aria-label="Time period">
+            {['Day', 'Week', 'Month'].map((p) => (
+              <button
+                key={p}
+                type="button"
+                className={`${styles.timeToggleBtn} ${timeRange === p ? styles.timeToggleBtn_active : ''}`}
+                onClick={() => setTimeRange(p)}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          <Button variant="outline" onClick={() => setReloadKey((k) => k + 1)} loading={loading} icon={<Icon name="switch" size={15} />}>
+            Refresh
+          </Button>
+        </div>
       }
       plain
     >

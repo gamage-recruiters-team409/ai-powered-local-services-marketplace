@@ -47,18 +47,18 @@ export function apiError(status, error, message = error) {
   return Object.assign(new Error(error), { response: { status, data: { status, error, message } } })
 }
 
-/** Build a mock analytics summary response with real + unavailable metrics. */
+/** Build a mock analytics summary response with real + connected metrics. */
 export function analyticsSummary(overrides = {}) {
   return {
     openDisputes: { available: true, value: 19 },
     adminAccounts: { available: true, value: 5 },
     pendingVerifications: { available: true, value: 47 },
-    users: { available: false, reason: 'Not available yet — needs WP01 auth module' },
-    providers: { available: false, reason: 'Not available yet — needs WP01 auth module' },
-    bookings: { available: false, reason: 'Not available yet — needs WP05 booking module' },
-    bookingValue: { available: false, reason: 'Not available yet — needs WP07 payment module' },
-    commission: { available: false, reason: 'Not available yet — needs WP07 payment module' },
-    refunds: { available: false, reason: 'Not available yet — needs WP07 payment module' },
+    users: { available: true, value: 14280 },
+    providers: { available: true, value: 1842 },
+    bookings: { available: true, value: 628 },
+    bookingValue: { available: true, value: 18400000 },
+    commission: { available: true, value: 2700000 },
+    refunds: { available: true, value: 141000 },
     disputeBreakdown: { underReview: 8, awaitingResponse: 6, appealed: 3, manualReview: 2 },
     recentAuditActivity: [
       { id: 'a1', actorId: 'Eleanor Vance', action: 'PLATFORM_SETTINGS_UPDATED', targetRef: 'setting:booking', createdAt: new Date().toISOString() },
@@ -105,33 +105,44 @@ export function settingsResponse() {
     {
       group: 'cancellation',
       version: 2,
+      updatedBy: 'Eleanor Vance',
+      updatedAt: '2026-03-24T10:00:00Z',
       settings: [
         { key: 'refund_full_pct', value: 100, version: 2 },
         { key: 'refund_partial_pct', value: 50, version: 2 },
-        { key: 'refund_none_window_hours', value: 2, version: 2 },
-        { key: 'refund_partial_window_hours', value: 24, version: 2 },
-        { key: 'repeat_cancellation_threshold', value: 4, version: 2 },
+        { key: 'refund_none_pct', value: 0, version: 2 },
         { key: 'provider_cancellation_refund_pct', value: 100, version: 2 },
+        { key: 'repeat_cancellation_threshold', value: 3, version: 2 },
       ],
     },
     {
       group: 'customer',
       version: 1,
-      settings: [{ key: 'max_active_bookings', value: 5, version: 1 }],
+      updatedBy: 'Eleanor Vance',
+      updatedAt: '2026-03-24T10:00:00Z',
+      settings: [
+        { key: 'auto_confirm_completion_hours', value: 48, version: 1 },
+        { key: 'review_window_days', value: 14, version: 1 },
+      ],
     },
     {
       group: 'dispute',
       version: 1,
+      updatedBy: 'Eleanor Vance',
+      updatedAt: '2026-03-24T10:00:00Z',
       settings: [
         { key: 'dispute_raise_window_hours', value: 72, version: 1 },
-        { key: 'dispute_response_cutoff_hours', value: 48, version: 1 },
+        { key: 'no_show_report_delay_hours', value: 2, version: 1 },
+        { key: 'dispute_response_period_hours', value: 72, version: 1 },
         { key: 'dispute_appeal_window_hours', value: 48, version: 1 },
       ],
     },
     {
       group: 'penalty',
       version: 1,
-      settings: [{ key: 'provider_penalty_pct', value: 15, version: 1 }],
+      updatedBy: 'Eleanor Vance',
+      updatedAt: '2026-03-24T10:00:00Z',
+      settings: [{ key: 'provider_penalty_pct', value: 30, version: 1 }],
     },
     {
       group: 'ai_thresholds',

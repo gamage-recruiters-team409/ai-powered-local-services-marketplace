@@ -1,14 +1,18 @@
 package com.gamagerecruiters.marketplace.modules.admin.service;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.bson.Document;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Service;
@@ -20,10 +24,13 @@ import com.gamagerecruiters.marketplace.modules.admin.dto.AdminAnalyticsSummaryR
 import com.gamagerecruiters.marketplace.modules.admin.dto.AdminAnalyticsSummaryResponse.MetricItem;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.security.Roles;
+import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.BookingSyncState;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.Dispute;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.SettlementState;
+import com.gamagerecruiters.marketplace.modules.payment.domain.PaymentStatus;
+import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
 import com.gamagerecruiters.marketplace.modules.verification.service.VerificationAdminService;
 
 /**
@@ -94,13 +101,48 @@ public class AdminAnalyticsService {
                 ))
                 .toList();
 
-        // Unavailable dependencies per SRS & prompt rules
-        MetricItem users = MetricItem.unavailable("WP01 User Directory");
-        MetricItem providers = MetricItem.unavailable("WP01 User Directory");
-        MetricItem bookings = MetricItem.unavailable("WP05 Booking System");
-        MetricItem bookingValue = MetricItem.unavailable("WP07 Payment Gateway");
-        MetricItem commission = MetricItem.unavailable("WP07 Payment Gateway");
-        MetricItem refunds = MetricItem.unavailable("WP07 Payment Gateway");
+        // Real counts for Users, Providers, Bookings
+        long userCount = mongoTemplate.count(new Query(), User.class);
+        MetricItem users = MetricItem.available(userCount, "UserRepository");
+
+        long providerCount = mongoTemplate.count(new Query(), ProviderProfile.class);
+        MetricItem providers = MetricItem.available(providerCount, "ProviderProfileRepository");
+
+        long bookingCount = mongoTemplate.count(new Query(), Booking.class);
+        MetricItem bookings = MetricItem.available(bookingCount, "BookingRepository");
+
+        // Payment monetary aggregates
+        BigDecimal totalBookingValue = BigDecimal.ZERO;
+        BigDecimal totalCommission = BigDecimal.ZERO;
+        BigDecimal totalRefunds = BigDecimal.ZERO;
+
+        try {
+            Aggregation agg = Aggregation.newAggregation(
+                    Aggregation.match(Criteria.where("status").in(
+                            PaymentStatus.CAPTURED, PaymentStatus.RELEASED, PaymentStatus.PARTIALLY_REFUNDED, PaymentStatus.REFUNDED
+                    )),
+                    Aggregation.group()
+                            .sum("amount").as("totalAmount")
+                            .sum("commissionAmount").as("totalCommission")
+                            .sum("refundedAmount").as("totalRefunds")
+            );
+            AggregationResults<Document> results = mongoTemplate.aggregate(agg, "payments", Document.class);
+            Document doc = results.getUniqueMappedResult();
+            if (doc != null) {
+                Object a = doc.get("totalAmount");
+                Object c = doc.get("totalCommission");
+                Object r = doc.get("totalRefunds");
+                if (a != null) totalBookingValue = new BigDecimal(a.toString());
+                if (c != null) totalCommission = new BigDecimal(c.toString());
+                if (r != null) totalRefunds = new BigDecimal(r.toString());
+            }
+        } catch (Exception e) {
+            log.warn("event=PAYMENT_AGGREGATION_FAILED cause={}", e.getMessage());
+        }
+
+        MetricItem bookingValue = MetricItem.available(totalBookingValue, "PaymentRepository");
+        MetricItem commission = MetricItem.available(totalCommission, "PaymentRepository");
+        MetricItem refunds = MetricItem.available(totalRefunds, "PaymentRepository");
 
         return new AdminAnalyticsSummaryResponse(
                 users,
