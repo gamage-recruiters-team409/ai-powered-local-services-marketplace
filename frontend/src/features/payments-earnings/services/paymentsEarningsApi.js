@@ -13,6 +13,20 @@ export async function getProviderEarningsSummary() {
 }
 
 /**
+ * Retrieves the authenticated provider's paginated ledger history.
+ *
+ * Amounts represent individual ledger movements, not aggregated
+ * booking-level earnings. Pagination uses zero-based page indexes.
+ */
+export async function getProviderEarningsTransactions(page = 0, size = 10) {
+  const { data } = await apiClient.get(`${EARNINGS_PATH}/transactions`, {
+    params: { page, size },
+  });
+
+  return data;
+}
+
+/**
  * Creates a payout request for the authenticated provider.
  *
  * The caller must preserve the same request key when retrying
@@ -148,5 +162,20 @@ export async function markPayoutFailed(payoutId, reason) {
     { reason },
   );
 
+  return data;
+}
+
+/**
+ * Retrieves paginated booking-level earnings for the authenticated provider.
+ * Net earnings represent financial entitlement, not withdrawable balance.
+ *
+ * @param {number} page Zero-based page number.
+ * @param {number} size Number of records per page.
+ * @returns {Promise<Object>} Paginated itemized earnings response.
+ */
+export async function getProviderItemizedEarnings(page = 0, size = 10) {
+  const { data } = await apiClient.get(`${EARNINGS_PATH}/itemized`, {
+    params: { page, size },
+  });
   return data;
 }

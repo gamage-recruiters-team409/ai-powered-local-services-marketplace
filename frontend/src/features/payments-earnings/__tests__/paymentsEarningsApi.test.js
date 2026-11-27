@@ -4,6 +4,8 @@ import apiClient from '../../../shared/services/apiClient';
 
 import {
   getProviderEarningsSummary,
+  getProviderEarningsTransactions,
+  getProviderItemizedEarnings,
   requestProviderPayout,
   getProviderPayoutHistory,
   getProviderPayoutDetails,
@@ -43,6 +45,89 @@ describe('paymentsEarningsApi', () => {
       '/provider/earnings/me',
     );
     expect(result).toEqual(mockData);
+  });
+
+  // --------------------------------------------------
+  // Provider earnings transaction history
+  // --------------------------------------------------
+
+  it('retrieves earnings transactions with default pagination', async () => {
+    const mockData = {
+      content: [],
+      page: 0,
+      size: 10,
+      totalElements: 0,
+      totalPages: 0,
+    };
+
+    apiClient.get.mockResolvedValueOnce({ data: mockData });
+
+    const result = await getProviderEarningsTransactions();
+
+    expect(apiClient.get).toHaveBeenCalledExactlyOnceWith(
+      '/provider/earnings/transactions',
+      { params: { page: 0, size: 10 } },
+    );
+
+    expect(result).toEqual(mockData);
+  });
+
+  it('retrieves earnings transactions with custom pagination', async () => {
+    const mockData = {
+      content: [],
+      page: 2,
+      size: 20,
+      totalElements: 40,
+      totalPages: 2,
+    };
+
+    apiClient.get.mockResolvedValueOnce({ data: mockData });
+
+    const result = await getProviderEarningsTransactions(2, 20);
+
+    expect(apiClient.get).toHaveBeenCalledExactlyOnceWith(
+      '/provider/earnings/transactions',
+      { params: { page: 2, size: 20 } },
+    );
+
+    expect(result).toEqual(mockData);
+  });
+
+  it('preserves verified ledger transaction response fields', async () => {
+    const mockData = {
+      content: [
+        {
+          transactionId: 'transaction-001',
+          paymentId: 'payment-001',
+          bookingId: 'booking-001',
+          eventType: 'EARNING_PENDING',
+          amount: 4500.25,
+          currency: 'LKR',
+          sequenceNumber: 5,
+          createdAt: '2026-11-26T10:00:00Z',
+        },
+      ],
+      page: 0,
+      size: 10,
+      totalElements: 1,
+      totalPages: 1,
+    };
+
+    apiClient.get.mockResolvedValueOnce({ data: mockData });
+
+    const result = await getProviderEarningsTransactions();
+
+    expect(result).toBe(mockData);
+  });
+
+  it('propagates earnings transaction retrieval errors', async () => {
+    const error = new Error('Unable to retrieve earnings transactions');
+
+    apiClient.get.mockRejectedValueOnce(error);
+
+    await expect(
+      getProviderEarningsTransactions(),
+    ).rejects.toBe(error);
   });
 
   // --------------------------------------------------
@@ -465,5 +550,70 @@ describe('paymentsEarningsApi', () => {
     await expect(
       markPayoutProcessing('payout-001'),
     ).rejects.toBe(error);
+  });
+});
+
+
+describe("getProviderItemizedEarnings", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("requests itemized earnings with default pagination", async () => {
+    apiClient.get.mockResolvedValueOnce({ data: { content: [] } });
+
+    await getProviderItemizedEarnings();
+
+    expect(apiClient.get).toHaveBeenCalledTimes(1);
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/provider/earnings/itemized",
+      { params: { page: 0, size: 10 } },
+    );
+  });
+
+  it("supports custom pagination", async () => {
+    apiClient.get.mockResolvedValueOnce({ data: { content: [] } });
+
+    await getProviderItemizedEarnings(2, 20);
+
+    expect(apiClient.get).toHaveBeenCalledWith(
+      "/provider/earnings/itemized",
+      { params: { page: 2, size: 20 } },
+    );
+  });
+
+  it("returns the backend response without modifying financial values", async () => {
+    const response = {
+      content: [
+        {
+          paymentId: "payment-001",
+          bookingId: "booking-001",
+          grossAmount: 10000,
+          commissionRate: 0.1,
+          commissionAmount: 1000,
+          refundedAmount: 2000,
+          refundAdjustmentAmount: 1800,
+          netEarnings: 7200,
+          currency: "LKR",
+          recognizedAt: "2026-11-26T10:00:00Z",
+        },
+      ],
+      page: 0,
+      size: 10,
+      totalElements: 1,
+      totalPages: 1,
+    };
+
+    apiClient.get.mockResolvedValueOnce({ data: response });
+
+    expect(await getProviderItemizedEarnings()).toBe(response);
+  });
+
+  it("propagates API errors without replacing them", async () => {
+    const error = new Error("Unable to retrieve itemized earnings");
+
+    apiClient.get.mockRejectedValueOnce(error);
+
+    await expect(getProviderItemizedEarnings()).rejects.toBe(error);
   });
 });

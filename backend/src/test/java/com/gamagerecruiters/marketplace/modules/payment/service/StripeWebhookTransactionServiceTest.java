@@ -274,7 +274,7 @@ class StripeWebhookTransactionServiceTest {
      * not trigger a second financial capture.
      */
     @Test
-    void differentEventForCapturedPaymentIsAcknowledgedWithoutRecapture() {
+    void differentEventForLegacyCapturedPaymentDoesNotBackfillReceipt() {
         Payment payment = initiatedPayment();
         payment.setStatus(PaymentStatus.CAPTURED);
         payment.setGatewayPaymentIntentId("pi_test123");
@@ -493,7 +493,7 @@ class StripeWebhookTransactionServiceTest {
      * are included in the same conditional MongoDB update.
      */
     @Test
-    void capturePersistsPaymentIntentAtomically() {
+    void capturePersistsPaymentIntentAndReceiptAtomically() {
         mockEventAndPayment(receivedEvent(), initiatedPayment());
         mockSuccessfulUpdates();
 
@@ -543,7 +543,10 @@ class StripeWebhookTransactionServiceTest {
         assertEquals("pi_test123",
                 fields.get("gatewayPaymentIntentId"));
 
-        assertNotNull(fields.get("paidAt"));
+        // Receipt metadata must be persisted with the verified capture.
+        assertEquals("RCT-pay_123", fields.get("receiptReference"));
+        assertInstanceOf(java.time.Instant.class, fields.get("paidAt"));
+        assertEquals(fields.get("paidAt"), fields.get("updatedAt"));
         assertNotNull(fields.get("updatedAt"));
 
         verify(transactionManager).commit(any());
@@ -764,7 +767,6 @@ class StripeWebhookTransactionServiceTest {
         verify(transactionManager, never()).commit(any());
     }
 
-
     /**
      * A verified capture must synchronize its booking before
      * the transaction is committed.
@@ -936,4 +938,38 @@ class StripeWebhookTransactionServiceTest {
         verify(transactionManager).commit(any());
     }
 
+    /**
+     * A repeated capture event must not replace an issued receipt
+     * or change the original verified capture timestamp.
+     */
+    @Test
+    void repeatedCapturePreservesIssuedReceiptMetadata() {
+        Payment payment = initiatedPayment();
+        payment.setStatus(PaymentStatus.CAPTURED);
+        payment.setGatewayPaymentIntentId("pi_test123");
+        payment.setReceiptReference("RCT-pay_123");
+
+        java.time.Instant originalPaidAt =
+                java.time.Instant.parse("2026-11-26T10:00:00Z");
+
+        payment.setPaidAt(originalPaidAt);
+
+        mockEventAndPayment(receivedEvent(), payment);
+        mockSuccessfulUpdates();
+
+        assertFalse(service.captureVerifiedPayment(
+                "evt_test_123", "pay_123", "cs_test_123",
+                "pi_test123", new BigDecimal("100.00"), "USD"));
+
+        verify(mongoTemplate, never()).updateFirst(
+                any(Query.class),
+                any(Update.class),
+                eq(Payment.class));
+
+        assertEquals("RCT-pay_123", payment.getReceiptReference());
+        assertEquals(originalPaidAt, payment.getPaidAt());
+
+        verify(transactionManager).commit(any());
+        verify(transactionManager, never()).rollback(any());
+    }
 }
