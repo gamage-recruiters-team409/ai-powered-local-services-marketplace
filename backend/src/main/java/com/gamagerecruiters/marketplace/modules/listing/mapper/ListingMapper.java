@@ -13,6 +13,7 @@ import com.gamagerecruiters.marketplace.modules.listing.dto.GeoPointDto;
 import com.gamagerecruiters.marketplace.modules.listing.dto.ListingResponse;
 import com.gamagerecruiters.marketplace.modules.listing.dto.ListingSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.listing.service.CategoryLookupPort.CategorySnapshot;
+import com.gamagerecruiters.marketplace.modules.listing.service.ListingRatingPort.ListingRatingSnapshot;
 
 /**
  * Maps between {@link ServiceListing} domain documents and external DTO records.
@@ -54,6 +55,15 @@ public class ListingMapper {
             CategorySnapshot category,
             boolean includeInternalDetails
     ) {
+        return toResponse(listing, category, includeInternalDetails, null);
+    }
+
+    public ListingResponse toResponse(
+            ServiceListing listing,
+            CategorySnapshot category,
+            boolean includeInternalDetails,
+            ListingRatingSnapshot liveRating
+    ) {
         List<AddOnItemResponse> addOnResponses = listing.getAddOns() == null
                 ? List.of()
                 : listing.getAddOns().stream()
@@ -64,6 +74,8 @@ public class ListingMapper {
         boolean categoryActive = isCategoryActive(category);
         int activeAddOnCount = countActiveAddOns(listing);
         boolean availableForBooking = isAvailableForBooking(listing, categoryActive);
+        double effectiveRatingAvg = liveRating != null ? liveRating.ratingAvg() : listing.getRatingAvg();
+        int effectiveRatingCount = liveRating != null ? liveRating.ratingCount() : listing.getRatingCount();
 
         return new ListingResponse(
                 listing.getId(),
@@ -92,8 +104,8 @@ public class ListingMapper {
                 includeInternalDetails ? listing.getModerationFlags() : List.of(),
                 includeInternalDetails ? listing.getModerationReason() : null,
                 includeInternalDetails ? listing.getModeratedAt() : null,
-                listing.getRatingAvg(),
-                listing.getRatingCount(),
+                effectiveRatingAvg,
+                effectiveRatingCount,
                 includeInternalDetails ? listing.getVersion() : null,
                 listing.getCreatedAt(),
                 listing.getUpdatedAt()
@@ -105,9 +117,20 @@ public class ListingMapper {
             CategorySnapshot category,
             boolean includeModerationDetails
     ) {
+        return toSummaryResponse(listing, category, includeModerationDetails, null);
+    }
+
+    public ListingSummaryResponse toSummaryResponse(
+            ServiceListing listing,
+            CategorySnapshot category,
+            boolean includeModerationDetails,
+            ListingRatingSnapshot liveRating
+    ) {
         boolean categoryActive = isCategoryActive(category);
         int activeAddOnCount = countActiveAddOns(listing);
         boolean availableForBooking = isAvailableForBooking(listing, categoryActive);
+        double effectiveRatingAvg = liveRating != null ? liveRating.ratingAvg() : listing.getRatingAvg();
+        int effectiveRatingCount = liveRating != null ? liveRating.ratingCount() : listing.getRatingCount();
 
         return new ListingSummaryResponse(
                 listing.getId(),
@@ -127,8 +150,8 @@ public class ListingMapper {
                 categoryActive,
                 activeAddOnCount,
                 includeModerationDetails ? listing.getModerationFlags() : List.of(),
-                listing.getRatingAvg(),
-                listing.getRatingCount(),
+                effectiveRatingAvg,
+                effectiveRatingCount,
                 listing.getCreatedAt(),
                 listing.getUpdatedAt()
         );
