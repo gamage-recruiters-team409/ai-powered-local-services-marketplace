@@ -1,9 +1,10 @@
 import { Link } from 'react-router-dom'
 
 import styles from './CustomerLayout.module.css'
+import { CustomerAvatar } from './CustomerAvatar'
 import { CustomerIcon } from './CustomerIcon'
 import { CustomerNavItemBadge } from './CustomerNavItemBadge'
-import { cx, getInitials, splitFooterItems } from './customerLayoutUtils'
+import { cx, splitFooterItems } from './customerLayoutUtils'
 import {
   CUSTOMER_NAV_FOOTER_ITEMS,
   CUSTOMER_NAV_SECTIONS,
@@ -45,9 +46,11 @@ export function CustomerAccountMenu({
 
   const identity = (
     <>
-      <span className={styles.accountAvatar} aria-hidden="true">
-        {getInitials(name)}
-      </span>
+      <CustomerAvatar
+        name={name}
+        src={user?.avatarUrl}
+        className={styles.accountAvatar}
+      />
 
       <span className={styles.identityText}>
         <strong>{name}</strong>

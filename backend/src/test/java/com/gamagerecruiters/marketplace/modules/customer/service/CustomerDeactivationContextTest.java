@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.http.HttpStatus;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
@@ -24,7 +25,10 @@ class CustomerDeactivationContextTest {
             .withUserConfiguration(CustomerServiceImpl.class)
             .withBean(UserInternalService.class, () -> mock(UserInternalService.class))
             .withBean(CustomerAddressRepository.class, () -> mock(CustomerAddressRepository.class))
-            .withBean(DistrictCatalog.class, () -> mock(DistrictCatalog.class));
+            .withBean(DistrictCatalog.class, () -> mock(DistrictCatalog.class))
+            .withBean(CustomerProfileImageStorage.class, () -> mock(CustomerProfileImageStorage.class))
+            .withBean(ProfileImageCleanupService.class, () -> mock(ProfileImageCleanupService.class))
+            .withBean(MongoTemplate.class, () -> mock(MongoTemplate.class));
 
     @Test
     @DisplayName("Context with NO OpenBookingsChecker bean: Starts cleanly and deactivateAccount returns 503")

@@ -31,7 +31,11 @@ import com.gamagerecruiters.marketplace.modules.catalog.repository.CategoryRepos
 import com.gamagerecruiters.marketplace.modules.completion.repository.ServiceCompletionRepository;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerAddressRepository;
 import com.gamagerecruiters.marketplace.modules.customer.repository.CustomerFavouriteRepository;
+import com.gamagerecruiters.marketplace.modules.customer.repository.ProfileImageCleanupRepository;
 import com.gamagerecruiters.marketplace.modules.customer.service.BookingOpenBookingsChecker;
+import com.gamagerecruiters.marketplace.modules.customer.service.CustomerProfileImageStorage;
+import com.gamagerecruiters.marketplace.modules.customer.service.FavouriteListingLookupAdapter;
+import com.gamagerecruiters.marketplace.modules.customer.service.ProfileImageCleanupService;
 import com.gamagerecruiters.marketplace.modules.dispute.port.PayoutHoldPort;
 import com.gamagerecruiters.marketplace.modules.dispute.repository.DisputeRepository;
 import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
@@ -39,12 +43,15 @@ import com.gamagerecruiters.marketplace.modules.listing.service.CatalogCategoryL
 import com.gamagerecruiters.marketplace.modules.listing.service.ProviderVerificationLookupAdapter;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
+import com.gamagerecruiters.marketplace.modules.notification.repository.NotificationRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.DisputePayoutHoldRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutAllocationRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.PayoutRepository;
 import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.RefundOperationRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.StripeWebhookEventRepository;
 import com.gamagerecruiters.marketplace.modules.payment.service.DisputePayoutHoldAdapter;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.review.repository.ReviewRepository;
@@ -84,6 +91,9 @@ class ApplicationContextRealStartupTest {
         private CustomerFavouriteRepository customerFavouriteRepository;
 
         @MockitoBean
+        private ProfileImageCleanupRepository profileImageCleanupRepository;
+
+        @MockitoBean
         private ProviderProfileRepository providerProfileRepository;
 
         @MockitoBean
@@ -117,10 +127,21 @@ class ApplicationContextRealStartupTest {
         private MessageRepository messageRepository;
 
         @MockitoBean
+        private NotificationRepository notificationRepository;
+
+        @MockitoBean
         private EarningsLedgerRepository earningsLedgerRepository;
 
         @MockitoBean
         private ProviderEarningsStateRepository providerEarningsStateRepository;
+
+        // Isolates refund operation persistence in the startup test.
+        @MockitoBean
+        private RefundOperationRepository refundOperationRepository;
+
+        // Isolates Stripe webhook persistence in the startup test.
+        @MockitoBean
+        private StripeWebhookEventRepository stripeWebhookEventRepository;
 
         @MockitoBean
         private PayoutRepository payoutRepository;
@@ -172,6 +193,18 @@ class ApplicationContextRealStartupTest {
                 assertNotNull(
                                 applicationContext.getBean(ProviderVerificationLookupAdapter.class),
                                 "ProviderVerificationLookupAdapter bean must exist");
+
+                assertNotNull(
+                                applicationContext.getBean(FavouriteListingLookupAdapter.class),
+                                "FavouriteListingLookupAdapter bean must exist");
+
+                assertNotNull(
+                                applicationContext.getBean(CustomerProfileImageStorage.class),
+                                "CustomerProfileImageStorage bean must exist");
+
+                assertNotNull(
+                                applicationContext.getBean(ProfileImageCleanupService.class),
+                                "ProfileImageCleanupService bean must exist");
 
                 assertInstanceOf(
                                 DisputePayoutHoldAdapter.class,

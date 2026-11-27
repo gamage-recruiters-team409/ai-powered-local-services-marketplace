@@ -19,10 +19,10 @@ import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeRules;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeDetailResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.AdminDisputeSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealDecisionRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeAdminSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
-import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.ResolveDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.security.DisputeAccess;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService;
@@ -49,7 +49,7 @@ public class AdminDisputeController {
     }
 
     @GetMapping
-    public ResponseEntity<DisputePageResponse<DisputeSummaryResponse>> getDisputes(
+    public ResponseEntity<DisputePageResponse<AdminDisputeSummaryResponse>> getDisputes(
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String category,
             @RequestParam(required = false) String q,

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import axios from 'axios';
 import tokenStore from '../tokenStore';
-import {
+import apiClient, {
   isPublicAuthEndpoint,
   normalizeError,
   notifySessionExpired,
@@ -149,6 +149,35 @@ describe('apiClient', () => {
       await expect(refreshSession()).rejects.toThrow('Network Error');
 
       expect(tokenStore.getRefreshToken()).toBe('stored-refresh');
+    });
+  });
+
+  describe('FormData Content-Type handling in request interceptor', () => {
+    it('unsets Content-Type header when request data is a FormData instance', async () => {
+      const formData = new FormData();
+      formData.append('file', 'data');
+
+      const interceptor = apiClient.interceptors.request.handlers[0];
+      const config = {
+        url: '/customers/me/photo',
+        data: formData,
+        headers: { 'Content-Type': 'application/json' },
+      };
+
+      const result = await interceptor.fulfilled(config);
+      expect(result.headers['Content-Type']).toBeUndefined();
+    });
+
+    it('preserves Content-Type application/json when request data is a normal JSON payload', async () => {
+      const interceptor = apiClient.interceptors.request.handlers[0];
+      const config = {
+        url: '/customers/me',
+        data: { fullName: 'Kamal Perera' },
+        headers: { 'Content-Type': 'application/json' },
+      };
+
+      const result = await interceptor.fulfilled(config);
+      expect(result.headers['Content-Type']).toBe('application/json');
     });
   });
 });

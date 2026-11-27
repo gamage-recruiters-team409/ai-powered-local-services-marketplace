@@ -13,6 +13,7 @@ public record CurrentUserResponse(
         Role role,
         UserStatus status,
         boolean emailVerified,
-        Instant createdAt
+        Instant createdAt,
+        String profileImageUrl
 ) {
 }

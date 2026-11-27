@@ -15,7 +15,11 @@ export function CustomerAccountPage() {
       breadcrumbs={[{ label: 'Home', to: '/' }, { label: 'Account' }]}
     >
       <CustomerAccountMenu
-        user={{ name: user?.name ?? '', email: user?.email ?? '' }}
+        user={{
+          name: user?.name ?? '',
+          email: user?.email ?? '',
+          avatarUrl: user?.profileImageUrl ?? null,
+        }}
         onLogout={() => logout()}
       />
     </CustomerPage>

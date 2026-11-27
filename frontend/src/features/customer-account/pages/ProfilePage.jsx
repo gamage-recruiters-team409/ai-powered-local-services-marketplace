@@ -1,8 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CustomerPage } from '../../../shared/layouts/customer/CustomerPage';
+import { useAuth } from '../../auth/hooks/useAuth';
 import { useToast } from '../../../shared/components/feedback/useToast';
-import { getProfile, updateProfile } from '../services/customerAccountApi';
+import {
+  getProfile,
+  removeProfilePhoto,
+  updateProfile,
+  uploadProfilePhoto,
+} from '../services/customerAccountApi';
 import { StatusBadge } from '../components/StatusBadge';
+import { RecentBookings } from '../components/RecentBookings';
 import styles from '../customerAccount.module.css';
 
 /**
@@ -21,7 +28,17 @@ function validateSriLankanPhone(phone = '') {
   return null;
 }
 
+function getInitials(name = '') {
+  if (!name || !name.trim()) return 'U';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) {
+    return parts[0].charAt(0).toUpperCase();
+  }
+  return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+}
+
 export function ProfilePage() {
+  const { refreshUser, updateCurrentUser } = useAuth();
   const toast = useToast();
   const [profile, setProfile] = useState(null);
   const [fullName, setFullName] = useState('');
@@ -31,6 +48,19 @@ export function ProfilePage() {
   const [errorMessage, setErrorMessage] = useState('');
   const [phoneError, setPhoneError] = useState('');
   const [nameError, setNameError] = useState('');
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const [photoError, setPhotoError] = useState('');
+  const fileInputRef = useRef(null);
+  const previewUrlRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -96,11 +126,101 @@ export function ProfilePage() {
       setProfile(updated);
       setFullName(updated.fullName || '');
       setPhone(updated.phone || '');
+      const refreshed = await refreshUser();
+      if (!refreshed && typeof updateCurrentUser === 'function') {
+        try {
+          updateCurrentUser({ name: updated.fullName, phone: updated.phone });
+        } catch {
+          // Fallback failure must not throw
+        }
+      }
       toast.success('Profile updated successfully');
     } catch (err) {
       setErrorMessage(err.message || 'Failed to update profile');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setPhotoError('');
+
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+    if (!allowedTypes.includes(file.type?.toLowerCase())) {
+      setPhotoError('Please select a JPEG or PNG image');
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setPhotoError('Image size must not exceed 5 MB');
+      return;
+    }
+
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+    }
+    const preview = URL.createObjectURL(file);
+    previewUrlRef.current = preview;
+    setPhotoPreview(preview);
+    setPhotoLoading(true);
+
+    try {
+      const updated = await uploadProfilePhoto(file);
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+        previewUrlRef.current = null;
+      }
+      setPhotoPreview(null);
+      setProfile((prev) => (prev ? { ...prev, profileImageUrl: updated.profileImageUrl } : updated));
+      const refreshed = await refreshUser();
+      if (!refreshed && typeof updateCurrentUser === 'function') {
+        try {
+          updateCurrentUser({ profileImageUrl: updated.profileImageUrl ?? null });
+        } catch {
+          // Fallback failure must not throw
+        }
+      }
+      toast.success('Profile photo updated successfully');
+    } catch (err) {
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+        previewUrlRef.current = null;
+      }
+      setPhotoPreview(null);
+      setPhotoError(err.message || 'Failed to upload profile photo');
+    } finally {
+      setPhotoLoading(false);
+    }
+  };
+
+  const handleRemovePhoto = async () => {
+    setPhotoError('');
+    setPhotoLoading(true);
+    try {
+      await removeProfilePhoto();
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+        previewUrlRef.current = null;
+      }
+      setPhotoPreview(null);
+      setProfile((prev) => (prev ? { ...prev, profileImageUrl: null } : prev));
+      const refreshed = await refreshUser();
+      if (!refreshed && typeof updateCurrentUser === 'function') {
+        try {
+          updateCurrentUser({ profileImageUrl: null });
+        } catch {
+          // Fallback failure must not throw
+        }
+      }
+      toast.success('Profile photo removed');
+    } catch (err) {
+      setPhotoError(err.message || 'Failed to remove profile photo');
+    } finally {
+      setPhotoLoading(false);
     }
   };
 
@@ -115,6 +235,7 @@ export function ProfilePage() {
   }
 
   const isEmailVerified = Boolean(profile?.emailVerified);
+  const displayPhoto = photoPreview || profile?.profileImageUrl;
 
   return (
     <CustomerPage title="Profile">
@@ -135,6 +256,51 @@ export function ProfilePage() {
           <div className={styles.cardHeader}>
             <h2 className={styles.cardTitle}>Personal details</h2>
             <span className={styles.cardHeaderTag}>Profile Settings</span>
+          </div>
+
+          <div className={styles.avatarSection}>
+            <div className={styles.avatarCircle}>
+              {displayPhoto ? (
+                <img src={displayPhoto} alt="Profile photo" className={styles.avatarImage} />
+              ) : (
+                <span className={styles.avatarInitials} aria-label="Initials">
+                  {getInitials(profile?.fullName || fullName)}
+                </span>
+              )}
+            </div>
+            <div className={styles.avatarActions}>
+              <div className={styles.avatarButtons}>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  style={{ display: 'none' }}
+                  onChange={handleFileChange}
+                  data-testid="file-input-photo"
+                />
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={photoLoading || saving}
+                >
+                  {photoLoading ? 'Uploading...' : 'Change photo'}
+                </button>
+                {displayPhoto && (
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    onClick={handleRemovePhoto}
+                    disabled={photoLoading || saving}
+                    style={{ color: '#dc2626', borderColor: '#fecaca' }}
+                  >
+                    Remove photo
+                  </button>
+                )}
+              </div>
+              <p className={styles.photoHelpText}>JPG or PNG, max 5 MB</p>
+              {photoError && <span className={styles.photoError}>{photoError}</span>}
+            </div>
           </div>
 
           <form onSubmit={handleSave}>
@@ -216,6 +382,8 @@ export function ProfilePage() {
             </div>
           </form>
         </div>
+
+        <RecentBookings />
       </div>
     </CustomerPage>
   );

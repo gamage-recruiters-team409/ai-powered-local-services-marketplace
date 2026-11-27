@@ -130,4 +130,38 @@ describe('CustomerHeader profile menu', () => {
 
     expect(screen.getByRole('menu')).toBeTruthy()
   })
+
+  it('renders avatar image on profile button and inside menu when avatarUrl is provided', () => {
+    const userWithAvatar = { ...user, avatarUrl: 'https://cdn.example.com/nimal.jpg' }
+    const { container } = renderHeader({ user: userWithAvatar })
+
+    const button = screen.getByRole('button', { name: 'Account menu for Nimal Perera' })
+    const buttonImg = button.querySelector('img')
+    expect(buttonImg).toBeTruthy()
+    expect(buttonImg.getAttribute('src')).toBe('https://cdn.example.com/nimal.jpg')
+
+    fireEvent.click(button)
+    const menu = screen.getByRole('menu', { name: 'Customer account' })
+    const menuImg = menu.querySelector('img')
+    expect(menuImg).toBeTruthy()
+    expect(menuImg.getAttribute('src')).toBe('https://cdn.example.com/nimal.jpg')
+
+    const allImgs = container.querySelectorAll('img')
+    expect(allImgs.length).toBe(2)
+    expect(allImgs[0].getAttribute('src')).toBe('https://cdn.example.com/nimal.jpg')
+    expect(allImgs[1].getAttribute('src')).toBe('https://cdn.example.com/nimal.jpg')
+  })
+
+  it('falls back to initials when avatar image fails to load', () => {
+    const userWithAvatar = { ...user, avatarUrl: 'https://broken.example.com/nimal.jpg' }
+    renderHeader({ user: userWithAvatar })
+
+    const button = screen.getByRole('button', { name: 'Account menu for Nimal Perera' })
+    const buttonImg = button.querySelector('img')
+    expect(buttonImg).toBeTruthy()
+    fireEvent.error(buttonImg)
+
+    expect(within(button).getByText('NP')).toBeTruthy()
+    expect(button.querySelector('img')).toBeNull()
+  })
 })

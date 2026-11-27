@@ -17,6 +17,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import org.mockito.Mock;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -55,6 +56,8 @@ import com.gamagerecruiters.marketplace.modules.messaging.dto.MessagePollingResp
 import com.gamagerecruiters.marketplace.modules.messaging.repository.ConversationRepository;
 import com.gamagerecruiters.marketplace.modules.messaging.repository.MessageRepository;
 import com.gamagerecruiters.marketplace.modules.admin.service.AdminAccessPolicyService;
+import com.gamagerecruiters.marketplace.modules.notification.service.NotificationService;
+import com.gamagerecruiters.marketplace.modules.notification.service.NotificationEvent;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -81,13 +84,16 @@ class MessageServiceImplTest {
     @Mock
     private MongoTemplate mongoTemplate;
 
+    @Mock
+    private NotificationService notificationService;
+
     private MessageServiceImpl service;
     private BookingParticipants participants;
 
     @BeforeEach
     void setUp() {
         service = new MessageServiceImpl(
-                bookingFacade, conversationRepository, messageRepository, adminAccessPolicyService, mongoTemplate);
+                bookingFacade, conversationRepository, messageRepository, adminAccessPolicyService, mongoTemplate, notificationService);
         participants = participants(BookingStatus.PENDING_PROVIDER, null);
         when(bookingFacade.getBookingParticipants(BOOKING_ID)).thenAnswer(invocation -> participants);
         when(conversationRepository.findByChatKey(anyString())).thenReturn(Optional.empty());
@@ -118,6 +124,33 @@ class MessageServiceImplTest {
         verify(messageRepository).save(captor.capture());
         assertThat(captor.getValue().getBody()).isEqualTo("Meet me at 0771234567");
         verify(conversationRepository, org.mockito.Mockito.times(2)).save(any(Conversation.class));
+    }
+
+    @Test
+    void successfulMessageNotifiesTheOtherParticipantOnly() {
+        service.sendMessage(BOOKING_ID, "hello");
+
+        ArgumentCaptor<NotificationEvent> event = ArgumentCaptor.forClass(NotificationEvent.class);
+        verify(notificationService).notify(event.capture());
+        assertThat(event.getValue().recipientUserId()).isEqualTo(PROVIDER_ID);
+        assertThat(event.getValue().recipientUserId()).isNotEqualTo(CUSTOMER_ID);
+        assertThat(event.getValue().bookingId()).isEqualTo(BOOKING_ID);
+    }
+
+    @Test
+    void notificationFailureDoesNotFailSuccessfulMessageSend() {
+        doThrow(new RuntimeException()).when(notificationService).notify(any(NotificationEvent.class));
+
+        assertThat(service.sendMessage(BOOKING_ID, "hello").body()).isEqualTo("hello");
+    }
+
+    @Test
+    void nullBookingStatusMasksContactDetails() {
+        participants = participants(null, null);
+
+        MessageResponse response = service.sendMessage(BOOKING_ID, "Call 0771234567");
+
+        assertThat(response.body()).isEqualTo("Call [contact hidden]");
     }
 
     @Test

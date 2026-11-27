@@ -312,7 +312,7 @@ class AdminAccountEndToEndWebTest {
     @DisplayName("Finding 2: PATCH own status (same ACTIVE, or different SUSPENDED) -> 403 CANNOT_MODIFY_SELF, record FAILED")
     void selfStatusChangeIsForbidden(String requested) throws Exception {
         UserStatus requestedStatus = UserStatus.valueOf(requested);
-        when(userInternalService.changeStatus(SUPER_ID, requestedStatus)).thenThrow(new com.gamagerecruiters.marketplace.common.exception.ApiException(
+        when(userInternalService.changeStatus(anyString(), eq(SUPER_ID), any(), eq(requestedStatus))).thenThrow(new com.gamagerecruiters.marketplace.common.exception.ApiException(
                 org.springframework.http.HttpStatus.FORBIDDEN, "CANNOT_MODIFY_SELF", "Self status modification is not allowed"));
 
         mockMvc.perform(authed(patch(ACCOUNTS_URL + "/" + SUPER_ID + "/status")).contentType(MediaType.APPLICATION_JSON)
@@ -343,7 +343,7 @@ class AdminAccountEndToEndWebTest {
                 .andExpect(jsonPath("$.error").value("STATUS_UNCHANGED"));
 
         verify(auditLogService, never()).recordPending(any());
-        verify(userInternalService, never()).changeStatus(anyString(), any());
+        verify(userInternalService, never()).changeStatus(anyString(), anyString(), any(), any());
     }
 
     // ---------- Finding 1: completion failure after the action still returns the normal success ----------

@@ -3,7 +3,9 @@ package com.gamagerecruiters.marketplace.modules.dispute.domain;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Version;
@@ -66,6 +68,13 @@ public class Dispute {
     private Instant finalizedAt;
     /** Carrying out the final decision in other modules (set when the dispute becomes RESOLVED_FINAL). */
     private DisputeSettlement settlement;
+    /** Uploaded evidence files (metadata only; the files are private assets in evidence storage). */
+    private List<EvidenceFile> evidenceFiles = new ArrayList<>();
+    /**
+     * Uploaded evidence files per party role (CUSTOMER / PROVIDER), kept in step with {@link #evidenceFiles} by the
+     * same atomic update, so the per-party limit holds under concurrent uploads.
+     */
+    private Map<String, Integer> evidenceCounts = new HashMap<>();
 
     /**
      * Moves the dispute to {@code toStatus} and records the change in the status history.
@@ -296,5 +305,22 @@ public class Dispute {
     /** Used by the MongoDB mapper when reading the document. */
     public void setStatusHistory(List<StatusHistoryEntry> statusHistory) {
         this.statusHistory = statusHistory == null ? new ArrayList<>() : new ArrayList<>(statusHistory);
+    }
+
+    /** Read-only view; files are added only through the evidence store's atomic update. */
+    public List<EvidenceFile> getEvidenceFiles() {
+        return evidenceFiles == null ? List.of() : Collections.unmodifiableList(evidenceFiles);
+    }
+
+    public void setEvidenceFiles(List<EvidenceFile> evidenceFiles) {
+        this.evidenceFiles = evidenceFiles == null ? new ArrayList<>() : new ArrayList<>(evidenceFiles);
+    }
+
+    public Map<String, Integer> getEvidenceCounts() {
+        return evidenceCounts == null ? Map.of() : Collections.unmodifiableMap(evidenceCounts);
+    }
+
+    public void setEvidenceCounts(Map<String, Integer> evidenceCounts) {
+        this.evidenceCounts = evidenceCounts == null ? new HashMap<>() : new HashMap<>(evidenceCounts);
     }
 }

@@ -263,6 +263,15 @@
   color: #fff;
   font-weight: 700;
   line-height: 1;
+  overflow: hidden;
+}
+
+.avatarImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
 }
 
 .headerAvatar {

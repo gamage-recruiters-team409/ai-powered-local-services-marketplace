@@ -1,0 +1,1153 @@
+{
+  "info": {
+    "_postman_id": "wp09-admin-users",
+    "name": "WP09 - Admin Users (customers and providers)",
+    "description": "Admin Users API (`/api/v1/admin/users`): list, summary, registrations, CSV export, account details, suspend / reactivate (atomic, 409 CONCURRENT_MODIFICATION), provider listing visibility retry and the read-only provider listings.\n\nSet the collection variables before running: `adminToken` (an ADMIN access token) and `superAdminToken` (a SUPER_ADMIN access token, read-only here) from POST /auth/login, and the ids. Values below are placeholders only; never commit real tokens.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "bearerPrefix",
+      "value": "Bearer ",
+      "type": "string"
+    },
+    {
+      "key": "adminToken",
+      "value": "<ADMIN_ACCESS_TOKEN>",
+      "type": "string"
+    },
+    {
+      "key": "superAdminToken",
+      "value": "<SUPER_ADMIN_ACCESS_TOKEN>",
+      "type": "string"
+    },
+    {
+      "key": "customerId",
+      "value": "<CUSTOMER_USER_ID>",
+      "type": "string"
+    },
+    {
+      "key": "providerId",
+      "value": "<PROVIDER_USER_ID>",
+      "type": "string"
+    },
+    {
+      "key": "listingId",
+      "value": "<PROVIDER_LISTING_ID>",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Reads (ADMIN; SUPER_ADMIN read-only)",
+      "item": [
+        {
+          "name": "1.1 List users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users?page=0&size=8",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "8"
+                }
+              ]
+            },
+            "description": "Paginated customers and providers, newest first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Page envelope', function () {",
+                  "    var d = pm.response.json();",
+                  "    pm.expect(d).to.have.property('content').that.is.an('array');",
+                  "    pm.expect(d).to.have.property('totalElements');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 Summary (weekly change from WP01 countNewUsers)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "summary"
+              ]
+            },
+            "description": "Customer / provider / suspended counts; joinedLast7Days is available with real counts."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('joinedLast7Days available', function () {",
+                  "    pm.expect(pm.response.json().customers.data.joinedLast7Days.available).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 Registrations - weeks",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/registrations?period=WEEKS",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "registrations"
+              ],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "WEEKS"
+                }
+              ]
+            },
+            "description": "Last 8 weeks (Monday 00:00 UTC), empty weeks are 0. Users without createdAt are not counted."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('8 buckets', function () {",
+                  "    var d = pm.response.json();",
+                  "    pm.expect(d.available).to.eql(true);",
+                  "    pm.expect(d.buckets).to.have.lengthOf(8);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.4 Registrations - months",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/registrations?period=MONTHS",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "registrations"
+              ],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "MONTHS"
+                }
+              ]
+            },
+            "description": "Last 6 months."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('6 buckets', function () {",
+                  "    pm.expect(pm.response.json().buckets).to.have.lengthOf(6);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.5 Export CSV",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/export.csv",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "export.csv"
+              ]
+            },
+            "description": "Same filters as the list."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('CSV', function () {",
+                  "    pm.expect(pm.response.headers.get('Content-Type')).to.include('text/csv');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.6 Provider details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{providerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{providerId}}"
+              ]
+            },
+            "description": "Last signed in (WP01), service area (WP02), rating (WP08) and listing counts (WP03) are available; booking stats stay NOT_CONNECTED until WP05 is merged."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Connected sections', function () {",
+                  "    var d = pm.response.json();",
+                  "    pm.expect(d.profile.lastActive.available).to.eql(true);",
+                  "    pm.expect(d.profile.serviceArea.available).to.eql(true);",
+                  "    pm.expect(d.rating.available).to.eql(true);",
+                  "    pm.expect(d.listings.available).to.eql(true);",
+                  "    pm.expect(d.bookingStats.available).to.eql(false);",
+                  "    pm.expect(d.actions).to.not.have.property('canReviewListings');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.7 Provider listings (read-only, paginated)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{providerId}}/listings?page=0&size=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{providerId}}",
+                "listings"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "0"
+                },
+                {
+                  "key": "size",
+                  "value": "5"
+                }
+              ]
+            },
+            "description": "Every status, most recently updated first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Listings page', function () {",
+                  "    var d = pm.response.json();",
+                  "    pm.expect(d.available).to.eql(true);",
+                  "    pm.expect(d.data.content).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.8 View listing details (read-only)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{providerId}}/listings/{{listingId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{providerId}}",
+                "listings",
+                "{{listingId}}"
+              ]
+            },
+            "description": "Facts, status, moderation reason if flagged and description. No decisions here."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.9 Details as SUPER_ADMIN (read-only)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{superAdminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{providerId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{providerId}}"
+              ]
+            },
+            "description": "SUPER_ADMIN can read; every action flag is false."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('No actions for SUPER_ADMIN', function () {",
+                  "    var a = pm.response.json().actions;",
+                  "    pm.expect(a.canSuspend).to.eql(false);",
+                  "    pm.expect(a.canReactivate).to.eql(false);",
+                  "    pm.expect(a.canSyncListingVisibility).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Suspend / reactivate (ADMIN only)",
+      "item": [
+        {
+          "name": "2.1 Suspend provider",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{providerId}}/suspend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{providerId}}",
+                "suspend"
+              ]
+            },
+            "description": "Atomic in WP01. For a provider the listings are hidden afterwards: listingVisibilitySynced true, or false when the listing update failed (the status change stands; use 3.1).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reasonCode\": \"REPEATED_CANCELLATIONS\",\n  \"note\": \"Repeated no-shows reported by several customers\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Suspended, listing visibility reported', function () {",
+                  "    var d = pm.response.json();",
+                  "    pm.expect(d.status).to.eql('SUSPENDED');",
+                  "    if (d.changed) { pm.expect(d).to.have.property('listingVisibilitySynced'); }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.2 Suspend again (idempotent)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{providerId}}/suspend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{providerId}}",
+                "suspend"
+              ]
+            },
+            "description": "Already suspended: 200 changed=false, no audit record.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reasonCode\": \"REPEATED_CANCELLATIONS\",\n  \"note\": \"Repeated no-shows reported by several customers\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('changed=false', function () {",
+                  "    pm.expect(pm.response.json().changed).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.3 Reactivate provider",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{providerId}}/reactivate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{providerId}}",
+                "reactivate"
+              ]
+            },
+            "description": "Only from SUSPENDED. Listings are restored after the account is saved ACTIVE.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note\": \"Appeal accepted after review of the bookings\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Active', function () {",
+                  "    pm.expect(pm.response.json().status).to.eql('ACTIVE');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.4 Suspend customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{customerId}}/suspend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{customerId}}",
+                "suspend"
+              ]
+            },
+            "description": "Customers have no listings: no listingVisibilitySynced field.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reasonCode\": \"REPEATED_CANCELLATIONS\",\n  \"note\": \"Repeated no-shows reported by several customers\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('No listing field for customers', function () {",
+                  "    pm.expect(pm.response.json()).to.not.have.property('listingVisibilitySynced');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.5 Concurrent reactivate (run from two admin sessions at once)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{customerId}}/reactivate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{customerId}}",
+                "reactivate"
+              ]
+            },
+            "description": "When another admin changed the status first the loser gets 409 CONCURRENT_MODIFICATION and nothing changes. Run this from two admin sessions at the same moment to see it.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"note\": \"Appeal accepted after review of the bookings\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 or 409 CONCURRENT_MODIFICATION', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 409]);",
+                  "    if (pm.response.code === 409) {",
+                  "        pm.expect(pm.response.json().error).to.eql('CONCURRENT_MODIFICATION');",
+                  "        pm.expect(pm.response.json().message).to.eql('The account status was changed by someone else. Reload the account and try again');",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.6 Suspend as SUPER_ADMIN -> 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{superAdminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{customerId}}/suspend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{customerId}}",
+                "suspend"
+              ]
+            },
+            "description": "SUPER_ADMIN is read-only in this area.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reasonCode\": \"REPEATED_CANCELLATIONS\",\n  \"note\": \"Repeated no-shows reported by several customers\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 403', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "pm.test('Error code is ACCESS_DENIED', function () {",
+                  "    pm.expect(pm.response.json().error).to.eql('ACCESS_DENIED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.7 Missing reason -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{customerId}}/suspend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{customerId}}",
+                "suspend"
+              ]
+            },
+            "description": "reasonCode is required.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reasonCode\": null,\n  \"note\": null\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 400', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test('Error code is VALIDATION_FAILED', function () {",
+                  "    pm.expect(pm.response.json().error).to.eql('VALIDATION_FAILED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Listing visibility retry (ADMIN only)",
+      "item": [
+        {
+          "name": "3.1 Re-apply listing visibility",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{providerId}}/listing-visibility/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{providerId}}",
+                "listing-visibility",
+                "sync"
+              ]
+            },
+            "description": "Idempotent: re-applies the right value for the current status (SUSPENDED: hidden; otherwise restored). 503 LISTING_VISIBILITY_SYNC_FAILED if the listing module still fails."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Synced', function () {",
+                  "    pm.expect(pm.response.json().listingVisibilitySynced).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.2 Customer -> 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{customerId}}/listing-visibility/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{customerId}}",
+                "listing-visibility",
+                "sync"
+              ]
+            },
+            "description": "Only provider accounts have listings."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 403', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "pm.test('Error code is USER_ACTION_NOT_ALLOWED', function () {",
+                  "    pm.expect(pm.response.json().error).to.eql('USER_ACTION_NOT_ALLOWED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.3 As SUPER_ADMIN -> 403",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{superAdminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{providerId}}/listing-visibility/sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{providerId}}",
+                "listing-visibility",
+                "sync"
+              ]
+            },
+            "description": "ADMIN only."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 403', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});",
+                  "pm.test('Error code is ACCESS_DENIED', function () {",
+                  "    pm.expect(pm.response.json().error).to.eql('ACCESS_DENIED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Boundaries",
+      "item": [
+        {
+          "name": "4.1 No token -> 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users"
+              ]
+            },
+            "description": "Every endpoint needs a token."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 401', function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.2 Removed listing decision endpoint -> 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/{{providerId}}/listings/{{listingId}}/review",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "{{providerId}}",
+                "listings",
+                "{{listingId}}",
+                "review"
+              ]
+            },
+            "description": "Admin listing decisions were removed (read-only View listings). Flagged listings are approved or rejected in the WP03 moderator workflow.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"MAKE_VISIBLE\",\n  \"note\": \"Contact details were removed\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "4.3 Unknown user -> 404",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "{{bearerPrefix}}{{adminToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/admin/users/000000000000000000000000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "users",
+                "000000000000000000000000"
+              ]
+            },
+            "description": "Not a customer or provider."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "pm.test('Error code is USER_NOT_FOUND', function () {",
+                  "    pm.expect(pm.response.json().error).to.eql('USER_NOT_FOUND');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -91,4 +91,34 @@ describe('CustomerSidebar', () => {
     expect(screen.getByRole('link', { name: 'My Bookings' }).getAttribute('title')).toBe('My Bookings')
     expect(screen.getByRole('button', { name: 'Log out' }).getAttribute('title')).toBe('Log out')
   })
+
+  it('renders avatar image in sidebar identity when avatarUrl is provided', () => {
+    const userWithAvatar = { ...user, avatarUrl: 'https://cdn.example.com/sidebar-avatar.jpg' }
+    const { container } = render(
+      <MemoryRouter initialEntries={['/customer/bookings']}>
+        <CustomerSidebar user={userWithAvatar} sections={sections} footerItems={footerItems} onLogout={vi.fn()} />
+      </MemoryRouter>
+    )
+
+    const img = container.querySelector('img')
+    expect(img).toBeTruthy()
+    expect(img.getAttribute('src')).toBe('https://cdn.example.com/sidebar-avatar.jpg')
+    expect(screen.queryByText('NP')).toBeNull()
+  })
+
+  it('falls back to initials in sidebar when avatar image fails to load', () => {
+    const userWithAvatar = { ...user, avatarUrl: 'https://broken.example.com/sidebar-avatar.jpg' }
+    const { container } = render(
+      <MemoryRouter initialEntries={['/customer/bookings']}>
+        <CustomerSidebar user={userWithAvatar} sections={sections} footerItems={footerItems} onLogout={vi.fn()} />
+      </MemoryRouter>
+    )
+
+    const img = container.querySelector('img')
+    expect(img).toBeTruthy()
+    fireEvent.error(img)
+
+    expect(screen.getByText('NP')).toBeTruthy()
+    expect(container.querySelector('img')).toBeNull()
+  })
 })

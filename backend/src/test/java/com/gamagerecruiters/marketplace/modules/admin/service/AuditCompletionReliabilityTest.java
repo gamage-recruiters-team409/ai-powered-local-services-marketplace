@@ -167,7 +167,7 @@ class AuditCompletionReliabilityTest {
 
     private void authSuspends() {
         when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.MODERATOR, UserStatus.ACTIVE));
-        when(userInternalService.changeStatus(TARGET_ID, UserStatus.SUSPENDED))
+        when(userInternalService.changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED)))
                 .thenReturn(user(TARGET_ID, Role.MODERATOR, UserStatus.SUSPENDED));
     }
 
@@ -365,7 +365,7 @@ class AuditCompletionReliabilityTest {
 
         assertThat(response.status()).isEqualTo(UserStatus.SUSPENDED);
         assertThat(response.auditLogId()).isEqualTo(AUDIT_ID);
-        verify(userInternalService, times(1)).changeStatus(TARGET_ID, UserStatus.SUSPENDED);
+        verify(userInternalService, times(1)).changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED));
         assertReconciled(AdminAuditAction.ADMIN_STATUS_CHANGED, TARGET_ID, Role.MODERATOR);
         AdminAuditLog recon = reconciliationRecords().get(0);
         assertThat(recon.getFromStatus()).isEqualTo(UserStatus.ACTIVE);
@@ -383,7 +383,7 @@ class AuditCompletionReliabilityTest {
 
         assertThat(suspend().status()).isEqualTo(UserStatus.SUSPENDED);
 
-        verify(userInternalService, times(1)).changeStatus(TARGET_ID, UserStatus.SUSPENDED);
+        verify(userInternalService, times(1)).changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED));
         verify(auditLogService, times(1)).recordReconciliation(any(), anyString(), anyString());
         assertThat(errorLines("AUDIT_RECONCILIATION_INSERT_FAILED")).singleElement().asString()
                 .contains("targetUserId=" + TARGET_ID).contains("targetRole=MODERATOR").contains("auditLogId=" + AUDIT_ID);
@@ -408,7 +408,7 @@ class AuditCompletionReliabilityTest {
     void statusRejectedUnchanged() {
         when(userInternalService.getById(TARGET_ID)).thenReturn(user(TARGET_ID, Role.SUPER_ADMIN, UserStatus.ACTIVE));
         ApiException last = new ApiException(HttpStatus.CONFLICT, "LAST_ACTIVE_SUPER_ADMIN", "last one");
-        when(userInternalService.changeStatus(TARGET_ID, UserStatus.SUSPENDED)).thenThrow(last);
+        when(userInternalService.changeStatus(anyString(), eq(TARGET_ID), any(), eq(UserStatus.SUSPENDED))).thenThrow(last);
         completionReturnsModified(1);
 
         assertThat(catchThrowable(this::suspend)).isSameAs(last);

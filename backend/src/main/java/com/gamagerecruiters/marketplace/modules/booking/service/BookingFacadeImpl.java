@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -24,7 +25,9 @@ import com.gamagerecruiters.marketplace.modules.auth.security.OwnershipChecker;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
+import com.gamagerecruiters.marketplace.modules.booking.domain.BookingPriceSnapshot;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingParticipants;
+import com.gamagerecruiters.marketplace.modules.booking.dto.BookingPaymentSnapshot;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
 
 @Service
@@ -43,6 +46,7 @@ public class BookingFacadeImpl implements BookingFacade {
             BookingStatus.CONFIRMED, BookingStatus.IN_PROGRESS, BookingStatus.COMPLETION_PENDING,
             BookingStatus.COMPLETED);
     private static final Set<BookingStatus> FROM_DISPUTED = EnumSet.of(BookingStatus.DISPUTED);
+    private static final Set<BookingStatus> FROM_AWAITING_PAYMENT = EnumSet.of(BookingStatus.AWAITING_PAYMENT);
 
     /** Final statuses an admin dispute decision can set (SRS 5.2). */
     static final Set<BookingStatus> DISPUTE_FINAL_STATUSES = EnumSet.of(
@@ -50,6 +54,11 @@ public class BookingFacadeImpl implements BookingFacade {
 
     /** Same role the dispute module requires for decisions (ADMIN area edit). */
     private static final Role DISPUTE_RESOLVER_ROLE = Role.ADMIN;
+
+    private static final Set<Role> PAYMENT_READ_ROLES = EnumSet.of(Role.ADMIN, Role.SUPER_ADMIN, Role.FINANCE_ADMIN);
+
+    /** Payment provider reference (e.g. Stripe session / payment intent id). */
+    private static final Pattern PAYMENT_REFERENCE = Pattern.compile("^[A-Za-z0-9_.:-]{1,100}$");
 
     /** WP09 settlement idempotency key: dispute-<disputeId> (SettlementInstruction.idempotencyKey). */
     private static final Pattern DISPUTE_REFERENCE = Pattern.compile("^dispute-[A-Za-z0-9_-]{1,92}$");
@@ -62,15 +71,17 @@ public class BookingFacadeImpl implements BookingFacade {
     }
 
     private final BookingRepository bookingRepository;
+    private final BookingPaymentPolicy paymentPolicy;
     private final Clock clock;
 
     @Autowired
-    public BookingFacadeImpl(BookingRepository bookingRepository) {
-        this(bookingRepository, Clock.systemUTC());
+    public BookingFacadeImpl(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy) {
+        this(bookingRepository, paymentPolicy, Clock.systemUTC());
     }
 
-    BookingFacadeImpl(BookingRepository bookingRepository, Clock clock) {
+    BookingFacadeImpl(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy, Clock clock) {
         this.bookingRepository = bookingRepository;
+        this.paymentPolicy = paymentPolicy;
         this.clock = clock;
     }
 
@@ -182,6 +193,101 @@ public class BookingFacadeImpl implements BookingFacade {
         booking.changeStatus(finalStatus, changedBy, "Dispute resolved", Instant.now(clock));
         booking.getTimeline().get(booking.getTimeline().size() - 1).setReference(reference);
         return save(booking);
+    }
+
+    // ---------- WP07 payment ----------
+
+    @Override
+    public BookingPaymentSnapshot getPaymentSnapshot(String bookingId) {
+        boolean trusted = TrustedBookingSystemCall.isActive(TrustedBookingSystemCall.Purpose.PAYMENT_PROCESSING);
+        if (!trusted && !CurrentUser.isAuthenticated()) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required");
+        }
+        Booking booking = findBooking(bookingId);
+        if (!trusted && !PAYMENT_READ_ROLES.contains(CurrentUser.getRole())) {
+            OwnershipChecker.assertOwner(CurrentUser.getUserId(), booking.getCustomerId());
+        }
+        BookingPriceSnapshot price = booking.getPriceSnapshot();
+        if (price == null) {
+            throw new ResourceConflictException("PRICE_SNAPSHOT_MISSING",
+                    "This booking has no captured price and cannot be paid");
+        }
+        return new BookingPaymentSnapshot(booking.getId(), booking.getRef(), booking.getCustomerId(),
+                booking.getProviderId(), booking.getListingId(), booking.getStatus(), price.totalPrice(),
+                price.currency(), price.commissionRate(), price.capturedAt(), booking.getAcceptedAt(),
+                booking.getPaymentDueAt());
+    }
+
+    @Override
+    public BookingParticipants markPaymentConfirmed(String bookingId, String paymentReference) {
+        assertPaymentProcessing(paymentReference);
+        Booking booking = findBooking(bookingId);
+
+        // Checked on the whole timeline, not the current status: a gateway retry can arrive after the
+        // booking has moved on (IN_PROGRESS, COMPLETED, DISPUTED ...). Same reference → unchanged.
+        BookingStatusChange applied = latestChange(booking, BookingStatus.AWAITING_PAYMENT, BookingStatus.CONFIRMED);
+        if (applied != null) {
+            if (paymentReference.equals(applied.getReference())) {
+                return toParticipants(booking);
+            }
+            throw new ResourceConflictException("PAYMENT_ALREADY_APPLIED",
+                    "This booking was already confirmed by a different payment");
+        }
+        assertStartsFrom(booking, FROM_AWAITING_PAYMENT, BookingStatus.CONFIRMED);
+
+        booking.changeStatus(BookingStatus.CONFIRMED, BookingStatusChange.SYSTEM, "Payment confirmed",
+                Instant.now(clock));
+        booking.getTimeline().get(booking.getTimeline().size() - 1).setReference(paymentReference);
+        return save(booking);
+    }
+
+    @Override
+    public BookingParticipants markPaymentExpired(String bookingId, String paymentReference) {
+        assertPaymentProcessing(paymentReference);
+        Booking booking = findBooking(bookingId);
+
+        if (booking.getStatus() == BookingStatus.EXPIRED
+                && latestChange(booking, BookingStatus.AWAITING_PAYMENT, BookingStatus.EXPIRED) != null) {
+            return toParticipants(booking);
+        }
+        assertStartsFrom(booking, FROM_AWAITING_PAYMENT, BookingStatus.EXPIRED);
+        Instant now = Instant.now(clock);
+        // Same rule as BookingExpiryJob: only after paymentDueAt + grace, so a payment that started just
+        // before the deadline can still be confirmed during the grace period.
+        if (!paymentPolicy.isPaymentTimedOut(booking.getPaymentDueAt(), now)) {
+            throw new ResourceConflictException("PAYMENT_NOT_DUE",
+                    "The payment time for this booking, including the grace period, has not passed yet");
+        }
+
+        booking.changeStatus(BookingStatus.EXPIRED, BookingStatusChange.SYSTEM, "Payment not completed", now);
+        booking.getTimeline().get(booking.getTimeline().size() - 1).setReference(paymentReference);
+        return save(booking);
+    }
+
+    /** Payment changes only from WP07 inside a PAYMENT_PROCESSING trusted call; reference must be valid. */
+    private static void assertPaymentProcessing(String paymentReference) {
+        if (!TrustedBookingSystemCall.isActive(TrustedBookingSystemCall.Purpose.PAYMENT_PROCESSING)) {
+            if (CurrentUser.isAuthenticated()) {
+                throw new AccessDeniedException("Access denied: payment status is changed by the payment module only");
+            }
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication is required");
+        }
+        if (paymentReference == null || !PAYMENT_REFERENCE.matcher(paymentReference).matches()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_PAYMENT_REFERENCE",
+                    "A valid payment reference is required");
+        }
+    }
+
+    /** Most recent timeline change from {@code from} to {@code to}, anywhere in the history (or null). */
+    private static BookingStatusChange latestChange(Booking booking, BookingStatus from, BookingStatus to) {
+        List<BookingStatusChange> timeline = booking.getTimeline();
+        for (int i = timeline.size() - 1; i >= 0; i--) {
+            BookingStatusChange change = timeline.get(i);
+            if (change.getFromStatus() == from && change.getToStatus() == to) {
+                return change;
+            }
+        }
+        return null;
     }
 
     /**

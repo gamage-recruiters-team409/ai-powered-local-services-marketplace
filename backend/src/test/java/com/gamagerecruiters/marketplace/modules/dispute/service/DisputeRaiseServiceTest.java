@@ -244,6 +244,24 @@ class DisputeRaiseServiceTest {
         assertThat(reason.getValue()).isEqualTo(TIMELINE_REASON).doesNotContain("private");
     }
 
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(value = DisputeCategory.class,
+            names = {"PROPERTY_DAMAGE", "CUSTOMER_BEHAVIOUR", "NON_PAYMENT", "OTHER"})
+    @DisplayName("raise: the provider \"Raise dispute\" categories are accepted through the same flow and eligibility")
+    void providerRaiseCategories(DisputeCategory category) {
+        loggedInAs(PROVIDER_ID, Role.PROVIDER);
+
+        DisputeDetailResponse created = service.raiseDispute(PROVIDER_ID, Role.PROVIDER,
+                new RaiseDisputeRequest(BOOKING_ID, category, "The customer did not pay the agreed amount", List.of()));
+
+        assertThat(created.id()).isEqualTo(DISPUTE_ID);
+        assertThat(insertedDispute().getCategory()).isEqualTo(category);
+        assertThat(insertedDispute().getRaisedByRole()).isEqualTo(Role.PROVIDER);
+        verify(eligibilityPort).assertEligible(BOOKING_ID);
+        verify(bookingFacade).markDisputed(BOOKING_ID, PROVIDER_ID, "Dispute raised: " + category);
+        assertThat(DisputeCategory.PROVIDER_RAISE).contains(category).doesNotContain(DisputeCategory.NO_SHOW);
+    }
+
     static Stream<Arguments> facadeErrors() {
         return Stream.of(
                 Arguments.of(new AccessDeniedException("Access denied: actor does not match the authenticated user")),
@@ -476,6 +494,34 @@ class DisputeRaiseServiceTest {
 
         assertApiError(catchThrowable(() -> raiseAs(CUSTOMER_ID, Role.CUSTOMER)), HttpStatus.CONFLICT,
                 "DISPUTE_ALREADY_EXISTS");
+        assertNoBookingChangeAndNothingSaved();
+    }
+
+    @Test
+    @DisplayName("raise: a FINAL dispute exists for the booking (active key already released) -> 409 "
+            + "DISPUTE_ALREADY_EXISTS before the Booking module is asked; nothing changed")
+    void finalizedDisputeBlocksSecondRaise() {
+        Dispute finalized = dispute(CUSTOMER_ID, BookingSyncState.SYNCED);
+        finalized.changeStatus(DisputeStatus.RESOLVED_FINAL, "admin-1", Role.ADMIN, null, NOW);
+        assertThat(finalized.getActiveBookingKey()).isNull();
+        when(disputeRepository.findVisiblePartiesByBookingId(BOOKING_ID)).thenReturn(List.of(finalized));
+
+        assertApiError(catchThrowable(() -> raiseAs(PROVIDER_ID, Role.PROVIDER)), HttpStatus.CONFLICT,
+                "DISPUTE_ALREADY_EXISTS");
+        verifyNoInteractions(eligibilityPort);
+        assertNoBookingChangeAndNothingSaved();
+    }
+
+    @Test
+    @DisplayName("raise: a non-party asks about a booking that has a dispute -> no 409 (nothing leaks); the Booking "
+            + "module's own 403 is returned")
+    void nonPartyDoesNotLearnAboutDispute() {
+        when(disputeRepository.findVisiblePartiesByBookingId(BOOKING_ID))
+                .thenReturn(List.of(dispute(CUSTOMER_ID, BookingSyncState.SYNCED)));
+        AccessDeniedException denied = new AccessDeniedException("Access denied: actor is not a participant");
+        when(eligibilityPort.assertEligible(BOOKING_ID)).thenThrow(denied);
+
+        assertThat(catchThrowable(() -> raiseAs("stranger-1", Role.CUSTOMER))).isSameAs(denied);
         assertNoBookingChangeAndNothingSaved();
     }
 

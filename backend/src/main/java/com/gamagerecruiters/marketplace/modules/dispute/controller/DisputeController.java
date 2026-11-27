@@ -1,6 +1,13 @@
 package com.gamagerecruiters.marketplace.modules.dispute.controller;
 
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -10,20 +17,25 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeRules;
+import com.gamagerecruiters.marketplace.modules.dispute.domain.DisputeStatus;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.AppealDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeDetailResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputePageResponse;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.DisputeSummaryResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.EvidenceUrlResponse;
+import com.gamagerecruiters.marketplace.modules.dispute.dto.EvidenceView;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.RaiseDisputeRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.dto.SubmitDisputeResponseRequest;
 import com.gamagerecruiters.marketplace.modules.dispute.security.DisputeAccess;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeAdminQueryService;
+import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeEvidenceService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeResolutionService;
 import com.gamagerecruiters.marketplace.modules.dispute.service.DisputeService;
 
@@ -37,12 +49,14 @@ public class DisputeController {
     private final DisputeService disputeService;
     private final DisputeResolutionService resolutionService;
     private final DisputeAdminQueryService adminQueryService;
+    private final DisputeEvidenceService evidenceService;
 
     public DisputeController(DisputeService disputeService, DisputeResolutionService resolutionService,
-                             DisputeAdminQueryService adminQueryService) {
+                             DisputeAdminQueryService adminQueryService, DisputeEvidenceService evidenceService) {
         this.disputeService = disputeService;
         this.resolutionService = resolutionService;
         this.adminQueryService = adminQueryService;
+        this.evidenceService = evidenceService;
     }
 
     @PostMapping
@@ -55,9 +69,10 @@ public class DisputeController {
     @GetMapping("/my")
     @PreAuthorize(DisputeAccess.PARTY)
     public ResponseEntity<DisputePageResponse<DisputeSummaryResponse>> getMyDisputes(
+            @RequestParam(required = false) List<String> status,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "" + DisputeRules.DEFAULT_PAGE_SIZE) int size) {
-        return ResponseEntity.ok(disputeService.getMyDisputes(currentUserId(), page, size));
+        return ResponseEntity.ok(disputeService.getMyDisputes(currentUserId(), parseStatuses(status), page, size));
     }
 
     /**
@@ -89,6 +104,51 @@ public class DisputeController {
     public ResponseEntity<DisputeDetailResponse> appeal(@PathVariable String disputeId,
                                                         @Valid @RequestBody AppealDisputeRequest request) {
         return ResponseEntity.ok(resolutionService.appeal(currentUserId(), CurrentUser.getRole(), disputeId, request));
+    }
+
+    /**
+     * Uploads one evidence file (multipart field {@code file}) to a dispute the caller is a party of, while it is OPEN,
+     * AWAITING_RESPONSE or UNDER_REVIEW. JPG, PNG, WEBP or PDF (checked by content), at most 5 MB, 5 files per party.
+     */
+    @PostMapping(path = "/{disputeId}/evidence", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize(DisputeAccess.PARTY)
+    public ResponseEntity<EvidenceView> uploadEvidence(@PathVariable String disputeId,
+                                                       @RequestParam(value = "file", required = false)
+                                                       MultipartFile file) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(evidenceService.upload(currentUserId(), disputeId, file));
+    }
+
+    /** A short-lived signed link (5 minutes) to one evidence file, for the two parties and admins who can view. */
+    @GetMapping("/{disputeId}/evidence/{evidenceId}/url")
+    @PreAuthorize(DisputeAccess.PARTY_OR_ADMIN_AREA_VIEW)
+    public ResponseEntity<EvidenceUrlResponse> evidenceUrl(@PathVariable String disputeId,
+                                                           @PathVariable String evidenceId) {
+        Role role = CurrentUser.getRole();
+        boolean admin = role != Role.CUSTOMER && role != Role.PROVIDER;
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(evidenceService.signedUrl(currentUserId(), admin, disputeId, evidenceId));
+    }
+
+    /** "status" may repeat (?status=A&status=B) or be comma separated; unknown values -> 400 INVALID_STATUS_FILTER. */
+    static Set<DisputeStatus> parseStatuses(List<String> values) {
+        Set<DisputeStatus> statuses = EnumSet.noneOf(DisputeStatus.class);
+        if (values == null) {
+            return statuses;
+        }
+        for (String value : values) {
+            for (String part : value.split(",")) {
+                if (part.isBlank()) {
+                    continue;
+                }
+                try {
+                    statuses.add(DisputeStatus.valueOf(part.strip().toUpperCase(Locale.ROOT)));
+                } catch (IllegalArgumentException e) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_STATUS_FILTER", "Unknown dispute status");
+                }
+            }
+        }
+        return statuses;
     }
 
     private static String currentUserId() {

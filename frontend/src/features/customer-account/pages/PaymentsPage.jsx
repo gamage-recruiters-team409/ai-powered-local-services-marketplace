@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { CustomerPage } from '../../../shared/layouts/customer/CustomerPage';
 import { getMyPayments } from '../services/paymentsApi';
 import { getPaymentStatusInfo } from '../config/paymentStatus';
+import { getRefundStatusInfo } from '../config/refundStatus';
 import { StatusBadge } from '../components/StatusBadge';
 import { Pagination } from '../components/Pagination';
 import { EmptyState } from '../components/EmptyState';
@@ -73,100 +74,73 @@ export function PaymentsPage() {
   }, [page, pageSize]);
 
   const renderRefundStatus = (p) => {
-    const { status, refundedAmount, amount, currency } = p;
+    const { status, refundStatus, refundReference, refundedAmount, amount, currency } = p;
     const curr = currency || 'LKR';
 
-    if (status === 'REFUND_PENDING') {
-      return (
-        <div>
-          <StatusBadge variant="info">Processing</StatusBadge>
+    let refundInfo = getRefundStatusInfo(refundStatus);
+    if (!refundInfo) {
+      if (status === 'REFUND_PENDING') {
+        refundInfo = { label: 'Processing', variant: 'info' };
+      } else if (status === 'PARTIALLY_REFUNDED' || status === 'REFUNDED') {
+        refundInfo = { label: 'Completed', variant: 'success' };
+      }
+    }
+
+    if (!refundInfo && !refundReference && (!refundedAmount || refundedAmount <= 0)) {
+      return <span>—</span>;
+    }
+
+    return (
+      <div>
+        {refundInfo && (
+          <StatusBadge variant={refundInfo.variant}>{refundInfo.label}</StatusBadge>
+        )}
+        {refundReference && (
+          <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
+            {refundReference}
+          </div>
+        )}
+        {status === 'REFUND_PENDING' && (
           <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
             Requested {formatAmount(refundedAmount)} {curr}
           </div>
-          <div>
-            <button
-              type="button"
-              disabled
-              data-testid="Link_ViewRefundDetails"
-              title="Not available yet"
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                color: '#94a3b8',
-                fontSize: '12px',
-                cursor: 'not-allowed',
-                marginTop: '2px',
-              }}
-            >
-              View refund details &gt;
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    if (status === 'PARTIALLY_REFUNDED') {
-      return (
-        <div>
-          <StatusBadge variant="success">Completed</StatusBadge>
+        )}
+        {status === 'PARTIALLY_REFUNDED' && (
           <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
             Refunded {formatAmount(refundedAmount)} of {formatAmount(amount)} {curr}
           </div>
-          <div>
-            <button
-              type="button"
-              disabled
-              data-testid="Link_ViewRefundDetails"
-              title="Not available yet"
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                color: '#94a3b8',
-                fontSize: '12px',
-                cursor: 'not-allowed',
-                marginTop: '2px',
-              }}
-            >
-              View refund details &gt;
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    if (status === 'REFUNDED') {
-      return (
-        <div>
-          <StatusBadge variant="success">Completed</StatusBadge>
+        )}
+        {status === 'REFUNDED' && (
           <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
             Refunded {formatAmount(refundedAmount)} {curr}
           </div>
-          <div>
-            <button
-              type="button"
-              disabled
-              data-testid="Link_ViewRefundDetails"
-              title="Not available yet"
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                color: '#94a3b8',
-                fontSize: '12px',
-                cursor: 'not-allowed',
-                marginTop: '2px',
-              }}
-            >
-              View refund details &gt;
-            </button>
+        )}
+        {status !== 'REFUND_PENDING' && status !== 'PARTIALLY_REFUNDED' && status !== 'REFUNDED' && refundedAmount > 0 && (
+          <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>
+            Refunded {formatAmount(refundedAmount)} {curr}
           </div>
+        )}
+        <div>
+          <button
+            type="button"
+            disabled
+            data-testid="Link_ViewRefundDetails"
+            title="Not available yet"
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              color: '#94a3b8',
+              fontSize: '12px',
+              cursor: 'not-allowed',
+              marginTop: '2px',
+            }}
+          >
+            View refund details &gt;
+          </button>
         </div>
-      );
-    }
-
-    return <span>—</span>;
+      </div>
+    );
   };
 
   return (
@@ -223,7 +197,7 @@ export function PaymentsPage() {
                     return (
                       <tr key={p.paymentId} className={styles.tableRow}>
                         <td style={{ fontWeight: 600 }}>{formatBookingId(p.bookingId)}</td>
-                        <td style={{ color: '#475569' }}>{formatDate(p.createdAt)}</td>
+                        <td style={{ color: '#475569' }}>{formatDate(p.paidAt)}</td>
                         <td style={{ fontWeight: 600 }}>
                           {formatAmount(p.amount)} <span style={{ fontSize: '12px', color: '#64748b', fontWeight: 400 }}>{p.currency || 'LKR'}</span>
                         </td>
@@ -234,23 +208,29 @@ export function PaymentsPage() {
                         </td>
                         <td>{renderRefundStatus(p)}</td>
                         <td>
-                          <button
-                            type="button"
-                            disabled
-                            data-testid="Link_ViewReceipt"
-                            title="Not available yet"
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              padding: 0,
-                              color: '#94a3b8',
-                              fontSize: '13px',
-                              fontWeight: 500,
-                              cursor: 'not-allowed',
-                            }}
-                          >
-                            View receipt
-                          </button>
+                          <div style={{ fontWeight: 500, color: p.receiptReference ? '#1e293b' : '#94a3b8' }}>
+                            {p.receiptReference || '—'}
+                          </div>
+                          <div>
+                            <button
+                              type="button"
+                              disabled
+                              data-testid="Link_ViewReceipt"
+                              title="Not available yet"
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                padding: 0,
+                                color: '#94a3b8',
+                                fontSize: '13px',
+                                fontWeight: 500,
+                                cursor: 'not-allowed',
+                                marginTop: '2px',
+                              }}
+                            >
+                              View receipt
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );

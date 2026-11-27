@@ -47,6 +47,7 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.TokenType;
 import com.gamagerecruiters.marketplace.modules.auth.domain.User;
 import com.gamagerecruiters.marketplace.modules.auth.domain.UserStatus;
 import com.gamagerecruiters.marketplace.modules.auth.dto.AuthResponse;
+import com.gamagerecruiters.marketplace.modules.auth.dto.CurrentUserResponse;
 import com.gamagerecruiters.marketplace.modules.auth.dto.LoginRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.LogoutRequest;
 import com.gamagerecruiters.marketplace.modules.auth.dto.RefreshTokenRequest;
@@ -1014,5 +1015,58 @@ class AuthServiceTest {
         } finally {
             serviceLogger.detachAppender(listAppender);
         }
+    }
+
+    @Test
+    @DisplayName("getCurrentUser: returns user profile with profileImageUrl when image is set")
+    void getCurrentUser_withProfileImageUrl_returnsUserWithImage() {
+        User user = new User();
+        user.setId("u-100");
+        user.setName("Alice");
+        user.setEmail("alice@example.com");
+        user.setPhone("+94771112233");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setEmailVerified(true);
+        user.setCreatedAt(Instant.parse("2026-01-01T00:00:00Z"));
+        user.setProfileImageUrl("https://res.cloudinary.com/demo/image/upload/alice.jpg");
+
+        when(userRepository.findById("u-100")).thenReturn(Optional.of(user));
+
+        CurrentUserResponse response = authService.getCurrentUser("u-100");
+
+        assertNotNull(response);
+        assertEquals("u-100", response.id());
+        assertEquals("Alice", response.name());
+        assertEquals("alice@example.com", response.email());
+        assertEquals("+94771112233", response.phone());
+        assertEquals(Role.CUSTOMER, response.role());
+        assertEquals(UserStatus.ACTIVE, response.status());
+        assertTrue(response.emailVerified());
+        assertEquals(Instant.parse("2026-01-01T00:00:00Z"), response.createdAt());
+        assertEquals("https://res.cloudinary.com/demo/image/upload/alice.jpg", response.profileImageUrl());
+    }
+
+    @Test
+    @DisplayName("getCurrentUser: returns user profile with null profileImageUrl when image is not set")
+    void getCurrentUser_withoutProfileImageUrl_returnsUserWithNullImage() {
+        User user = new User();
+        user.setId("u-101");
+        user.setName("Bob");
+        user.setEmail("bob@example.com");
+        user.setRole(Role.CUSTOMER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setEmailVerified(false);
+        user.setCreatedAt(Instant.parse("2026-01-02T00:00:00Z"));
+        user.setProfileImageUrl(null);
+
+        when(userRepository.findById("u-101")).thenReturn(Optional.of(user));
+
+        CurrentUserResponse response = authService.getCurrentUser("u-101");
+
+        assertNotNull(response);
+        assertEquals("u-101", response.id());
+        assertEquals("Bob", response.name());
+        assertNull(response.profileImageUrl());
     }
 }

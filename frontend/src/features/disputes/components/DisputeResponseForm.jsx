@@ -8,13 +8,15 @@ import { submitDisputeResponse } from '../services/disputesApi'
 import { parseApiError } from '../utils/disputeErrors'
 import { MAX_RESPONSE_LENGTH, validateResponseText } from '../utils/responseValidation'
 import { CardHeading } from './DisputeParts'
-import { DisputeIcon } from './DisputeIcon'
+import { EvidencePicker } from './EvidencePicker'
+import { pendingUploads, uploadPickedFiles } from '../utils/evidenceUpload'
 import styles from '../disputes.module.css'
 
 /**
  * "Your response" form for whichever party must respond (the provider, or the customer when the provider raised
  * the dispute). Shared by both dispute screens. Disabled with a "Response window closed" message when `canRespond`
- * is false. Sends only the text: there is no evidence upload endpoint yet.
+ * is false. Chosen evidence files are uploaded right after the response is saved (the dispute must exist in its
+ * responded state first); `onSubmitted(updated, { failedUploads })` reports files that could not be uploaded.
  */
 export function DisputeResponseForm({ disputeId, canRespond, closedMessage, onSubmitted, onWindowClosed }) {
   const navigate = useNavigate()
@@ -24,6 +26,7 @@ export function DisputeResponseForm({ disputeId, canRespond, closedMessage, onSu
   const [fieldError, setFieldError] = useState(null)
   const [formError, setFormError] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  const [files, setFiles] = useState([])
   const inFlight = useRef(false)
 
   if (!canRespond) {
@@ -53,7 +56,10 @@ export function DisputeResponseForm({ disputeId, canRespond, closedMessage, onSu
     setSubmitting(true)
     try {
       const updated = await submitDisputeResponse(disputeId, text.trim())
-      onSubmitted(updated)
+      const toUpload = pendingUploads(files).length
+      const uploaded = toUpload > 0 ? await uploadPickedFiles(disputeId, files, setFiles) : []
+      const evidenceFiles = [...(updated.evidenceFiles ?? []), ...uploaded]
+      onSubmitted({ ...updated, evidenceFiles }, { failedUploads: toUpload - uploaded.length })
     } catch (error) {
       const parsed = parseApiError(error)
       if (parsed.kind === 'unauthorized') {
@@ -98,14 +104,7 @@ export function DisputeResponseForm({ disputeId, canRespond, closedMessage, onSu
           {length} / {MAX_RESPONSE_LENGTH}
         </p>
 
-        <div>
-          <p className={styles.fieldLabel}>Add evidence (optional)</p>
-          <div className={styles.dropzone} aria-disabled="true">
-            <span className={styles.dropzoneIcon}><DisputeIcon name="upload" size={22} /></span>
-            <strong>Evidence upload coming soon</strong>
-            <span>For now, describe any photos or documents in your response.</span>
-          </div>
-        </div>
+        <EvidencePicker files={files} onChange={setFiles} disabled={submitting} />
 
         <div aria-live="assertive">
           {formError && <InlineMessage variant="error">{formError}</InlineMessage>}
