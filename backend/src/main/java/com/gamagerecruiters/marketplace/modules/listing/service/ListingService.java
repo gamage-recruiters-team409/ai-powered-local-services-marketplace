@@ -110,4 +110,12 @@ public interface ListingService {
     boolean hasBlockingListingsForCategory(String categoryId);
 
     List<ProvinceGeoDto> getDistrictLocations();
+
+    /**
+     * Deletes a freshly uploaded, unsaved Cloudinary portfolio image belonging to the provider
+     * only if no persisted listing of that provider currently references it.
+     */
+    default void deleteUnusedListingMedia(String providerUserId, String publicId) {
+        // Default no-op for lightweight test doubles
+    }
 }

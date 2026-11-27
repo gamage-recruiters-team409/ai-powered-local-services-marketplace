@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -23,12 +24,15 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.GlobalExceptionHandler;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
@@ -47,10 +51,12 @@ import com.gamagerecruiters.marketplace.modules.listing.domain.ListingStatus;
 import com.gamagerecruiters.marketplace.modules.listing.domain.PricingModel;
 import com.gamagerecruiters.marketplace.modules.listing.dto.DistrictGeoDto;
 import com.gamagerecruiters.marketplace.modules.listing.dto.GeoPointDto;
+import com.gamagerecruiters.marketplace.modules.listing.dto.ListingMediaUploadResponse;
 import com.gamagerecruiters.marketplace.modules.listing.dto.ListingResponse;
 import com.gamagerecruiters.marketplace.modules.listing.dto.ListingSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.listing.dto.ProviderListingDashboardSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.listing.dto.ProvinceGeoDto;
+import com.gamagerecruiters.marketplace.modules.listing.service.ListingMediaUploadService;
 import com.gamagerecruiters.marketplace.modules.listing.service.ListingService;
 
 @WebMvcTest(ListingController.class)
@@ -79,6 +85,9 @@ class ListingControllerTest {
 
     @MockitoBean
     private ListingService listingService;
+
+    @MockitoBean
+    private ListingMediaUploadService listingMediaUploadService;
 
     private void mockUser(String token, String userId, Role role) {
         when(tokenService.validateToken(token)).thenReturn(true);
@@ -410,5 +419,95 @@ class ListingControllerTest {
                         .content("{\"status\":\"ACTIVE\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value("INVALID_STATUS_TRANSITION"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/listings/media/upload enforces PROVIDER role and returns 201 with uploaded Cloudinary URL")
+    void uploadListingMediaEnforcesRoleAndReturns201() throws Exception {
+        MockMultipartFile validFile = new MockMultipartFile(
+                "file",
+                "leak-repair.jpg",
+                "image/jpeg",
+                new byte[]{10, 20, 30}
+        );
+
+        mockMvc.perform(multipart(BASE + "/media/upload").file(validFile))
+                .andExpect(status().isUnauthorized());
+
+        mockUser(CUSTOMER_TOKEN, "cust-1", Role.CUSTOMER);
+        mockMvc.perform(multipart(BASE + "/media/upload")
+                        .file(validFile)
+                        .header("Authorization", "Bearer " + CUSTOMER_TOKEN))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+
+        mockUser(PROVIDER_TOKEN, "provider-1", Role.PROVIDER);
+        when(listingMediaUploadService.uploadPortfolioImage(eq("provider-1"), any()))
+                .thenReturn(new ListingMediaUploadResponse(
+                        "localserve/service-listings/provider-1/img-1",
+                        "https://res.cloudinary.com/demo/image/upload/v1/localserve/service-listings/provider-1/img-1.jpg",
+                        "leak-repair.jpg",
+                        "image/jpeg",
+                        3L
+                ));
+
+        mockMvc.perform(multipart(BASE + "/media/upload")
+                        .file(validFile)
+                        .header("Authorization", "Bearer " + PROVIDER_TOKEN))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.secureUrl").value(
+                        "https://res.cloudinary.com/demo/image/upload/v1/localserve/service-listings/provider-1/img-1.jpg"))
+                .andExpect(jsonPath("$.fileName").value("leak-repair.jpg"));
+
+        MockMultipartFile badFile = new MockMultipartFile(
+                "file",
+                "malware.exe",
+                "application/octet-stream",
+                new byte[]{1, 2}
+        );
+        when(listingMediaUploadService.uploadPortfolioImage(eq("provider-1"), any()))
+                .thenThrow(new ApiException(
+                        HttpStatus.BAD_REQUEST,
+                        "UNSUPPORTED_IMAGE_FORMAT",
+                        "Only JPG, PNG, and WEBP portfolio images are supported"
+                ));
+
+        mockMvc.perform(multipart(BASE + "/media/upload")
+                        .file(badFile)
+                        .header("Authorization", "Bearer " + PROVIDER_TOKEN))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("UNSUPPORTED_IMAGE_FORMAT"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/v1/listings/media enforces PROVIDER role, returns 204 when unused, and 409 when in use")
+    void deleteUnusedListingMediaEnforcesRoleAndConflict() throws Exception {
+        String publicId = "localserve/service-listings/provider-1/temp-img";
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(BASE + "/media")
+                        .param("publicId", publicId))
+                .andExpect(status().isUnauthorized());
+
+        mockUser(CUSTOMER_TOKEN, "cust-1", Role.CUSTOMER);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(BASE + "/media")
+                        .param("publicId", publicId)
+                        .header("Authorization", "Bearer " + CUSTOMER_TOKEN))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+
+        mockUser(PROVIDER_TOKEN, "provider-1", Role.PROVIDER);
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(BASE + "/media")
+                        .param("publicId", publicId)
+                        .header("Authorization", "Bearer " + PROVIDER_TOKEN))
+                .andExpect(status().isNoContent());
+
+        org.mockito.Mockito.doThrow(new ResourceConflictException("MEDIA_IN_USE", "Image still attached"))
+                .when(listingService).deleteUnusedListingMedia("provider-1", publicId);
+
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete(BASE + "/media")
+                        .param("publicId", publicId)
+                        .header("Authorization", "Bearer " + PROVIDER_TOKEN))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("MEDIA_IN_USE"));
     }
 }

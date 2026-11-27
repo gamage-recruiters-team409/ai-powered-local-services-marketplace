@@ -59,6 +59,7 @@ import com.gamagerecruiters.marketplace.modules.listing.repository.ListingReposi
 import com.gamagerecruiters.marketplace.modules.listing.service.CategoryLookupPort.CategorySnapshot;
 import com.gamagerecruiters.marketplace.modules.listing.service.ListingContentScreeningService.ScreeningResult;
 import com.gamagerecruiters.marketplace.modules.listing.service.ListingMediaValidator.ValidatedMedia;
+import com.gamagerecruiters.marketplace.modules.listing.service.ListingRatingPort.ListingRatingSnapshot;
 
 @Service
 public class ListingServiceImpl implements ListingService {
@@ -81,6 +82,8 @@ public class ListingServiceImpl implements ListingService {
     private final ObjectProvider<CategoryLookupPort> categoryLookupPortProvider;
     private final ObjectProvider<RateLimitService> rateLimitServiceProvider;
     private final MongoTemplate mongoTemplate;
+    private final ObjectProvider<ListingRatingPort> listingRatingPortProvider;
+    private final ObjectProvider<ListingMediaUploadService> mediaUploadServiceProvider;
 
     public ListingServiceImpl(
             ListingRepository listingRepository,
@@ -127,7 +130,6 @@ public class ListingServiceImpl implements ListingService {
         );
     }
 
-    @Autowired
     public ListingServiceImpl(
             ListingRepository listingRepository,
             ListingMapper listingMapper,
@@ -139,6 +141,61 @@ public class ListingServiceImpl implements ListingService {
             ObjectProvider<RateLimitService> rateLimitServiceProvider,
             MongoTemplate mongoTemplate
     ) {
+        this(
+                listingRepository,
+                listingMapper,
+                mediaValidator,
+                contentScreeningService,
+                providerEligibilityChecker,
+                districtGeoService,
+                categoryLookupPortProvider,
+                rateLimitServiceProvider,
+                mongoTemplate,
+                null
+        );
+    }
+
+    public ListingServiceImpl(
+            ListingRepository listingRepository,
+            ListingMapper listingMapper,
+            ListingMediaValidator mediaValidator,
+            ListingContentScreeningService contentScreeningService,
+            ProviderEligibilityChecker providerEligibilityChecker,
+            SriLankaDistrictGeoService districtGeoService,
+            ObjectProvider<CategoryLookupPort> categoryLookupPortProvider,
+            ObjectProvider<RateLimitService> rateLimitServiceProvider,
+            MongoTemplate mongoTemplate,
+            ObjectProvider<ListingRatingPort> listingRatingPortProvider
+    ) {
+        this(
+                listingRepository,
+                listingMapper,
+                mediaValidator,
+                contentScreeningService,
+                providerEligibilityChecker,
+                districtGeoService,
+                categoryLookupPortProvider,
+                rateLimitServiceProvider,
+                mongoTemplate,
+                listingRatingPortProvider,
+                null
+        );
+    }
+
+    @Autowired
+    public ListingServiceImpl(
+            ListingRepository listingRepository,
+            ListingMapper listingMapper,
+            ListingMediaValidator mediaValidator,
+            ListingContentScreeningService contentScreeningService,
+            ProviderEligibilityChecker providerEligibilityChecker,
+            SriLankaDistrictGeoService districtGeoService,
+            ObjectProvider<CategoryLookupPort> categoryLookupPortProvider,
+            ObjectProvider<RateLimitService> rateLimitServiceProvider,
+            MongoTemplate mongoTemplate,
+            ObjectProvider<ListingRatingPort> listingRatingPortProvider,
+            ObjectProvider<ListingMediaUploadService> mediaUploadServiceProvider
+    ) {
         this.listingRepository = listingRepository;
         this.listingMapper = listingMapper;
         this.mediaValidator = mediaValidator;
@@ -148,6 +205,8 @@ public class ListingServiceImpl implements ListingService {
         this.categoryLookupPortProvider = categoryLookupPortProvider;
         this.rateLimitServiceProvider = rateLimitServiceProvider;
         this.mongoTemplate = mongoTemplate;
+        this.listingRatingPortProvider = listingRatingPortProvider;
+        this.mediaUploadServiceProvider = mediaUploadServiceProvider;
     }
 
     @Override
@@ -224,8 +283,9 @@ public class ListingServiceImpl implements ListingService {
         }
 
         Map<String, CategorySnapshot> categories = resolveEffectiveCategoriesForPage(page.getContent());
+        Map<String, ListingRatingSnapshot> ratings = resolveEffectiveRatingsForPage(page.getContent());
         return page.map(item -> listingMapper.toSummaryResponse(
-                item, categories.get(item.getCategoryId()), true));
+                item, categories.get(item.getCategoryId()), true, ratings.get(item.getId())));
     }
 
     @Override
@@ -302,7 +362,9 @@ public class ListingServiceImpl implements ListingService {
             return List.of();
         }
 
-        Map<String, CategorySnapshot> categories = resolveEffectiveCategoriesForPage(new ArrayList<>(byId.values()));
+        List<ServiceListing> publicListings = new ArrayList<>(byId.values());
+        Map<String, CategorySnapshot> categories = resolveEffectiveCategoriesForPage(publicListings);
+        Map<String, ListingRatingSnapshot> ratings = resolveEffectiveRatingsForPage(publicListings);
         List<ListingResponse> responses = new ArrayList<>();
         for (String id : orderedIds) {
             ServiceListing listing = byId.get(id);
@@ -310,7 +372,8 @@ public class ListingServiceImpl implements ListingService {
                 responses.add(listingMapper.toResponse(
                         listing,
                         categories.get(listing.getCategoryId()),
-                        false
+                        false,
+                        ratings.get(listing.getId())
                 ));
             }
         }
@@ -346,10 +409,14 @@ public class ListingServiceImpl implements ListingService {
 
         Map<String, CategorySnapshot> categories =
                 resolveEffectiveCategoriesForPage(content, activeCategories);
+        Map<String, ListingRatingSnapshot> ratings = resolveEffectiveRatingsForPage(content);
         return new PageImpl<>(
                 content.stream()
                         .map(listing -> listingMapper.toResponse(
-                                listing, categories.get(listing.getCategoryId()), false))
+                                listing,
+                                categories.get(listing.getCategoryId()),
+                                false,
+                                ratings.get(listing.getId())))
                         .toList(),
                 effectivePageable,
                 total
@@ -374,9 +441,13 @@ public class ListingServiceImpl implements ListingService {
                 new Query(criteria).with(RECOMMENDED_LISTING_SORT), ServiceListing.class);
         Map<String, CategorySnapshot> categories =
                 resolveEffectiveCategoriesForPage(listings, activeCategories);
+        Map<String, ListingRatingSnapshot> ratings = resolveEffectiveRatingsForPage(listings);
         return listings.stream()
                 .map(listing -> listingMapper.toResponse(
-                        listing, categories.get(listing.getCategoryId()), false))
+                        listing,
+                        categories.get(listing.getCategoryId()),
+                        false,
+                        ratings.get(listing.getId())))
                 .toList();
     }
 
@@ -391,7 +462,8 @@ public class ListingServiceImpl implements ListingService {
         }
 
         CategorySnapshot category = resolveEffectiveCategory(listing.getCategoryId());
-        return listingMapper.toResponse(listing, category, isOwner || isModeratorViewer);
+        ListingRatingSnapshot liveRating = resolveEffectiveRating(listing.getId());
+        return listingMapper.toResponse(listing, category, isOwner || isModeratorViewer, liveRating);
     }
 
     @Override
@@ -414,6 +486,8 @@ public class ListingServiceImpl implements ListingService {
         boolean keepAsDraft = currentStatus == ListingStatus.DRAFT && !Boolean.FALSE.equals(request.saveAsDraft());
         boolean publishing = !keepAsDraft;
         providerEligibilityChecker.assertEligibleToManageListing(providerUserId, publishing);
+
+        List<String> previousImages = collectListingImageUrls(existing);
 
         CategorySnapshot category = resolveActiveCategoryHierarchy(request.categoryId());
         existing.setCategoryId(category.id());
@@ -441,7 +515,8 @@ public class ListingServiceImpl implements ListingService {
         existing.setUpdatedAt(Instant.now());
 
         ServiceListing saved = listingRepository.save(existing);
-        return listingMapper.toResponse(saved, category, true);
+        cleanupRemovedMediaBestEffort(providerUserId, saved, previousImages);
+        return listingMapper.toResponse(saved, category, true, resolveEffectiveRating(saved.getId()));
     }
 
     @Override
@@ -478,14 +553,14 @@ public class ListingServiceImpl implements ListingService {
 
         existing.setUpdatedAt(Instant.now());
         ServiceListing saved = listingRepository.save(existing);
-        return listingMapper.toResponse(saved, category, true);
+        return listingMapper.toResponse(saved, category, true, resolveEffectiveRating(saved.getId()));
     }
 
     @Override
     public ListingResponse getListingForModeration(String id) {
         ServiceListing listing = findEntityOrThrow(id);
         CategorySnapshot category = resolveEffectiveCategory(listing.getCategoryId());
-        return listingMapper.toResponse(listing, category, true);
+        return listingMapper.toResponse(listing, category, true, resolveEffectiveRating(listing.getId()));
     }
 
     @Override
@@ -493,8 +568,9 @@ public class ListingServiceImpl implements ListingService {
         ListingStatus effectiveStatus = status == null ? ListingStatus.FLAGGED : status;
         Page<ServiceListing> page = listingRepository.findByStatusOrderByCreatedAtAsc(effectiveStatus, pageable);
         Map<String, CategorySnapshot> categories = resolveEffectiveCategoriesForPage(page.getContent());
+        Map<String, ListingRatingSnapshot> ratings = resolveEffectiveRatingsForPage(page.getContent());
         return page.map(item -> listingMapper.toSummaryResponse(
-                item, categories.get(item.getCategoryId()), true));
+                item, categories.get(item.getCategoryId()), true, ratings.get(item.getId())));
     }
 
     @Override
@@ -547,7 +623,7 @@ public class ListingServiceImpl implements ListingService {
         existing.setUpdatedAt(now);
 
         ServiceListing saved = listingRepository.save(existing);
-        return listingMapper.toResponse(saved, category, true);
+        return listingMapper.toResponse(saved, category, true, resolveEffectiveRating(saved.getId()));
     }
 
     @Override
@@ -667,6 +743,115 @@ public class ListingServiceImpl implements ListingService {
     @Override
     public List<ProvinceGeoDto> getDistrictLocations() {
         return districtGeoService.getProvincesWithCoordinates();
+    }
+
+    @Override
+    public void deleteUnusedListingMedia(String providerUserId, String publicId) {
+        if (providerUserId == null || providerUserId.isBlank()) {
+            throw new AccessDeniedException("Authentication is required to delete listing media");
+        }
+        String trimmedPublicId = trimToNull(publicId);
+        if (trimmedPublicId == null) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "INVALID_MEDIA_PUBLIC_ID",
+                    "Media publicId is required"
+            );
+        }
+        ListingMediaUploadService mediaService = mediaUploadServiceProvider == null
+                ? null
+                : mediaUploadServiceProvider.getIfAvailable();
+        if (mediaService == null) {
+            throw new ApiException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "MEDIA_STORAGE_NOT_CONFIGURED",
+                    "Direct cloud image storage is not configured on this server"
+            );
+        }
+
+        List<ServiceListing> providerListings = listingRepository.findByProviderIdOrderByUpdatedAtDesc(providerUserId);
+        if (providerListings != null) {
+            for (ServiceListing listing : providerListings) {
+                for (String url : collectListingImageUrls(listing)) {
+                    if (urlReferencesPublicId(url, trimmedPublicId)) {
+                        throw new ResourceConflictException(
+                                "MEDIA_IN_USE",
+                                "This image is still attached to a saved listing. Remove it from the listing and save changes instead."
+                        );
+                    }
+                }
+            }
+        }
+
+        mediaService.deletePortfolioImageByPublicId(providerUserId, trimmedPublicId);
+    }
+
+    private void cleanupRemovedMediaBestEffort(
+            String providerUserId,
+            ServiceListing savedListing,
+            List<String> previousImageUrls
+    ) {
+        if (previousImageUrls == null || previousImageUrls.isEmpty() || mediaUploadServiceProvider == null) {
+            return;
+        }
+        ListingMediaUploadService mediaService = mediaUploadServiceProvider.getIfAvailable();
+        if (mediaService == null) {
+            return;
+        }
+        Set<String> retainedUrls = new LinkedHashSet<>(collectListingImageUrls(savedListing));
+        List<String> removedUrls = new ArrayList<>();
+        for (String prevUrl : previousImageUrls) {
+            if (!retainedUrls.contains(prevUrl)) {
+                removedUrls.add(prevUrl);
+            }
+        }
+        if (removedUrls.isEmpty()) {
+            return;
+        }
+
+        Set<String> otherListingUrls = new LinkedHashSet<>();
+        List<ServiceListing> providerListings = listingRepository.findByProviderIdOrderByUpdatedAtDesc(providerUserId);
+        if (providerListings != null) {
+            for (ServiceListing other : providerListings) {
+                if (other != null && (savedListing.getId() == null || !savedListing.getId().equals(other.getId()))) {
+                    otherListingUrls.addAll(collectListingImageUrls(other));
+                }
+            }
+        }
+
+        for (String removedUrl : removedUrls) {
+            if (!otherListingUrls.contains(removedUrl)) {
+                mediaService.deletePortfolioImageByUrlBestEffort(providerUserId, removedUrl);
+            }
+        }
+    }
+
+    private List<String> collectListingImageUrls(ServiceListing listing) {
+        if (listing == null) {
+            return List.of();
+        }
+        LinkedHashSet<String> urls = new LinkedHashSet<>();
+        if (listing.getImages() != null) {
+            for (String url : listing.getImages()) {
+                String trimmed = trimToNull(url);
+                if (trimmed != null) {
+                    urls.add(trimmed);
+                }
+            }
+        }
+        String cover = trimToNull(listing.getCoverImageUrl());
+        if (cover != null) {
+            urls.add(cover);
+        }
+        return new ArrayList<>(urls);
+    }
+
+    private boolean urlReferencesPublicId(String imageUrl, String publicId) {
+        if (imageUrl == null || publicId == null) {
+            return false;
+        }
+        String cleanUrl = imageUrl.split("\\?", 2)[0];
+        return cleanUrl.contains("/" + publicId + ".") || cleanUrl.endsWith("/" + publicId);
     }
 
     private void requireMongoTemplate() {
@@ -857,6 +1042,36 @@ public class ListingServiceImpl implements ListingService {
             if (categoryId != null && !result.containsKey(categoryId)) {
                 CategorySnapshot raw = rawCache.computeIfAbsent(categoryId, id -> port.findById(id).orElse(null));
                 result.put(categoryId, applyParentActiveStatus(port, raw, rawCache));
+            }
+        }
+        return result;
+    }
+
+    private ListingRatingSnapshot resolveEffectiveRating(String listingId) {
+        if (listingId == null || listingId.isBlank() || listingRatingPortProvider == null) {
+            return null;
+        }
+        ListingRatingPort port = listingRatingPortProvider.getIfAvailable();
+        if (port == null) {
+            return null;
+        }
+        return port.findListingRating(listingId).orElse(null);
+    }
+
+    private Map<String, ListingRatingSnapshot> resolveEffectiveRatingsForPage(List<ServiceListing> listings) {
+        Map<String, ListingRatingSnapshot> result = new HashMap<>();
+        if (listingRatingPortProvider == null || listings == null || listings.isEmpty()) {
+            return result;
+        }
+        ListingRatingPort port = listingRatingPortProvider.getIfAvailable();
+        if (port == null) {
+            return result;
+        }
+        Set<String> seenIds = new LinkedHashSet<>();
+        for (ServiceListing listing : listings) {
+            String listingId = listing.getId();
+            if (listingId != null && !listingId.isBlank() && seenIds.add(listingId)) {
+                port.findListingRating(listingId).ifPresent(snapshot -> result.put(listingId, snapshot));
             }
         }
         return result;

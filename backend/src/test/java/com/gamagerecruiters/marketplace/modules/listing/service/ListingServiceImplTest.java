@@ -79,6 +79,7 @@ import com.gamagerecruiters.marketplace.modules.listing.dto.UpdateListingStatusR
 import com.gamagerecruiters.marketplace.modules.listing.mapper.ListingMapper;
 import com.gamagerecruiters.marketplace.modules.listing.repository.ListingRepository;
 import com.gamagerecruiters.marketplace.modules.listing.service.CategoryLookupPort.CategorySnapshot;
+import com.gamagerecruiters.marketplace.modules.listing.service.ListingRatingPort.ListingRatingSnapshot;
 import com.gamagerecruiters.marketplace.modules.provider.domain.ProviderProfile;
 import com.gamagerecruiters.marketplace.modules.provider.repository.ProviderProfileRepository;
 import com.gamagerecruiters.marketplace.modules.verification.domain.ProviderVerification;
@@ -1375,5 +1376,199 @@ class ListingServiceImplTest {
             assertThat(queryText).contains("status", "ACTIVE");
             assertThat(queryText).doesNotContain(excludedStatus.name());
         }
+    }
+
+    @Test
+    @DisplayName("WP08 PR #41: reads live published rating aggregates from ListingRatingPort across listing responses")
+    void liveRatingsFromReviewFacadeOverrideStoredListingStats() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<ListingRatingPort> ratingPortProvider = mock(ObjectProvider.class);
+        ListingRatingPort ratingPort = mock(ListingRatingPort.class);
+        when(ratingPortProvider.getIfAvailable()).thenReturn(ratingPort);
+        when(ratingPort.findListingRating("lst-rated"))
+                .thenReturn(Optional.of(new ListingRatingSnapshot(4.8, 27)));
+
+        ListingServiceImpl ratedService = new ListingServiceImpl(
+                listingRepository,
+                new ListingMapper(),
+                new ListingMediaValidator(),
+                new ListingContentScreeningService(),
+                providerEligibilityChecker,
+                new SriLankaDistrictGeoService(districtCatalog),
+                categoryLookupPortProvider,
+                rateLimitServiceProvider,
+                mongoTemplate,
+                ratingPortProvider
+        );
+
+        ServiceListing active = persistedListing("lst-rated", ListingStatus.ACTIVE);
+        active.setRatingAvg(0.0);
+        active.setRatingCount(0);
+
+        stubActiveCategoryHierarchy();
+        when(categoryLookupPort.findActiveCategories()).thenReturn(List.of(
+                new CategorySnapshot(ROOT_CAT_ID, "Electrical", null, true, new BigDecimal("0.10")),
+                new CategorySnapshot(SUB_CAT_ID, "Wiring Repair", ROOT_CAT_ID, true, new BigDecimal("0.12"))));
+        when(listingRepository.findById("lst-rated")).thenReturn(Optional.of(active));
+        when(listingRepository.findAllById(any())).thenReturn(List.of(active));
+        when(listingRepository.findByProviderIdOrderByUpdatedAtDesc(PROVIDER_ID, PageRequest.of(0, 20)))
+                .thenReturn(new PageImpl<>(List.of(active)));
+        when(listingRepository.findByStatusOrderByCreatedAtAsc(ListingStatus.ACTIVE, PageRequest.of(0, 20)))
+                .thenReturn(new PageImpl<>(List.of(active)));
+        when(listingRepository.save(any(ServiceListing.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(mongoTemplate.find(any(Query.class), eq(ServiceListing.class))).thenReturn(List.of(active));
+        when(mongoTemplate.count(any(Query.class), eq(ServiceListing.class))).thenReturn(1L);
+
+        ListingResponse detail = ratedService.getListingForViewer("lst-rated", null, null);
+        assertThat(detail.ratingAvg()).isEqualTo(4.8);
+        assertThat(detail.ratingCount()).isEqualTo(27);
+
+        Page<ListingSummaryResponse> myListings = ratedService.getMyListings(
+                PROVIDER_ID, null, null, PageRequest.of(0, 20));
+        assertThat(myListings.getContent().get(0).ratingAvg()).isEqualTo(4.8);
+        assertThat(myListings.getContent().get(0).ratingCount()).isEqualTo(27);
+
+        List<ListingResponse> byIds = ratedService.getListingsByIds(List.of("lst-rated"));
+        assertThat(byIds.get(0).ratingAvg()).isEqualTo(4.8);
+        assertThat(byIds.get(0).ratingCount()).isEqualTo(27);
+
+        Page<ListingResponse> searched = ratedService.searchPublicListings(
+                null, null, null, null, null, PageRequest.of(0, 12));
+        assertThat(searched.getContent().get(0).ratingAvg()).isEqualTo(4.8);
+        assertThat(searched.getContent().get(0).ratingCount()).isEqualTo(27);
+
+        List<ListingResponse> providerPublic = ratedService.getPublicListingsByProviderId(PROVIDER_ID);
+        assertThat(providerPublic.get(0).ratingAvg()).isEqualTo(4.8);
+        assertThat(providerPublic.get(0).ratingCount()).isEqualTo(27);
+
+        ListingResponse moderationDetail = ratedService.getListingForModeration("lst-rated");
+        assertThat(moderationDetail.ratingAvg()).isEqualTo(4.8);
+        assertThat(moderationDetail.ratingCount()).isEqualTo(27);
+
+        Page<ListingSummaryResponse> moderationQueue = ratedService.getModerationQueue(
+                ListingStatus.ACTIVE, PageRequest.of(0, 20));
+        assertThat(moderationQueue.getContent().get(0).ratingAvg()).isEqualTo(4.8);
+        assertThat(moderationQueue.getContent().get(0).ratingCount()).isEqualTo(27);
+
+        ListingResponse paused = ratedService.updateListingStatus(
+                PROVIDER_ID, "lst-rated", new UpdateListingStatusRequest(ListingStatus.PAUSED, null));
+        assertThat(paused.ratingAvg()).isEqualTo(4.8);
+        assertThat(paused.ratingCount()).isEqualTo(27);
+    }
+
+    @Test
+    @DisplayName("WP08 PR #41: falls back to stored rating stats when port returns empty, and honors live 0.0/0 when reviews are cleared")
+    void ratingLookupFallsBackGracefullyOnEmptyAndHonorsZeroLiveAggregate() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<ListingRatingPort> ratingPortProvider = mock(ObjectProvider.class);
+        ListingRatingPort ratingPort = mock(ListingRatingPort.class);
+        when(ratingPortProvider.getIfAvailable()).thenReturn(ratingPort);
+
+        ListingServiceImpl ratedService = new ListingServiceImpl(
+                listingRepository,
+                new ListingMapper(),
+                new ListingMediaValidator(),
+                new ListingContentScreeningService(),
+                providerEligibilityChecker,
+                new SriLankaDistrictGeoService(districtCatalog),
+                categoryLookupPortProvider,
+                rateLimitServiceProvider,
+                mongoTemplate,
+                ratingPortProvider
+        );
+
+        ServiceListing listing = persistedListing("lst-fallback", ListingStatus.ACTIVE);
+        listing.setRatingAvg(4.3);
+        listing.setRatingCount(12);
+        stubActiveCategoryHierarchy();
+        when(listingRepository.findById("lst-fallback")).thenReturn(Optional.of(listing));
+
+        when(ratingPort.findListingRating("lst-fallback")).thenReturn(Optional.empty());
+        ListingResponse fallbackResponse = ratedService.getListingForViewer("lst-fallback", null, null);
+        assertThat(fallbackResponse.ratingAvg()).isEqualTo(4.3);
+        assertThat(fallbackResponse.ratingCount()).isEqualTo(12);
+
+        when(ratingPort.findListingRating("lst-fallback"))
+                .thenReturn(Optional.of(new ListingRatingSnapshot(0.0, 0)));
+        ListingResponse clearedLiveResponse = ratedService.getListingForViewer("lst-fallback", null, null);
+        assertThat(clearedLiveResponse.ratingAvg()).isEqualTo(0.0);
+        assertThat(clearedLiveResponse.ratingCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("Option A cloud cleanup: destroys removed Cloudinary URLs on save (preserving shared URLs) and blocks deleting in-use media")
+    void cloudMediaCleanupOnUpdateAndUnusedMediaDeletion() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<ListingMediaUploadService> mediaProvider = mock(ObjectProvider.class);
+        ListingMediaUploadService mediaService = mock(ListingMediaUploadService.class);
+        when(mediaProvider.getIfAvailable()).thenReturn(mediaService);
+
+        ListingServiceImpl mediaAwareService = new ListingServiceImpl(
+                listingRepository,
+                new ListingMapper(),
+                new ListingMediaValidator(),
+                new ListingContentScreeningService(),
+                providerEligibilityChecker,
+                new SriLankaDistrictGeoService(districtCatalog),
+                categoryLookupPortProvider,
+                rateLimitServiceProvider,
+                mongoTemplate,
+                null,
+                mediaProvider
+        );
+
+        String keptUrl = "https://res.cloudinary.com/demo/image/upload/v1/localserve/service-listings/provider-1/kept.jpg";
+        String removedUniqueUrl = "https://res.cloudinary.com/demo/image/upload/v1/localserve/service-listings/provider-1/removed.jpg";
+        String sharedAcrossListingUrl = "https://res.cloudinary.com/demo/image/upload/v1/localserve/service-listings/provider-1/shared.jpg";
+
+        ServiceListing existing = persistedListing("lst-edit", ListingStatus.ACTIVE);
+        existing.setImages(List.of(keptUrl, removedUniqueUrl, sharedAcrossListingUrl));
+        existing.setCoverImageUrl(keptUrl);
+
+        ServiceListing otherListing = persistedListing("lst-other", ListingStatus.ACTIVE);
+        otherListing.setImages(List.of(sharedAcrossListingUrl));
+        otherListing.setCoverImageUrl(sharedAcrossListingUrl);
+
+        stubActiveCategoryHierarchy();
+        when(districtCatalog.isValidDistrict("Colombo")).thenReturn(true);
+        when(listingRepository.findById("lst-edit")).thenReturn(Optional.of(existing));
+        when(listingRepository.save(any(ServiceListing.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(listingRepository.findByProviderIdOrderByUpdatedAtDesc(PROVIDER_ID))
+                .thenReturn(List.of(existing, otherListing));
+
+        UpdateListingRequest updateReq = new UpdateListingRequest(
+                SUB_CAT_ID,
+                "Updated Electrical Repair",
+                "Complete home breaker panel fault diagnosis, earthing test, and certified wiring maintenance.",
+                PricingModel.FIXED,
+                new BigDecimal("4000.00"),
+                90,
+                ExecutionModel.ON_SITE,
+                "Colombo",
+                "Dehiwala",
+                new GeoPointDto(79.8612, 6.9271),
+                15,
+                List.of("Dehiwala"),
+                List.of(keptUrl),
+                keptUrl,
+                List.of(),
+                false
+        );
+
+        mediaAwareService.updateListing(PROVIDER_ID, "lst-edit", updateReq);
+
+        verify(mediaService).deletePortfolioImageByUrlBestEffort(PROVIDER_ID, removedUniqueUrl);
+        verify(mediaService, never()).deletePortfolioImageByUrlBestEffort(PROVIDER_ID, keptUrl);
+        verify(mediaService, never()).deletePortfolioImageByUrlBestEffort(PROVIDER_ID, sharedAcrossListingUrl);
+
+        assertThatThrownBy(() -> mediaAwareService.deleteUnusedListingMedia(
+                PROVIDER_ID, "localserve/service-listings/provider-1/kept"))
+                .isInstanceOf(ResourceConflictException.class)
+                .satisfies(ex -> assertThat(((ApiException) ex).getErrorCode()).isEqualTo("MEDIA_IN_USE"));
+
+        mediaAwareService.deleteUnusedListingMedia(
+                PROVIDER_ID, "localserve/service-listings/provider-1/unsaved-temp");
+        verify(mediaService).deletePortfolioImageByPublicId(
+                PROVIDER_ID, "localserve/service-listings/provider-1/unsaved-temp");
     }
 }
