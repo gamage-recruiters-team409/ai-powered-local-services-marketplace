@@ -43,6 +43,10 @@ public class EarningsLedgerIndexInitializer {
      */
     static final String PROVIDER_SEQUENCE_INDEX = "providerId_1_currency_1_sequenceNumber_1";
 
+    static final String PROVIDER_HISTORY_INDEX = "providerId_1_currency_1_sequenceNumber_-1__id_-1";
+
+    static final String PROVIDER_ITEMIZED_INDEX = "providerId_1_currency_1_eventType_1_sequenceNumber_-1__id_-1";
+
     private static final Logger log = LoggerFactory.getLogger(EarningsLedgerIndexInitializer.class);
 
     private final MongoTemplate mongoTemplate;
@@ -63,6 +67,8 @@ public class EarningsLedgerIndexInitializer {
 
         ensureEventKeyIndex();
         ensureProviderSequenceIndex();
+        ensureProviderHistoryIndex();
+        ensureProviderItemizedIndex();
 
         log.info("Earnings ledger indexes verified successfully.");
     }
@@ -336,4 +342,158 @@ public class EarningsLedgerIndexInitializer {
                         + "to protect financial records. "
                         + "Manual database migration is required.");
     }
+
+    /**
+     * Creates or verifies the index supporting paginated provider
+     * earnings history, including legacy unsequenced entries.
+     */
+    void ensureProviderHistoryIndex() {
+        try {
+            ensureCollectionExists();
+
+            MongoCollection<Document> collection =
+                    mongoTemplate.getCollection(LEDGER_COLLECTION);
+
+            Document expectedKey = new Document("providerId", 1)
+                    .append("currency", 1)
+                    .append("sequenceNumber", -1)
+                    .append("_id", -1);
+
+            List<Document> indexes =
+                    collection.listIndexes().into(new ArrayList<>());
+
+            Document existing = findByName(indexes, PROVIDER_HISTORY_INDEX);
+
+            if (existing == null) {
+                for (Document index : indexes) {
+                    if (hasExpectedHistoryKey(index, expectedKey)) {
+                        throw incompatible(PROVIDER_HISTORY_INDEX, index);
+                    }
+                }
+
+                collection.createIndex(
+                        expectedKey,
+                        new IndexOptions()
+                                .name(PROVIDER_HISTORY_INDEX)
+                                .unique(false));
+
+                indexes = collection.listIndexes().into(new ArrayList<>());
+                existing = findByName(indexes, PROVIDER_HISTORY_INDEX);
+            }
+
+            if (existing == null) {
+                throw new IllegalStateException(
+                        "Provider history index was not found after creation.");
+            }
+
+            if (!hasExpectedHistoryKey(existing, expectedKey)
+                    || hasExpectedUniqueness(existing)
+                    || existing.containsKey("partialFilterExpression")
+                    || Boolean.TRUE.equals(existing.get("sparse"))
+                    || Boolean.TRUE.equals(existing.get("hidden"))
+                    || existing.containsKey("expireAfterSeconds")
+                    || existing.containsKey("collation")) {
+                throw incompatible(PROVIDER_HISTORY_INDEX, existing);
+            }
+
+            log.info(
+                    "Earnings ledger index verified: {}",
+                    PROVIDER_HISTORY_INDEX);
+
+        } catch (IllegalStateException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new IllegalStateException(
+                    "Unable to create or verify earnings ledger index '"
+                            + PROVIDER_HISTORY_INDEX + "'.",
+                    exception);
+        }
+    }
+
+    /**
+     * Verifies the exact field order and direction of the history index.
+     */
+    private boolean hasExpectedHistoryKey(
+            Document index,
+            Document expectedKey) {
+
+        Document actualKey = index.get("key", Document.class);
+
+        return actualKey != null
+                && new ArrayList<>(actualKey.keySet())
+                        .equals(new ArrayList<>(expectedKey.keySet()))
+                && expectedKey.equals(actualKey);
+    }
+
+    /**
+     * Creates or verifies the compound index supporting provider-scoped
+     * recognition event queries with deterministic pagination.
+     */
+    void ensureProviderItemizedIndex() {
+        try {
+            ensureCollectionExists();
+
+            MongoCollection<Document> collection =
+                    mongoTemplate.getCollection(LEDGER_COLLECTION);
+
+            Document expectedKey = new Document("providerId", 1)
+                    .append("currency", 1)
+                    .append("eventType", 1)
+                    .append("sequenceNumber", -1)
+                    .append("_id", -1);
+
+            List<Document> indexes =
+                    collection.listIndexes().into(new ArrayList<>());
+
+            Document existing =
+                    findByName(indexes, PROVIDER_ITEMIZED_INDEX);
+
+            if (existing == null) {
+                for (Document index : indexes) {
+                    if (hasExpectedHistoryKey(index, expectedKey)) {
+                        throw incompatible(PROVIDER_ITEMIZED_INDEX, index);
+                    }
+                }
+
+                collection.createIndex(
+                        expectedKey,
+                        new IndexOptions()
+                                .name(PROVIDER_ITEMIZED_INDEX)
+                                .unique(false));
+
+                indexes = collection.listIndexes().into(new ArrayList<>());
+
+                existing = findByName(indexes, PROVIDER_ITEMIZED_INDEX);
+            }
+
+            if (existing == null) {
+                throw new IllegalStateException(
+                        "Provider itemized earnings index was not found after creation.");
+            }
+
+            if (!hasExpectedHistoryKey(existing, expectedKey)
+                    || hasExpectedUniqueness(existing)
+                    || existing.containsKey("partialFilterExpression")
+                    || Boolean.TRUE.equals(existing.get("sparse"))
+                    || Boolean.TRUE.equals(existing.get("hidden"))
+                    || existing.containsKey("expireAfterSeconds")
+                    || existing.containsKey("collation")) {
+
+                throw incompatible(PROVIDER_ITEMIZED_INDEX, existing);
+            }
+
+            log.info(
+                    "Earnings ledger index verified: {}",
+                    PROVIDER_ITEMIZED_INDEX);
+
+        } catch (IllegalStateException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new IllegalStateException(
+                    "Unable to create or verify earnings ledger index '"
+                            + PROVIDER_ITEMIZED_INDEX + "'.",
+                    exception);
+        }
+    }
+
 }

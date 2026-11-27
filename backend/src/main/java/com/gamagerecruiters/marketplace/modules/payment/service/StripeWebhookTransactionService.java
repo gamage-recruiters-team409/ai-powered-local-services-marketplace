@@ -215,6 +215,8 @@ public class StripeWebhookTransactionService {
             Update paymentUpdate = new Update()
                     .set("status", PaymentStatus.CAPTURED)
                     .set("gatewayPaymentIntentId", validatedPaymentIntentId)
+                    // Issue a stable receipt reference only during verified capture.
+                    .set("receiptReference", "RCT-" + validatedPaymentId)
                     .set("paidAt", now)
                     .set("updatedAt", now);
 
