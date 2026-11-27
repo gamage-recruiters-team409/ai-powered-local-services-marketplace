@@ -141,6 +141,11 @@ describe('SavedAddressesPage', () => {
     fireEvent.click(saveBtn);
     expect(screen.getByText(/city must be at least 2 characters/i)).toBeTruthy();
 
+    // City all digits -> city digits validation
+    fireEvent.change(cityInput, { target: { value: '12345' } });
+    fireEvent.click(saveBtn);
+    expect(screen.getByText(/city must not be digits only/i)).toBeTruthy();
+
     // Fill valid city, submit -> district required
     fireEvent.change(cityInput, { target: { value: 'Dehiwala-Mount Lavinia' } });
     fireEvent.click(saveBtn);
@@ -155,6 +160,69 @@ describe('SavedAddressesPage', () => {
         label: 'Office',
         addressLine1: '74 Temple Road',
         city: 'Dehiwala-Mount Lavinia',
+        district: 'Colombo',
+      });
+      expect(mockToast.success).toHaveBeenCalledWith('Address added successfully');
+    });
+  });
+
+  it('validates against control characters in label, address line, and city, while accepting valid text', async () => {
+    customerAccountApi.createAddress.mockResolvedValueOnce({
+      id: 'addr-3',
+      label: 'Home Office',
+      addressLine1: 'No. 5, Galle Road',
+      city: 'Colombo 03',
+      district: 'Colombo',
+      isDefault: false,
+    });
+
+    render(
+      <MemoryRouter>
+        <SavedAddressesPage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/No. 45\/2, Alfred House Gardens/i)).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /\+ add address/i }));
+
+    const labelInput = screen.getByLabelText(/^label/i);
+    const lineInput = screen.getByLabelText(/^address line/i);
+    const cityInput = screen.getByLabelText(/^city/i);
+    const districtSelect = screen.getByLabelText(/^district/i);
+    const saveBtn = screen.getByRole('button', { name: /^save$/i });
+
+    // Label with control character
+    fireEvent.change(labelInput, { target: { value: 'Home\u0007' } });
+    fireEvent.change(lineInput, { target: { value: 'No. 5, Galle Road' } });
+    fireEvent.change(cityInput, { target: { value: 'Colombo 03' } });
+    fireEvent.change(districtSelect, { target: { value: 'Colombo' } });
+    fireEvent.click(saveBtn);
+    expect(screen.getByText(/fields must not contain control characters/i)).toBeTruthy();
+
+    // Address line with control character
+    fireEvent.change(labelInput, { target: { value: 'Home Office' } });
+    fireEvent.change(lineInput, { target: { value: 'No. 5, Galle\u0007 Road' } });
+    fireEvent.click(saveBtn);
+    expect(screen.getByText(/fields must not contain control characters/i)).toBeTruthy();
+
+    // City with control character
+    fireEvent.change(lineInput, { target: { value: 'No. 5, Galle Road' } });
+    fireEvent.change(cityInput, { target: { value: 'Colombo\u0007 03' } });
+    fireEvent.click(saveBtn);
+    expect(screen.getByText(/fields must not contain control characters/i)).toBeTruthy();
+
+    // Valid inputs: "Home Office", "No. 5, Galle Road", "Colombo 03"
+    fireEvent.change(cityInput, { target: { value: 'Colombo 03' } });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(customerAccountApi.createAddress).toHaveBeenCalledWith({
+        label: 'Home Office',
+        addressLine1: 'No. 5, Galle Road',
+        city: 'Colombo 03',
         district: 'Colombo',
       });
       expect(mockToast.success).toHaveBeenCalledWith('Address added successfully');

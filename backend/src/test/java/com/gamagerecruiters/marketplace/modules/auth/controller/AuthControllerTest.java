@@ -120,6 +120,51 @@ class AuthControllerTest {
     }
 
     @Test
+    @DisplayName("Should return 400 VALIDATION_FAILED when full name contains digits")
+    void shouldRejectRegistrationWhenFullNameContainsDigits() throws Exception {
+        RegisterRequest request = new RegisterRequest(
+                "kalana test 14444",
+                "valid@marketplace.lk",
+                "+94771234567",
+                "SecurePass123",
+                Role.CUSTOMER,
+                true,
+                "v1.0"
+        );
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("name"));
+    }
+
+    @Test
+    @DisplayName("Should return 400 VALIDATION_FAILED when password exceeds 72 characters")
+    void shouldRejectRegistrationWhenPasswordExceeds72Chars() throws Exception {
+        String longPassword = "A1a" + "b".repeat(70); // 73 chars
+        RegisterRequest request = new RegisterRequest(
+                "Kalana Dinuja",
+                "valid@marketplace.lk",
+                "+94771234567",
+                longPassword,
+                Role.CUSTOMER,
+                true,
+                "v1.0"
+        );
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("password"));
+    }
+
+    @Test
     @DisplayName("Should return 400 when login payload is empty")
     void shouldReturnBadRequestWhenLoginEmpty() throws Exception {
         LoginRequest request = new LoginRequest("", "");
@@ -180,7 +225,7 @@ class AuthControllerTest {
                 {
                     "name": "Jane Doe",
                     "email": "jane@example.com",
-                    "phone": "+1234567890",
+                    "phone": "+94771234567",
                     "password": "Password123",
                     "role": "NOT_A_VALID_ROLE",
                     "acceptedTerms": true,

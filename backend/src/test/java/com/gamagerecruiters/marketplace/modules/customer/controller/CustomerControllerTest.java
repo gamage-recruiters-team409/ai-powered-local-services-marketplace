@@ -187,6 +187,22 @@ class CustomerControllerTest {
     }
 
     @Test
+    @DisplayName("PUT /api/v1/customers/me returns 400 when full name contains digits")
+    void shouldReturn400WhenNameContainsDigits() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        UpdateCustomerProfileRequest req = new UpdateCustomerProfileRequest("kalana test 14444", "0779876543");
+
+        mockMvc.perform(put("/api/v1/customers/me")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("fullName"));
+    }
+
+    @Test
     @DisplayName("PUT /api/v1/customers/me/password returns 204 on success")
     void shouldChangePasswordSuccessfully() throws Exception {
         mockAuth("cust-token", "cust-1", Role.CUSTOMER);
@@ -215,6 +231,24 @@ class CustomerControllerTest {
                         .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/customers/me/addresses returns 400 when city is all digits")
+    void shouldReturn400WhenAddressCityIsAllDigits() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        CustomerAddressRequest req = new CustomerAddressRequest(
+                "Home", "123 Galle Rd", "Apt 2", "12345", "Colombo", "00300", true
+        );
+
+        mockMvc.perform(post("/api/v1/customers/me/addresses")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors[0].field").value("city"));
     }
 
     @Test
@@ -323,6 +357,22 @@ class CustomerControllerTest {
         DeactivateAccountRequest req = new DeactivateAccountRequest("");
 
         mockMvc.perform(post("/api/v1/customers/me/deactivate")
+                        .header("Authorization", "Bearer cust-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("VALIDATION_FAILED"));
+    }
+
+    @Test
+    @DisplayName("PUT /api/v1/customers/me/password returns 400 when new password exceeds 72 characters")
+    void shouldReturn400WhenPasswordExceeds72Chars() throws Exception {
+        mockAuth("cust-token", "cust-1", Role.CUSTOMER);
+
+        String longPassword = "A1a" + "b".repeat(70); // 73 chars
+        ChangePasswordRequest req = new ChangePasswordRequest("OldPass123!", longPassword);
+
+        mockMvc.perform(put("/api/v1/customers/me/password")
                         .header("Authorization", "Bearer cust-token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(req)))

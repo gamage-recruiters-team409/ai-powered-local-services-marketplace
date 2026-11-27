@@ -48,6 +48,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.gamagerecruiters.marketplace.common.util.ValidationUtils;
 import com.mongodb.MongoException;
 import com.mongodb.client.result.UpdateResult;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
@@ -174,7 +175,7 @@ public class UserInternalServiceImpl implements UserInternalService {
         }
 
         User admin = new User();
-        admin.setName(name.trim());
+        admin.setName(ValidationUtils.normalizeFullName(name));
         admin.setEmail(normalizedEmail);
         admin.setPasswordHash(passwordEncoder.encode(password));
         admin.setRole(role);
@@ -199,7 +200,7 @@ public class UserInternalServiceImpl implements UserInternalService {
             }
         });
 
-        user.setName(fullName.trim());
+        user.setName(ValidationUtils.normalizeFullName(fullName));
         user.setPhone(normalizedPhone);
         return userRepository.save(user);
     }
@@ -216,7 +217,7 @@ public class UserInternalServiceImpl implements UserInternalService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "SAME_PASSWORD", "New password cannot be the same as the current password");
         }
 
-        if (newPassword == null || !PASSWORD_POLICY.matcher(newPassword).matches()) {
+        if (newPassword == null || !PASSWORD_POLICY.matcher(newPassword).matches() || !ValidationUtils.isValidPasswordLength(newPassword)) {
             throw new ApiException(
                     HttpStatus.BAD_REQUEST,
                     "WEAK_PASSWORD",

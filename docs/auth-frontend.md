@@ -157,3 +157,23 @@ The user interface implements the 15 high-fidelity visual designs matching the L
   - **Step 3 (Post-Update Revocation):** After a successful status update, revokes refresh tokens once more best-effort to cover tokens issued between Step 1 and Step 2. Failure is logged safely (`userId` and exception class name only) and does not fail the request.
   - Both `JwtAuthenticationFilter` and `AuthServiceImpl.refresh()` explicitly verify `user.getStatus() == UserStatus.ACTIVE` on every request/refresh, ensuring inactive users cannot execute authenticated operations even during transient intermediate states.
   - When transitioned to `ACTIVE`, resets `failedLoginCount` to 0 and unsets `lockStartedAt`.
+
+## Input Validation Rules (WP01)
+
+- **Full Name Rule (Backend Authority & Frontend Mirror):**
+  - **Canonical Normalization:** Input is trimmed and inner whitespace sequences are collapsed to a single space (`name.trim().replaceAll("\\s+", " ")`).
+  - **Length:** 2 to 100 characters after trimming.
+  - **Character Set:** Unicode letters (`\p{L}`), Unicode combining marks (`\p{M}`, supporting Sinhala and Tamil vowels/diacritics), single spaces, hyphens `-`, apostrophes `'` and `’`, and dots `.`.
+  - **Boundary Rules:** Must start and end with a Unicode letter or mark; no digits, emoji, or symbols allowed. Canonical regex: `^[\p{L}\p{M}][\p{L}\p{M} .'’-]*[\p{L}\p{M}]$`.
+  - **Letter Count:** Must contain at least 2 Unicode letters (`countLetters(name) >= 2`).
+  - **Application:** Applied on registration (`POST /api/v1/auth/register`) and customer profile updates (`PUT /api/v1/customers/me`). Never applied to login or token refresh, preventing existing users with legacy names from being locked out.
+  - **Error Code / Message:** Returns `400 VALIDATION_FAILED` with message: `"Full name can only contain letters, spaces, apostrophes, hyphens and dots."`.
+- **Sri Lankan Phone Number:**
+  - Standard format: `^(\+94|0|94)[0-9]{9}$`. Strips whitespace, hyphens, and parentheses on submit and normalizes to `+94XXXXXXXXX`.
+- **Email:**
+  - Trimmed and lowercased. Maximum length is 254 characters (`@Size(max = 254)`).
+- **Password (BCrypt 72-Byte Boundary):**
+  - Minimum 8 characters with at least one uppercase letter, one lowercase letter, and one digit.
+  - Maximum size: 72 bytes (UTF-8 encoding). Passwords are never trimmed to preserve leading/trailing intentional spaces.
+  - Applied across registration, force password change, password reset, customer settings change-password, and account deactivation.
+

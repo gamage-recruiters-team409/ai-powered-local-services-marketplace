@@ -95,4 +95,56 @@ describe('RegisterPage', () => {
       );
     });
   });
+
+  it('validates name format on blur and rejects digits', async () => {
+    render(
+      <MemoryRouter>
+        <RegisterPage />
+      </MemoryRouter>
+    );
+
+    const nameInput = screen.getByPlaceholderText(/enter your full name/i);
+    fireEvent.change(nameInput, { target: { value: 'kalana test 14444' } });
+    fireEvent.blur(nameInput);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/full name can only contain letters, spaces, apostrophes, hyphens and dots/i)
+      ).toBeTruthy();
+    });
+  });
+
+  it('normalizes multiple spaces in name when submitting valid form', async () => {
+    mockRegister.mockResolvedValueOnce({ id: 'u2' });
+
+    render(
+      <MemoryRouter>
+        <RegisterPage />
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByPlaceholderText(/enter your full name/i), {
+      target: { value: '  Kasun    Marie   Perera  ' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/name@example\.lk/i), {
+      target: { value: 'kasun@example.lk' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/77 123 4567/i), {
+      target: { value: '771234567' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/create a password/i), {
+      target: { value: 'ValidPass123!' },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    fireEvent.click(screen.getByRole('button', { name: /create account/i }));
+
+    await waitFor(() => {
+      expect(mockRegister).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Kasun Marie Perera',
+        })
+      );
+    });
+  });
 });

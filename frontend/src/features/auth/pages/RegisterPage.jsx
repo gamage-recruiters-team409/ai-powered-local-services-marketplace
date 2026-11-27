@@ -10,6 +10,8 @@ import PasswordRules from '../components/PasswordRules';
 import { useAuth } from '../hooks/useAuth';
 import { getErrorMessage } from '../utils/errorMessages';
 import {
+  validateFullName,
+  normalizeFullName,
   validateEmail,
   validatePhone,
   validatePassword,
@@ -46,9 +48,8 @@ export default function RegisterPage({ previewState } = {}) {
   const validate = useCallback(() => {
     const newErrors = {};
 
-    if (!name.trim()) {
-      newErrors.name = 'Please enter your full name.';
-    }
+    const nameErr = validateFullName(name, { requiredMessage: 'Please enter your full name.' });
+    if (nameErr) newErrors.name = nameErr;
 
     const emailErr = validateEmail(email);
     if (emailErr) newErrors.email = emailErr;
@@ -66,6 +67,11 @@ export default function RegisterPage({ previewState } = {}) {
     return newErrors;
   }, [name, email, phone, password, acceptedTerms]);
 
+  const handleNameBlur = useCallback(() => {
+    const err = validateFullName(name, { requiredMessage: 'Please enter your full name.' });
+    setErrors((prev) => ({ ...prev, name: err || undefined }));
+  }, [name]);
+
   const handleSubmit = useCallback(
     async (e) => {
       e.preventDefault();
@@ -81,7 +87,7 @@ export default function RegisterPage({ previewState } = {}) {
       setLoading(true);
       try {
         await register({
-          name: name.trim(),
+          name: normalizeFullName(name),
           email: email.trim(),
           phone: normalizePhoneForSubmission(phone),
           password,
@@ -168,6 +174,8 @@ export default function RegisterPage({ previewState } = {}) {
             placeholder="Enter your full name"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            onBlur={handleNameBlur}
+            maxLength={100}
             error={errors.name}
             autoComplete="name"
             disabled={loading}
@@ -178,6 +186,7 @@ export default function RegisterPage({ previewState } = {}) {
             placeholder="name@example.lk"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            maxLength={254}
             error={errors.email}
             autoComplete="email"
             disabled={loading}
@@ -218,6 +227,7 @@ export default function RegisterPage({ previewState } = {}) {
               placeholder="Create a password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              maxLength={72}
               error={errors.password}
               autoComplete="new-password"
               disabled={loading}

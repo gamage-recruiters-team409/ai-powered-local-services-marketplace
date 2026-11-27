@@ -107,7 +107,7 @@ class AuthServiceTest {
         RegisterRequest request = new RegisterRequest(
                 "Jane Doe",
                 "jane@example.com",
-                "+12345678901",
+                "+94771234567",
                 "SecurePass123",
                 Role.CUSTOMER,
                 true,
@@ -115,7 +115,7 @@ class AuthServiceTest {
         );
 
         when(userRepository.existsByEmail("jane@example.com")).thenReturn(false);
-        when(userRepository.existsByPhone("+12345678901")).thenReturn(false);
+        when(userRepository.existsByPhone("+94771234567")).thenReturn(false);
         when(passwordEncoder.encode("SecurePass123")).thenReturn("hashedPass");
         when(userRepository.save(any(User.class))).thenAnswer(invocation -> {
             User user = invocation.getArgument(0);
@@ -133,6 +133,33 @@ class AuthServiceTest {
 
         // Verify emailVerified is false
         verify(userRepository).save(org.mockito.ArgumentMatchers.argThat(u -> !u.isEmailVerified()));
+    }
+
+    @Test
+    @DisplayName("Should collapse repeated inner whitespace in full name upon registration")
+    void shouldNormalizeFullNameOnRegistration() {
+        RegisterRequest request = new RegisterRequest(
+                "  Jane    Marie   Doe  ",
+                "jane.marie@example.com",
+                "+94771234567",
+                "SecurePass123",
+                Role.CUSTOMER,
+                true,
+                "v1.0"
+        );
+
+        when(userRepository.existsByEmail("jane.marie@example.com")).thenReturn(false);
+        when(userRepository.existsByPhone("+94771234567")).thenReturn(false);
+        when(passwordEncoder.encode("SecurePass123")).thenReturn("hashedPass");
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> {
+            User user = invocation.getArgument(0);
+            user.setId("user-2");
+            return user;
+        });
+
+        RegisterResponse response = authService.register(request);
+        assertNotNull(response);
+        verify(userRepository).save(org.mockito.ArgumentMatchers.argThat(u -> "Jane Marie Doe".equals(u.getName())));
     }
 
     @Test
@@ -154,7 +181,7 @@ class AuthServiceTest {
         RegisterRequest request = new RegisterRequest(
                 "Jane Doe",
                 "jane@example.com",
-                "+12345678901",
+                "+94771234567",
                 "SecurePass123",
                 Role.CUSTOMER,
                 true,
@@ -162,7 +189,7 @@ class AuthServiceTest {
         );
 
         when(userRepository.existsByEmail("jane@example.com")).thenReturn(false);
-        when(userRepository.existsByPhone("+12345678901")).thenReturn(false);
+        when(userRepository.existsByPhone("+94771234567")).thenReturn(false);
         when(passwordEncoder.encode(anyString())).thenReturn("hashed");
         when(userRepository.save(any(User.class))).thenAnswer(i -> {
             User u = i.getArgument(0);
@@ -181,7 +208,7 @@ class AuthServiceTest {
         RegisterRequest request = new RegisterRequest(
                 "Admin Wannabe",
                 "admin@example.com",
-                "+12345678901",
+                "+94771234567",
                 "SecurePass123",
                 Role.ADMIN,
                 true,
@@ -198,7 +225,7 @@ class AuthServiceTest {
         RegisterRequest request = new RegisterRequest(
                 "Jane Doe",
                 "jane@example.com",
-                "+12345678901",
+                "+94771234567",
                 "SecurePass123",
                 Role.CUSTOMER,
                 true,
@@ -216,7 +243,7 @@ class AuthServiceTest {
         RegisterRequest request = new RegisterRequest(
                 "Jane Doe",
                 "jane@example.com",
-                "+12345678901",
+                "+94771234567",
                 "SecurePass123",
                 Role.CUSTOMER,
                 true,
@@ -224,7 +251,7 @@ class AuthServiceTest {
         );
 
         when(userRepository.existsByEmail("jane@example.com")).thenReturn(false);
-        when(userRepository.existsByPhone("+12345678901")).thenReturn(true);
+        when(userRepository.existsByPhone("+94771234567")).thenReturn(true);
 
         assertThrows(ResourceConflictException.class, () -> authService.register(request));
     }

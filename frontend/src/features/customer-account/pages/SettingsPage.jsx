@@ -42,8 +42,11 @@ export function SettingsPage() {
     if (!newPassword) {
       errors.newPassword = 'New password is required';
     } else {
+      const bytes = new TextEncoder().encode(newPassword).length;
       const criteria = checkPasswordCriteria(newPassword);
-      if (!criteria.isValid) {
+      if (bytes > 72 || newPassword.length > 72) {
+        errors.newPassword = 'Password must not exceed 72 characters';
+      } else if (!criteria.isValid) {
         errors.newPassword = 'Password must meet all complexity requirements';
       } else if (newPassword === currentPassword) {
         errors.newPassword = 'New password cannot be the same as the current password';
@@ -130,6 +133,7 @@ export function SettingsPage() {
               <input
                 id="settings-currentPassword"
                 type="password"
+                maxLength={72}
                 className={styles.input}
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
@@ -148,6 +152,7 @@ export function SettingsPage() {
               <input
                 id="settings-newPassword"
                 type="password"
+                maxLength={72}
                 className={styles.input}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
@@ -172,6 +177,7 @@ export function SettingsPage() {
               <input
                 id="settings-confirmPassword"
                 type="password"
+                maxLength={72}
                 className={styles.input}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}

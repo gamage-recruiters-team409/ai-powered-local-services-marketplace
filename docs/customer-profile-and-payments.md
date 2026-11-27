@@ -269,3 +269,26 @@ event=PROFILE_IMAGE_ORPHAN_UNRECOVERABLE ownerUserId=<ownerUserId> publicId=<pub
   2. **If Unreferenced:** Delete the orphaned asset manually via the Cloudinary Management Console under folder `localserve/customer-profile/<ownerUserId>` or via the Cloudinary Admin API using `<publicId>`.
   3. **If Still Referenced:** If a user document references this `publicId` (e.g. from a concurrent update), do **not** delete it; leave it active.
   4. **Optional Retry Insertion:** Alternatively, insert a document into the `profile_image_cleanup` collection with `publicId`, `ownerUserId`, `status: "PENDING"`, and `reason: "UPLOAD_ROLLBACK"` to allow the background cleanup job (`ProfileImageCleanupJob`) to safely reconcile and verify references on its next run.
+
+
+---
+
+## 9. Customer Profile & Address Input Validation Rules (WP01)
+
+### 9.1. Customer Profile (`PUT /api/v1/customers/me`)
+- **Full Name (`fullName`):**
+  - **Normalization:** Trims leading/trailing whitespace and collapses repeated internal spaces to a single space.
+  - **Length:** 2 to 100 characters.
+  - **Allowed Characters:** Unicode letters (`\p{L}`), Unicode combining marks (`\p{M}` for Sinhala and Tamil names), single spaces, hyphens `-`, apostrophes `'` and `’`, and dots `.`.
+  - **Constraints:** Cannot contain digits, emojis, control characters, or leading/trailing punctuation; must contain at least 2 Unicode letters.
+  - **Regex:** `^[\p{L}\p{M}][\p{L}\p{M} .'’-]*[\p{L}\p{M}]$`.
+  - **Validation Error:** `400 VALIDATION_FAILED` with message `"Full name can only contain letters, spaces, apostrophes, hyphens and dots."`.
+- **Phone (`phone`):**
+  - Sri Lankan phone format: `^(\+94|0|94)[0-9]{9}$`. Cleaned and normalized to `+94XXXXXXXXX`.
+
+### 9.2. Customer Addresses (`POST /api/v1/customers/me/addresses`, `PUT /api/v1/customers/me/addresses/{id}`)
+- **Label (`label`):** 1 to 30 characters, no control characters.
+- **Address Line 1 (`addressLine1`):** 1 to 100 characters, no control characters.
+- **Address Line 2 (`addressLine2`):** Optional, max 100 characters, no control characters.
+- **City (`city`):** 2 to 60 characters, no control characters, and **cannot be digits only** (`^(?!^\d+$)[^\p{Cntrl}]+$`).
+- **District (`district`):** 1 to 50 characters, must match a valid Sri Lankan district.

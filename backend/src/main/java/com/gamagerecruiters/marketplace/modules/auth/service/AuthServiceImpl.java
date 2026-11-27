@@ -20,6 +20,8 @@ import com.gamagerecruiters.marketplace.common.exception.AccountStatusException;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceNotFoundException;
+import com.gamagerecruiters.marketplace.common.util.ValidationUtils;
+import com.gamagerecruiters.marketplace.modules.customer.util.SriLankanPhoneUtil;
 import com.gamagerecruiters.marketplace.modules.auth.domain.AuthToken;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.domain.TokenType;
@@ -92,7 +94,7 @@ public class AuthServiceImpl implements AuthService {
         }
 
         String normalizedEmail = request.email().toLowerCase().trim();
-        String normalizedPhone = request.phone().trim();
+        String normalizedPhone = SriLankanPhoneUtil.normalize(request.phone());
 
         if (userRepository.existsByEmail(normalizedEmail)) {
             throw new ResourceConflictException("EMAIL_ALREADY_EXISTS", "A user with this email already exists");
@@ -103,7 +105,7 @@ public class AuthServiceImpl implements AuthService {
         }
 
         User user = new User();
-        user.setName(request.name().trim());
+        user.setName(ValidationUtils.normalizeFullName(request.name()));
         user.setEmail(normalizedEmail);
         user.setPhone(normalizedPhone);
         user.setPasswordHash(passwordEncoder.encode(request.password()));

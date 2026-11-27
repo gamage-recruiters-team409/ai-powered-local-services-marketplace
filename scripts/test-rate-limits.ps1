@@ -137,7 +137,7 @@ Write-Host ""
 Write-Host "[Setup] Creating temporary test customer for sensitive endpoint tests..." -ForegroundColor Yellow
 $setupSuffix = [System.Guid]::NewGuid().ToString().Substring(0, 8)
 $setupEmail = "setup-ratelimit-$setupSuffix@marketplace.local"
-$setupPhone = "+1" + (Get-Random -Minimum 1000000000 -Maximum 9999999999)
+$setupPhone = "+947" + (Get-Random -Minimum 10000000 -Maximum 99999999)
 $setupPass = "SetupPass123!"
 
 $setupRegBody = @{
@@ -221,7 +221,7 @@ $maxRegisterAttempts = 15
 for ($i = 1; $i -le $maxRegisterAttempts; $i++) {
     $regSuffix = [System.Guid]::NewGuid().ToString().Substring(0, 8)
     $regEmail = "reg-limit-$regSuffix@marketplace.local"
-    $regPhone = "+1" + (Get-Random -Minimum 1000000000 -Maximum 9999999999)
+    $regPhone = "+947" + (Get-Random -Minimum 10000000 -Maximum 99999999)
 
     $regBody = @{
         name          = "Rate Limit User $i"

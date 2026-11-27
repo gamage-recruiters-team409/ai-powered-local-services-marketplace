@@ -137,6 +137,66 @@ describe('ProfilePage', () => {
     expect(mockUpdateCurrentUser).not.toHaveBeenCalled();
   });
 
+  it('validates name with digits and shows error on blur and submit', async () => {
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Nimal Perera')).toBeTruthy();
+    });
+
+    const nameInput = screen.getByDisplayValue('Nimal Perera');
+    const saveBtn = screen.getByRole('button', { name: /save changes/i });
+
+    // Blur validation
+    fireEvent.change(nameInput, { target: { value: 'kalana test 14444' } });
+    fireEvent.blur(nameInput);
+    expect(
+      screen.getByText(/full name can only contain letters, spaces, apostrophes, hyphens and dots/i)
+    ).toBeTruthy();
+
+    // Submit blocked
+    fireEvent.click(saveBtn);
+    expect(customerAccountApi.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('normalizes multiple spaces in name when saving profile', async () => {
+    customerAccountApi.updateProfile.mockResolvedValueOnce({
+      id: 'cust-1',
+      fullName: 'Nimal Marie Perera',
+      email: 'nimal@email.com',
+      phone: '+94771234567',
+      emailVerified: true,
+    });
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Nimal Perera')).toBeTruthy();
+    });
+
+    const nameInput = screen.getByDisplayValue('Nimal Perera');
+    const saveBtn = screen.getByRole('button', { name: /save changes/i });
+
+    fireEvent.change(nameInput, { target: { value: '  Nimal    Marie   Perera  ' } });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(customerAccountApi.updateProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fullName: 'Nimal Marie Perera',
+        })
+      );
+    });
+  });
+
   it('saves updated profile successfully, updates input from server response, and shows success toast', async () => {
     customerAccountApi.updateProfile.mockResolvedValueOnce({
       id: 'cust-1',
