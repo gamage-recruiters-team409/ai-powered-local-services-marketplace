@@ -2912,7 +2912,9 @@ class RefundTransactionMongoIntegrationTest {
         return new StripeWebhookTransactionService(
                 context.template(),
                 new org.springframework.data.mongodb.MongoTransactionManager(
-                        context.template().getMongoDatabaseFactory()));
+                        context.template().getMongoDatabaseFactory()),
+                org.mockito.Mockito.mock(com.gamagerecruiters.marketplace.modules.payment.service.BookingPaymentConfirmationService.class),
+                false);
     }
 
     /**
@@ -3071,7 +3073,9 @@ class RefundTransactionMongoIntegrationTest {
             var service = new StripeWebhookTransactionService(
                     template,
                     new org.springframework.data.mongodb.MongoTransactionManager(
-                            context.template().getMongoDatabaseFactory()));
+                            context.template().getMongoDatabaseFactory()),
+                org.mockito.Mockito.mock(com.gamagerecruiters.marketplace.modules.payment.service.BookingPaymentConfirmationService.class),
+                false);
 
             IllegalStateException failure = assertThrows(
                     IllegalStateException.class,

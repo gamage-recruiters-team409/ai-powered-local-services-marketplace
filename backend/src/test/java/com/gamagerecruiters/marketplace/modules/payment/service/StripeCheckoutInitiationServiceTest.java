@@ -251,7 +251,8 @@ class StripeCheckoutInitiationServiceTest {
                         new BigDecimal("200.00"),
                         "USD",
                         new BigDecimal("0.10"),
-                        Instant.now().minusSeconds(60)));
+                        Instant.now().minusSeconds(60),
+                        Instant.now().plusSeconds(840)));
 
         assertThrows(IllegalStateException.class, () ->
                 service.initiate(
@@ -273,7 +274,8 @@ class StripeCheckoutInitiationServiceTest {
                         new BigDecimal("100.00"),
                         "USD",
                         new BigDecimal("0.10"),
-                        Instant.now().minusSeconds(25 * 60 * 60)));
+                        Instant.now().minusSeconds(1200),
+                        Instant.now().minusSeconds(300)));
 
         assertThrows(IllegalArgumentException.class, () ->
                 service.initiate(
@@ -281,6 +283,7 @@ class StripeCheckoutInitiationServiceTest {
                         SUCCESS_URL, CANCEL_URL));
 
         verifyNoInteractions(
+                reservationService,
                 checkoutGateway,
                 sessionPersistenceService);
     }
@@ -513,7 +516,8 @@ class StripeCheckoutInitiationServiceTest {
         when(quoteProvider.getPaymentQuote(BOOKING_ID))
                 .thenReturn(new BookingPaymentQuote(
                         amount, currency, new BigDecimal("0.10"),
-                        Instant.now().minusSeconds(60)));
+                        Instant.now().minusSeconds(60),
+                        Instant.now().plusSeconds(840)));
 
         when(reservationService.tryReserve(PAYMENT_ID))
                 .thenReturn("invalid-reservation");
@@ -579,7 +583,8 @@ class StripeCheckoutInitiationServiceTest {
                                 new BigDecimal("100.00"),
                                 "AUD",
                                 new BigDecimal("0.10"),
-                                Instant.now().minusSeconds(60)),
+                                Instant.now().minusSeconds(60),
+                                Instant.now().plusSeconds(840)),
                         trustedQuote());
 
         when(reservationService.tryReserve(PAYMENT_ID))
@@ -677,6 +682,96 @@ class StripeCheckoutInitiationServiceTest {
                 new BigDecimal("100.00"),
                 "USD",
                 new BigDecimal("0.10"),
-                Instant.now().minusSeconds(60));
+                Instant.now().minusSeconds(60),
+                Instant.now().plusSeconds(840));
     }
+
+    /**
+     * A missing authoritative deadline must fail before
+     * acquiring a reservation or contacting the gateway.
+     */
+    @Test
+    void rejectsMissingTrustedPaymentDeadline() {
+        when(persistenceService.findPaymentById(PAYMENT_ID))
+                .thenReturn(Optional.of(payment()));
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(new BookingPaymentQuote(
+                        new BigDecimal("100.00"),
+                        "USD",
+                        new BigDecimal("0.10"),
+                        Instant.now().minusSeconds(60),
+                        null));
+
+        assertThrows(IllegalArgumentException.class, () ->
+                service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        SUCCESS_URL, CANCEL_URL));
+
+        verifyNoInteractions(
+                reservationService,
+                checkoutGateway,
+                sessionPersistenceService);
+    }
+
+    /**
+     * An inconsistent booking deadline must fail without
+     * creating any checkout-related side effects.
+     */
+    @Test
+    void rejectsInvalidTrustedPaymentDeadline() {
+        Instant acceptedAt = Instant.now().minusSeconds(60);
+
+        when(persistenceService.findPaymentById(PAYMENT_ID))
+                .thenReturn(Optional.of(payment()));
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(new BookingPaymentQuote(
+                        new BigDecimal("100.00"),
+                        "USD",
+                        new BigDecimal("0.10"),
+                        acceptedAt,
+                        acceptedAt.minusSeconds(1)));
+
+        assertThrows(IllegalArgumentException.class, () ->
+                service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        SUCCESS_URL, CANCEL_URL));
+
+        verifyNoInteractions(
+                reservationService,
+                checkoutGateway,
+                sessionPersistenceService);
+    }
+
+    /**
+     * Checkout cannot begin before provider acceptance,
+     * even when the authoritative deadline is in the future.
+     */
+    @Test
+    void rejectsCheckoutBeforeProviderAcceptance() {
+        Instant acceptedAt = Instant.now().plusSeconds(300);
+
+        when(persistenceService.findPaymentById(PAYMENT_ID))
+                .thenReturn(Optional.of(payment()));
+
+        when(quoteProvider.getPaymentQuote(BOOKING_ID))
+                .thenReturn(new BookingPaymentQuote(
+                        new BigDecimal("100.00"),
+                        "USD",
+                        new BigDecimal("0.10"),
+                        acceptedAt,
+                        acceptedAt.plusSeconds(900)));
+
+        assertThrows(IllegalArgumentException.class, () ->
+                service.initiate(
+                        PAYMENT_ID, CUSTOMER_ID,
+                        SUCCESS_URL, CANCEL_URL));
+
+        verifyNoInteractions(
+                reservationService,
+                checkoutGateway,
+                sessionPersistenceService);
+    }
+
 }
