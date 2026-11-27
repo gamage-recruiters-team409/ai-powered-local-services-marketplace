@@ -39,6 +39,14 @@ public class BookingNotifier {
         this.notificationService = notificationService;
     }
 
+    /**
+     * A notifier that sends nothing. Only for code that uses the booking facade without the
+     * notification module (e.g. other modules' tests written before booking notifications existed).
+     */
+    public static BookingNotifier silent() {
+        return new BookingNotifier(null);
+    }
+
     /** New request → provider. */
     public void requestReceived(Booking booking) {
         send(NotificationType.BOOKING_REQUEST_RECEIVED, booking.getProviderId(), booking, null);
@@ -159,6 +167,9 @@ public class BookingNotifier {
     }
 
     private void deliver(NotificationEvent event) {
+        if (notificationService == null) {
+            return; // silent notifier
+        }
         try {
             notificationService.notify(event);
         } catch (RuntimeException e) {

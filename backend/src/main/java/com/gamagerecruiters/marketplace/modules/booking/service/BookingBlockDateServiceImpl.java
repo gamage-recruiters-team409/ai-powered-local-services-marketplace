@@ -14,10 +14,14 @@ import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.data.mongodb.MongoTransactionManager;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
@@ -57,25 +61,39 @@ public class BookingBlockDateServiceImpl implements BookingBlockDateService {
     private final BookingRescheduleServiceImpl rescheduleService;
     private final ReschedulePolicy reschedulePolicy;
     private final BookingNotifier notifier;
+    private final ProviderBookingGuard providerBookingGuard;
+    private final TransactionOperations transactions;
     private final Clock clock;
+    private final long retryDelayMillis;
 
     @Autowired
     public BookingBlockDateServiceImpl(BookingRepository bookingRepository, AvailabilityFacade availabilityFacade,
                                        BookingRescheduleServiceImpl rescheduleService,
-                                       ReschedulePolicy reschedulePolicy, BookingNotifier notifier) {
+                                       ReschedulePolicy reschedulePolicy, BookingNotifier notifier,
+                                       ProviderBookingGuard providerBookingGuard,
+                                       ObjectProvider<MongoTransactionManager> transactionManager) {
         this(bookingRepository, availabilityFacade, rescheduleService, reschedulePolicy, notifier,
-                Clock.systemUTC());
+                providerBookingGuard, transactionTemplate(transactionManager.getIfAvailable()), Clock.systemUTC(),
+                BookingRescheduleServiceImpl.DEFAULT_RETRY_DELAY_MILLIS);
     }
 
     BookingBlockDateServiceImpl(BookingRepository bookingRepository, AvailabilityFacade availabilityFacade,
                                 BookingRescheduleServiceImpl rescheduleService, ReschedulePolicy reschedulePolicy,
-                                BookingNotifier notifier, Clock clock) {
+                                BookingNotifier notifier, ProviderBookingGuard providerBookingGuard,
+                                TransactionOperations transactions, Clock clock, long retryDelayMillis) {
         this.bookingRepository = bookingRepository;
         this.availabilityFacade = availabilityFacade;
         this.rescheduleService = rescheduleService;
         this.reschedulePolicy = reschedulePolicy;
         this.notifier = notifier;
+        this.providerBookingGuard = providerBookingGuard;
+        this.transactions = transactions;
         this.clock = clock;
+        this.retryDelayMillis = retryDelayMillis;
+    }
+
+    private static TransactionOperations transactionTemplate(MongoTransactionManager manager) {
+        return manager == null ? null : new TransactionTemplate(manager);
     }
 
     @Override
@@ -105,10 +123,43 @@ public class BookingBlockDateServiceImpl implements BookingBlockDateService {
     public BlockDateResult blockWithBookings(BlockDateWithBookingsRequest request) {
         String providerId = currentUserId();
         LocalDate date = parseDate(request.date());
-        Instant now = Instant.now(clock);
         if (date.isBefore(LocalDate.now(clock.withZone(SlotServiceImpl.BUSINESS_ZONE)))) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_BLOCKED_DATE", "Cannot block a past date");
         }
+        if (transactions == null) {
+            // Fail closed: without a transaction the changes could not be atomic or serialised with bookings.
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "BLOCK_DATE_UNAVAILABLE",
+                    "Blocking dates is not available right now. Please try again later.");
+        }
+        providerBookingGuard.ensureExists(providerId, Instant.now(clock));
+
+        for (int attempt = 1; attempt <= BookingRescheduleServiceImpl.MAX_TRANSACTION_ATTEMPTS; attempt++) {
+            try {
+                BlockDateResult result = transactions.execute(status -> blockOnce(providerId, date, request));
+                log.info("event=DATE_BLOCKED_WITH_BOOKINGS date={} declined={} kept={} newTimeRequested={}", date,
+                        result.declinedBookingIds().size(), result.keptBookingIds().size(),
+                        result.newTimeRequestedBookingIds().size());
+                return result;
+            } catch (RuntimeException e) {
+                if (!BookingRequestServiceImpl.isTransientTransactionError(e)) {
+                    throw e;
+                }
+                sleepBeforeRetry();
+            }
+        }
+        throw new ResourceConflictException("BOOKING_BUSY",
+                "Another booking for this provider is being processed. Please try again.");
+    }
+
+    /**
+     * One attempt, inside a MongoDB transaction: claim the provider booking guard first (the same serialisation
+     * point as booking creation and reschedule approval), then read the bookings fresh, check everything, apply,
+     * and save the blocked date. Any failure rolls back every change; notifications are sent only after commit
+     * ({@link BookingNotifier} waits for the commit when a transaction is open).
+     */
+    private BlockDateResult blockOnce(String providerId, LocalDate date, BlockDateWithBookingsRequest request) {
+        Instant now = Instant.now(clock);
+        providerBookingGuard.claim(providerId, now);
         if (availabilityFacade.isDateBlocked(providerId, date)) {
             throw new ResourceConflictException("BLOCKED_DATE_EXISTS", "This date is already blocked");
         }
@@ -123,7 +174,7 @@ public class BookingBlockDateServiceImpl implements BookingBlockDateService {
 
         Map<String, BlockDateDecision> decisions = decisionsById(request.decisions(), confirmed);
 
-        // 1. Check everything before changing anything.
+        // 1. Check every decision before changing anything.
         for (Booking booking : confirmed) {
             BlockDateDecision decision = decisions.get(booking.getId());
             if (decision.action() == BlockDateAction.REQUEST_NEW_TIME) {
@@ -139,7 +190,7 @@ public class BookingBlockDateServiceImpl implements BookingBlockDateService {
             }
         }
 
-        // 2. Apply.
+        // 2. Apply (all in this transaction).
         List<String> declined = new ArrayList<>();
         for (Booking booking : pending) {
             booking.changeStatus(BookingStatus.DECLINED, providerId, DECLINE_REASON, now);
@@ -161,13 +212,24 @@ public class BookingBlockDateServiceImpl implements BookingBlockDateService {
             }
         }
 
-        // 3. Block the date; the booking check accepts the bookings decided above.
+        // 3. Block the date in the same transaction; the booking check accepts the bookings decided above.
         BlockedDateResponse blocked = BlockDateContext.runWithHandled(handled, () ->
                 availabilityFacade.createBlockedDate(providerId,
                         new CreateBlockedDateRequest(date.toString(), request.reason(), request.note())));
-        log.info("event=DATE_BLOCKED_WITH_BOOKINGS date={} declined={} kept={} newTimeRequested={}", date,
-                declined.size(), kept.size(), newTimeRequested.size());
         return new BlockDateResult(blocked, declined, kept, newTimeRequested);
+    }
+
+    private void sleepBeforeRetry() {
+        if (retryDelayMillis <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(retryDelayMillis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ResourceConflictException("BOOKING_BUSY",
+                    "Another booking for this provider is being processed. Please try again.");
+        }
     }
 
     private static Map<String, BlockDateDecision> decisionsById(List<BlockDateDecision> list, List<Booking> confirmed) {

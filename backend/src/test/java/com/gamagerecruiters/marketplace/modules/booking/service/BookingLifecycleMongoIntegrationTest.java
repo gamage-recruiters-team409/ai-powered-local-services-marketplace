@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -15,6 +16,11 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -30,12 +36,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.testcontainers.containers.MongoDBContainer;
 
@@ -45,12 +54,15 @@ import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
 import com.gamagerecruiters.marketplace.modules.availability.domain.BlockReason;
 import com.gamagerecruiters.marketplace.modules.availability.dto.CreateBlockedDateRequest;
+import com.gamagerecruiters.marketplace.modules.availability.dto.UpdateAvailabilityRequest;
+import com.gamagerecruiters.marketplace.modules.availability.dto.WeeklyHoursRequest;
 import com.gamagerecruiters.marketplace.modules.availability.service.AvailabilityFacade;
 import com.gamagerecruiters.marketplace.modules.availability.service.AvailabilityService;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingPriceSnapshot;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatusChange;
+import com.gamagerecruiters.marketplace.modules.booking.domain.CalendarFeedToken;
 import com.gamagerecruiters.marketplace.modules.booking.domain.RescheduleRequest;
 import com.gamagerecruiters.marketplace.modules.booking.domain.RescheduleStatus;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BlockDateAction;
@@ -60,11 +72,14 @@ import com.gamagerecruiters.marketplace.modules.booking.dto.BlockDateWithBooking
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingListItem;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingPageResponse;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
+import com.gamagerecruiters.marketplace.modules.booking.repository.CalendarFeedTokenRepository;
+import com.gamagerecruiters.marketplace.modules.notification.service.NotificationService;
 
 /**
  * PR #51 review (F3, F5) against a real MongoDB (Testcontainers):
  * deterministic My Bookings pagination with identical slotStart values, and the one WP05/WP07
  * payment-timeout contract shared by BookingExpiryJob and markPaymentExpired.
+ * Also PR #65 review: atomic block-date rollback (F1) and calendar link revoke/reset races (F4).
  * Requires Docker. Skip with -DSKIP_DOCKER_TESTS=true.
  */
 @SpringBootTest
@@ -393,5 +408,154 @@ class BookingLifecycleMongoIntegrationTest {
         assertThatThrownBy(() -> calendarService.feed(firstToken)).isInstanceOf(ResourceNotFoundException.class);
         assertThat(calendarService.feed(secondUrl.substring(secondUrl.lastIndexOf('/') + 1).replace(".ics", "")))
                 .contains("BEGIN:VCALENDAR");
+    }
+
+    // ---------- PR #65 F1: block-date is all-or-nothing (real MongoDB transaction) ----------
+
+    @Autowired
+    private ProviderBookingGuard providerBookingGuard;
+
+    @Autowired
+    private MongoTransactionManager mongoTransactionManager;
+
+    @Autowired
+    private SlotService slotService;
+
+    @Test
+    @DisplayName("F1: saving the blocked date fails at the last step → the decline and the new-time request are "
+            + "rolled back, nothing is blocked and no notification is sent")
+    void blockDateFailureRollsBackEverything() {
+        LocalDate day = LocalDate.now(SlotServiceImpl.BUSINESS_ZONE).plusDays(12);
+        String provider = "prov-f1-" + UUID.randomUUID();
+        List<WeeklyHoursRequest> week = new ArrayList<>();
+        for (DayOfWeek d : DayOfWeek.values()) {
+            week.add(new WeeklyHoursRequest(d, true, "08:00", "20:00"));
+        }
+        availabilityService.updateAvailability(provider, new UpdateAvailabilityRequest(week, 30));
+        Instant nine = day.atTime(9, 0).atZone(SlotServiceImpl.BUSINESS_ZONE).toInstant();
+        Instant nextDayTen = day.plusDays(1).atTime(10, 0).atZone(SlotServiceImpl.BUSINESS_ZONE).toInstant();
+        Booking confirmed = save("cust-f1a", provider, BookingStatus.CONFIRMED, nine);
+        Booking pending = save("cust-f1b", provider, BookingStatus.PENDING_PROVIDER, nine.plus(Duration.ofHours(4)));
+        int pendingTimeline = pending.getTimeline().size();
+
+        // Real availability reads; only the final blocked-date save fails.
+        AvailabilityFacade failingAvailability = Mockito.mock(AvailabilityFacade.class);
+        Mockito.when(failingAvailability.isDateBlocked(provider, day)).thenReturn(false);
+        Mockito.when(failingAvailability.createBlockedDate(Mockito.eq(provider), Mockito.any()))
+                .thenThrow(new IllegalStateException("simulated failure while saving the blocked date"));
+        NotificationService notificationService = Mockito.mock(NotificationService.class);
+        BookingNotifier notifier = new BookingNotifier(notificationService);
+        TransactionTemplate transactions = new TransactionTemplate(mongoTransactionManager);
+        ReschedulePolicy reschedulePolicy = new ReschedulePolicy(2, 6, 12);
+        BookingRescheduleServiceImpl rescheduleService = new BookingRescheduleServiceImpl(bookingRepository,
+                slotService, providerBookingGuard, reschedulePolicy, notifier, transactions, Clock.systemUTC(), 0);
+        BookingBlockDateServiceImpl service = new BookingBlockDateServiceImpl(bookingRepository, failingAvailability,
+                rescheduleService, reschedulePolicy, notifier, providerBookingGuard, transactions, Clock.systemUTC(),
+                0);
+
+        loginAs(provider, Role.PROVIDER);
+        assertThatThrownBy(() -> service.blockWithBookings(new BlockDateWithBookingsRequest(day.toString(),
+                BlockReason.PERSONAL, null, List.of(new BlockDateDecision(confirmed.getId(),
+                        BlockDateAction.REQUEST_NEW_TIME, nextDayTen, "Sorry, can we move it?")))))
+                .isInstanceOf(IllegalStateException.class);
+
+        Booking storedPending = bookingRepository.findById(pending.getId()).orElseThrow();
+        Booking storedConfirmed = bookingRepository.findById(confirmed.getId()).orElseThrow();
+        assertThat(storedPending.getStatus()).isEqualTo(BookingStatus.PENDING_PROVIDER);
+        assertThat(storedPending.getTimeline()).hasSize(pendingTimeline);
+        assertThat(storedConfirmed.getStatus()).isEqualTo(BookingStatus.CONFIRMED);
+        assertThat(storedConfirmed.getRescheduleRequests()).isEmpty();
+        assertThat(storedConfirmed.getSlotStart()).isEqualTo(nine);
+        assertThat(availabilityFacade.isDateBlocked(provider, day)).isFalse();
+        Mockito.verifyNoInteractions(notificationService);
+    }
+
+    // ---------- PR #65 F4: a revoked or reset calendar link never comes back (real MongoDB) ----------
+
+    @Autowired
+    private CalendarFeedTokenRepository calendarFeedTokenRepository;
+
+    private static String tokenOf(String url) {
+        return url.substring(url.lastIndexOf('/') + 1).replace(".ics", "");
+    }
+
+    private long tokensOf(String userId) {
+        return mongoTemplate.count(Query.query(Criteria.where("userId").is(userId)), CalendarFeedToken.class);
+    }
+
+    @Test
+    @DisplayName("F4: last-used update after revoke matches nothing and recreates nothing; after reset the old "
+            + "token's update leaves the new token alone")
+    void calendarTouchAfterRevokeOrReset() {
+        String provider = "prov-f4-" + UUID.randomUUID();
+        loginAs(provider, Role.PROVIDER);
+        String revokedToken = tokenOf(calendarService.createOrResetSubscription().url());
+        CalendarFeedToken revoked = calendarFeedTokenRepository
+                .findByTokenHash(BookingCalendarServiceImpl.hash(revokedToken)).orElseThrow();
+
+        calendarService.revokeSubscription();
+        assertThat(calendarFeedTokenRepository.touchLastUsed(revoked.getId(), revoked.getTokenHash(), Instant.now()))
+                .isZero();
+        assertThat(tokensOf(provider)).isZero();
+        assertThatThrownBy(() -> calendarService.feed(revokedToken)).isInstanceOf(ResourceNotFoundException.class);
+
+        String oldToken = tokenOf(calendarService.createOrResetSubscription().url());
+        CalendarFeedToken old = calendarFeedTokenRepository
+                .findByTokenHash(BookingCalendarServiceImpl.hash(oldToken)).orElseThrow();
+        String newToken = tokenOf(calendarService.createOrResetSubscription().url());
+        SecurityContextHolder.clearContext();
+
+        assertThat(calendarFeedTokenRepository.touchLastUsed(old.getId(), old.getTokenHash(), Instant.now()))
+                .isZero();
+        assertThat(tokensOf(provider)).isEqualTo(1);
+        CalendarFeedToken current = calendarFeedTokenRepository
+                .findByTokenHash(BookingCalendarServiceImpl.hash(newToken)).orElseThrow();
+        assertThat(current.getLastUsedAt()).isNull();
+        assertThatThrownBy(() -> calendarService.feed(oldToken)).isInstanceOf(ResourceNotFoundException.class);
+        assertThat(calendarService.feed(newToken)).contains("BEGIN:VCALENDAR");
+    }
+
+    @Test
+    @DisplayName("F4: calendar apps polling while the link is revoked → the revoked link stays 404, no token left")
+    void calendarPollsDuringRevoke() throws Exception {
+        String provider = "prov-f4r-" + UUID.randomUUID();
+        save("cust-f4", provider, BookingStatus.CONFIRMED, Instant.now().plus(Duration.ofDays(3)));
+        loginAs(provider, Role.PROVIDER);
+        String token = tokenOf(calendarService.createOrResetSubscription().url());
+
+        int pollers = 12;
+        ExecutorService executor = Executors.newFixedThreadPool(pollers);
+        CountDownLatch ready = new CountDownLatch(pollers);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<String>> results = new ArrayList<>();
+        try {
+            for (int i = 0; i < pollers; i++) {
+                results.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    String outcome = "OK";
+                    for (int n = 0; n < 20; n++) {
+                        try {
+                            calendarService.feed(token);
+                        } catch (ResourceNotFoundException e) {
+                            outcome = "NOT_FOUND";
+                        }
+                    }
+                    return outcome;
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            calendarService.revokeSubscription();
+            for (Future<String> result : results) {
+                assertThat(result.get(60, TimeUnit.SECONDS)).isIn("OK", "NOT_FOUND");
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+        SecurityContextHolder.clearContext();
+
+        assertThat(tokensOf(provider)).isZero();
+        assertThatThrownBy(() -> calendarService.feed(token)).isInstanceOf(ResourceNotFoundException.class);
     }
 }

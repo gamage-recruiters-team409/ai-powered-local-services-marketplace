@@ -176,10 +176,6 @@ public class AvailabilityServiceImpl implements AvailabilityService {
         if (blockedDateRepository.existsByProviderIdAndDate(providerId, dateText)) {
             throw new ResourceConflictException("BLOCKED_DATE_EXISTS", "This date is already blocked");
         }
-        
-        if (bookingCheck != null) {
-            bookingCheck.assertNoBookingsToHandle(providerId, date);
-        }
 
         BlockedDate blockedDate = new BlockedDate();
         blockedDate.setProviderId(providerId);
@@ -189,7 +185,11 @@ public class AvailabilityServiceImpl implements AvailabilityService {
         blockedDate.setCreatedAt(Instant.now(clock));
 
         try {
-            return AvailabilityMapper.toResponse(blockedDateRepository.save(blockedDate));
+            BlockedDate saved = bookingCheck == null
+                ? blockedDateRepository.save(blockedDate)
+                : bookingCheck.createIfNoBookingsToHandle(providerId, date,
+                    () -> blockedDateRepository.save(blockedDate));
+            return AvailabilityMapper.toResponse(saved);
         } catch (DuplicateKeyException e) {
             // Two requests for the same date at the same time: the unique index stops the second one.
             throw new ResourceConflictException("BLOCKED_DATE_EXISTS", "This date is already blocked");

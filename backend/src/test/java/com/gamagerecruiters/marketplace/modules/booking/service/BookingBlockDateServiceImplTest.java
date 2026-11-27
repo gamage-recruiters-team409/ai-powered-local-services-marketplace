@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -19,16 +20,21 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionOperations;
 
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.common.exception.ResourceConflictException;
@@ -47,6 +53,7 @@ import com.gamagerecruiters.marketplace.modules.booking.dto.BlockDateImpactRespo
 import com.gamagerecruiters.marketplace.modules.booking.dto.BlockDateResult;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BlockDateWithBookingsRequest;
 import com.gamagerecruiters.marketplace.modules.booking.repository.BookingRepository;
+import com.mongodb.MongoException;
 
 @ExtendWith(MockitoExtension.class)
 class BookingBlockDateServiceImplTest {
@@ -70,15 +77,23 @@ class BookingBlockDateServiceImplTest {
     @Mock
     private BookingNotifier notifier;
 
+    @Mock
+    private ProviderBookingGuard providerBookingGuard;
+
     private BookingBlockDateServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new BookingBlockDateServiceImpl(bookingRepository, availabilityFacade, rescheduleService,
-                new ReschedulePolicy(2, 6, 12), notifier, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = service(TransactionOperations.withoutTransaction());
         UserPrincipal principal = new UserPrincipal(PROVIDER, "p@test.local", Role.PROVIDER);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
+    }
+
+    private BookingBlockDateServiceImpl service(TransactionOperations transactions) {
+        return new BookingBlockDateServiceImpl(bookingRepository, availabilityFacade, rescheduleService,
+                new ReschedulePolicy(2, 6, 12), notifier, providerBookingGuard, transactions,
+                Clock.fixed(NOW, ZoneOffset.UTC), 0);
     }
 
     @AfterEach
@@ -160,6 +175,45 @@ class BookingBlockDateServiceImplTest {
         verify(rescheduleService).submit(move, PROVIDER, NEXT_DAY, "Sorry, family function", NOW);
         assertThat(handledDuringBlock).containsExactly(Set.of("k", "m"));
         assertThat(BlockDateContext.handled()).isEmpty();
+        // The provider guard is claimed before the bookings are read (serialised with booking creation).
+        InOrder order = inOrder(providerBookingGuard, bookingRepository);
+        order.verify(providerBookingGuard).ensureExists(PROVIDER, NOW);
+        order.verify(providerBookingGuard).claim(PROVIDER, NOW);
+        order.verify(bookingRepository).findByProviderIdAndStatusInAndSlotStartLessThanAndSlotEndGreaterThan(
+                eq(PROVIDER), anyCollection(), any(Instant.class), any(Instant.class));
+    }
+
+    @Test
+    @DisplayName("No MongoDB transaction manager → 503 BLOCK_DATE_UNAVAILABLE, nothing read or changed")
+    void failsClosedWithoutTransactions() {
+        assertThatThrownBy(() -> service(null).blockWithBookings(request()))
+                .satisfies(e -> assertCode(e, "BLOCK_DATE_UNAVAILABLE"));
+        verifyNoInteractions(bookingRepository, availabilityFacade, providerBookingGuard, notifier);
+    }
+
+    @Test
+    @DisplayName("Transient transaction conflict (a booking for the provider committing) → retried with fresh data")
+    void retriesTransientConflict() {
+        Booking pending = booking("p", BookingStatus.PENDING_PROVIDER, DAY_2PM);
+        givenOnDate(pending);
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(availabilityFacade.createBlockedDate(eq(PROVIDER), any(CreateBlockedDateRequest.class)))
+                .thenReturn(new BlockedDateResponse("bd-1", DATE, BlockReason.PERSONAL, null, NOW));
+        AtomicInteger calls = new AtomicInteger();
+        TransactionOperations flaky = new TransactionOperations() {
+            @Override
+            public <T> T execute(TransactionCallback<T> action) {
+                if (calls.incrementAndGet() == 1) {
+                    MongoException conflict = new MongoException("WriteConflict");
+                    conflict.addLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL);
+                    throw conflict;
+                }
+                return action.doInTransaction((TransactionStatus) null);
+            }
+        };
+
+        assertThat(service(flaky).blockWithBookings(request()).declinedBookingIds()).containsExactly("p");
+        assertThat(calls.get()).isEqualTo(2);
     }
 
     @Test

@@ -51,14 +51,19 @@ import org.testcontainers.containers.MongoDBContainer;
 import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import com.gamagerecruiters.marketplace.modules.auth.domain.Role;
 import com.gamagerecruiters.marketplace.modules.auth.security.UserPrincipal;
+import com.gamagerecruiters.marketplace.modules.availability.domain.BlockReason;
+import com.gamagerecruiters.marketplace.modules.availability.dto.CreateBlockedDateRequest;
 import com.gamagerecruiters.marketplace.modules.availability.dto.UpdateAvailabilityRequest;
 import com.gamagerecruiters.marketplace.modules.availability.dto.WeeklyHoursRequest;
 import com.gamagerecruiters.marketplace.modules.availability.service.AvailabilityService;
 import com.gamagerecruiters.marketplace.modules.booking.domain.Booking;
 import com.gamagerecruiters.marketplace.modules.booking.domain.BookingStatus;
+import com.gamagerecruiters.marketplace.modules.booking.dto.BlockDateWithBookingsRequest;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingAddressRequest;
 import com.gamagerecruiters.marketplace.modules.booking.dto.BookingResponse;
 import com.gamagerecruiters.marketplace.modules.booking.dto.CreateBookingRequest;
+import com.gamagerecruiters.marketplace.modules.availability.service.AvailabilityFacade;
+import com.gamagerecruiters.marketplace.modules.booking.service.BookingBlockDateService;
 import com.gamagerecruiters.marketplace.modules.booking.service.BookingRequestService;
 import com.gamagerecruiters.marketplace.modules.listing.domain.PricingModel;
 import com.gamagerecruiters.marketplace.modules.listing.dto.PriceSnapshotResponse;
@@ -135,6 +140,7 @@ class BookingRequestIntegrationTest {
     @BeforeEach
     void setUp() {
         mongoTemplate.remove(new Query(), Booking.class);
+        mongoTemplate.remove(Query.query(Criteria.where("providerId").is(PROVIDER)), "blocked_dates");
         // Provider works every day 08:00–20:00 Colombo, 30 minutes buffer.
         List<WeeklyHoursRequest> week = new ArrayList<>();
         for (DayOfWeek day : DayOfWeek.values()) {
@@ -299,6 +305,95 @@ class BookingRequestIntegrationTest {
             assertThat(List.of(slowOutcome, secondOutcome))
                     .allMatch(o -> o.equals("CREATED") || o.equals("SLOT_UNAVAILABLE") || o.equals("BOOKING_BUSY"));
             assertThat(storedOpenBookings()).isEqualTo(1);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    // ---------- PR #65 F2: blocking a date is serialised with booking creation (provider guard) ----------
+
+    @Autowired
+    private BookingBlockDateService blockDateService;
+
+    @Autowired
+    private AvailabilityFacade availabilityFacade;
+
+    private static void loginAsProvider() {
+        UserPrincipal principal = new UserPrincipal(PROVIDER, PROVIDER + "@test.local", Role.PROVIDER);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
+    }
+
+    private long openBookingsOn(LocalDate date) {
+        Instant dayStart = date.atStartOfDay(SlotServiceImpl.BUSINESS_ZONE).toInstant();
+        Instant dayEnd = date.plusDays(1).atStartOfDay(SlotServiceImpl.BUSINESS_ZONE).toInstant();
+        return mongoTemplate.count(Query.query(Criteria.where("providerId").is(PROVIDER)
+                .and("status").in(BookingStatus.OPEN_STATUSES)
+                .and("slotStart").gte(dayStart).lt(dayEnd)), Booking.class);
+    }
+
+    @Test
+    @DisplayName("Real MongoDB: booking requests and date blocking at the same moment on the same date → never "
+            + "a blocked date that still has an open booking")
+    void bookingAndBlockingSameDateAtOnce() throws Exception {
+        int dates = 8;
+        ExecutorService executor = Executors.newFixedThreadPool(dates * 2);
+        CountDownLatch ready = new CountDownLatch(dates * 2);
+        CountDownLatch start = new CountDownLatch(1);
+        List<LocalDate> days = new ArrayList<>();
+        List<Future<String>> bookingResults = new ArrayList<>();
+        List<Future<String>> blockResults = new ArrayList<>();
+        try {
+            for (int i = 0; i < dates; i++) {
+                LocalDate day = LocalDate.now(SlotServiceImpl.BUSINESS_ZONE).plusDays(20 + i);
+                days.add(day);
+                Instant ten = day.atTime(10, 0).atZone(SlotServiceImpl.BUSINESS_ZONE).toInstant();
+                String customer = "customer-f2-" + i;
+                // Even dates: the plain availability POST (empty-day path). Odd dates: the booking-aware flow.
+                boolean plainPost = i % 2 == 0;
+                bookingResults.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return attempt(customer, ten);
+                }));
+                blockResults.add(executor.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    loginAsProvider();
+                    try {
+                        if (plainPost) {
+                            availabilityService.createBlockedDate(PROVIDER,
+                                    new CreateBlockedDateRequest(day.toString(), BlockReason.PERSONAL, null));
+                        } else {
+                            blockDateService.blockWithBookings(new BlockDateWithBookingsRequest(day.toString(),
+                                    BlockReason.PERSONAL, null, List.of()));
+                        }
+                        return "BLOCKED";
+                    } catch (ApiException e) {
+                        return e.getErrorCode();
+                    } finally {
+                        SecurityContextHolder.clearContext();
+                    }
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            for (int i = 0; i < dates; i++) {
+                String booking = bookingResults.get(i).get(60, TimeUnit.SECONDS);
+                String block = blockResults.get(i).get(60, TimeUnit.SECONDS);
+                LocalDate day = days.get(i);
+                boolean blocked = availabilityFacade.isDateBlocked(PROVIDER, day);
+                long open = openBookingsOn(day);
+                log.info("Block vs booking on {}: booking={}, block={}, blocked={}, open bookings={}",
+                        day, booking, block, blocked, open);
+
+                // The invariant the guard protects.
+                assertThat(blocked && open > 0).as("blocked date %s with an open booking", day).isFalse();
+                assertThat(booking).isIn("CREATED", "SLOT_UNAVAILABLE", "BOOKING_BUSY");
+                assertThat(block).isIn("BLOCKED", "BOOKINGS_ON_DATE", "BOOKING_BUSY");
+                assertThat(blocked).isEqualTo("BLOCKED".equals(block));
+            }
         } finally {
             executor.shutdownNow();
         }

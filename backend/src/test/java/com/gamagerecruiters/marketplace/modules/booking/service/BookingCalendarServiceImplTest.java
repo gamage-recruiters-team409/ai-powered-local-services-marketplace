@@ -205,6 +205,27 @@ class BookingCalendarServiceImplTest {
 
         assertThat(service.feed(token)).startsWith("BEGIN:VCALENDAR");
         verify(tokenRepository, never()).save(any());
+        verify(tokenRepository, never()).touchLastUsed(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Feed: an hour-old lastUsedAt is refreshed with a conditional update, never with save()")
+    void feedTouchesLastUsedConditionally() {
+        String token = "C".repeat(43);
+        CalendarFeedToken t = new CalendarFeedToken();
+        t.setId("t-1");
+        t.setUserId("cust-1");
+        t.setRole("CUSTOMER");
+        t.setTokenHash(BookingCalendarServiceImpl.hash(token));
+        t.setLastUsedAt(NOW.minus(Duration.ofHours(2)));
+        when(tokenRepository.findByTokenHash(t.getTokenHash())).thenReturn(Optional.of(t));
+        when(bookingRepository.findTop500ByCustomerIdAndStatusInAndSlotEndGreaterThanOrderBySlotStartAsc(eq("cust-1"),
+                anyCollection(), any(Instant.class))).thenReturn(List.of());
+
+        service.feed(token);
+
+        verify(tokenRepository).touchLastUsed("t-1", t.getTokenHash(), NOW);
+        verify(tokenRepository, never()).save(any());
     }
 
     @Test

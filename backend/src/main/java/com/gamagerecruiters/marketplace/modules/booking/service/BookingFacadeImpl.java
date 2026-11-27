@@ -81,6 +81,14 @@ public class BookingFacadeImpl implements BookingFacade {
         this(bookingRepository, paymentPolicy, notifier, Clock.systemUTC());
     }
 
+    /**
+     * Without booking notifications. Kept so code that built the facade before notifications were
+     * added (e.g. WP07 payment tests) still works; Spring always uses the constructor above.
+     */
+    public BookingFacadeImpl(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy) {
+        this(bookingRepository, paymentPolicy, BookingNotifier.silent(), Clock.systemUTC());
+    }
+
     BookingFacadeImpl(BookingRepository bookingRepository, BookingPaymentPolicy paymentPolicy,
                       BookingNotifier notifier, Clock clock) {
         this.bookingRepository = bookingRepository;

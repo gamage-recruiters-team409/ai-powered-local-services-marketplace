@@ -212,9 +212,10 @@ public class BookingCalendarServiceImpl implements BookingCalendarService {
         CalendarFeedToken feedToken = tokenRepository.findByTokenHash(hash(token)).orElseThrow(this::feedNotFound);
         Instant now = Instant.now(clock);
         // Calendar apps poll often: record use at most once an hour.
+        // Conditional field update (never save()): a link revoked or reset while this request runs is not
+        // written back, so a revoked secret can never become valid again.
         if (feedToken.getLastUsedAt() == null || feedToken.getLastUsedAt().isBefore(now.minus(Duration.ofHours(1)))) {
-            feedToken.setLastUsedAt(now);
-            tokenRepository.save(feedToken);
+            tokenRepository.touchLastUsed(feedToken.getId(), feedToken.getTokenHash(), now);
         }
         return ics(feedToken.getUserId(), feedToken.getRole());
     }

@@ -344,6 +344,22 @@ class BookingRescheduleServiceImplTest {
         assertThat(calls.get()).isEqualTo(2);
     }
 
+    @Test
+    @DisplayName("No MongoDB transaction manager → approve fails closed (503), booking untouched")
+    void approveFailsClosedWithoutTransactions() {
+        RescheduleRequest request = pending(CUSTOMER, NOW.plus(Duration.ofHours(5)));
+        loginAs(PROVIDER, Role.PROVIDER);
+
+        assertThatThrownBy(() -> service(null).approve("b-1"))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(e.getErrorCode()).isEqualTo("RESCHEDULE_UNAVAILABLE");
+                });
+        assertThat(booking.getSlotStart()).isEqualTo(START);
+        assertThat(request.getStatus()).isEqualTo(RescheduleStatus.PENDING);
+        verifyNoInteractions(bookingRepository, providerBookingGuard, slotService, notifier);
+    }
+
     // ---------- reject / withdraw ----------
 
     @Test

@@ -73,7 +73,7 @@ public class BookingRescheduleServiceImpl implements BookingRescheduleService {
         this.providerBookingGuard = providerBookingGuard;
         this.policy = policy;
         this.notifier = notifier;
-        this.transactions = transactions == null ? TransactionOperations.withoutTransaction() : transactions;
+        this.transactions = transactions;
         this.clock = clock;
         this.retryDelayMillis = retryDelayMillis;
     }
@@ -155,6 +155,11 @@ public class BookingRescheduleServiceImpl implements BookingRescheduleService {
     @Override
     public RescheduleResponse approve(String bookingId) {
         String userId = currentUserId();
+        if (transactions == null) {
+            // Fail closed, like booking creation: without a transaction the guard cannot prevent double booking.
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "RESCHEDULE_UNAVAILABLE",
+                    "Approving a new time is not available right now. Please try again later.");
+        }
         Booking first = loadForParticipant(bookingId, userId);
         providerBookingGuard.ensureExists(first.getProviderId(), Instant.now(clock));
 

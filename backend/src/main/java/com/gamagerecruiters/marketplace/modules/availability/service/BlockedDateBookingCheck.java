@@ -1,16 +1,21 @@
 package com.gamagerecruiters.marketplace.modules.availability.service;
 
 import java.time.LocalDate;
+import java.util.function.Supplier;
 
 /**
  * Implemented by the booking module, so availability does not depend on booking (no module cycle).
- * Called before a blocked date is saved.
+ * Wraps the saving of a blocked date.
  */
 public interface BlockedDateBookingCheck {
 
     /**
-     * Throws 409 BOOKINGS_ON_DATE when the provider still has bookings on this date that need a decision
-     * (pending requests, bookings awaiting payment, confirmed bookings not handled by the block-date flow).
+     * Saves the blocked date ({@code createBlockedDate}) only if the provider has no bookings on that date that
+     * still need a decision; otherwise throws 409 BOOKINGS_ON_DATE and saves nothing.
+     * <p>
+     * The check and the save run in one MongoDB transaction that claims the provider's booking guard, the same
+     * serialisation point booking creation uses, so a booking cannot be created on the date while it is being
+     * blocked (and vice versa).
      */
-    void assertNoBookingsToHandle(String providerId, LocalDate date);
+    <T> T createIfNoBookingsToHandle(String providerId, LocalDate date, Supplier<T> createBlockedDate);
 }
