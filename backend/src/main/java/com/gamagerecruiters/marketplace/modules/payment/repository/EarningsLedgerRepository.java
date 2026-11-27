@@ -9,6 +9,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEntry;
+import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEventType;
 
 /**
  * MongoDB repository for provider earnings ledger entries.
@@ -110,4 +111,23 @@ public interface EarningsLedgerRepository
                         String providerId,
                         String currency,
                         Pageable pageable);
+
+        /**
+         * Retrieves paginated recognition events for a provider and currency.
+         *
+         * Recognition events identify earned payments without treating
+         * subsequent balance transfers as additional earnings.
+         *
+         * @param providerId the authenticated provider identifier
+         * @param currency the supported ledger currency
+         * @param eventType the requested ledger event type
+         * @param pageable pagination and sorting configuration
+         * @return a page of matching recognition events
+         */
+        Page<EarningsLedgerEntry> findByProviderIdAndCurrencyAndEventType(
+                        String providerId,
+                        String currency,
+                        EarningsLedgerEventType eventType,
+                        Pageable pageable);
+
 }

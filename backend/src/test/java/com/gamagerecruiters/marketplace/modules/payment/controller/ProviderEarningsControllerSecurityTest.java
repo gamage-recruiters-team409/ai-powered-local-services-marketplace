@@ -40,8 +40,11 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEve
 import com.gamagerecruiters.marketplace.modules.payment.dto.EarningsSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.payment.dto.EarningsTransactionResponse;
 import com.gamagerecruiters.marketplace.modules.payment.dto.EarningsTransactionPageResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.ItemizedEarningsResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.ItemizedEarningsPageResponse;
 import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarningsSummaryService;
 import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarningsTransactionService;
+import com.gamagerecruiters.marketplace.modules.payment.service.ProviderItemizedEarningsService;
 
 /**
  * Spring MVC security tests for provider earnings retrieval.
@@ -81,6 +84,9 @@ class ProviderEarningsControllerSecurityTest {
 
     @MockitoBean
     private ProviderEarningsTransactionService transactionService;
+
+    @MockitoBean
+    private ProviderItemizedEarningsService itemizedService;
 
     @MockitoBean
     private TokenService tokenService;
@@ -410,4 +416,178 @@ class ProviderEarningsControllerSecurityTest {
                 .andExpect(jsonPath("$.error")
                         .value("EARNINGS_DATA_INCONSISTENT"));
     }
+
+    private static final String ITEMIZED_URL =
+            "/api/v1/provider/earnings/itemized";
+
+    @Test
+    void itemizedEndpointReturns401WithoutToken() throws Exception {
+
+        mockMvc.perform(get(ITEMIZED_URL))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("UNAUTHORIZED"));
+
+        verifyNoInteractions(itemizedService);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = Role.class, names = {
+            "CUSTOMER",
+            "ADMIN",
+            "FINANCE_ADMIN"
+    })
+    void itemizedEndpointReturns403ForNonProvider(Role role)
+            throws Exception {
+
+        String token = authenticateAs(role);
+
+        mockMvc.perform(get(ITEMIZED_URL)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("ACCESS_DENIED"));
+
+        verifyNoInteractions(itemizedService);
+    }
+
+    @Test
+    void itemizedEndpointReturnsProviderOwnedFinancialBreakdown()
+            throws Exception {
+
+        String token = authenticateAs(Role.PROVIDER);
+
+        ItemizedEarningsResponse earning =
+                new ItemizedEarningsResponse(
+                        "payment-123",
+                        "booking-123",
+                        new BigDecimal("10000.00"),
+                        new BigDecimal("0.10"),
+                        new BigDecimal("1000.00"),
+                        new BigDecimal("2000.00"),
+                        new BigDecimal("1800.00"),
+                        new BigDecimal("7200.00"),
+                        "LKR",
+                        Instant.parse("2026-11-26T10:00:00Z"));
+
+        when(itemizedService.getItemizedEarnings(PROVIDER_ID, 0, 10))
+                .thenReturn(new ItemizedEarningsPageResponse(
+                        List.of(earning), 0, 10, 1, 1));
+
+        mockMvc.perform(get(ITEMIZED_URL)
+                        .param("providerId", "another-provider")
+                        .param("currency", "USD")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result
+                        .MockMvcResultMatchers.header()
+                        .string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.content[0].paymentId")
+                        .value("payment-123"))
+                .andExpect(jsonPath("$.content[0].bookingId")
+                        .value("booking-123"))
+                .andExpect(jsonPath("$.content[0].grossAmount")
+                        .value(10000.00))
+                .andExpect(jsonPath("$.content[0].commissionRate")
+                        .value(0.10))
+                .andExpect(jsonPath("$.content[0].commissionAmount")
+                        .value(1000.00))
+                .andExpect(jsonPath("$.content[0].refundedAmount")
+                        .value(2000.00))
+                .andExpect(jsonPath("$.content[0].refundAdjustmentAmount")
+                        .value(1800.00))
+                .andExpect(jsonPath("$.content[0].netEarnings")
+                        .value(7200.00))
+                .andExpect(jsonPath("$.content[0].currency").value("LKR"))
+                .andExpect(jsonPath("$.content[0].recognizedAt")
+                        .value("2026-11-26T10:00:00Z"))
+                .andExpect(jsonPath("$.content[0].providerId").doesNotExist())
+                .andExpect(jsonPath("$.content[0].customerId").doesNotExist())
+                .andExpect(jsonPath("$.content[0].eventKey").doesNotExist())
+                .andExpect(jsonPath("$.content[0].gatewayRef").doesNotExist())
+                .andExpect(jsonPath("$.page").value(0))
+                .andExpect(jsonPath("$.size").value(10))
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.totalPages").value(1));
+
+        verify(itemizedService).getItemizedEarnings(PROVIDER_ID, 0, 10);
+        verifyNoInteractions(summaryService, transactionService);
+    }
+
+    @Test
+    void itemizedEndpointSupportsCustomPagination() throws Exception {
+
+        String token = authenticateAs(Role.PROVIDER);
+
+        when(itemizedService.getItemizedEarnings(PROVIDER_ID, 2, 5))
+                .thenReturn(new ItemizedEarningsPageResponse(
+                        List.of(), 2, 5, 0, 0));
+
+        mockMvc.perform(get(ITEMIZED_URL)
+                        .param("page", "2")
+                        .param("size", "5")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.page").value(2))
+                .andExpect(jsonPath("$.size").value(5))
+                .andExpect(jsonPath("$.totalElements").value(0))
+                .andExpect(jsonPath("$.totalPages").value(0));
+
+        verify(itemizedService).getItemizedEarnings(PROVIDER_ID, 2, 5);
+    }
+
+    @Test
+    void itemizedEndpointReturns400ForNegativePage() throws Exception {
+
+        String token = authenticateAs(Role.PROVIDER);
+
+        when(itemizedService.getItemizedEarnings(PROVIDER_ID, -1, 10))
+                .thenThrow(new ApiException(
+                        HttpStatus.BAD_REQUEST,
+                        "INVALID_PAGINATION",
+                        "Invalid pagination"));
+
+        mockMvc.perform(get(ITEMIZED_URL)
+                        .param("page", "-1")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("INVALID_PAGINATION"));
+    }
+
+    @Test
+    void itemizedEndpointReturns400ForExcessivePageSize() throws Exception {
+
+        String token = authenticateAs(Role.PROVIDER);
+
+        when(itemizedService.getItemizedEarnings(PROVIDER_ID, 0, 101))
+                .thenThrow(new ApiException(
+                        HttpStatus.BAD_REQUEST,
+                        "INVALID_PAGINATION",
+                        "Invalid pagination"));
+
+        mockMvc.perform(get(ITEMIZED_URL)
+                        .param("size", "101")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("INVALID_PAGINATION"));
+    }
+
+    @Test
+    void itemizedEndpointReturns500ForInconsistentFinancialData()
+            throws Exception {
+
+        String token = authenticateAs(Role.PROVIDER);
+
+        when(itemizedService.getItemizedEarnings(PROVIDER_ID, 0, 10))
+                .thenThrow(new ApiException(
+                        HttpStatus.INTERNAL_SERVER_ERROR,
+                        "EARNINGS_DATA_INCONSISTENT",
+                        "Itemized earnings are temporarily unavailable"));
+
+        mockMvc.perform(get(ITEMIZED_URL)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error")
+                        .value("EARNINGS_DATA_INCONSISTENT"));
+    }
+
 }

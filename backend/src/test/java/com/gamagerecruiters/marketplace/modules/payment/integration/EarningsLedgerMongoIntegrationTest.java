@@ -14,6 +14,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutionException;
 
+import org.springframework.http.HttpStatus;
+import com.gamagerecruiters.marketplace.common.exception.ApiException;
 import org.bson.Document;
 import org.bson.types.Decimal128;
 import org.junit.jupiter.api.AfterAll;
@@ -45,6 +47,9 @@ import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEnt
 import com.gamagerecruiters.marketplace.modules.payment.domain.EarningsLedgerEventType;
 import com.gamagerecruiters.marketplace.modules.payment.domain.ProviderEarningsState;
 import com.gamagerecruiters.marketplace.modules.payment.repository.EarningsLedgerRepository;
+import com.gamagerecruiters.marketplace.modules.payment.repository.PaymentRepository;
+import com.gamagerecruiters.marketplace.modules.payment.service.ProviderItemizedEarningsService;
+import com.gamagerecruiters.marketplace.modules.payment.service.RefundCommissionCalculator;
 import com.gamagerecruiters.marketplace.modules.payment.initializer.EarningsLedgerIndexInitializer;
 import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarningsTransactionService;
 import com.gamagerecruiters.marketplace.modules.payment.repository.ProviderEarningsStateRepository;
@@ -930,4 +935,347 @@ class EarningsLedgerMongoIntegrationTest {
                             && index.containsKey("partialFilterExpression")));
         });
     }
+
+    @Test
+    void createsItemizedIndexAndPreservesExistingIndexes() {
+
+        withLedger((service, repository, template) -> {
+
+            var initializer =
+                    new EarningsLedgerIndexInitializer(template);
+
+            initializer.initializeIndexes();
+            initializer.initializeIndexes();
+
+            var indexes = template.getCollection("earnings_ledger")
+                    .listIndexes()
+                    .into(new java.util.ArrayList<Document>());
+
+            String itemizedIndexName =
+                    "providerId_1_currency_1_eventType_1_sequenceNumber_-1__id_-1";
+
+            var matching = indexes.stream()
+                    .filter(index -> itemizedIndexName.equals(
+                            index.getString("name")))
+                    .toList();
+
+            assertEquals(1, matching.size());
+
+            Document itemizedIndex = matching.get(0);
+            Document key = itemizedIndex.get("key", Document.class);
+
+            assertEquals(
+                    List.of(
+                            "providerId",
+                            "currency",
+                            "eventType",
+                            "sequenceNumber",
+                            "_id"),
+                    new java.util.ArrayList<>(key.keySet()));
+
+            assertEquals(
+                    new Document("providerId", 1)
+                            .append("currency", 1)
+                            .append("eventType", 1)
+                            .append("sequenceNumber", -1)
+                            .append("_id", -1),
+                    key);
+
+            assertFalse(Boolean.TRUE.equals(itemizedIndex.get("unique")));
+            assertFalse(Boolean.TRUE.equals(itemizedIndex.get("sparse")));
+            assertFalse(Boolean.TRUE.equals(itemizedIndex.get("hidden")));
+            assertFalse(itemizedIndex.containsKey("partialFilterExpression"));
+            assertFalse(itemizedIndex.containsKey("expireAfterSeconds"));
+            assertFalse(itemizedIndex.containsKey("collation"));
+
+            assertTrue(indexes.stream().anyMatch(index ->
+                    "eventKey_1".equals(index.getString("name"))
+                            && Boolean.TRUE.equals(index.get("unique"))));
+
+            assertTrue(indexes.stream().anyMatch(index ->
+                    "providerId_1_currency_1_sequenceNumber_1"
+                            .equals(index.getString("name"))
+                            && Boolean.TRUE.equals(index.get("unique"))
+                            && index.containsKey("partialFilterExpression")));
+
+            assertTrue(indexes.stream().anyMatch(index ->
+                    "providerId_1_currency_1_sequenceNumber_-1__id_-1"
+                            .equals(index.getString("name"))));
+        });
+    }
+
+
+    /**
+     * Creates an itemized earnings service backed by real MongoDB repositories.
+     */
+    private ProviderItemizedEarningsService itemizedService(
+            EarningsLedgerRepository repository,
+            MongoTemplate template) {
+
+        PaymentRepository paymentRepository =
+                new MongoRepositoryFactory(template)
+                        .getRepository(PaymentRepository.class);
+
+        return new ProviderItemizedEarningsService(
+                repository,
+                paymentRepository,
+                new RefundCommissionCalculator());
+    }
+
+    /**
+     * Seeds a recognized payment in the isolated integration test database.
+     */
+    private void seedItemizedPayment(
+            EarningsLedgerRepository repository,
+            MongoTemplate template,
+            String paymentId,
+            String providerId,
+            String currency,
+            long sequence,
+            String refundedAmount,
+            PaymentStatus status) {
+
+        Payment payment = new Payment();
+
+        payment.setId(paymentId);
+        payment.setBookingId("booking-" + paymentId);
+        payment.setCustomerId("customer-test");
+        payment.setAmount(new BigDecimal("10000.00"));
+        payment.setCommissionAmount(new BigDecimal("1000.00"));
+        payment.setCommissionRate(new BigDecimal("0.10"));
+        payment.setRefundedAmount(new BigDecimal(refundedAmount));
+        payment.setCurrency(currency);
+        payment.setStatus(status);
+
+        template.insert(payment);
+
+        seedItemizedRecognition(
+                repository, paymentId, providerId, currency, sequence);
+    }
+
+    /**
+     * Inserts a canonical recognition event for repository query testing.
+     */
+    private void seedItemizedRecognition(
+            EarningsLedgerRepository repository,
+            String paymentId,
+            String providerId,
+            String currency,
+            long sequence) {
+
+        EarningsLedgerEntry entry = new EarningsLedgerEntry();
+
+        entry.setEventKey("earning-pending:" + paymentId);
+        entry.setPaymentId(paymentId);
+        entry.setBookingId("booking-" + paymentId);
+        entry.setProviderId(providerId);
+        entry.setCurrency(currency);
+        entry.setAmount(new BigDecimal("9000.00"));
+        entry.setEventType(EarningsLedgerEventType.EARNING_PENDING);
+        entry.setSequenceNumber(sequence);
+        entry.setCreatedAt(Instant.parse("2026-11-26T10:00:00Z"));
+
+        repository.insert(entry);
+    }
+
+    @Test
+    void itemizedEarningsIsolatesProviderCurrencyAndEventType() {
+
+        withLedger((service, repository, template) -> {
+
+            new EarningsLedgerIndexInitializer(template)
+                    .initializeIndexes();
+
+            seedItemizedPayment(
+                    repository, template, "own-payment",
+                    "provider-a", "LKR", 1L,
+                    "0.00", PaymentStatus.CAPTURED);
+
+            seedItemizedPayment(
+                    repository, template, "foreign-payment",
+                    "provider-b", "LKR", 1L,
+                    "0.00", PaymentStatus.CAPTURED);
+
+            seedItemizedPayment(
+                    repository, template, "foreign-currency",
+                    "provider-a", "USD", 1L,
+                    "0.00", PaymentStatus.CAPTURED);
+
+            EarningsLedgerEntry movement = new EarningsLedgerEntry();
+
+            movement.setEventKey("available-own-payment");
+            movement.setPaymentId("own-payment");
+            movement.setBookingId("booking-own-payment");
+            movement.setProviderId("provider-a");
+            movement.setCurrency("LKR");
+            movement.setAmount(new BigDecimal("9000.00"));
+            movement.setEventType(EarningsLedgerEventType.EARNING_AVAILABLE);
+            movement.setSequenceNumber(2L);
+            movement.setCreatedAt(Instant.now());
+
+            repository.insert(movement);
+
+            var response = itemizedService(repository, template)
+                    .getItemizedEarnings("provider-a", 0, 10);
+
+            assertEquals(1L, response.totalElements());
+            assertEquals(1, response.content().size());
+
+            var item = response.content().get(0);
+
+            assertEquals("own-payment", item.paymentId());
+            assertEquals("booking-own-payment", item.bookingId());
+            assertEquals("LKR", item.currency());
+
+            assertEquals(0, new BigDecimal("10000.00")
+                    .compareTo(item.grossAmount()));
+
+            assertEquals(0, new BigDecimal("1000.00")
+                    .compareTo(item.commissionAmount()));
+
+            assertEquals(0, new BigDecimal("9000.00")
+                    .compareTo(item.netEarnings()));
+
+            assertEquals(4L, repository.count());
+        });
+    }
+
+    @Test
+    void itemizedEarningsMapsPartialAndFullRefunds() {
+
+        withLedger((service, repository, template) -> {
+
+            seedItemizedPayment(
+                    repository, template, "partial-payment",
+                    "provider-a", "LKR", 1L,
+                    "2000.00", PaymentStatus.PARTIALLY_REFUNDED);
+
+            seedItemizedPayment(
+                    repository, template, "full-payment",
+                    "provider-a", "LKR", 2L,
+                    "10000.00", PaymentStatus.REFUNDED);
+
+            var response = itemizedService(repository, template)
+                    .getItemizedEarnings("provider-a", 0, 10);
+
+            assertEquals(2L, response.totalElements());
+
+            var full = response.content().get(0);
+            var partial = response.content().get(1);
+
+            assertEquals("full-payment", full.paymentId());
+
+            assertEquals(0, BigDecimal.ZERO
+                    .compareTo(full.netEarnings()));
+
+            assertEquals(0, new BigDecimal("9000.00")
+                    .compareTo(full.refundAdjustmentAmount()));
+
+            assertEquals("partial-payment", partial.paymentId());
+
+            assertEquals(0, new BigDecimal("2000.00")
+                    .compareTo(partial.refundedAmount()));
+
+            assertEquals(0, new BigDecimal("1800.00")
+                    .compareTo(partial.refundAdjustmentAmount()));
+
+            assertEquals(0, new BigDecimal("7200.00")
+                    .compareTo(partial.netEarnings()));
+        });
+    }
+
+    @Test
+    void itemizedEarningsUsesDeterministicPagination() {
+
+        withLedger((service, repository, template) -> {
+
+            new EarningsLedgerIndexInitializer(template)
+                    .initializeIndexes();
+
+            for (long sequence = 1; sequence <= 5; sequence++) {
+
+                seedItemizedPayment(
+                        repository, template, "payment-" + sequence,
+                        "provider-a", "LKR", sequence,
+                        "0.00", PaymentStatus.CAPTURED);
+            }
+
+            var itemized = itemizedService(repository, template);
+
+            var first = itemized.getItemizedEarnings("provider-a", 0, 2);
+            var second = itemized.getItemizedEarnings("provider-a", 1, 2);
+            var third = itemized.getItemizedEarnings("provider-a", 2, 2);
+
+            assertEquals(5L, first.totalElements());
+            assertEquals(3, first.totalPages());
+
+            assertEquals(
+                    List.of("payment-5", "payment-4"),
+                    first.content().stream()
+                            .map(item -> item.paymentId())
+                            .toList());
+
+            assertEquals(
+                    List.of("payment-3", "payment-2"),
+                    second.content().stream()
+                            .map(item -> item.paymentId())
+                            .toList());
+
+            assertEquals(
+                    List.of("payment-1"),
+                    third.content().stream()
+                            .map(item -> item.paymentId())
+                            .toList());
+
+            assertEquals(5L, repository.count());
+        });
+    }
+
+    @Test
+    void itemizedEarningsReturnsEmptyPageForUnrelatedProvider() {
+
+        withLedger((service, repository, template) -> {
+
+            seedItemizedPayment(
+                    repository, template, "foreign-payment",
+                    "provider-b", "LKR", 1L,
+                    "0.00", PaymentStatus.CAPTURED);
+
+            var response = itemizedService(repository, template)
+                    .getItemizedEarnings("provider-a", 0, 10);
+
+            assertTrue(response.content().isEmpty());
+            assertEquals(0L, response.totalElements());
+            assertEquals(0, response.totalPages());
+        });
+    }
+
+    @Test
+    void itemizedEarningsRejectsMissingPaymentRecord() {
+
+        withLedger((service, repository, template) -> {
+
+            seedItemizedRecognition(
+                    repository, "missing-payment",
+                    "provider-a", "LKR", 1L);
+
+            var itemized = itemizedService(repository, template);
+
+            ApiException exception = assertThrows(
+                    ApiException.class,
+                    () -> itemized.getItemizedEarnings(
+                            "provider-a", 0, 10));
+
+            assertEquals(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    exception.getStatus());
+
+            assertEquals(
+                    "EARNINGS_DATA_INCONSISTENT",
+                    exception.getErrorCode());
+
+            assertEquals(1L, repository.count());
+        });
+    }
+
 }

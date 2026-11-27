@@ -14,8 +14,10 @@ import com.gamagerecruiters.marketplace.common.util.ApiPaths;
 import com.gamagerecruiters.marketplace.modules.auth.security.CurrentUser;
 import com.gamagerecruiters.marketplace.modules.payment.dto.EarningsSummaryResponse;
 import com.gamagerecruiters.marketplace.modules.payment.dto.EarningsTransactionPageResponse;
+import com.gamagerecruiters.marketplace.modules.payment.dto.ItemizedEarningsPageResponse;
 import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarningsSummaryService;
 import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarningsTransactionService;
+import com.gamagerecruiters.marketplace.modules.payment.service.ProviderItemizedEarningsService;
 
 /**
  * Read-only REST endpoints for authenticated provider earnings.
@@ -27,7 +29,7 @@ import com.gamagerecruiters.marketplace.modules.payment.service.ProviderEarnings
  * </p>
  *
  * <p>
- * These endpoints expose earnings summaries and transaction history.
+ * These endpoints expose earnings summaries, transaction history and itemized earnings.
  * They do not authorize payouts or modify ledger records.
  * </p>
  */
@@ -40,18 +42,22 @@ public class ProviderEarningsController {
 
     private final ProviderEarningsSummaryService summaryService;
     private final ProviderEarningsTransactionService transactionService;
+    private final ProviderItemizedEarningsService itemizedService;
 
     /**
      * Creates the provider earnings controller.
      *
      * @param summaryService read-only earnings summary service
      * @param transactionService read-only earnings transaction service
+     * @param itemizedService read-only itemized earnings service
      */
     public ProviderEarningsController(
             ProviderEarningsSummaryService summaryService,
-            ProviderEarningsTransactionService transactionService) {
+            ProviderEarningsTransactionService transactionService,
+            ProviderItemizedEarningsService itemizedService) {
         this.summaryService = summaryService;
         this.transactionService = transactionService;
+        this.itemizedService = itemizedService;
     }
 
     /**
@@ -112,4 +118,28 @@ public class ProviderEarningsController {
                 .cacheControl(org.springframework.http.CacheControl.noStore())
                 .body(response);
     }
+
+    /**
+     * Retrieves the authenticated provider's recognized earnings
+     * with persisted commission and refund-adjusted financial values.
+     *
+     * @param page zero-based page number
+     * @param size requested page size
+     * @return provider-owned itemized earnings
+     */
+    @GetMapping("/itemized")
+    public ResponseEntity<ItemizedEarningsPageResponse> getMyItemizedEarnings(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+
+        String providerId = requireAuthenticatedProviderId();
+
+        ItemizedEarningsPageResponse response =
+                itemizedService.getItemizedEarnings(providerId, page, size);
+
+        return ResponseEntity.ok()
+                .cacheControl(org.springframework.http.CacheControl.noStore())
+                .body(response);
+    }
+
 }

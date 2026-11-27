@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 
 import { ProviderPage } from "../../../shared/layouts/provider/ProviderPage";
@@ -696,6 +697,21 @@ function ProviderEarningsContent({ providerId }) {
             />
           </div>
         ) : null}
+
+        <section className={styles.panel}>
+          <div className={styles.sectionHeader}>
+            <div>
+              <h2>Itemized Earnings</h2>
+              <p className={styles.description}>
+                View booking-level earnings, commissions and refund adjustments.
+              </p>
+            </div>
+
+            <Link to="/provider/earnings/itemized">
+              View All Earnings
+            </Link>
+          </div>
+        </section>
 
         <section className={styles.panel}>
           <div className={styles.sectionHeader}>

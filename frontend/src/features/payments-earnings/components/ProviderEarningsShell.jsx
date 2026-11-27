@@ -10,7 +10,7 @@ import ProviderEarningsPage from "../pages/ProviderEarningsPage";
  * Connects the shared provider layout to the authenticated
  * account and the central authentication logout lifecycle.
  */
-export default function ProviderEarningsShell() {
+export default function ProviderEarningsShell({ children }) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
 
@@ -27,7 +27,7 @@ export default function ProviderEarningsShell() {
       }}
       onLogout={handleLogout}
     >
-      <ProviderEarningsPage />
+      {children ?? <ProviderEarningsPage />}
     </ProviderLayout>
   );
 }
